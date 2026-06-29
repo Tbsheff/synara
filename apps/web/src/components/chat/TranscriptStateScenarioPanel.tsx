@@ -58,6 +58,10 @@ export function TranscriptStateScenarioPanel({
     }
 
     const nextScenario = TRANSCRIPT_SCENARIOS[nextIndex];
+    if (!nextScenario) {
+      return;
+    }
+
     onSelectScenario(nextScenario.id);
     requestAnimationFrame(() => {
       document.getElementById(`transcript-lab-${layout}-scenario-${nextScenario.id}`)?.focus();

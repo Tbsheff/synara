@@ -164,7 +164,13 @@ export function TranscriptStateComposer({ state, className }: TranscriptStateCom
   );
 
   if (mode === "ready") {
-    return <TranscriptStateReadyComposer key={state.scenario.id} state={state} className={className} />;
+    return (
+      <TranscriptStateReadyComposer
+        key={state.scenario.id}
+        state={state}
+        {...(className ? { className } : {})}
+      />
+    );
   }
 
   return (
