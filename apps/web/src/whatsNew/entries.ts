@@ -22,6 +22,36 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "0.3.7",
+    date: "Jun 30",
+    features: [
+      {
+        id: "upstream-fork-sync",
+        title: "Fork sync brings the newest Synara improvements",
+        description:
+          "This release updates the fork with the latest upstream desktop, provider, transcript, sidebar, model, and sharing improvements.",
+        details:
+          "The fork is now merged with upstream main, including the recent desktop update flow, Cursor ACP command hardening, Claude credential keepalive, model metadata, message trail, sidebar polish, and share-card export work.",
+      },
+      {
+        id: "claude-live-diff-checkpoints",
+        title: "Claude edits show live file-change progress again",
+        description:
+          "Claude sessions now derive live git diff placeholders while file edits are still in progress, then replace them with the final checkpoint when the turn completes.",
+        details:
+          "The checkpoint reactor now listens for file-change completion events from providers without native live diff patches, snapshots a temporary turn-live ref, dispatches a missing checkpoint placeholder, and keeps the final turn-completed checkpoint authoritative.",
+      },
+      {
+        id: "macos-icon-cache-startup",
+        title: "macOS icon cache refresh is wired into startup",
+        description:
+          "The desktop app now runs the packaged macOS icon cache refresh path during startup so Dock and Finder icons recover after updates.",
+        details:
+          "The release restores the desktop main-process integration for the macOS Launch Services refresh helper, including the last-launch version marker and best-effort bundle re-registration.",
+      },
+    ],
+  },
+  {
     version: "0.3.6",
     date: "Jun 30",
     features: [

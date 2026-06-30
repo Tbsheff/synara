@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.3.7 - 2026-06-30
+
+### Changed
+
+- Synced the fork with upstream `main`, bringing in the latest desktop update, Cursor ACP, Claude credential keepalive, model metadata, transcript, sidebar, and share-card improvements.
+- Bumped Synara release package versions to `0.3.7` across the server, desktop, web, and contracts packages.
+
+### Fixed
+
+- Restored Claude live file-change diff handling after the upstream merge so in-progress Claude edits produce live checkpoint placeholders before final turn completion.
+- Restored macOS icon-cache refresh startup integration so the new cache refresh helper runs after packaged app updates.
+
+### Verification
+
+- `apps/server`: `bun run test src/orchestration/Layers/CheckpointReactor.test.ts` passed: 20 tests.
+- `apps/server`: `bun run test src/provider/acp/CursorAcpSupport.test.ts src/provider/acp/CursorAcpCommand.test.ts` passed: 42 tests.
+- `apps/desktop`: `bun run test src/macIconCacheRefresh.test.ts` passed: 12 tests.
+- `git diff --check` passed.
+
 ## 0.3.6 - 2026-06-30
 
 ### Added
