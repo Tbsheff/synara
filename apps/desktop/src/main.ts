@@ -32,6 +32,14 @@ import { RotatingFileSink } from "@t3tools/shared/logging";
 import { isBackendReadinessAborted, waitForHttpReady } from "./backendReadiness";
 import { waitForBackendStartupReady } from "./backendStartupReadiness";
 import { showDesktopConfirmDialog } from "./confirmDialog";
+import {
+  LSREGISTER_PATH,
+  parseLastLaunchVersion,
+  resolveLaunchVersionRecordPath,
+  resolveMacAppBundlePath,
+  serializeLaunchVersionRecord,
+  shouldRefreshIconCache,
+} from "./macIconCacheRefresh";
 import { openInitialBackendWindow } from "./initialBackendWindowOpen";
 import { shouldAllowMediaPermissionRequest } from "./mediaPermissions";
 import {
@@ -946,6 +954,66 @@ function applyLegacyMacDockIcon(): void {
   app.dock.setIcon(image);
 }
 
+function readLaunchVersionRecordContents(): string | null {
+  try {
+    return FS.readFileSync(resolveLaunchVersionRecordPath(app.getPath("userData")), "utf8");
+  } catch {
+    // No prior record (fresh profile) or an unreadable file.
+    return null;
+  }
+}
+
+function persistLastLaunchVersion(version: string): void {
+  const recordPath = resolveLaunchVersionRecordPath(app.getPath("userData"));
+  try {
+    FS.mkdirSync(Path.dirname(recordPath), { recursive: true });
+    FS.writeFileSync(recordPath, serializeLaunchVersionRecord(version));
+  } catch (error) {
+    console.warn("[desktop] Failed to persist last launch version", error);
+  }
+}
+
+// macOS keeps an aggressive Launch Services / IconServices cache keyed by bundle
+// path + identifier. electron-updater swaps the bundle in place, so after an
+// update the refreshed icon.icns is already on disk while the dock and Finder
+// can keep painting the previous icon. Best-effort: never blocks startup.
+function refreshMacIconCacheOnVersionChange(): void {
+  if (process.platform !== "darwin" || !app.isPackaged) {
+    return;
+  }
+
+  const currentVersion = app.getVersion();
+  const previousVersion = parseLastLaunchVersion(readLaunchVersionRecordContents());
+  if (!shouldRefreshIconCache(previousVersion, currentVersion)) {
+    return;
+  }
+
+  persistLastLaunchVersion(currentVersion);
+
+  const bundlePath = resolveMacAppBundlePath(process.execPath, process.platform);
+  if (!bundlePath || !FS.existsSync(LSREGISTER_PATH)) {
+    return;
+  }
+
+  try {
+    const now = new Date();
+    FS.utimesSync(bundlePath, now, now);
+  } catch {
+    // Read-only bundle: fall through to lsregister.
+  }
+
+  const child = ChildProcess.spawn(LSREGISTER_PATH, ["-f", bundlePath], { stdio: "ignore" });
+  child.unref();
+  child.once("error", (error) => {
+    console.warn("[desktop] Failed to refresh macOS icon cache after update", error);
+  });
+  child.once("exit", (code) => {
+    console.info(
+      `[desktop] Refreshed macOS icon registration after update ${previousVersion ?? "(none)"} -> ${currentVersion} (lsregister exit ${code ?? "unknown"}).`,
+    );
+  });
+}
+
 function emitUpdateState(): void {
   updateController.emitState();
 }
@@ -1403,6 +1471,7 @@ if (hasSingleInstanceLock) {
       writeDesktopLogHeader("app ready");
       configureAppIdentity();
       applyLegacyMacDockIcon();
+      refreshMacIconCacheOnVersionChange();
       configureMediaPermissions();
       configureApplicationMenu();
       registerDesktopProtocol();
