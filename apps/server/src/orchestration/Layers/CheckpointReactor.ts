@@ -1,4 +1,5 @@
 import {
+  CheckpointRef,
   EventId,
   type ProjectId,
   ThreadId,
@@ -12,9 +13,11 @@ import {
 import { Cause, Effect, Layer, Option, Stream } from "effect";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 
+import { parseCheckpointFilesFromUnifiedDiff } from "../../checkpointing/Diffs.ts";
 import {
   checkpointRefForThreadMessageStart,
   checkpointRefForThreadTurn,
+  checkpointRefForThreadTurnLive,
   checkpointRefForThreadTurnStart,
   resolveThreadWorkspaceCwd,
 } from "../../checkpointing/Utils.ts";
@@ -51,6 +54,22 @@ const make = Effect.gen(function* () {
   const receiptBus = yield* RuntimeReceiptBus;
   const pendingMessageStartByThread = new Map<ThreadId, MessageId>();
   const reviewChatThreadIds = new Set<ThreadId>();
+  // Coalesces live turn-diff recomputes: at most one queued + one in-flight per
+  // thread. The flag is cleared when the worker starts processing the job so an
+  // edit arriving during the git work re-schedules and captures the newest tree.
+  const liveDiffScheduledThreads = new Set<ThreadId>();
+
+  // Providers that stream their own unified diff update the live turn diff
+  // through ProviderRuntimeIngestion. For providers without that capability
+  // (for example Claude) we derive the live diff from git here instead.
+  const supportsLiveTurnDiffPatch = Effect.fnUntraced(function* (
+    provider: ProviderRuntimeEvent["provider"],
+  ) {
+    const capabilities = yield* providerService
+      .getCapabilities(provider)
+      .pipe(Effect.catch(() => Effect.succeed(null)));
+    return capabilities?.supportsLiveTurnDiffPatch === true;
+  });
 
   const {
     appendCaptureFailureActivity,
@@ -265,6 +284,107 @@ const make = Effect.gen(function* () {
       turnCount: nextTurnCount,
       status: checkpointStatusFromRuntime(event.payload.state),
       assistantMessageId: undefined,
+      createdAt: event.createdAt,
+    });
+  });
+
+  const captureLiveTurnDiff = Effect.fnUntraced(function* (
+    event: Extract<ProviderRuntimeEvent, { type: "item.completed" }>,
+  ) {
+    const turnId = toTurnId(event.turnId);
+    if (!turnId) {
+      return;
+    }
+
+    const thread = yield* getThreadDetail(event.threadId);
+    if (!thread) {
+      return;
+    }
+    if (thread.reviewChatTarget !== null || reviewChatThreadIds.has(thread.id)) {
+      return;
+    }
+    const project = yield* getProjectShell(thread.projectId);
+    if (!project) {
+      return;
+    }
+
+    // Only the active primary turn may emit live diffs.
+    if (thread.session?.activeTurnId && !sameId(thread.session.activeTurnId, turnId)) {
+      return;
+    }
+
+    // Never override a real checkpoint already captured for this turn by the
+    // terminal turn.completed path.
+    const existingForTurn = thread.checkpoints.find((checkpoint) => checkpoint.turnId === turnId);
+    if (existingForTurn && existingForTurn.status !== "missing") {
+      return;
+    }
+
+    const checkpointCwd = yield* resolveCheckpointCwd({
+      threadId: thread.id,
+      thread,
+      project,
+      preferSessionRuntime: true,
+    });
+    if (!checkpointCwd) {
+      return;
+    }
+
+    const fromCheckpointRef = checkpointRefForThreadTurnStart(thread.id, turnId);
+    const baselineExists = yield* checkpointStore.hasCheckpointRef({
+      cwd: checkpointCwd,
+      checkpointRef: fromCheckpointRef,
+    });
+    if (!baselineExists) {
+      // The terminal capture on turn.completed still produces the authoritative
+      // diff, so skip the live preview rather than guessing without a baseline.
+      return;
+    }
+
+    const liveCheckpointRef = checkpointRefForThreadTurnLive(thread.id, turnId);
+    yield* checkpointStore.captureCheckpoint({
+      cwd: checkpointCwd,
+      checkpointRef: liveCheckpointRef,
+    });
+    const diff = yield* checkpointStore
+      .diffCheckpoints({
+        cwd: checkpointCwd,
+        fromCheckpointRef,
+        toCheckpointRef: liveCheckpointRef,
+        fallbackFromToHead: false,
+        ignoreWhitespace: false,
+      })
+      .pipe(Effect.catch(() => Effect.succeed("")));
+    yield* checkpointStore
+      .deleteCheckpointRefs({ cwd: checkpointCwd, checkpointRefs: [liveCheckpointRef] })
+      .pipe(Effect.catch(() => Effect.void));
+
+    const files = parseCheckpointFilesFromUnifiedDiff(diff);
+    if (files.length === 0) {
+      return;
+    }
+
+    const maxTurnCount = thread.checkpoints.reduce(
+      (max, checkpoint) => Math.max(max, checkpoint.checkpointTurnCount),
+      0,
+    );
+    const checkpointTurnCount = existingForTurn
+      ? existingForTurn.checkpointTurnCount
+      : maxTurnCount + 1;
+
+    yield* orchestrationEngine.dispatch({
+      type: "thread.turn.diff.complete",
+      commandId: serverCommandId("checkpoint-live-turn-diff"),
+      threadId: thread.id,
+      turnId,
+      completedAt: event.createdAt,
+      // A provider-diff ref keeps the projector treating this as a live
+      // placeholder until the terminal turn.completed capture replaces it.
+      checkpointRef: CheckpointRef.makeUnsafe(`provider-diff:${event.eventId}`),
+      status: "missing",
+      files,
+      assistantMessageId: undefined,
+      checkpointTurnCount,
       createdAt: event.createdAt,
     });
   });
@@ -616,6 +736,14 @@ const make = Effect.gen(function* () {
       return;
     }
 
+    if (event.type === "item.completed") {
+      // Clear the coalescing flag before the git work so edits arriving during
+      // it re-schedule and snapshot the newest tree.
+      liveDiffScheduledThreads.delete(event.threadId);
+      yield* captureLiveTurnDiff(event);
+      return;
+    }
+
     if (event.type === "turn.completed") {
       const turnId = toTurnId(event.turnId);
       yield* captureCheckpointFromTurnCompletion(event).pipe(
@@ -672,10 +800,24 @@ const make = Effect.gen(function* () {
 
     yield* Effect.forkScoped(
       Stream.runForEach(providerService.streamEvents, (event) => {
-        if (event.type !== "turn.started" && event.type !== "turn.completed") {
-          return Effect.void;
+        if (event.type === "turn.started" || event.type === "turn.completed") {
+          return worker.enqueue({ source: "runtime", event });
         }
-        return worker.enqueue({ source: "runtime", event });
+        if (event.type === "item.completed" && event.payload.itemType === "file_change") {
+          return Effect.gen(function* () {
+            // Coalesce first so bursts of edits collapse to one recompute.
+            if (liveDiffScheduledThreads.has(event.threadId)) {
+              return;
+            }
+            // Skip providers that stream their own live diff elsewhere.
+            if (yield* supportsLiveTurnDiffPatch(event.provider)) {
+              return;
+            }
+            liveDiffScheduledThreads.add(event.threadId);
+            yield* worker.enqueue({ source: "runtime", event });
+          });
+        }
+        return Effect.void;
       }),
     );
   });

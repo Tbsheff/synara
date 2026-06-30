@@ -261,6 +261,7 @@ import {
   ComposerSendArrowIcon,
   LayoutSidebarIcon,
   RefreshCwIcon,
+  TemporaryThreadIcon,
   XIcon,
 } from "~/lib/icons";
 import { ComposerQueuedHeader } from "./chat/ComposerQueuedHeader";
@@ -318,6 +319,7 @@ import {
   useComposerThreadDraft,
   useEffectiveComposerModelState,
 } from "../composerDraftStore";
+import { useTemporaryThreadStore } from "../temporaryThreadStore";
 import { useComposerFocusRequestStore } from "../composerFocusRequestStore";
 import { appendComposerPromptText } from "../lib/chatReferences";
 import {
@@ -381,7 +383,6 @@ import {
   type EnvironmentPanelProps,
 } from "./chat/environment/EnvironmentPanel";
 import { usePinnedMessageActions } from "./chat/environment/usePinnedMessageActions";
-import { useIsDisposableThread } from "~/hooks/useIsDisposableThread";
 import {
   CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
   CHAT_SURFACE_HEADER_HEIGHT_CLASS,
@@ -436,6 +437,7 @@ import { ComposerPendingApprovalActions } from "./chat/ComposerPendingApprovalAc
 import { ComposerExtrasMenu } from "./chat/ComposerExtrasMenu";
 import { ContextWindowMeter } from "./chat/ContextWindowMeter";
 import { ComposerInputBanners } from "./chat/ComposerInputBanners";
+import { ComposerPendingUserInputPanel } from "./chat/ComposerPendingUserInputPanel";
 import { ComposerVoiceButton } from "./chat/ComposerVoiceButton";
 import { ComposerVoiceRecorderBar } from "./chat/ComposerVoiceRecorderBar";
 import { ComposerReferenceAttachments } from "./chat/ComposerReferenceAttachments";
@@ -1059,6 +1061,11 @@ export default function ChatView({
   const draftThread = useComposerDraftStore(
     (store) => store.draftThreadsByThreadId[threadId] ?? null,
   );
+  const hasTemporaryThreadMarker = useTemporaryThreadStore((store) =>
+    threadId ? store.temporaryThreadIds[threadId] === true : false,
+  );
+  const markTemporaryThread = useTemporaryThreadStore((store) => store.markTemporaryThread);
+  const clearTemporaryThread = useTemporaryThreadStore((store) => store.clearTemporaryThread);
   const serverThread = useStore(useMemo(() => createThreadSelector(threadId), [threadId]));
   const fallbackDraftProjectId = draftThread?.projectId ?? null;
   const fallbackDraftProject = useStore(
@@ -3997,10 +4004,10 @@ export default function ChatView({
   // or hides the side panel only when this thread already has a pane to show.
   const rightDockOpen = useRightDockStore((store) => selectRightDockState(threadId)(store).open);
   const isMobileViewport = useIsMobile();
-  // The Environment panel replaces the old header diff toggle + footer pickers for normal
-  // threads; disposable (temporary/draft) threads keep the legacy inline controls.
-  const isDisposableThread = useIsDisposableThread(threadId);
-  const environmentEnabled = !isDisposableThread && !isEditorRail;
+  // Temporary threads are visually identical to regular chats — they use the same
+  // Environment panel + header controls. "Temporary" is purely a sidebar badge +
+  // auto-delete-on-leave concern, never a stripped-down chat UI.
+  const environmentEnabled = !isEditorRail;
   const environmentUsesFloatingOverlay =
     isTerminalEnvironmentContext || isMobileViewport || rightDockOpen || surfaceMode === "split";
   const environmentDefaultOpen = resolveDefaultEnvironmentPanelOpen({
@@ -9476,6 +9483,18 @@ export default function ChatView({
   };
   const showEmptyLandingBranchToolbar =
     isCenteredEmptyLanding && activeProject?.kind === "project" && !isHomeChatContainer;
+  // Temporary is chosen while starting a chat. Draft metadata covers local reloads;
+  // the in-memory marker keeps the badge + auto-delete alive through promotion.
+  const isThreadTemporary = draftThread?.isTemporary === true || hasTemporaryThreadMarker;
+  const toggleDraftTemporary = () => {
+    const next = !isThreadTemporary;
+    setDraftThreadContext(threadId, { isTemporary: next });
+    if (next) {
+      markTemporaryThread(threadId);
+    } else {
+      clearTemporaryThread(threadId);
+    }
+  };
   const showEmptyLandingProjectPicker =
     isCenteredEmptyLanding && isLocalDraftThread && activeProject?.kind === "project";
   const emptyLandingProjectChip =
@@ -9550,6 +9569,30 @@ export default function ChatView({
           />
         ) : null}
       </div>
+      {showEmptyLandingBranchToolbar ? (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          aria-pressed={isThreadTemporary}
+          onClick={toggleDraftTemporary}
+          title={
+            isThreadTemporary
+              ? "Temporary chat — deleted when you leave. Click to keep it."
+              : "Make this a temporary chat (deleted when you leave)"
+          }
+          aria-label="Temporary chat"
+          className={cn(
+            "ml-auto shrink-0 gap-1.5 whitespace-nowrap px-2 text-[length:var(--app-font-size-ui-sm,11px)] font-normal transition-colors sm:px-2.5",
+            isThreadTemporary
+              ? "text-[var(--color-text-accent)] hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-accent)]"
+              : "text-[var(--color-text-foreground-secondary)] hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)]",
+          )}
+        >
+          <TemporaryThreadIcon className="size-3.5" />
+          <span className="sr-only sm:not-sr-only">Temporary</span>
+        </Button>
+      ) : null}
     </div>
   ) : null;
 
@@ -9668,8 +9711,27 @@ export default function ChatView({
                 onSteer={onSteerQueuedComposerTurn}
                 onRemove={removeQueuedComposerTurn}
                 onEdit={onEditQueuedComposerTurn}
+                cwd={threadWorkspaceCwd ?? undefined}
                 attachedToPrevious={showComposerLiveChangesHeader || showComposerActiveTaskListCard}
               />
+              {/* Pending user-input questions render as a detached card floating just
+                  above the composer (padding gives the measured gap), instead of a
+                  banner fused into the composer surface. Approvals still take over the
+                  composer, so suppress the card while one is active. */}
+              {!activePendingApproval && pendingUserInputs.length > 0 ? (
+                <div className="pb-2">
+                  <ComposerPendingUserInputPanel
+                    pendingUserInputs={pendingUserInputs}
+                    respondingRequestIds={respondingUserInputRequestIds}
+                    answers={activePendingDraftAnswers}
+                    questionIndex={activePendingQuestionIndex}
+                    onToggleOption={onToggleActivePendingUserInputOption}
+                    onAdvance={onAdvanceActivePendingUserInput}
+                    onPrevious={onPreviousActivePendingUserInputQuestion}
+                    onCancel={onCancelActivePendingUserInput}
+                  />
+                </div>
+              ) : null}
             </div>
             <div
               className={cn(
@@ -9689,15 +9751,8 @@ export default function ChatView({
                   roundedTopReset={false}
                   activeApproval={activePendingApproval}
                   pendingApprovalCount={pendingApprovals.length}
-                  pendingUserInputs={pendingUserInputs}
-                  respondingUserInputRequestIds={respondingUserInputRequestIds}
-                  pendingUserInputAnswers={activePendingDraftAnswers}
-                  pendingUserInputQuestionIndex={activePendingQuestionIndex}
-                  onToggleUserInputOption={onToggleActivePendingUserInputOption}
-                  onAdvanceUserInput={onAdvanceActivePendingUserInput}
-                  onCancelUserInput={onCancelActivePendingUserInput}
                   planFollowUp={
-                    showPlanFollowUpPrompt && activeProposedPlan
+                    pendingUserInputs.length === 0 && showPlanFollowUpPrompt && activeProposedPlan
                       ? {
                           id: activeProposedPlan.id,
                           title: proposedPlanTitle(activeProposedPlan.planMarkdown) ?? null,
@@ -9705,6 +9760,7 @@ export default function ChatView({
                       : null
                   }
                   automationSetup={
+                    pendingUserInputs.length === 0 &&
                     pendingAutomationConversation &&
                     pendingAutomationConversation.threadId === threadId
                       ? { onCancel: cancelAutomationConversation }
@@ -9937,36 +9993,23 @@ export default function ChatView({
                         />
                       ) : null}
                       {activePendingProgress ? (
-                        <div className="flex items-center gap-2">
-                          {activePendingProgress.questionIndex > 0 ? (
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="rounded-full"
-                              onClick={onPreviousActivePendingUserInputQuestion}
-                              disabled={activePendingIsResponding}
-                            >
-                              Previous
-                            </Button>
-                          ) : null}
-                          <Button
-                            type="submit"
-                            size="sm"
-                            className="rounded-full px-4"
-                            disabled={
-                              activePendingIsResponding ||
-                              (activePendingProgress.isLastQuestion
-                                ? !activePendingResolvedAnswers
-                                : !activePendingProgress.canAdvance)
-                            }
-                          >
-                            {activePendingIsResponding
-                              ? "Submitting..."
-                              : activePendingProgress.isLastQuestion
-                                ? "Submit answers"
-                                : "Next question"}
-                          </Button>
-                        </div>
+                        <Button
+                          type="submit"
+                          size="sm"
+                          className="rounded-full px-4"
+                          disabled={
+                            activePendingIsResponding ||
+                            (activePendingProgress.isLastQuestion
+                              ? !activePendingResolvedAnswers
+                              : !activePendingProgress.canAdvance)
+                          }
+                        >
+                          {activePendingIsResponding
+                            ? "Submitting..."
+                            : activePendingProgress.isLastQuestion
+                              ? "Submit answers"
+                              : "Next question"}
+                        </Button>
                       ) : phase === "running" ? (
                         <Button
                           type="button"

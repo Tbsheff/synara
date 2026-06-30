@@ -22,6 +22,136 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "0.3.7",
+    date: "Jun 30",
+    features: [
+      {
+        id: "upstream-fork-sync",
+        title: "Fork sync brings the newest Synara improvements",
+        description:
+          "This release updates the fork with the latest upstream desktop, provider, transcript, sidebar, model, and sharing improvements.",
+        details:
+          "The fork is now merged with upstream main, including the recent desktop update flow, Cursor ACP command hardening, Claude credential keepalive, model metadata, message trail, sidebar polish, and share-card export work.",
+      },
+      {
+        id: "claude-live-diff-checkpoints",
+        title: "Claude edits show live file-change progress again",
+        description:
+          "Claude sessions now derive live git diff placeholders while file edits are still in progress, then replace them with the final checkpoint when the turn completes.",
+        details:
+          "The checkpoint reactor now listens for file-change completion events from providers without native live diff patches, snapshots a temporary turn-live ref, dispatches a missing checkpoint placeholder, and keeps the final turn-completed checkpoint authoritative.",
+      },
+      {
+        id: "macos-icon-cache-startup",
+        title: "macOS icon cache refresh is wired into startup",
+        description:
+          "The desktop app now runs the packaged macOS icon cache refresh path during startup so Dock and Finder icons recover after updates.",
+        details:
+          "The release restores the desktop main-process integration for the macOS Launch Services refresh helper, including the last-launch version marker and best-effort bundle re-registration.",
+      },
+    ],
+  },
+  {
+    version: "0.3.6",
+    date: "Jun 30",
+    features: [
+      {
+        id: "cursor-launch-fallbacks",
+        title: "Cursor launch fallback is much sturdier",
+        description:
+          "Synara now finds Cursor agent commands across more install layouts, including bundled sibling shims and legacy shim locations, while rejecting unsafe fallbacks.",
+        details:
+          "Cursor ACP command discovery now resolves safer CLI paths, honors bundled sibling launchers, preserves legacy shim coverage, and avoids falling back to paths that do not match the expected Cursor agent shape.",
+      },
+      {
+        id: "muxy-open-in",
+        title: "Muxy can open from Synara",
+        description:
+          "Open-in support now recognizes Muxy, so editor/open buttons can hand files to the right desktop target when Muxy is part of your workflow.",
+        details:
+          "Editor metadata, open-route handling, and focused coverage were extended so Muxy is treated as a supported external app alongside the existing editor launch targets.",
+      },
+      {
+        id: "live-message-trail",
+        title: "Live chats leave a clearer message trail",
+        description:
+          "Active replies now expose a calmer live trail through the transcript, making long-running turns easier to follow while new work arrives.",
+        details:
+          "The transcript gained MessageTrail rendering, shared message-trail logic, browser coverage, and timeline integration so live assistant activity can stay visible without fighting the normal message rows.",
+      },
+      {
+        id: "clipboard-image-sharing",
+        title: "Image sharing works better on desktop",
+        description:
+          "Share cards and exported profile visuals can now use the desktop clipboard image path, making it easier to paste polished snapshots elsewhere.",
+        details:
+          "The web share-card export path now cooperates with desktop clipboard IPC, including preload contracts and browser-side helpers for copying generated image blobs.",
+      },
+      {
+        id: "claude-credential-keepalive",
+        title: "Claude credentials stay fresh longer",
+        description:
+          "Synara refreshes Claude credential freshness on macOS so long sessions are less likely to hit the familiar stale-token sign-in failure.",
+        details:
+          "A Claude credential keepalive helper, adapter integration, and focused tests now keep the OAuth token file active enough to avoid the roughly eight-hour stale credential path.",
+      },
+      {
+        id: "model-and-sidebar-polish",
+        title: "Models, command rows, and status icons got a polish pass",
+        description:
+          "Sonnet 5 variants, sidebar status icons, branded command rows, chat bubble padding, and tool labels were tightened for a more readable daily workspace.",
+        details:
+          "The release adds Sonnet 5 model variant metadata, refines sidebar status presentation, brands command/tool rows more clearly, and trims chat typography spacing in dense transcript areas.",
+      },
+    ],
+  },
+  {
+    version: "0.3.5",
+    date: "Jun 30",
+    features: [
+      {
+        id: "temporary-thread-promotion",
+        title: "Temporary chats graduate more naturally",
+        description:
+          "Draft and temporary threads now promote into the main chat flow more predictably, with clearer naming and steadier routing once work becomes real.",
+        details:
+          "Disposable-thread helpers were renamed around temporary-thread behavior, ChatView and sidebar state now share the promotion path, and timeline coverage guards the new handoff from temporary work into durable chat rows.",
+      },
+      {
+        id: "archive-undo-toast",
+        title: "Archived chats are easier to recover",
+        description:
+          "Archive actions now use an undo toast instead of an interrupting confirmation dialog, so cleaning up threads is faster while still giving you a quick escape hatch.",
+        details:
+          "The sidebar archive flow, shared toast primitive, settings surfaces, environment panel hints, and threadArchive helper now cooperate around immediate archive plus undo behavior.",
+      },
+      {
+        id: "pending-input-and-work-polish",
+        title: "Pending inputs and work rows feel calmer",
+        description:
+          "User-input prompts, queued composer state, work rows, tool details, markdown spacing, and composer preview surfaces were tightened so active sessions scan better.",
+        details:
+          "Composer pending-input panels now float more cleanly in the stack, queued headers and work rows have focused coverage, and shared rendering helpers reduce small inconsistencies across tool and diff displays.",
+      },
+      {
+        id: "macos-icon-cache-refresh",
+        title: "macOS icon refreshes after app updates",
+        description:
+          "The desktop app now refreshes macOS icon caches on startup/update paths so Dock and Finder icons are less likely to stay stale after an icon change.",
+        details:
+          "A dedicated macOS icon-cache refresh helper was added to the desktop main process with coverage for the app-support marker, cache invalidation command, and platform gating.",
+      },
+      {
+        id: "settings-and-export-cleanup",
+        title: "Settings, heatmaps, and labels got a tidy pass",
+        description:
+          "The settings route, activity heatmap export, share cards, model/traits pickers, sidebar labels, and dark-mode composer border all received small polish fixes.",
+        details:
+          "This release cleans up settings panel primitives, aligns heatmap and diff-rendering helpers, restores a dark-mode composer input border, simplifies repeated labels, and trims a handful of dense UI edges.",
+      },
+    ],
+  },
+  {
     version: "0.3.4",
     date: "Jun 29",
     features: [

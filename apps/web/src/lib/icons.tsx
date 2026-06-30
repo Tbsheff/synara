@@ -196,7 +196,10 @@ export const McpIcon: LucideIcon = (props) => (
 );
 export const PluginIcon: LucideIcon = centralIconWrapper("puzzle");
 export const PlugIcon = PluginIcon;
-export const HammerIcon = adaptIcon(IconTool);
+// Single hammer/build glyph (tool-call rows, codex provider, "build" scripts).
+// Sourced from the Central set so it matches the other work-row icons (pencil,
+// terminal, skill cube) it sits beside, instead of the Tabler wrench it used to be.
+export const HammerIcon: LucideIcon = centralIconWrapper("hammer");
 export const HistoryIcon = adaptIcon(IconHistory);
 export const InfoIcon = adaptIcon(IconInfoCircle);
 export const KanbanIcon = centralIconWrapper("columns-3-wide");
