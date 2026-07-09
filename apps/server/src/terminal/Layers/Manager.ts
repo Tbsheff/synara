@@ -38,6 +38,10 @@ import {
 import { DEFAULT_HISTORY_BYTE_LIMIT } from "../terminalHistory";
 import { createTerminalModeReplayTracker } from "../terminalModeReplay";
 import {
+  defaultProcessTreeKiller,
+  type ProcessTreeKiller,
+} from "../processTreeKiller";
+import {
   agentStateFromHookEvent,
   appendSessionHistory,
   cliKindFromRuntimeEnv,
@@ -93,6 +97,7 @@ export {
 
 const DEFAULT_SUBPROCESS_POLL_INTERVAL_MS = 1_000;
 const OUTPUT_ACK_PAUSE_THRESHOLD_BYTES = 64_000;
+const SHUTDOWN_ESCALATION_SETTLE_MS = 25;
 
 function messageWithNestedCause(error: unknown, fallback: string): string {
   const messages: string[] = [];
@@ -485,12 +490,19 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
       this.stopProcess(session);
     }
     this.historyStore.dispose();
+    if (!options.keepEscalationTimers) {
+      this.clearAllKillEscalationTimers();
+    }
+    this.threadLocks.clear();
+    return this.killEscalationTimers.size;
+  }
+
+  private clearAllKillEscalationTimers(): void {
     for (const handle of this.killEscalationTimers.values()) {
       clearTimeout(handle.timer);
       handle.unsubscribeExit?.();
     }
     this.killEscalationTimers.clear();
-    this.threadLocks.clear();
   }
 
   private async startSession(

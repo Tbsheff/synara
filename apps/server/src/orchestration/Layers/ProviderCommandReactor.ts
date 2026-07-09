@@ -287,7 +287,24 @@ const make = Effect.gen(function* () {
     );
 
   const threadProviderOptions = new Map<string, ProviderStartOptions>();
-  const threadModelSelections = new Map<string, ModelSelection>();
+  // The selection last applied to each live session. Keep this separate from
+  // projected thread metadata so spawn-fixed Claude option changes are compared
+  // against the subprocess configuration that is actually running.
+  const threadSessionModelSelections = new Map<string, ModelSelection>();
+  const seedThreadModelSelections = projectionSnapshotQuery.getCommandReadModel().pipe(
+    Effect.tap((snapshot) =>
+      Effect.sync(() => {
+        for (const thread of snapshot.threads) {
+          threadSessionModelSelections.set(thread.id, thread.modelSelection);
+        }
+      }),
+    ),
+    Effect.catchCause((cause) =>
+      Effect.logWarning("provider command reactor failed to seed model selections", {
+        cause: Cause.pretty(cause),
+      }),
+    ),
+  );
   const recentlyEnsuredSessionThreads = new Map<
     string,
     {
@@ -943,6 +960,7 @@ const make = Effect.gen(function* () {
     const startedSession = yield* startProviderSessionWithStaleResumeRetry(
       cachedResumeCursorMatches ? { resumeCursor: cachedResumeCursor.resumeCursor } : undefined,
     );
+    threadSessionModelSelections.set(threadId, desiredModelSelection);
     yield* bindSessionToThread(startedSession);
     return startedSession.threadId;
   });
@@ -1078,7 +1096,7 @@ const make = Effect.gen(function* () {
               model: activeSession.model,
             }
           : requestedModelSelection
-        : input.modelSelection;
+        : requestedModelSelection;
     const recordTurnResumeCursor = (resumeCursor: unknown | undefined) =>
       Effect.gen(function* () {
         if (resumeCursor === undefined || activeSession === undefined) {
@@ -2238,7 +2256,7 @@ const make = Effect.gen(function* () {
       ),
     );
     if (event.payload.modelSelection !== undefined) {
-      threadModelSelections.set(event.payload.threadId, event.payload.modelSelection);
+      threadSessionModelSelections.set(event.payload.threadId, event.payload.modelSelection);
     }
     if (event.payload.providerOptions !== undefined) {
       threadProviderOptions.set(event.payload.threadId, event.payload.providerOptions);
@@ -2290,7 +2308,7 @@ const make = Effect.gen(function* () {
       items: event.payload.items,
     });
     if (event.payload.modelSelection !== undefined) {
-      threadModelSelections.set(event.payload.threadId, event.payload.modelSelection);
+      threadSessionModelSelections.set(event.payload.threadId, event.payload.modelSelection);
     }
     if (event.payload.providerOptions !== undefined) {
       threadProviderOptions.set(event.payload.threadId, event.payload.providerOptions);
@@ -2318,13 +2336,13 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       switch (event.type) {
         case "thread.created": {
-          if (event.payload.runtimePlan == null) {
-            return;
+          threadSessionModelSelections.set(event.payload.threadId, event.payload.modelSelection);
+          if (event.payload.runtimePlan != null) {
+            yield* executionRuntimeService.applyRuntimePlan({
+              threadId: event.payload.threadId,
+              plan: event.payload.runtimePlan,
+            });
           }
-          yield* executionRuntimeService.applyRuntimePlan({
-            threadId: event.payload.threadId,
-            plan: event.payload.runtimePlan,
-          });
           return;
         }
         case "thread.meta-updated": {
@@ -2464,26 +2482,28 @@ const make = Effect.gen(function* () {
 
   const worker = yield* makeDrainableWorker(processDomainEventSafely);
 
-  const start: ProviderCommandReactorShape["start"] = Effect.all([
-    Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) => {
-      if (
-        event.type !== "thread.created" &&
-        event.type !== "thread.meta-updated" &&
-        event.type !== "thread.runtime-mode-set" &&
-        event.type !== "thread.turn-queued" &&
-        event.type !== "thread.turn-start-requested" &&
-        event.type !== "thread.turn-interrupt-requested" &&
-        event.type !== "thread.approval-response-requested" &&
-        event.type !== "thread.user-input-response-requested" &&
-        event.type !== "thread.conversation-rollback-requested" &&
-        event.type !== "thread.message-edit-resend-requested" &&
-        event.type !== "thread.session-stop-requested" &&
-        event.type !== "thread.session-ensure-requested" &&
-        event.type !== "thread.context-inject-requested" &&
-        event.type !== "thread.runtime-action-requested"
-      ) {
-        return Effect.void;
-      }
+  const start: ProviderCommandReactorShape["start"] = seedThreadModelSelections.pipe(
+    Effect.andThen(
+      Effect.all([
+        Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) => {
+          if (
+            event.type !== "thread.created" &&
+            event.type !== "thread.meta-updated" &&
+            event.type !== "thread.runtime-mode-set" &&
+            event.type !== "thread.turn-queued" &&
+            event.type !== "thread.turn-start-requested" &&
+            event.type !== "thread.turn-interrupt-requested" &&
+            event.type !== "thread.approval-response-requested" &&
+            event.type !== "thread.user-input-response-requested" &&
+            event.type !== "thread.conversation-rollback-requested" &&
+            event.type !== "thread.message-edit-resend-requested" &&
+            event.type !== "thread.session-stop-requested" &&
+            event.type !== "thread.session-ensure-requested" &&
+            event.type !== "thread.context-inject-requested" &&
+            event.type !== "thread.runtime-action-requested"
+          ) {
+            return Effect.void;
+          }
 
           return worker.enqueue(event);
         }).pipe(Effect.forkScoped),

@@ -19,6 +19,25 @@ import {
   summarizeGitResult,
 } from "./GitActionsControl.logic";
 
+function statusPr(
+  overrides: Partial<NonNullable<GitStatusResult["pr"]>> = {},
+): NonNullable<GitStatusResult["pr"]> {
+  return {
+    number: 10,
+    title: "Open PR",
+    url: "https://example.com/pr/10",
+    baseBranch: "main",
+    headBranch: "feature/test",
+    state: "open",
+    isDraft: false,
+    mergeability: "unknown",
+    additions: null,
+    deletions: null,
+    changedFiles: null,
+    ...overrides,
+  };
+}
+
 function progress(overrides: Partial<ActiveGitActionProgress> = {}): ActiveGitActionProgress {
   return {
     toastId: "toast",

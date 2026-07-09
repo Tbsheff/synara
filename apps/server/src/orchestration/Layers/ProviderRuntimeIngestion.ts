@@ -1,10 +1,12 @@
 import {
   MessageId,
+  STUDIO_OUTPUTS_ACTIVITY_KIND,
   type AssistantDeliveryMode,
   CheckpointRef,
   ThreadId,
   TurnId,
   type OrchestrationThread,
+  type OrchestrationThreadActivity,
   type ProviderRuntimeEvent,
 } from "@t3tools/contracts";
 import { Cause, Effect, Layer, Option, Stream } from "effect";
@@ -16,8 +18,13 @@ import {
   resolveSubagentIdentityFromDirectory,
 } from "@t3tools/shared/subagents";
 
-import { generatedImagePathFromRuntimeEvent } from "../../codexGeneratedImages.ts";
+import {
+  generatedImagePathFromRuntimeEvent,
+  isCodexGeneratedImageArtifact,
+} from "../../codexGeneratedImages.ts";
 import { parseCheckpointFilesFromUnifiedDiff } from "../../checkpointing/Diffs.ts";
+import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
+import { copyAndAttributeStudioGeneratedImage } from "../../studioGeneratedImages.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
 import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
@@ -37,6 +44,7 @@ import {
 } from "./ProviderRuntimeIngestion.config.ts";
 import {
   asObject,
+  asString,
   extractCollabPayload,
   extractSubagentIdentity,
   inferRuntimeModeFromUserInputAnswers,
@@ -50,6 +58,7 @@ import {
   runtimeTurnErrorMessage,
   runtimeTurnState,
   sameId,
+  stringifyJsonLike,
   subagentThreadId,
   subagentThreadTitle,
   toTurnId,
@@ -75,6 +84,44 @@ import type {
 const deliveryModeKey = (threadId: ThreadId, turnId: TurnId | string) => `${threadId}:${turnId}`;
 
 const toolOutputBufferKey = (threadId: ThreadId, itemId: string) => `${threadId}:${itemId}`;
+
+const MAX_PENDING_GENERATED_IMAGES_PER_TURN = 32;
+
+export function collectPersistedGeneratedImagePaths(
+  records: ReadonlyArray<ProjectionGeneratedImageActivityRecord>,
+): string[] {
+  const studioDisplayPathBySourcePath = new Map<string, string>();
+  for (const record of records) {
+    if (record.kind !== STUDIO_OUTPUTS_ACTIVITY_KIND) continue;
+    const generatedImage = asObject(asObject(asObject(record.payload)?.data)?.generatedImage);
+    const sourcePath = asString(generatedImage?.sourcePath)?.trim();
+    const fullPath = asString(generatedImage?.fullPath)?.trim();
+    if (sourcePath && fullPath) studioDisplayPathBySourcePath.set(sourcePath, fullPath);
+  }
+
+  const paths: string[] = [];
+  const seen = new Set<string>();
+  const representedSources = new Set<string>();
+  const add = (path: string) => {
+    if (!seen.has(path)) {
+      seen.add(path);
+      paths.push(path);
+    }
+  };
+  for (const record of records) {
+    if (record.kind !== "tool.completed") continue;
+    const payload = asObject(record.payload);
+    if (payload?.itemType !== "image_generation") continue;
+    const artifact = isCodexGeneratedImageArtifact(payload.data) ? payload.data : undefined;
+    if (!artifact) continue;
+    representedSources.add(artifact.path);
+    add(studioDisplayPathBySourcePath.get(artifact.path) ?? artifact.path);
+  }
+  for (const [sourcePath, fullPath] of studioDisplayPathBySourcePath) {
+    if (!representedSources.has(sourcePath)) add(fullPath);
+  }
+  return paths;
+}
 
 const isToolOutputDelta = (
   event: ProviderRuntimeEvent,
@@ -183,6 +230,8 @@ const make = Effect.gen(function* () {
     { readonly checkpointRef: CheckpointRef; readonly checkpointTurnCount: number }
   >();
   const toolOutputBuffersByItem = new Map<string, string>();
+  const pendingGeneratedImagesByTurn = new Map<string, ReadonlyArray<string>>();
+  const latestActivityUpdateFingerprintByKey = new Map<string, string>();
 
   const state = yield* makeIngestionState();
   const {
@@ -203,8 +252,8 @@ const make = Effect.gen(function* () {
     const key = activityUpdateDedupeKey(event, threadId, activity);
     const fingerprint = key ? activityUpdateFingerprint(activity) : undefined;
     if (key && fingerprint) {
-      const previous = yield* Cache.getOption(latestActivityUpdateFingerprintByKey, key);
-      if (Option.isSome(previous) && previous.value === fingerprint) {
+      const previous = latestActivityUpdateFingerprintByKey.get(key);
+      if (previous === fingerprint) {
         return;
       }
     }
@@ -217,21 +266,15 @@ const make = Effect.gen(function* () {
       createdAt: activity.createdAt,
     });
     if (key && fingerprint) {
-      yield* Cache.set(latestActivityUpdateFingerprintByKey, key, fingerprint);
+      latestActivityUpdateFingerprintByKey.set(key, fingerprint);
     }
   });
 
   const clearActivityUpdateFingerprints = Effect.fnUntraced(function* (threadId: ThreadId) {
     const keyPrefix = `${threadId}:`;
-    const keys = Array.from(yield* Cache.keys(latestActivityUpdateFingerprintByKey));
-    yield* Effect.forEach(
-      keys,
-      (key) =>
-        key.startsWith(keyPrefix)
-          ? Cache.invalidate(latestActivityUpdateFingerprintByKey, key)
-          : Effect.void,
-      { concurrency: 1 },
-    );
+    for (const key of latestActivityUpdateFingerprintByKey.keys()) {
+      if (key.startsWith(keyPrefix)) latestActivityUpdateFingerprintByKey.delete(key);
+    }
   });
 
   const getThreadDetail = Effect.fnUntraced(function* (
@@ -240,6 +283,13 @@ const make = Effect.gen(function* () {
     return Option.getOrUndefined(
       yield* projectionSnapshotQuery
         .getThreadDetailById(threadId)
+        .pipe(Effect.catch(() => Effect.succeed(Option.none()))),
+    );
+  });
+  const getProjectShell = Effect.fnUntraced(function* (thread: OrchestrationThread) {
+    return Option.getOrUndefined(
+      yield* projectionSnapshotQuery
+        .getProjectShellById(thread.projectId)
         .pipe(Effect.catch(() => Effect.succeed(Option.none()))),
     );
   });
@@ -286,6 +336,90 @@ const make = Effect.gen(function* () {
     state,
     getThreadDetail,
   });
+
+  const rememberPendingGeneratedImage = (threadId: ThreadId, turnId: TurnId, imagePath: string) =>
+    Effect.sync(() => {
+      const key = deliveryModeKey(threadId, turnId);
+      const paths = pendingGeneratedImagesByTurn.get(key) ?? [];
+      if (!paths.includes(imagePath) && paths.length < MAX_PENDING_GENERATED_IMAGES_PER_TURN) {
+        pendingGeneratedImagesByTurn.set(key, [...paths, imagePath]);
+      }
+    });
+
+  const takePendingGeneratedImages = (threadId: ThreadId, turnId: TurnId) =>
+    Effect.sync(() => {
+      const key = deliveryModeKey(threadId, turnId);
+      const paths = pendingGeneratedImagesByTurn.get(key) ?? [];
+      pendingGeneratedImagesByTurn.delete(key);
+      return paths;
+    });
+
+  const flushPendingGeneratedImagesForTurn = (input: {
+    event: ProviderRuntimeEvent;
+    thread: OrchestrationThread;
+    turnId: TurnId;
+    createdAt: string;
+  }) =>
+    Effect.gen(function* () {
+      const cached = yield* takePendingGeneratedImages(input.thread.id, input.turnId);
+      const persisted = yield* projectionSnapshotQuery
+        .listGeneratedImageActivitiesByTurn(input.thread.id, input.turnId)
+        .pipe(
+          Effect.catchCause((cause) =>
+            Effect.logWarning("failed to recover persisted generated-image references", {
+              threadId: input.thread.id,
+              turnId: input.turnId,
+              cause: Cause.pretty(cause),
+            }).pipe(Effect.as<ReadonlyArray<ProjectionGeneratedImageActivityRecord>>([])),
+          ),
+        );
+      const imagePaths = [...new Set([...cached, ...collectPersistedGeneratedImagePaths(persisted)])];
+      yield* Effect.forEach(
+        imagePaths,
+        (imagePath) =>
+          appendGeneratedImageReference({
+            event: input.event,
+            thread: input.thread,
+            imagePath,
+            turnId: input.turnId,
+            createdAt: input.createdAt,
+          }),
+        { concurrency: 1 },
+      );
+    });
+
+  const materializeStudioGeneratedImage = (input: {
+    event: ProviderRuntimeEvent;
+    thread: OrchestrationThread;
+    imagePath: string;
+    turnId: TurnId | undefined;
+    createdAt: string;
+  }) =>
+    Effect.gen(function* () {
+      const project = yield* getProjectShell(input.thread);
+      if (!project || project.kind !== "studio") return null;
+      const workspaceRoot = resolveThreadWorkspaceCwd({ thread: input.thread, projects: [project] });
+      if (!workspaceRoot) return null;
+      return yield* copyAndAttributeStudioGeneratedImage({
+        orchestrationEngine,
+        sourcePath: input.imagePath,
+        workspaceRoot,
+        threadId: input.thread.id,
+        turnId: input.turnId,
+        eventId: input.event.eventId,
+        createdAt: input.createdAt,
+      });
+    }).pipe(
+      Effect.catchCause((cause) =>
+        Cause.hasInterruptsOnly(cause)
+          ? Effect.failCause(cause)
+          : Effect.logWarning("failed to copy generated image into Studio workspace", {
+              threadId: input.thread.id,
+              imagePath: input.imagePath,
+              cause: Cause.pretty(cause),
+            }).pipe(Effect.as(null)),
+      ),
+    );
 
   const processRuntimeEvent = (event: ProviderRuntimeEvent) =>
     Effect.gen(function* () {
@@ -943,13 +1077,7 @@ const make = Effect.gen(function* () {
 
       const activities = runtimeEventToActivities(mappedEvent);
       yield* Effect.forEach(activities, (activity) =>
-        orchestrationEngine.dispatch({
-          type: "thread.activity.append",
-          commandId: providerCommandId(event, "thread-activity-append"),
-          threadId: thread.id,
-          activity,
-          createdAt: activity.createdAt,
-        }),
+        dispatchActivityUpdate(event, thread.id, activity),
       ).pipe(Effect.asVoid);
     });
 

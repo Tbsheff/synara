@@ -304,6 +304,9 @@ export const makeOrchestrationIntegrationHarness = (
     const runtimeIngestionLayer = ProviderRuntimeIngestionLive.pipe(
       Layer.provideMerge(runtimeServicesLayer),
     );
+    const studioOutputReactorLayer = StudioOutputReactorLive.pipe(
+      Layer.provideMerge(runtimeServicesLayer),
+    );
     const gitCoreLayer = Layer.succeed(GitCore, {
       renameBranch: (input: Parameters<GitCoreShape["renameBranch"]>[0]) =>
         Effect.succeed({ branch: input.newBranch }),

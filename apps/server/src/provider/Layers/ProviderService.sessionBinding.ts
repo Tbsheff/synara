@@ -9,7 +9,7 @@
  * @module ProviderServiceSessionBinding
  */
 import { ThreadId, type ProviderRuntimeEvent, type ProviderSession } from "@t3tools/contracts";
-import { Cause, Effect, Option } from "effect";
+import { Cause, Effect, Option, Semaphore } from "effect";
 
 import {
   type ProviderRuntimeBinding,
@@ -32,6 +32,11 @@ export interface SessionBindingDeps {
 }
 
 export interface SessionBindingWriters {
+  readonly withBindingWriteLock: <A, E, R>(
+    threadId: ThreadId,
+    effect: Effect.Effect<A, E, R>,
+  ) => Effect.Effect<A, E, R>;
+  readonly consumeRecentlyCompletedTurn: (threadId: ThreadId, turnId: string) => boolean;
   readonly upsertSessionBinding: (
     session: ProviderSession,
     threadId: ThreadId,
@@ -57,6 +62,39 @@ export interface SessionBindingWriters {
 
 export const makeSessionBindingWriters = (deps: SessionBindingDeps): SessionBindingWriters => {
   const { directory, registry } = deps;
+  const recentlyCompletedTurnsByThread = new Map<ThreadId, Set<string>>();
+  const bindingWriteLocks = new Map<ThreadId, Semaphore.Semaphore>();
+
+  const recordRecentlyCompletedTurn = (threadId: ThreadId, turnId: string): void => {
+    const turns = recentlyCompletedTurnsByThread.get(threadId) ?? new Set<string>();
+    recentlyCompletedTurnsByThread.set(threadId, turns);
+    turns.delete(turnId);
+    turns.add(turnId);
+    while (turns.size > 32) {
+      const oldest = turns.values().next().value;
+      if (oldest === undefined) break;
+      turns.delete(oldest);
+    }
+  };
+
+  const consumeRecentlyCompletedTurn = (threadId: ThreadId, turnId: string): boolean => {
+    const turns = recentlyCompletedTurnsByThread.get(threadId);
+    if (!turns?.delete(turnId)) return false;
+    if (turns.size === 0) recentlyCompletedTurnsByThread.delete(threadId);
+    return true;
+  };
+
+  const withBindingWriteLock = <A, E, R>(
+    threadId: ThreadId,
+    effect: Effect.Effect<A, E, R>,
+  ): Effect.Effect<A, E, R> => {
+    let lock = bindingWriteLocks.get(threadId);
+    if (lock === undefined) {
+      lock = Semaphore.makeUnsafe(1);
+      bindingWriteLocks.set(threadId, lock);
+    }
+    return lock.withPermits(1)(effect);
+  };
 
   const upsertSessionBinding: SessionBindingWriters["upsertSessionBinding"] = (
     session,
@@ -143,6 +181,7 @@ export const makeSessionBindingWriters = (deps: SessionBindingDeps): SessionBind
         case "thread.started":
         case "thread.state.changed":
         case "turn.started":
+        case "model.rerouted":
         case "turn.completed":
         case "turn.aborted":
         case "session.exited":
@@ -152,7 +191,13 @@ export const makeSessionBindingWriters = (deps: SessionBindingDeps): SessionBind
           return Effect.void;
       }
 
-      return Effect.gen(function* () {
+      return withBindingWriteLock(event.threadId, Effect.gen(function* () {
+        if (
+          (event.type === "turn.completed" || event.type === "turn.aborted") &&
+          event.turnId !== undefined
+        ) {
+          recordRecentlyCompletedTurn(event.threadId, String(event.turnId));
+        }
         const binding = Option.getOrUndefined(yield* directory.getBinding(event.threadId));
         if (!binding) {
           return;
@@ -197,7 +242,7 @@ export const makeSessionBindingWriters = (deps: SessionBindingDeps): SessionBind
             ...(lastError !== undefined ? { lastError } : {}),
           },
         });
-      }).pipe(
+      })).pipe(
         Effect.catchCause((cause) =>
           Effect.logWarning("provider.session.runtime_binding_update_failed", {
             threadId: event.threadId,
@@ -209,6 +254,8 @@ export const makeSessionBindingWriters = (deps: SessionBindingDeps): SessionBind
     };
 
   return {
+    withBindingWriteLock,
+    consumeRecentlyCompletedTurn,
     upsertSessionBinding,
     upsertStoppedSessionBinding,
     markPersistedThreadStopped,

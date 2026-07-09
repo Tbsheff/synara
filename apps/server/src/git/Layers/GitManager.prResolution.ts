@@ -6,7 +6,10 @@
 import { Effect } from "effect";
 
 import type { GitCoreShape } from "../Services/GitCore.ts";
-import type { GitHubCliShape } from "../Services/GitHubCli.ts";
+import {
+  PULL_REQUEST_SUMMARY_JSON_FIELDS,
+  type GitHubCliShape,
+} from "../Services/GitHubCli.ts";
 import {
   OPEN_PR_LOOKUP_LIMIT,
   type BranchHeadContext,
@@ -352,7 +355,7 @@ export function makePrResolution(deps: PrResolutionDeps): PrResolution {
               "--limit",
               "20",
               "--json",
-              "number,title,url,baseRefName,headRefName,state,mergedAt,updatedAt,isCrossRepository,headRepository,headRepositoryOwner",
+              PULL_REQUEST_SUMMARY_JSON_FIELDS,
             ],
           })
           .pipe(Effect.map((result) => result.stdout));

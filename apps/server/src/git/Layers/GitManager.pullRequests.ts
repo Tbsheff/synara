@@ -172,6 +172,11 @@ export function toPullRequestInfo(pullRequest: GitHubPullRequestSummary): PullRe
     baseRefName: pullRequest.baseRefName,
     headRefName: pullRequest.headRefName,
     state: pullRequest.state ?? "open",
+    isDraft: pullRequest.isDraft ?? false,
+    mergeability: pullRequest.mergeability ?? "unknown",
+    additions: pullRequest.additions ?? null,
+    deletions: pullRequest.deletions ?? null,
+    changedFiles: pullRequest.changedFiles ?? null,
     updatedAt: null,
     ...(pullRequest.isCrossRepository !== undefined
       ? { isCrossRepository: pullRequest.isCrossRepository }
@@ -222,6 +227,11 @@ export function parsePullRequestList(raw: unknown): PullRequestInfo[] {
     const state = record.state;
     const mergedAt = record.mergedAt;
     const updatedAt = record.updatedAt;
+    const isDraft = record.isDraft;
+    const mergeability = record.mergeability ?? record.mergeable;
+    const additions = record.additions;
+    const deletions = record.deletions;
+    const changedFiles = record.changedFiles;
     const isCrossRepository = record.isCrossRepository;
     const headRepository = record.headRepository;
     const headRepositoryOwner = record.headRepositoryOwner;
@@ -256,6 +266,16 @@ export function parsePullRequestList(raw: unknown): PullRequestInfo[] {
       headRefName,
       state: normalizedState,
       updatedAt: typeof updatedAt === "string" && updatedAt.trim().length > 0 ? updatedAt : null,
+      isDraft: typeof isDraft === "boolean" ? isDraft : false,
+      mergeability:
+        mergeability === "mergeable" || mergeability === "MERGEABLE"
+          ? "mergeable"
+          : mergeability === "conflicting" || mergeability === "CONFLICTING"
+            ? "conflicting"
+          : "unknown",
+      additions: typeof additions === "number" ? additions : null,
+      deletions: typeof deletions === "number" ? deletions : null,
+      changedFiles: typeof changedFiles === "number" ? changedFiles : null,
       ...(typeof isCrossRepository === "boolean" ? { isCrossRepository } : {}),
       ...(headRepository &&
       typeof headRepository === "object" &&
@@ -284,6 +304,11 @@ export function toStatusPr(pr: PullRequestInfo): {
   baseBranch: string;
   headBranch: string;
   state: "open" | "closed" | "merged";
+  isDraft: boolean;
+  mergeability: "mergeable" | "conflicting" | "unknown";
+  additions: number | null;
+  deletions: number | null;
+  changedFiles: number | null;
 } {
   return {
     number: pr.number,
@@ -292,6 +317,11 @@ export function toStatusPr(pr: PullRequestInfo): {
     baseBranch: pr.baseRefName,
     headBranch: pr.headRefName,
     state: pr.state,
+    isDraft: pr.isDraft ?? false,
+    mergeability: pr.mergeability ?? "unknown",
+    additions: pr.additions ?? null,
+    deletions: pr.deletions ?? null,
+    changedFiles: pr.changedFiles ?? null,
   };
 }
 
@@ -308,6 +338,11 @@ export function toResolvedPullRequest(pr: {
   baseRefName: string;
   headRefName: string;
   state?: "open" | "closed" | "merged";
+  isDraft?: boolean;
+  mergeability?: "mergeable" | "conflicting" | "unknown";
+  additions?: number | null;
+  deletions?: number | null;
+  changedFiles?: number | null;
 }): ResolvedPullRequest {
   return {
     number: pr.number,
@@ -316,6 +351,11 @@ export function toResolvedPullRequest(pr: {
     baseBranch: pr.baseRefName,
     headBranch: pr.headRefName,
     state: pr.state ?? "open",
+    isDraft: pr.isDraft ?? false,
+    mergeability: pr.mergeability ?? "unknown",
+    additions: pr.additions ?? null,
+    deletions: pr.deletions ?? null,
+    changedFiles: pr.changedFiles ?? null,
   };
 }
 

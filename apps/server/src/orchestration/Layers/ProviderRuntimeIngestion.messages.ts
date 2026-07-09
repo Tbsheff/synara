@@ -254,11 +254,7 @@ export function makeIngestionMessages(deps: IngestionMessagesDeps) {
         ? messages
             .filter(
               (message) =>
-                message.role === "assistant" &&
-                message.turnId === input.turnId &&
-                !message.streaming &&
-                message.text.trim().length > 0 &&
-                !isGeneratedImageOnlyMarkdown(message.text),
+                message.role === "assistant" && message.turnId === input.turnId,
             )
             .toSorted(
               (left, right) =>

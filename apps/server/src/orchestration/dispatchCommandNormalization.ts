@@ -220,24 +220,34 @@ export function makeDispatchCommandNormalizer<E>(options: DispatchCommandNormali
     }
     return prepare(workspaceRoot).pipe(Effect.retry(WORKSPACE_ROOT_PREPARE_RETRY_SCHEDULE));
   };
-  const maybePrepareChatWorkspaceRoot = (
+  const deferredPrepareWorkspaceRoot = (
     command: Extract<
       ClientOrchestrationCommand,
       { type: "project.create" | "project.meta.update" }
     >,
     workspaceRoot: string,
-  ) => {
-    if (
-      command.kind !== "chat" ||
-      (command.type === "project.create" && command.createWorkspaceRootIfMissing !== true) ||
-      !options.chatWorkspaceRoot ||
-      !options.prepareChatWorkspaceRoot ||
-      !isWorkspaceRootWithin(workspaceRoot, options.chatWorkspaceRoot) ||
-      workspaceRootsEqual(workspaceRoot, options.chatWorkspaceRoot)
-    ) {
-      return Effect.void;
+  ): Effect.Effect<void, E> | null => {
+    if (command.kind === "chat") {
+      return maybePrepareWorkspaceRoot({
+        kind: "chat",
+        command,
+        workspaceRoot,
+        configuredWorkspaceRoot: options.chatWorkspaceRoot,
+        prepare: options.prepareChatWorkspaceRoot,
+        prepareWhenEqualToRoot: false,
+      });
     }
-    return options.prepareChatWorkspaceRoot(workspaceRoot);
+    if (command.kind === "studio") {
+      return maybePrepareWorkspaceRoot({
+        kind: "studio",
+        command,
+        workspaceRoot,
+        configuredWorkspaceRoot: options.studioWorkspaceRoot,
+        prepare: options.prepareStudioWorkspaceRoot,
+        prepareWhenEqualToRoot: true,
+      });
+    }
+    return null;
   };
 
   return Effect.fnUntraced(function* (input: { readonly command: ClientOrchestrationCommand }) {

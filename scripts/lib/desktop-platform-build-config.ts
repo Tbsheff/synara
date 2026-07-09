@@ -63,6 +63,7 @@ export function createDesktopPlatformBuildConfig(
             hardenedRuntime: true,
             entitlements: MAC_ENTITLEMENTS_PATH,
             entitlementsInherit: MAC_INHERITED_ENTITLEMENTS_PATH,
+            requirements: MAC_BRIDGE_REQUIREMENTS_PATH,
             ...(input.macNotarize === true ? { notarize: true } : {}),
           }
         : { identity: null }),

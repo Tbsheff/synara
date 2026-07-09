@@ -3865,72 +3865,18 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             runtimeMode: input.runtimeMode,
             ...(input.cwd ? { cwd: input.cwd } : {}),
             ...(modelSelection?.model ? { model: modelSelection.model } : {}),
-            ...(threadId ? { threadId } : {}),
-            ...(sessionId ? { resume: sessionId } : {}),
-            ...(resumeState?.resumeSessionAt
-              ? { resumeSessionAt: resumeState.resumeSessionAt }
-              : {}),
-            turnCount: resumeState?.turnCount ?? 0,
-          },
-          createdAt: startedAt,
-          updatedAt: startedAt,
-        };
-
-        const context: ClaudeSessionContext = {
-          session,
-          promptQueue,
-          query: queryRuntime,
-          streamFiber: undefined,
-          startedAt,
-          basePermissionMode: permissionMode,
-          lastInteractionMode: undefined,
-          currentApiModelId: apiModelId,
-          resumeSessionId: sessionId,
-          pendingApprovals,
-          pendingUserInputs,
-          turns: [],
-          inFlightTools,
-          turnState: undefined,
-          interruptRequestedTurnId: undefined,
-          lastKnownContextWindow: undefined,
-          lastKnownTokenUsage: undefined,
-          lastThinkingItemId: undefined,
-          lastAssistantUuid: resumeState?.resumeSessionAt,
-          lastThreadStartedId: undefined,
-          stopped: false,
-          warnedUnhandledSdkKinds: new Set(),
-        };
-        yield* Ref.set(contextRef, context);
-        sessions.set(threadId, context);
-
-        const sessionStartedStamp = yield* makeEventStamp();
-        yield* offerRuntimeEvent({
-          type: "session.started",
-          eventId: sessionStartedStamp.eventId,
-          provider: PROVIDER,
-          createdAt: sessionStartedStamp.createdAt,
-          threadId,
-          payload: input.resumeCursor !== undefined ? { resume: input.resumeCursor } : {},
-          providerRefs: {},
-        });
-
-        const configuredStamp = yield* makeEventStamp();
-        yield* offerRuntimeEvent({
-          type: "session.configured",
-          eventId: configuredStamp.eventId,
-          provider: PROVIDER,
-          createdAt: configuredStamp.createdAt,
-          threadId,
-          payload: {
-            config: {
-              ...(modelSelection?.model ? { model: modelSelection.model } : {}),
-              ...(apiModelId ? { apiModelId } : {}),
-              ...(requestedContextWindow ? { contextWindow: requestedContextWindow } : {}),
-              ...(input.cwd ? { cwd: input.cwd } : {}),
-              ...(effectiveEffort ? { effort: effectiveEffort } : {}),
-              ...(permissionMode ? { permissionMode } : {}),
-              ...(providerOptions?.maxThinkingTokens !== undefined
-                ? { maxThinkingTokens: providerOptions.maxThinkingTokens }
+            resumeCursor: {
+              ...(threadId ? { threadId } : {}),
+              ...(sessionId ? { resume: sessionId } : {}),
+              ...(resumeState?.resumeSessionAt
+                ? { resumeSessionAt: resumeState.resumeSessionAt }
+                : {}),
+              turnCount: resumeState?.turnCount ?? 0,
+              ...(resumedRerouteOriginalApiModelId && resumedRerouteFallbackApiModelId
+                ? {
+                    rerouteOriginalApiModelId: resumedRerouteOriginalApiModelId,
+                    rerouteFallbackApiModelId: resumedRerouteFallbackApiModelId,
+                  }
                 : {}),
             },
             createdAt: startedAt,

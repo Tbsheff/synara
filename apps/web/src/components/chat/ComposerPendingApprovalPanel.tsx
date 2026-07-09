@@ -17,8 +17,8 @@ import { COMPOSER_INPUT_SURFACE_CLASS_NAME } from "./composerPickerStyles";
 interface ComposerPendingApprovalPanelProps {
   approval: PendingApproval;
   pendingCount: number;
-  isResponding: boolean;
-  onRespond: (requestId: ApprovalRequestId, decision: ProviderApprovalDecision) => Promise<void>;
+  isResponding?: boolean;
+  onRespond?: (requestId: ApprovalRequestId, decision: ProviderApprovalDecision) => Promise<void>;
 }
 
 type ParsedApproval = {
@@ -73,7 +73,7 @@ const KIND_PROMPT: Record<PendingApproval["requestKind"], string> = {
 export const ComposerPendingApprovalPanel = memo(function ComposerPendingApprovalPanel({
   approval,
   pendingCount,
-  isResponding,
+  isResponding = false,
   onRespond,
 }: ComposerPendingApprovalPanelProps) {
   const parsed = useMemo(() => parseApprovalDetail(approval.detail), [approval.detail]);
@@ -82,7 +82,7 @@ export const ComposerPendingApprovalPanel = memo(function ComposerPendingApprova
   // Digit shortcuts bubble from focused controls inside this card only; a bare
   // number key elsewhere in the app must never approve a tool request.
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (isResponding || event.metaKey || event.ctrlKey || event.altKey) return;
+    if (!onRespond || isResponding || event.metaKey || event.ctrlKey || event.altKey) return;
     const target = event.target;
     if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) return;
     if (
@@ -102,7 +102,8 @@ export const ComposerPendingApprovalPanel = memo(function ComposerPendingApprova
   return (
     <div
       role="group"
-      className="px-5 pt-3 pb-3 sm:px-6"
+      onKeyDown={handleKeyDown}
+      className={cn(COMPOSER_INPUT_SURFACE_CLASS_NAME, "overflow-hidden px-3.5 py-3")}
       data-composer-blocker="pending-approval"
       aria-describedby={`pending-approval-status-${approval.requestId}`}
     >
@@ -113,16 +114,14 @@ export const ComposerPendingApprovalPanel = memo(function ComposerPendingApprova
         aria-live="polite"
         aria-atomic="true"
       >
-        Approval required for {kindLabel.toLowerCase()} request.
+        Approval required for {approval.requestKind} request.
       </span>
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex min-w-0 items-baseline gap-1.5">
-          <span className="shrink-0 text-[10px] font-semibold tracking-[0.14em] uppercase text-muted-foreground/70">
-            {kindLabel}
-          </span>
+      <div className="flex items-start justify-between gap-3">
+        <p className="min-w-0 text-[13px] font-medium leading-snug text-foreground/90">
+          {KIND_PROMPT[approval.requestKind]}
           {parsed.tool ? (
-            <span className="truncate text-[10px] font-medium tracking-[0.08em] uppercase text-muted-foreground/70">
-              · {parsed.tool}
+            <span className="ml-1.5 text-[11px] font-normal text-muted-foreground/50">
+              {parsed.tool}
             </span>
           ) : null}
         </p>
@@ -133,7 +132,7 @@ export const ComposerPendingApprovalPanel = memo(function ComposerPendingApprova
         ) : null}
       </div>
       <ApprovalDetail parsed={parsed} />
-      <div className="mt-2.5 space-y-0.5">
+      {onRespond ? <div className="mt-2.5 space-y-0.5">
         {APPROVAL_ACTIONS.map((action, index) => (
           <ComposerChoiceRow
             key={action.decision}
@@ -145,7 +144,7 @@ export const ComposerPendingApprovalPanel = memo(function ComposerPendingApprova
             onSelect={() => void onRespond(requestId, action.decision)}
           />
         ))}
-      </div>
+      </div> : null}
     </div>
   );
 });

@@ -6752,62 +6752,11 @@ export default function Sidebar() {
               onSelectView={handleSidebarViewChange}
               onPrewarmView={prewarmSidebarViewTarget}
             />
-            {/* Primary sidebar actions stay limited to features we currently ship. */}
-            <SidebarGroup className="px-1.5 pt-1 pb-1.5">
-              <SidebarMenu className="gap-0.5">
-                {isOnWorkspace ? (
-                  <SidebarPrimaryAction
-                    icon={TerminalIcon}
-                    label="New workspace"
-                    onClick={handleCreateWorkspace}
-                  />
-                ) : (
-                  <>
-                    <SidebarPrimaryAction
-                      icon={NewThreadIcon}
-                      label="New thread"
-                      onClick={handlePrimaryNewThread}
-                    />
-                    <SidebarPrimaryAction
-                      icon={SearchIcon}
-                      label="Search"
-                      active={searchPaletteOpen}
-                      onClick={() => {
-                        setSearchPaletteOpen(true);
-                      }}
-                      shortcutLabel={searchShortcutLabel}
-                    />
-                    <SidebarPrimaryAction
-                      icon={GitPullRequestIcon}
-                      label="Reviews"
-                      active={isOnReview}
-                      onClick={() => {
-                        void navigate({ to: "/review" });
-                      }}
-                    />
-                    <SidebarPrimaryAction
-                      icon={KanbanIcon}
-                      label="Kanban"
-                      active={isOnKanban}
-                      onClick={() => {
-                        void navigate({ to: "/kanban" });
-                      }}
-                    />
-                    <SidebarPrimaryAction
-                      icon={ClockIcon}
-                      label="Automations"
-                      active={isOnAutomations}
-                      badgeCount={automationAttentionBadgeCount}
-                      onClick={() => {
-                        void navigate({ to: "/automations" });
-                      }}
-                    />
-                  </>
-                )}
-              </SidebarMenu>
-            </SidebarGroup>
-
-            {isOnWorkspace ? (
+            {/* Keep the picker mounted while the selected surface animates in. */}
+            <div
+              key={isOnWorkspace ? "workspace" : isOnStudio ? "studio" : "threads"}
+              className="sidebar-surface-enter"
+            >
               <SidebarGroup className="px-1.5 pt-1 pb-1.5">
                 <SidebarMenu className="gap-0.5">
                   {isOnWorkspace ? (

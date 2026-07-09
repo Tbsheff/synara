@@ -511,15 +511,52 @@ function collapseDerivedWorkLogEntries(
   entries: ReadonlyArray<DerivedWorkLogEntry>,
 ): DerivedWorkLogEntry[] {
   const collapsed: DerivedWorkLogEntry[] = [];
+  const stableToolIndexByKey = new Map<string, number>();
   for (const entry of entries) {
     const previous = collapsed.at(-1);
-    if (previous && shouldCollapseToolLifecycleEntries(previous, entry)) {
+    if (previous && shouldCollapseContextCompactionEntries(previous, entry)) {
       collapsed[collapsed.length - 1] = mergeDerivedWorkLogEntries(previous, entry);
       continue;
     }
+    const stableToolKey =
+      entry.collapseKey?.startsWith("tool:") &&
+      isRenderableToolLifecycleActivity(entry.activityKind)
+        ? entry.collapseKey
+        : undefined;
+    if (stableToolKey !== undefined) {
+      const existingIndex = stableToolIndexByKey.get(stableToolKey);
+      if (existingIndex !== undefined) {
+        collapsed[existingIndex] = mergeDerivedWorkLogEntries(collapsed[existingIndex]!, entry);
+        continue;
+      }
+    }
+    if (previous && shouldCollapseToolLifecycleEntries(previous, entry)) {
+      collapsed[collapsed.length - 1] = mergeDerivedWorkLogEntries(previous, entry);
+      if (stableToolKey !== undefined) {
+        stableToolIndexByKey.set(stableToolKey, collapsed.length - 1);
+      }
+      continue;
+    }
     collapsed.push(entry);
+    if (stableToolKey !== undefined) {
+      stableToolIndexByKey.set(stableToolKey, collapsed.length - 1);
+    }
   }
   return collapsed;
+}
+
+const CONTEXT_COMPACTION_PROGRESS_LABEL = "Compacting conversation...";
+
+function shouldCollapseContextCompactionEntries(
+  previous: DerivedWorkLogEntry,
+  next: DerivedWorkLogEntry,
+): boolean {
+  return (
+    previous.activityKind === "context-compaction" &&
+    next.activityKind === "context-compaction" &&
+    previous.turnId === next.turnId &&
+    previous.label === CONTEXT_COMPACTION_PROGRESS_LABEL
+  );
 }
 
 function shouldCollapseToolLifecycleEntries(

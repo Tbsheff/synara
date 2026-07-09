@@ -71,7 +71,14 @@ export type MessagesTimelineRow =
       createdAt: string;
       proposedPlan: ProposedPlan;
     }
-  | { kind: "working"; id: string; createdAt: string | null; label?: string };
+  | { kind: "working"; id: string; createdAt: string | null; label?: string }
+  | { kind: "working-header"; id: string; createdAt: string; label?: string }
+  | {
+      kind: "worktree-setup";
+      id: string;
+      steps: ReadonlyArray<WorktreeSetupStep>;
+      open: boolean;
+    };
 
 export interface StableMessagesTimelineRowsState {
   byId: Map<string, MessagesTimelineRow>;
@@ -115,6 +122,47 @@ export function resolveAssistantMessageCopyState({
     text: normalizedText,
     visible: showCopyButton && normalizedText !== null && !streaming,
   };
+}
+
+type AssistantMessageDisplayInput = {
+  readonly message: Pick<ChatMessage, "text" | "streaming">;
+  readonly leadingWorkEntries?: ReadonlyArray<WorkLogEntry>;
+  readonly inlineWorkEntries?: ReadonlyArray<WorkLogEntry>;
+  readonly collapsedTurnItems?: ReadonlyArray<CollapsedTurnItem>;
+};
+
+function isVisibleGeneratedImageEntry(entry: WorkLogEntry): boolean {
+  return (
+    entry.itemType === "image_generation" &&
+    entry.activityKind === "tool.completed" &&
+    entry.tone !== "error"
+  );
+}
+
+/**
+ * Keeps completed image-generation output from being followed by a misleading
+ * empty-response placeholder while preserving that placeholder for truly empty
+ * settled turns.
+ */
+export function resolveAssistantMessageDisplayText(
+  input: AssistantMessageDisplayInput,
+): string | null {
+  if (input.message.text) {
+    return input.message.text;
+  }
+  if (input.message.streaming) {
+    return "";
+  }
+
+  const hasVisibleGeneratedImage = [
+    ...(input.leadingWorkEntries ?? []),
+    ...(input.inlineWorkEntries ?? []),
+    ...(input.collapsedTurnItems ?? []).flatMap((item) =>
+      item.kind === "work" ? [item.entry] : [],
+    ),
+  ].some(isVisibleGeneratedImageEntry);
+
+  return hasVisibleGeneratedImage ? null : "(empty response)";
 }
 
 function deriveWorkingRowLabel(row: MessagesTimelineRow | undefined): string | undefined {
@@ -386,8 +434,17 @@ export function deriveMessagesTimelineRows(input: {
   // completed chat does not end with a detached tool-log footer.
   flushPendingWorkGroup();
 
-  if (input.isWorking) {
-    const workingLabel = deriveWorkingRowLabel(nextRows.at(-1));
+  const workingLabel = input.isWorking ? deriveWorkingRowLabel(nextRows.at(-1)) : undefined;
+  if (input.worktreeSetup) {
+    nextRows.push({
+      kind: "worktree-setup",
+      id: "worktree-setup-row",
+      steps: input.worktreeSetup.steps,
+      open: input.worktreeSetupOpen,
+    });
+  }
+
+  if (input.isWorking && !(input.worktreeSetup && input.worktreeSetupOpen)) {
     nextRows.push({
       kind: "working",
       id: "working-indicator-row",
@@ -416,6 +473,7 @@ export function deriveMessagesTimelineRows(input: {
       kind: "working-header",
       id: "working-header-row",
       createdAt: input.activeTurnStartedAt,
+      ...(workingLabel ? { label: workingLabel } : {}),
     });
   }
 
@@ -776,7 +834,7 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
       return a.createdAt === (b as typeof a).createdAt && a.label === (b as typeof a).label;
 
     case "working-header":
-      return a.createdAt === (b as typeof a).createdAt;
+      return a.createdAt === (b as typeof a).createdAt && a.label === (b as typeof a).label;
 
     case "worktree-setup": {
       const bw = b as typeof a;

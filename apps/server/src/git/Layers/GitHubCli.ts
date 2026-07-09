@@ -6,17 +6,21 @@
 
 import { Effect, Layer, Schema } from "effect";
 import { parsePullRequestUrl } from "@t3tools/shared/git";
+import type { GitPullRequestCheck, GitPullRequestComment } from "@t3tools/contracts";
 
 import { runProcess } from "../../processRunner";
 import {
   GitHubCli,
+  PULL_REQUEST_SUMMARY_JSON_FIELDS,
   type GitHubCliShape,
+  type GitHubPullRequestSummary,
   type GitHubProjectBoardData,
   type GitHubProjectItem,
   type GitHubProjectSummary,
   type GitHubReviewStateEvent,
   type GitHubReviewThread,
 } from "../Services/GitHubCli.ts";
+import { GitHubCliError } from "../Errors.ts";
 import {
   decodeGitHubJson,
   findStatusField,
@@ -246,6 +250,32 @@ function repositoryPullRequestListArgs(
   return args;
 }
 
+const decodeRawPullRequestEntry = Schema.decodeUnknownSync(RawGitHubPullRequestSchema);
+
+export function decodePullRequestListJson(
+  raw: string,
+  operation: "listOpenPullRequests" | "listPullRequests" = "listPullRequests",
+): Effect.Effect<ReadonlyArray<GitHubPullRequestSummary>, GitHubCliError> {
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) return Effect.succeed([]);
+  return decodeGitHubJson(
+    trimmed,
+    Schema.Array(Schema.Unknown),
+    operation,
+    "GitHub CLI returned invalid PR list JSON.",
+  ).pipe(
+    Effect.map((entries) =>
+      entries.flatMap((entry) => {
+        try {
+          return [normalizePullRequestSummary(decodeRawPullRequestEntry(entry))];
+        } catch {
+          return [];
+        }
+      }),
+    ),
+  );
+}
+
 const makeGitHubCli = Effect.sync(() => {
   const execute: GitHubCliShape["execute"] = (input) =>
     Effect.tryPromise({
@@ -315,6 +345,79 @@ const makeGitHubCli = Effect.sync(() => {
           ),
         ),
         Effect.map(normalizePullRequestSummary),
+      ),
+    getPullRequestWithChecks: (input) =>
+      execute({
+        cwd: input.cwd,
+        args: [
+          "pr",
+          "view",
+          input.reference,
+          "--json",
+          `${PULL_REQUEST_SUMMARY_JSON_FIELDS},statusCheckRollup`,
+        ],
+      }).pipe(
+        Effect.flatMap((result) =>
+          Effect.try({
+            try: () => {
+              const raw = JSON.parse(result.stdout) as Record<string, unknown>;
+              const rollup = Array.isArray(raw.statusCheckRollup) ? raw.statusCheckRollup : [];
+              const checks: GitPullRequestCheck[] = rollup.flatMap((entry) => {
+                if (!entry || typeof entry !== "object") return [];
+                const row = entry as Record<string, unknown>;
+                const name = typeof row.name === "string" ? row.name.trim() : "";
+                if (!name) return [];
+                const conclusion = String(row.conclusion ?? row.state ?? row.status ?? "").toUpperCase();
+                const status: GitPullRequestCheck["status"] =
+                  conclusion === "SUCCESS"
+                    ? "success"
+                    : conclusion === "FAILURE" || conclusion === "ERROR" || conclusion === "TIMED_OUT"
+                      ? "failure"
+                      : conclusion === "SKIPPED"
+                        ? "skipped"
+                        : conclusion === "NEUTRAL"
+                          ? "neutral"
+                          : conclusion === "CANCELLED"
+                            ? "cancelled"
+                            : "pending";
+                return [{
+                  name,
+                  status,
+                  url: typeof row.detailsUrl === "string" ? row.detailsUrl : null,
+                }];
+              });
+              return { summary: normalizePullRequestSummary(raw as never), checks };
+            },
+            catch: (cause) =>
+              new GitHubCliError({
+                operation: "getPullRequestWithChecks",
+                detail: "GitHub CLI returned invalid pull request JSON.",
+                cause,
+              }),
+          }),
+        ),
+      ),
+    getPullRequestReviewComments: (input) =>
+      fetchPullRequestReviewThreads(execute, {
+        cwd: input.cwd,
+        pullRequest: { owner: input.owner, repo: input.repo, number: input.number },
+      }).pipe(
+        Effect.map((threads) => {
+          const comments: GitPullRequestComment[] = threads.flatMap((thread) => {
+            if (thread.isResolved) return [];
+            const comment = thread.comments[0];
+            if (!comment) return [];
+            return [{
+              id: comment.id ?? thread.id,
+              author: comment.author.trim() || null,
+              body: comment.body,
+              path: thread.path?.trim() || null,
+              url: comment.url ?? null,
+              createdAt: comment.createdAt?.trim() || null,
+            }];
+          });
+          return { comments, truncated: false };
+        }),
       ),
     listRepositoryPullRequests: (input) =>
       execute({

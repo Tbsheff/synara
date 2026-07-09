@@ -10,6 +10,7 @@ import {
 } from "../../pendingUserInput";
 import { CheckIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
+import { ComposerChoiceRow } from "./ComposerChoiceRow";
 
 interface PendingUserInputPanelProps {
   pendingUserInputs: PendingUserInput[];
@@ -180,40 +181,13 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
                 description={option.description}
                 selected={isSelected}
                 disabled={isResponding}
-                aria-pressed={isSelected}
-                onClick={() => handleOptionSelection(activeQuestion.id, option.label)}
-                className={cn(
-                  "group flex w-full items-center gap-3 rounded-lg border px-3 py-2 text-left transition-all duration-150",
-                  isSelected
-                    ? "border-[color:var(--color-border)] bg-[var(--color-background-button-secondary)] text-[var(--color-text-foreground)]"
-                    : "border-transparent bg-[var(--color-background-elevated-secondary)] text-[var(--color-text-foreground)]/80 hover:border-[color:var(--color-border-light)] hover:bg-[var(--color-background-button-secondary-hover)]",
-                  isResponding && "opacity-50 cursor-not-allowed",
-                )}
-              >
-                {shortcutKey !== null ? (
-                  <kbd
-                    className={cn(
-                      "flex size-5 shrink-0 items-center justify-center rounded text-[11px] font-medium tabular-nums transition-colors duration-150",
-                      isSelected
-                        ? "bg-[var(--color-background-elevated-secondary)] text-[var(--color-text-foreground)]"
-                        : "bg-[var(--color-background-elevated-secondary)] text-[var(--color-text-foreground-secondary)] group-hover:bg-[var(--color-background-button-secondary-hover)] group-hover:text-[var(--color-text-foreground)]",
-                    )}
-                  >
-                    {shortcutKey}
-                  </kbd>
-                ) : null}
-                <div className="min-w-0 flex-1">
-                  <span className="text-sm font-medium">{option.label}</span>
-                  {option.description && option.description !== option.label ? (
-                    <span className="ml-2 text-xs text-muted-foreground/70">
-                      {option.description}
-                    </span>
-                  ) : null}
-                </div>
-                {isSelected ? (
-                  <CheckIcon className="size-3.5 shrink-0 text-[var(--color-text-foreground)]" />
-                ) : null}
-              </button>
+                onSelect={() => handleOptionSelection(activeQuestion.id, option.label)}
+                trailing={
+                  isSelected ? (
+                    <CheckIcon className="size-3.5 shrink-0 text-[var(--color-text-foreground)]" />
+                  ) : null
+                }
+              />
             );
           })}
         </div>

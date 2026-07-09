@@ -188,6 +188,7 @@ export function runtimeStatusForEvent(
 export function shouldRefreshResumeCursorForEvent(event: ProviderRuntimeEvent): boolean {
   return (
     event.type === "thread.started" ||
+    event.type === "model.rerouted" ||
     (event.type === "thread.state.changed" &&
       event.payload.state === "compacted" &&
       event.turnId === undefined) ||

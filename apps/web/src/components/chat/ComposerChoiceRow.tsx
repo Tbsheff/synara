@@ -56,6 +56,7 @@ export function ComposerChoiceRow({
   return (
     <button
       type="button"
+      aria-pressed={selected}
       disabled={disabled}
       onClick={onSelect}
       className={cn(

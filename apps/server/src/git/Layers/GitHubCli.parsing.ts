@@ -561,12 +561,30 @@ export function normalizePullRequestSummary(
     baseRefName: raw.baseRefName,
     headRefName: raw.headRefName,
     state: normalizePullRequestState(raw),
+    isDraft: raw.isDraft === true,
+    mergeability: normalizePullRequestMergeability(raw.mergeable),
+    additions: normalizeDiffCount(raw.additions),
+    deletions: normalizeDiffCount(raw.deletions),
+    changedFiles: normalizeDiffCount(raw.changedFiles),
+    updatedAt: raw.updatedAt?.trim() || null,
     ...(typeof raw.isCrossRepository === "boolean"
       ? { isCrossRepository: raw.isCrossRepository }
       : {}),
     ...(headRepositoryNameWithOwner ? { headRepositoryNameWithOwner } : {}),
     ...(headRepositoryOwnerLogin ? { headRepositoryOwnerLogin } : {}),
   };
+}
+
+function normalizePullRequestMergeability(
+  mergeable: string | null | undefined,
+): "mergeable" | "conflicting" | "unknown" {
+  if (mergeable === "MERGEABLE") return "mergeable";
+  if (mergeable === "CONFLICTING") return "conflicting";
+  return "unknown";
+}
+
+function normalizeDiffCount(value: number | null | undefined): number | null {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null;
 }
 
 export function normalizeRepositoryCloneUrls(

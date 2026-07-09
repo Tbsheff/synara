@@ -188,6 +188,8 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       );
 
     const {
+      withBindingWriteLock,
+      consumeRecentlyCompletedTurn,
       upsertSessionBinding,
       upsertStoppedSessionBinding,
       markPersistedThreadStopped,

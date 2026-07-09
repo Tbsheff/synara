@@ -77,6 +77,10 @@ import Migration0058 from "./Migrations/049_ReviewWalkthroughCacheTokenIdentity.
 import Migration0059 from "./Migrations/050_EnsureReviewWalkthroughCacheTokenIdentity.ts";
 import Migration0060 from "./Migrations/048_AutomationCompletionEvaluationBacklog.ts";
 import Migration0061 from "./Migrations/061_ProjectionThreadProviderItems.ts";
+import Migration0062 from "./Migrations/049_ProjectionThreadMessagesDispatchOrigin.ts";
+import Migration0063 from "./Migrations/050_ProfileStatsArchive.ts";
+import Migration0064 from "./Migrations/051_ProfileStatsDeletedTokensModel.ts";
+import Migration0065 from "./Migrations/052_ProjectionThreadUserMessageSummaryIndex.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -150,6 +154,10 @@ export const migrationEntries = [
   [59, "EnsureReviewWalkthroughCacheTokenIdentity", Migration0059],
   [60, "AutomationCompletionEvaluationBacklog", Migration0060],
   [61, "ProjectionThreadProviderItems", Migration0061],
+  [62, "ProjectionThreadMessagesDispatchOrigin", Migration0062],
+  [63, "ProfileStatsArchive", Migration0063],
+  [64, "ProfileStatsDeletedTokensModel", Migration0064],
+  [65, "ProjectionThreadUserMessageSummaryIndex", Migration0065],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

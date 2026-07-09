@@ -86,6 +86,10 @@ import {
   toSafeThreadAttachmentSegment,
 } from "../../attachmentStore.ts";
 import { deriveThreadSummaryState } from "@t3tools/shared/threadSummary";
+import {
+  shouldApplyThreadsProjection,
+  shouldRefreshThreadShellSummary,
+} from "../threadShellEvents.ts";
 import { makeMiscProjectors } from "./ProjectionPipeline.projectors.misc.ts";
 import {
   retainProjectionProviderItemsAfterConversationRollback,
@@ -200,6 +204,26 @@ const THREAD_ACTIVITY_PROJECTION_EVENT_TYPES = new Set<OrchestrationEvent["type"
   "thread.activity-appended",
   "thread.reverted",
   "thread.conversation-rolled-back",
+]);
+
+const THREAD_PROVIDER_ITEM_PROJECTION_EVENT_TYPES = new Set<OrchestrationEvent["type"]>([
+  "thread.provider-item-upserted",
+  "thread.reverted",
+  "thread.conversation-rolled-back",
+]);
+
+const THREAD_RUNTIME_PROJECTION_EVENT_TYPES = new Set<OrchestrationEvent["type"]>([
+  "thread.runtime-provision-requested",
+  "thread.runtime-instance-created",
+  "thread.runtime-instance-state-changed",
+  "thread.runtime-process-started",
+  "thread.runtime-process-output",
+  "thread.runtime-process-completed",
+  "thread.runtime-route-exposed",
+  "thread.runtime-snapshot-created",
+  "thread.runtime-lease-renewed",
+  "thread.runtime-destroyed",
+  "thread.runtime-failed",
 ]);
 
 const THREAD_TURN_PROJECTION_EVENT_TYPES = new Set<OrchestrationEvent["type"]>([
@@ -1945,6 +1969,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
     {
       name: ORCHESTRATION_PROJECTOR_NAMES.threadProviderItems,
       phase: "hot",
+      shouldApply: (event) => THREAD_PROVIDER_ITEM_PROJECTION_EVENT_TYPES.has(event.type),
       apply: applyThreadProviderItemsProjection,
     },
     {
@@ -1962,6 +1987,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
     {
       name: ORCHESTRATION_PROJECTOR_NAMES.threadRuntime,
       phase: "hot",
+      shouldApply: (event) => THREAD_RUNTIME_PROJECTION_EVENT_TYPES.has(event.type),
       apply: applyThreadRuntimeProjection,
     },
     {

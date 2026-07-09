@@ -25,6 +25,7 @@ import { ProjectionThreadRuntimeRepository } from "../../persistence/Services/Pr
 import { ProjectionThreadRuntimeRepositoryLive } from "../../persistence/Layers/ProjectionThreadRuntime.ts";
 import {
   ProjectionSnapshotQuery,
+  type ProjectionGeneratedImageActivityRecord,
   type ProjectionSnapshotQueryShape,
 } from "../Services/ProjectionSnapshotQuery.ts";
 import {
@@ -32,6 +33,7 @@ import {
   decodeShellSnapshot,
   decodeThreadDetail,
   decodeThreadDetailSnapshot,
+  MAX_THREAD_MESSAGES,
 } from "./ProjectionSnapshotQuery.schemas.ts";
 import { makeSnapshotQueries } from "./ProjectionSnapshotQuery.queries.ts";
 import { makeSnapshotLookups } from "./ProjectionSnapshotQuery.lookups.ts";
@@ -82,6 +84,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     getThreadSessionRowByThread,
     getLatestTurnRowByThread,
     listCheckpointRowsByThread,
+    listGeneratedImageActivityRowsByTurn,
   } = queries;
 
   const getSnapshot: ProjectionSnapshotQueryShape["getSnapshot"] = () =>
@@ -937,6 +940,21 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             error,
           );
         }),
+      );
+
+  const listGeneratedImageActivitiesByTurn: ProjectionSnapshotQueryShape["listGeneratedImageActivitiesByTurn"] =
+    (threadId, turnId) =>
+      listGeneratedImageActivityRowsByTurn({ threadId, turnId }).pipe(
+        Effect.mapError(
+          toPersistenceSqlOrDecodeError(
+            "ProjectionSnapshotQuery.listGeneratedImageActivitiesByTurn:query",
+            "ProjectionSnapshotQuery.listGeneratedImageActivitiesByTurn:decodeRows",
+          ),
+        ),
+        Effect.map(
+          (rows): ReadonlyArray<ProjectionGeneratedImageActivityRecord> =>
+            rows.map((row) => ({ kind: row.kind, payload: row.payload })),
+        ),
       );
 
   return {

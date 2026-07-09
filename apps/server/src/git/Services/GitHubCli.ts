@@ -42,6 +42,11 @@ export interface GitHubPullRequestSummary {
   readonly updatedAt?: string | null;
 }
 
+export interface GitHubPullRequestReviewCommentsResult {
+  readonly comments: ReadonlyArray<GitPullRequestComment>;
+  readonly truncated: boolean;
+}
+
 export interface GitHubRepositoryCloneUrls {
   readonly nameWithOwner: string;
   readonly url: string;
@@ -366,6 +371,22 @@ export interface GitHubCliShape {
     readonly cwd: string;
     readonly reference: string;
   }) => Effect.Effect<GitHubPullRequestSummary, GitHubCliError>;
+
+  readonly getPullRequestWithChecks: (input: {
+    readonly cwd: string;
+    readonly reference: string;
+  }) => Effect.Effect<
+    { readonly summary: GitHubPullRequestSummary; readonly checks: ReadonlyArray<GitPullRequestCheck> },
+    GitHubCliError
+  >;
+
+  readonly getPullRequestReviewComments: (input: {
+    readonly cwd: string;
+    readonly host: string;
+    readonly owner: string;
+    readonly repo: string;
+    readonly number: number;
+  }) => Effect.Effect<GitHubPullRequestReviewCommentsResult, GitHubCliError>;
 
   /**
    * List repository pull requests filtered by state for the review surface.

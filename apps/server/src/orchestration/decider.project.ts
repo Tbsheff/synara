@@ -6,6 +6,7 @@ import type {
   OrchestrationCommand,
   OrchestrationEvent,
   OrchestrationReadModel,
+  ProjectKind,
 } from "@t3tools/contracts";
 import { MAX_PINNED_PROJECTS } from "@t3tools/contracts";
 import { Effect } from "effect";
@@ -22,6 +23,10 @@ import {
 import { nowIso, withEventBase, type DeciderReturn } from "./decider.shared.ts";
 
 type ProjectCommand = Extract<OrchestrationCommand, { type: `project.${string}` }>;
+
+const STUDIO_PROJECT_KIND_SET = new Set<ProjectKind>(["studio"]);
+// Chat containers use placeholder roots and may coexist with workspace-owning projects.
+const WORKSPACE_OWNING_PROJECT_KIND_SET = new Set<ProjectKind>(["project", "studio"]);
 
 function countPinnedProjects(
   readModel: OrchestrationReadModel,
@@ -40,22 +45,23 @@ function validateProjectPinLimit(input: {
   readonly command: Extract<ProjectCommand, { type: "project.create" | "project.meta.update" }>;
   readonly readModel: OrchestrationReadModel;
   readonly projectId: OrchestrationEvent["aggregateId"];
-  readonly nextKind: "project" | "chat";
+  readonly nextKind: ProjectKind;
   readonly nextDeletedAt?: string | null;
   readonly wasPinned?: boolean;
   readonly staleProjectIds?: ReadonlySet<string>;
 }): Effect.Effect<void, OrchestrationCommandInvariantError> {
-  if (input.command.isPinned !== true) {
-    return Effect.void;
-  }
-
-  if (input.nextKind !== "project") {
+  const nextIsPinned = input.command.isPinned ?? input.wasPinned ?? false;
+  if (nextIsPinned && input.nextKind !== "project") {
     return Effect.fail(
       new OrchestrationCommandInvariantError({
         commandType: input.command.type,
         detail: "Only projects can be pinned.",
       }),
     );
+  }
+
+  if (input.command.isPinned !== true) {
+    return Effect.void;
   }
 
   if (input.nextDeletedAt !== undefined && input.nextDeletedAt !== null) {
@@ -100,7 +106,19 @@ export const decideProjectCommand = Effect.fn("decideProjectCommand")(function* 
       });
       const events: Array<Omit<OrchestrationEvent, "sequence">> = [];
       const staleProjects: Array<OrchestrationReadModel["projects"][number]> = [];
-      if ((command.kind ?? "project") === "project") {
+      const nextProjectKind = command.kind ?? "project";
+      if (nextProjectKind === "project") {
+        const existingStudioProject = listActiveProjectsByWorkspaceRoot(
+          readModel,
+          command.workspaceRoot,
+          { kinds: STUDIO_PROJECT_KIND_SET },
+        )[0];
+        if (existingStudioProject) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: `Project '${existingStudioProject.id}' already uses workspace root '${existingStudioProject.workspaceRoot}'.`,
+          });
+        }
         const existingProjects = listActiveProjectsByWorkspaceRoot(
           readModel,
           command.workspaceRoot,
@@ -136,11 +154,24 @@ export const decideProjectCommand = Effect.fn("decideProjectCommand")(function* 
           });
         }
       }
+      if (nextProjectKind === "studio") {
+        const existingOwningProject = listActiveProjectsByWorkspaceRoot(
+          readModel,
+          command.workspaceRoot,
+          { kinds: WORKSPACE_OWNING_PROJECT_KIND_SET },
+        )[0];
+        if (existingOwningProject) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: `Project '${existingOwningProject.id}' already uses workspace root '${existingOwningProject.workspaceRoot}'.`,
+          });
+        }
+      }
       yield* validateProjectPinLimit({
         command,
         readModel,
         projectId: command.projectId,
-        nextKind: command.kind ?? "project",
+        nextKind: nextProjectKind,
         staleProjectIds: new Set(staleProjects.map((project) => project.id)),
       });
 
@@ -154,7 +185,7 @@ export const decideProjectCommand = Effect.fn("decideProjectCommand")(function* 
         type: "project.created",
         payload: {
           projectId: command.projectId,
-          kind: command.kind ?? "project",
+          kind: nextProjectKind,
           title: command.title,
           workspaceRoot: command.workspaceRoot,
           defaultModelSelection: command.defaultModelSelection ?? null,
@@ -173,19 +204,24 @@ export const decideProjectCommand = Effect.fn("decideProjectCommand")(function* 
         command,
         projectId: command.projectId,
       });
-      if (command.workspaceRoot !== undefined && command.kind !== "chat") {
+      const nextProjectKind = command.kind ?? existingProject.kind ?? "project";
+      const ownershipMayChange =
+        command.workspaceRoot !== undefined ||
+        (command.kind !== undefined && command.kind !== (existingProject.kind ?? "project"));
+      if (ownershipMayChange && nextProjectKind !== "chat") {
         yield* requireProjectWorkspaceRootAvailable({
           readModel,
           command,
-          workspaceRoot: command.workspaceRoot,
+          workspaceRoot: command.workspaceRoot ?? existingProject.workspaceRoot,
           excludeProjectId: command.projectId,
+          kinds: WORKSPACE_OWNING_PROJECT_KIND_SET,
         });
       }
       yield* validateProjectPinLimit({
         command,
         readModel,
         projectId: command.projectId,
-        nextKind: command.kind ?? existingProject.kind ?? "project",
+        nextKind: nextProjectKind,
         nextDeletedAt: existingProject.deletedAt,
         wasPinned: existingProject.isPinned === true,
       });

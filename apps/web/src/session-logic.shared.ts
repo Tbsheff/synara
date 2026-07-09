@@ -94,7 +94,19 @@ export function compareActivitiesByOrder(
     return lifecycleRankComparison;
   }
 
+  if (left.kind === "context-compaction" && right.kind === "context-compaction") {
+    const compactionRankComparison =
+      contextCompactionOrderRank(left.summary) - contextCompactionOrderRank(right.summary);
+    if (compactionRankComparison !== 0) {
+      return compactionRankComparison;
+    }
+  }
+
   return left.id.localeCompare(right.id);
+}
+
+function contextCompactionOrderRank(summary: string): number {
+  return summary === "Compacting conversation..." ? 0 : 1;
 }
 
 function compareActivityLifecycleRank(kind: string): number {

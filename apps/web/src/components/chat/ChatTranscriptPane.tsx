@@ -19,7 +19,6 @@ import {
   type RefObject,
   type TouchEventHandler,
   type WheelEventHandler,
-  useRef,
 } from "react";
 import { type TimestampFormat } from "../../appSettings";
 import { type TurnDiffSummary, type WorktreeSetupSnapshot } from "../../types";

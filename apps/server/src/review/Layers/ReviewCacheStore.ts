@@ -61,8 +61,38 @@ function normalizeLegacyChangesetPayload(input: unknown): unknown {
   if (typeof patch !== "string") {
     return input;
   }
+  const pullRequest = record["pullRequest"];
+  const normalizedPullRequest =
+    typeof pullRequest === "object" && pullRequest !== null && !Array.isArray(pullRequest)
+      ? {
+          ...pullRequest,
+          isDraft:
+            typeof (pullRequest as Record<string, unknown>)["isDraft"] === "boolean"
+              ? (pullRequest as Record<string, unknown>)["isDraft"]
+              : false,
+          mergeability:
+            (pullRequest as Record<string, unknown>)["mergeability"] === "mergeable" ||
+            (pullRequest as Record<string, unknown>)["mergeability"] === "conflicting" ||
+            (pullRequest as Record<string, unknown>)["mergeability"] === "unknown"
+              ? (pullRequest as Record<string, unknown>)["mergeability"]
+              : "unknown",
+          additions:
+            typeof (pullRequest as Record<string, unknown>)["additions"] === "number"
+              ? (pullRequest as Record<string, unknown>)["additions"]
+              : null,
+          deletions:
+            typeof (pullRequest as Record<string, unknown>)["deletions"] === "number"
+              ? (pullRequest as Record<string, unknown>)["deletions"]
+              : null,
+          changedFiles:
+            typeof (pullRequest as Record<string, unknown>)["changedFiles"] === "number"
+              ? (pullRequest as Record<string, unknown>)["changedFiles"]
+              : null,
+        }
+      : pullRequest;
   return {
     ...record,
+    ...(normalizedPullRequest !== undefined ? { pullRequest: normalizedPullRequest } : {}),
     patchSignature:
       typeof record["patchSignature"] === "string" && record["patchSignature"].trim().length > 0
         ? record["patchSignature"]

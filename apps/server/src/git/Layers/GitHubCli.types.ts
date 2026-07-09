@@ -22,6 +22,11 @@ export const RawGitHubPullRequestSchema = Schema.Struct({
   headRefName: TrimmedNonEmptyString,
   state: Schema.optional(Schema.NullOr(Schema.String)),
   mergedAt: Schema.optional(Schema.NullOr(Schema.String)),
+  isDraft: Schema.optional(Schema.NullOr(Schema.Boolean)),
+  mergeable: Schema.optional(Schema.NullOr(Schema.String)),
+  additions: Schema.optional(Schema.NullOr(Schema.Number)),
+  deletions: Schema.optional(Schema.NullOr(Schema.Number)),
+  changedFiles: Schema.optional(Schema.NullOr(Schema.Number)),
   isCrossRepository: Schema.optional(Schema.Boolean),
   headRepository: Schema.optional(
     Schema.NullOr(
@@ -37,6 +42,7 @@ export const RawGitHubPullRequestSchema = Schema.Struct({
       }),
     ),
   ),
+  updatedAt: Schema.optional(Schema.NullOr(Schema.String)),
 });
 
 export const RawGitHubRepositoryCloneUrlsSchema = Schema.Struct({

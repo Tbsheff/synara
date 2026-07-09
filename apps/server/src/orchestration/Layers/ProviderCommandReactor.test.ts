@@ -470,6 +470,7 @@ describe("ProviderCommandReactor", () => {
       drain,
       emitRuntimeEvent,
       getThreadRuntime,
+      setRuntimeSessionTurnState,
     };
   }
 

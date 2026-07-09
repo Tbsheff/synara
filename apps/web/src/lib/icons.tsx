@@ -143,6 +143,9 @@ export const ChevronUpIcon = adaptIcon(IconChevronUp);
 export const ChevronsUpDownIcon = adaptIcon(IconSelector);
 export const CircleAlertIcon = adaptIcon(IconAlertCircle);
 export const CircleCheckIcon = adaptIcon(IconCircleCheck);
+export const CheckCircle2Icon: LucideIcon = centralIconWrapper("check-circle-2");
+export const CircleQuestionIcon: LucideIcon = centralIconWrapper("circle-questionmark");
+export const ArrowUpCircleIcon: LucideIcon = centralIconWrapper("arrow-up-circle");
 export const CloudUploadIcon = centralIconWrapper("cloud-upload");
 export const CloudSyncIcon = centralIconWrapper("cloud-sync");
 export const Columns2Icon = adaptIcon(IconColumns2);
@@ -256,6 +259,10 @@ export const SquareSplitVertical: LucideIcon = (props) => (
 export const DisposableThreadIcon: LucideIcon = (props) => (
   <LuMessageSquareDashed className={cn("size-3 shrink-0", props.className)} style={props.style} />
 );
+const TemporaryThreadGlyph = centralIconWrapper("bubble-annotation-5");
+export const TemporaryThreadIcon: LucideIcon = ({ className, ...props }) => (
+  <TemporaryThreadGlyph className={cn("size-3.5 shrink-0", className)} {...props} />
+);
 export const TerminalIcon = centralIconWrapper("console");
 export const TerminalSquare = centralIconWrapper("console");
 export const TerminalSquareIcon = centralIconWrapper("console");
@@ -267,3 +274,4 @@ export const WrenchIcon = adaptIcon(IconTool);
 export const WorktreeIcon = centralIconWrapper("arrow-split-right");
 export const XIcon = adaptIcon(IconX);
 export const ZapIcon = adaptIcon(IconBolt);
+export const FastModeIcon: LucideIcon = centralIconWrapper("zap", "fill");

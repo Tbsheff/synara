@@ -24,11 +24,33 @@ export type SidebarDerivedProjectData = {
   projectThreads: SidebarThreadSummary[];
   orderedProjectThreadIds: ThreadId[];
   visibleEntries: SidebarProjectEntry[];
-  hasHiddenThreads: boolean;
-  isThreadListExpanded: boolean;
+  threadListExtraPages: number;
+  canShowMoreThreads: boolean;
+  canShowLessThreads: boolean;
   activeEntryId: ThreadId | null;
   projectStatus: ReturnType<typeof resolveProjectStatusIndicator>;
 };
+
+function resolveProjectThreadListPaging(input: {
+  totalCount: number;
+  baseLimit: number;
+  pageSize: number;
+  requestedExtraPages: number;
+}) {
+  const hiddenBeyondBase = Math.max(0, input.totalCount - input.baseLimit);
+  const maxExtraPages = input.pageSize > 0 ? Math.ceil(hiddenBeyondBase / input.pageSize) : 0;
+  const requestedExtraPages = Number.isFinite(input.requestedExtraPages)
+    ? Math.floor(input.requestedExtraPages)
+    : 0;
+  const effectiveExtraPages = Math.min(Math.max(0, requestedExtraPages), maxExtraPages);
+  const previewLimit = input.baseLimit + effectiveExtraPages * input.pageSize;
+  return {
+    effectiveExtraPages,
+    previewLimit,
+    canShowMore: input.totalCount > previewLimit,
+    canShowLess: effectiveExtraPages > 0,
+  };
+}
 
 export function getVisibleThreadsForProject<T extends Pick<SidebarThreadSummary, "id">>(input: {
   threads: readonly T[];
@@ -279,7 +301,7 @@ export function getVisibleSidebarThreadIds(input: {
   threads: readonly (Pick<SidebarThreadSummary, "id" | "projectId" | "parentThreadId"> &
     SidebarThreadSortInput)[];
   activeThreadId: Thread["id"] | undefined;
-  expandedThreadListsByProject: ReadonlySet<Project["id"]>;
+  expandedThreadListsByProject?: ReadonlySet<Project["id"]>;
   expandedSubagentParentIds?: ReadonlySet<Thread["id"]>;
   previewLimit: number;
   threadSortOrder: SidebarThreadSortOrder;
@@ -287,7 +309,7 @@ export function getVisibleSidebarThreadIds(input: {
   const {
     activeThreadId,
     expandedSubagentParentIds,
-    expandedThreadListsByProject,
+    expandedThreadListsByProject = new Set(),
     previewLimit,
     projects,
     threadSortOrder,
@@ -354,10 +376,11 @@ export function deriveSidebarProjectData(input: {
   sortedSidebarThreadsByProjectId: ReadonlyMap<ProjectId, SidebarThreadSummary[]>;
   pinnedThreadIds: readonly ThreadId[];
   expandedParentThreadIds: ReadonlySet<ThreadId>;
-  expandedThreadListProjectCwds: ReadonlySet<string>;
+  threadListExtraPagesByProjectCwd: ReadonlyMap<string, number>;
   normalizeProjectCwd: (cwd: string) => string;
   activeSidebarThreadId: ThreadId | undefined;
   previewLimit: number;
+  previewPageSize: number;
   resolveThreadStatus?: (
     thread: SidebarThreadSummary,
   ) => ReturnType<typeof resolveThreadStatusPill>;
@@ -378,9 +401,8 @@ export function deriveSidebarProjectData(input: {
             }),
       ),
     );
-    const isThreadListExpanded = input.expandedThreadListProjectCwds.has(
-      input.normalizeProjectCwd(project.cwd),
-    );
+    const requestedExtraPages =
+      input.threadListExtraPagesByProjectCwd.get(input.normalizeProjectCwd(project.cwd)) ?? 0;
     const orderedProjectThreadIds = projectThreads.map((thread) => thread.id);
 
     // Collapsed folders should not build or render their full tree; large projects can
@@ -414,8 +436,9 @@ export function deriveSidebarProjectData(input: {
         projectThreads,
         orderedProjectThreadIds,
         visibleEntries,
-        hasHiddenThreads: projectThreads.length > visibleEntries.length,
-        isThreadListExpanded,
+        threadListExtraPages: 0,
+        canShowMoreThreads: false,
+        canShowLessThreads: false,
         activeEntryId: activeThread?.id ?? null,
         projectStatus,
       });
@@ -442,11 +465,16 @@ export function deriveSidebarProjectData(input: {
       input.activeSidebarThreadId === undefined
         ? null
         : (orderedEntries.find((entry) => entry.rowId === input.activeSidebarThreadId) ?? null);
+    const paging = resolveProjectThreadListPaging({
+      totalCount: orderedEntries.length,
+      baseLimit: input.previewLimit,
+      pageSize: input.previewPageSize,
+      requestedExtraPages,
+    });
     const { visibleEntries: renderedEntries } = getVisibleSidebarEntriesForPreview({
       entries: orderedEntries,
       activeEntryId: activeEntry?.rowId,
-      isExpanded: isThreadListExpanded,
-      previewLimit: input.previewLimit,
+      previewLimit: paging.previewLimit,
     });
 
     byProjectId.set(project.id, {
@@ -454,8 +482,9 @@ export function deriveSidebarProjectData(input: {
       projectThreads,
       orderedProjectThreadIds,
       visibleEntries: renderedEntries,
-      hasHiddenThreads: renderedEntries.length < orderedEntries.length,
-      isThreadListExpanded,
+      threadListExtraPages: paging.effectiveExtraPages,
+      canShowMoreThreads: paging.canShowMore && renderedEntries.length < orderedEntries.length,
+      canShowLessThreads: paging.canShowLess,
       activeEntryId: activeEntry?.rowId ?? null,
       projectStatus,
     });

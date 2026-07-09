@@ -67,6 +67,16 @@ function readUnknownErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function parsePullRequestRepositoryFromUrl(
+  url: string,
+): { host: string; owner: string; repo: string } | null {
+  const match = /^https?:\/\/([^/]+)\/([^/]+)\/([^/]+)\/pull\/\d+(?:\/.*)?$/i.exec(url.trim());
+  const host = match?.[1]?.trim() ?? "";
+  const owner = match?.[2]?.trim() ?? "";
+  const repo = match?.[3]?.trim() ?? "";
+  return host && owner && repo ? { host, owner, repo } : null;
+}
+
 function toGitManagerServiceError(operation: string, error: unknown): GitManagerServiceError {
   if (
     error instanceof GitManagerError ||

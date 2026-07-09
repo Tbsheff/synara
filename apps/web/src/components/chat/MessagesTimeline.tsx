@@ -34,7 +34,15 @@ import { deriveTimelineEntries, formatClockElapsed, type WorkLogEntry } from "..
 import { type TurnDiffSummary } from "../../types";
 import ChatMarkdown from "../ChatMarkdown";
 import { InlineLinkChip } from "../InlineLinkChip";
-import { ChangesIcon, NewThreadIcon, PinIcon, SteerIcon, Undo2Icon } from "~/lib/icons";
+import {
+  ChangesIcon,
+  ClockIcon,
+  type LucideIcon,
+  NewThreadIcon,
+  PinIcon,
+  SteerIcon,
+  Undo2Icon,
+} from "~/lib/icons";
 import { pinActionLabel } from "~/lib/pin";
 import { Button } from "../ui/button";
 import { buildExpandedImagePreview, ExpandedImagePreview } from "./ExpandedImagePreview";
@@ -109,6 +117,11 @@ import {
   isFileChangeWorkEntry,
   prefersCompactWorkEntryRow,
 } from "./workEntryRow";
+import {
+  resolveActiveTrailSnapshot,
+  type ActiveTrailSnapshot,
+  type MessageTrailAnchor,
+} from "./messageTrail.logic";
 
 const MAX_VISIBLE_INLINE_TOOL_ENTRIES = 4;
 // Changed-files list in the per-turn card is capped so large turns stay compact;
@@ -127,12 +140,20 @@ const TRANSCRIPT_DISCLOSURE_TRANSITION_MS = 220;
 const TRANSCRIPT_DISCLOSURE_CLEANUP_BUFFER_MS = 40;
 const MESSAGE_SEND_ENTER_ANIMATION_MS = 180;
 const MESSAGE_SEND_ENTER_CLEANUP_BUFFER_MS = 60;
+const TRAIL_VIEWABILITY_CONFIG = { itemVisiblePercentThreshold: 0 } as const;
 // The deep-link "active" ring is applied imperatively to the rendered marker spans so jumping
 // never re-parses a message's markdown tree (the className is purely a CSS box-shadow).
 const ACTIVE_MARKER_CLASS_NAME = "thread-marker-active";
 const EMPTY_MESSAGE_MARKERS: readonly ThreadMarker[] = [];
 const EMPTY_THREAD_MARKERS_BY_MESSAGE_ID = new Map<MessageId, readonly ThreadMarker[]>();
 const EMPTY_MESSAGE_ID_SET: ReadonlySet<MessageId> = new Set();
+const USER_TURN_MARKER_PRESENTATION: Record<
+  UserTurnMarkerKind,
+  { readonly Icon: LucideIcon; readonly label: string }
+> = {
+  automation: { Icon: ClockIcon, label: "Sent via Automation" },
+  steer: { Icon: SteerIcon, label: "Steering conversation" },
+};
 
 /**
  * Imperative handle the transcript exposes so the Environment panel's pinned-message
@@ -322,6 +343,7 @@ interface MessagesTimelineProps {
   onMarkdownContentReflow?: (() => void) | undefined;
   shouldTailReflow?: (() => boolean) | undefined;
   onIsAtEndChange?: (isAtEnd: boolean) => void;
+  onTrailHighlightsChange?: (snapshot: ActiveTrailSnapshot) => void;
   onMessagesClickCapture?: ComponentProps<typeof LegendList>["onClickCapture"];
   onMessagesMouseUp?: ComponentProps<typeof LegendList>["onMouseUp"];
   onMessagesPointerCancel?: ComponentProps<typeof LegendList>["onPointerCancel"];
@@ -352,6 +374,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   isWorking,
   activeTurnInProgress,
   activeTurnStartedAt,
+  worktreeSetup = null,
+  followLiveOutput = false,
   listRef,
   controllerRef,
   pinnedMessageIds,
@@ -377,6 +401,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onMarkdownContentReflow,
   shouldTailReflow,
   onIsAtEndChange,
+  onTrailHighlightsChange,
   onMessagesClickCapture,
   onMessagesMouseUp,
   onMessagesPointerCancel,
@@ -808,16 +833,61 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       window.cancelAnimationFrame(frameId);
     };
   }, [onIsAtEndChange, resolvedListRef, rows.length]);
+  const userMessageAnchors = useMemo<MessageTrailAnchor[]>(() => {
+    const anchors: MessageTrailAnchor[] = [];
+    rows.forEach((row, index) => {
+      if (row.kind === "message" && row.message.role === "user") {
+        anchors.push({ id: row.message.id, rowIndex: index });
+      }
+    });
+    return anchors;
+  }, [rows]);
+  const userMessageAnchorsRef = useRef(userMessageAnchors);
+  userMessageAnchorsRef.current = userMessageAnchors;
+  const emitTrailHighlightsForViewport = useCallback(
+    (topRowIndex: number, bottomRowIndex: number) => {
+      if (!onTrailHighlightsChange || !Number.isFinite(topRowIndex)) return;
+      onTrailHighlightsChange(
+        resolveActiveTrailSnapshot(userMessageAnchorsRef.current, topRowIndex, bottomRowIndex),
+      );
+    },
+    [onTrailHighlightsChange],
+  );
   const handleListScroll = useCallback<NonNullable<MessagesTimelineProps["onMessagesScroll"]>>(
     (event) => {
       onMessagesScroll?.(event);
       const state = resolvedListRef.current?.getState?.();
       if (state) {
         onIsAtEndChange?.(state.isAtEnd);
+        emitTrailHighlightsForViewport(state.start, state.end);
       }
     },
-    [onIsAtEndChange, onMessagesScroll, resolvedListRef],
+    [emitTrailHighlightsForViewport, onIsAtEndChange, onMessagesScroll, resolvedListRef],
   );
+  const handleViewableItemsChanged = useCallback<
+    NonNullable<ComponentProps<typeof LegendList>["onViewableItemsChanged"]>
+  >(
+    ({ viewableItems }) => {
+      let topIndex = Number.POSITIVE_INFINITY;
+      let bottomIndex = Number.NEGATIVE_INFINITY;
+      for (const token of viewableItems) {
+        if (token.isViewable) {
+          topIndex = Math.min(topIndex, token.index);
+          bottomIndex = Math.max(bottomIndex, token.index);
+        }
+      }
+      emitTrailHighlightsForViewport(topIndex, bottomIndex);
+    },
+    [emitTrailHighlightsForViewport],
+  );
+  useEffect(() => {
+    if (!onTrailHighlightsChange) return;
+    const frameId = window.requestAnimationFrame(() => {
+      const state = resolvedListRef.current?.getState?.();
+      if (state) emitTrailHighlightsForViewport(state.start, state.end);
+    });
+    return () => window.cancelAnimationFrame(frameId);
+  }, [emitTrailHighlightsForViewport, onTrailHighlightsChange, resolvedListRef, rows.length]);
   const toggleFileChangesExpanded = useCallback((turnId: TurnId) => {
     setExpandedFileChangesByTurnId((current) => ({
       ...current,
@@ -1579,7 +1649,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     <div className="mt-1 mb-4 overflow-hidden rounded-[0.65rem] border border-[color:var(--color-border-light)] dark:border-[color:color-mix(in_srgb,var(--color-border-light)_55%,transparent)]">
                       <div
                         className={cn(
-                          "flex items-center justify-between gap-3 bg-[var(--app-user-message-background)] px-3 py-1.5",
+                        "flex items-center justify-between gap-3 bg-[var(--app-user-message-background)] px-3 py-[8px]",
                           fileChangesExpanded &&
                             "border-b border-[color:var(--color-border-light)]",
                         )}
@@ -1705,7 +1775,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             className="-ml-0.5 pb-2 text-muted-foreground/70"
             style={{ fontSize: chatTypographyStyle.fontSize }}
           >
-            Working for{" "}
+            {row.label ?? "Working"} for{" "}
             {nowIso ? (
               (formatWorkingTimer(row.createdAt, nowIso) ?? "0s")
             ) : (
@@ -1774,13 +1844,21 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         // has to be surfaced through extraData.
         extraData={timelineExtraData}
         initialScrollAtEnd
-        maintainVisibleContentPosition
+        maintainScrollAtEnd={followLiveOutput}
+        maintainScrollAtEndThreshold={0.1}
+        {...(!followLiveOutput ? { maintainVisibleContentPosition: true } : {})}
         onClickCapture={onMessagesClickCapture}
         onMouseUp={onMessagesMouseUp}
         onPointerCancel={handleMessagesPointerCancel}
         onPointerDown={handleMessagesPointerDown}
         onPointerUp={handleMessagesPointerUp}
         onScroll={handleListScroll}
+        {...(onTrailHighlightsChange
+          ? {
+              onViewableItemsChanged: handleViewableItemsChanged,
+              viewabilityConfig: TRAIL_VIEWABILITY_CONFIG,
+            }
+          : {})}
         onKeyDown={handleMessagesKeyDown}
         onTouchEnd={handleMessagesTouchEnd}
         onTouchMove={handleMessagesTouchMove}

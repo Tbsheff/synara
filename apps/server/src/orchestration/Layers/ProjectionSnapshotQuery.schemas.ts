@@ -128,6 +128,21 @@ export const ProjectIdLookupInput = Schema.Struct({
 export const ThreadIdLookupInput = Schema.Struct({
   threadId: ThreadId,
 });
+export const ThreadMessagesByThreadLookupInput = Schema.Struct({
+  threadId: ThreadId,
+  maxMessages: Schema.NullOr(NonNegativeInt),
+});
+export const ThreadTurnLookupInput = Schema.Struct({
+  threadId: ThreadId,
+  turnId: TurnId,
+});
+export const ProjectionGeneratedImageActivityDbRowSchema = Schema.Struct({
+  kind: Schema.String,
+  payload: Schema.fromJsonString(Schema.Unknown),
+});
+export const ProjectionFileChangeActivityPayloadDbRowSchema = Schema.Struct({
+  payload: Schema.fromJsonString(Schema.Unknown),
+});
 export const SyntheticSubagentParentLookupInput = Schema.Struct({
   threadId: ThreadId,
 });
@@ -142,6 +157,7 @@ export const ProjectionThreadIdLookupRowSchema = Schema.Struct({
 export const ProjectionThreadCheckpointContextThreadRowSchema = Schema.Struct({
   threadId: ThreadId,
   projectId: ProjectId,
+  projectKind: Schema.Literals(["project", "studio"]),
   workspaceRoot: Schema.String,
   envMode: ThreadEnvironmentMode,
   worktreePath: Schema.NullOr(Schema.String),
@@ -149,10 +165,12 @@ export const ProjectionThreadCheckpointContextThreadRowSchema = Schema.Struct({
 export const ProjectionFullThreadDiffContextRowSchema = Schema.Struct({
   threadId: ThreadId,
   projectId: ProjectId,
+  projectKind: Schema.Literals(["project", "studio"]),
   workspaceRoot: Schema.String,
   envMode: ThreadEnvironmentMode,
   worktreePath: Schema.NullOr(Schema.String),
   latestCheckpointTurnCount: Schema.NullOr(NonNegativeInt),
+  baselineCheckpointRef: Schema.NullOr(CheckpointRef),
   toCheckpointRef: Schema.NullOr(CheckpointRef),
 });
 
@@ -183,13 +201,6 @@ export type ProjectionThreadSessionDbRow = Schema.Schema.Type<
 >;
 
 export const REQUIRED_SNAPSHOT_PROJECTORS = [
-  ORCHESTRATION_PROJECTOR_NAMES.projects,
-  ORCHESTRATION_PROJECTOR_NAMES.threads,
+  ORCHESTRATION_PROJECTOR_NAMES.hot,
   ORCHESTRATION_PROJECTOR_NAMES.threadShellSummaries,
-  ORCHESTRATION_PROJECTOR_NAMES.threadMessages,
-  ORCHESTRATION_PROJECTOR_NAMES.threadProposedPlans,
-  ORCHESTRATION_PROJECTOR_NAMES.threadProviderItems,
-  ORCHESTRATION_PROJECTOR_NAMES.threadActivities,
-  ORCHESTRATION_PROJECTOR_NAMES.threadSessions,
-  ORCHESTRATION_PROJECTOR_NAMES.checkpoints,
 ] as const;

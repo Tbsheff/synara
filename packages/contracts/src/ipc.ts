@@ -263,6 +263,7 @@ export interface DesktopUpdateState {
   errorContext: "check" | "download" | "install" | null;
   canRetry: boolean;
   releaseUrl: string | null;
+  installFailureCount: number;
 }
 
 export interface DesktopUpdateActionResult {

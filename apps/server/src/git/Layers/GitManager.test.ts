@@ -28,6 +28,10 @@ import { createGitHubCliWithFakeGh, type FakeGhScenario } from "../testing/fakeG
 import { makeGitManager } from "./GitManager.ts";
 import { ServerConfig } from "../../config.ts";
 
+function isGitHubCliError(error: unknown): error is GitHubCliError {
+  return error instanceof GitHubCliError;
+}
+
 interface FakeGitTextGeneration {
   generateCommitMessage: (input: {
     cwd: string;
@@ -343,7 +347,7 @@ function createTextGeneration(overrides: Partial<FakeGitTextGeneration> = {}): T
   };
 }
 
-function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
+function createLegacyGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
   service: GitHubCliShape;
   ghCalls: string[];
 } {
@@ -553,7 +557,7 @@ function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
             "--limit",
             String(input.limit ?? 1),
             "--json",
-            "number,title,url,baseRefName,headRefName,state,mergedAt,isCrossRepository,headRepository,headRepositoryOwner",
+            PULL_REQUEST_SUMMARY_JSON_FIELDS,
           ],
         }).pipe(
           Effect.map((result) => {
@@ -566,6 +570,11 @@ function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
                 baseRefName: string;
                 headRefName: string;
                 state?: Exclude<GitHubPullRequestSummary["state"], undefined>;
+                isDraft?: boolean;
+                mergeability?: "mergeable" | "conflicting" | "unknown";
+                additions?: number | null;
+                deletions?: number | null;
+                changedFiles?: number | null;
                 isCrossRepository?: boolean;
                 headRepositoryNameWithOwner?: string | null;
                 headRepositoryOwnerLogin?: string | null;
@@ -582,6 +591,19 @@ function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
                   undefined
                 >;
               }
+              summary.isDraft = pullRequest.isDraft === true;
+              summary.mergeability =
+                pullRequest.mergeable === "MERGEABLE"
+                  ? "mergeable"
+                  : pullRequest.mergeable === "CONFLICTING"
+                    ? "conflicting"
+                    : "unknown";
+              summary.additions =
+                typeof pullRequest.additions === "number" ? pullRequest.additions : null;
+              summary.deletions =
+                typeof pullRequest.deletions === "number" ? pullRequest.deletions : null;
+              summary.changedFiles =
+                typeof pullRequest.changedFiles === "number" ? pullRequest.changedFiles : null;
               if (typeof pullRequest.isCrossRepository === "boolean") {
                 summary.isCrossRepository = pullRequest.isCrossRepository;
               }
@@ -642,7 +664,7 @@ function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
             "view",
             input.reference,
             "--json",
-            "number,title,url,baseRefName,headRefName,state,mergedAt,isCrossRepository,headRepository,headRepositoryOwner",
+            PULL_REQUEST_SUMMARY_JSON_FIELDS,
           ],
         }).pipe(Effect.map((result) => JSON.parse(result.stdout) as GitHubPullRequestSummary)),
       listRepositoryPullRequests: () => Effect.succeed([]),

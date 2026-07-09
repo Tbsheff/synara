@@ -18,6 +18,7 @@ import { Route as ChatPluginsRouteImport } from './routes/_chat.plugins'
 import { Route as ChatAutomationsRouteImport } from './routes/_chat.automations'
 import { Route as ChatThreadIdRouteImport } from './routes/_chat.$threadId'
 import { Route as ChatWorkspaceIndexRouteImport } from './routes/_chat.workspace.index'
+import { Route as ChatStudioIndexRouteImport } from './routes/_chat.studio.index'
 import { Route as ChatReviewIndexRouteImport } from './routes/_chat.review.index'
 import { Route as ChatKanbanIndexRouteImport } from './routes/_chat.kanban.index'
 import { Route as ChatAutomationsIndexRouteImport } from './routes/_chat.automations.index'
@@ -69,6 +70,11 @@ const ChatThreadIdRoute = ChatThreadIdRouteImport.update({
 const ChatWorkspaceIndexRoute = ChatWorkspaceIndexRouteImport.update({
   id: '/workspace/',
   path: '/workspace/',
+  getParentRoute: () => ChatRoute,
+} as any)
+const ChatStudioIndexRoute = ChatStudioIndexRouteImport.update({
+  id: '/studio/',
+  path: '/studio/',
   getParentRoute: () => ChatRoute,
 } as any)
 const ChatReviewIndexRoute = ChatReviewIndexRouteImport.update({
@@ -130,6 +136,7 @@ export interface FileRoutesByFullPath {
   '/automations/': typeof ChatAutomationsIndexRoute
   '/kanban/': typeof ChatKanbanIndexRoute
   '/review/': typeof ChatReviewIndexRoute
+  '/studio/': typeof ChatStudioIndexRoute
   '/workspace/': typeof ChatWorkspaceIndexRoute
 }
 export interface FileRoutesByTo {
@@ -146,6 +153,7 @@ export interface FileRoutesByTo {
   '/automations': typeof ChatAutomationsIndexRoute
   '/kanban': typeof ChatKanbanIndexRoute
   '/review': typeof ChatReviewIndexRoute
+  '/studio': typeof ChatStudioIndexRoute
   '/workspace': typeof ChatWorkspaceIndexRoute
 }
 export interface FileRoutesById {
@@ -166,6 +174,7 @@ export interface FileRoutesById {
   '/_chat/automations/': typeof ChatAutomationsIndexRoute
   '/_chat/kanban/': typeof ChatKanbanIndexRoute
   '/_chat/review/': typeof ChatReviewIndexRoute
+  '/_chat/studio/': typeof ChatStudioIndexRoute
   '/_chat/workspace/': typeof ChatWorkspaceIndexRoute
 }
 export interface FileRouteTypes {
@@ -186,6 +195,7 @@ export interface FileRouteTypes {
     | '/automations/'
     | '/kanban/'
     | '/review/'
+    | '/studio/'
     | '/workspace/'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -202,6 +212,7 @@ export interface FileRouteTypes {
     | '/automations'
     | '/kanban'
     | '/review'
+    | '/studio'
     | '/workspace'
   id:
     | '__root__'
@@ -221,6 +232,7 @@ export interface FileRouteTypes {
     | '/_chat/automations/'
     | '/_chat/kanban/'
     | '/_chat/review/'
+    | '/_chat/studio/'
     | '/_chat/workspace/'
   fileRoutesById: FileRoutesById
 }
@@ -291,6 +303,13 @@ declare module '@tanstack/react-router' {
       path: '/workspace'
       fullPath: '/workspace/'
       preLoaderRoute: typeof ChatWorkspaceIndexRouteImport
+      parentRoute: typeof ChatRoute
+    }
+    '/_chat/studio/': {
+      id: '/_chat/studio/'
+      path: '/studio'
+      fullPath: '/studio/'
+      preLoaderRoute: typeof ChatStudioIndexRouteImport
       parentRoute: typeof ChatRoute
     }
     '/_chat/review/': {

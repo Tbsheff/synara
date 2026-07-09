@@ -71,6 +71,85 @@ export const THREAD_SELECTION_SAFE_SELECTOR = "[data-thread-item], [data-thread-
 export const SIDEBAR_THREAD_PREWARM_LIMIT = 10;
 export const DEBUG_FEATURE_FLAGS_MENU_STORAGE_KEY = "synara:show-debug-feature-flags-menu";
 export type SidebarNewThreadEnvMode = "local" | "worktree";
+export type SidebarView = "threads" | "studio" | "workspace";
+
+export function resolvePendingSidebarViewSelection(
+  activeView: SidebarView,
+  selectedView: SidebarView,
+): SidebarView | null {
+  return selectedView === activeView ? null : selectedView;
+}
+
+export function pruneProjectThreadListPagingForCollapsedProjects<
+  T extends Pick<Project, "cwd" | "expanded">,
+>(input: {
+  threadListExtraPagesByProjectCwd: ReadonlyMap<string, number>;
+  projects: readonly T[];
+  normalizeProjectCwd: (cwd: string) => string;
+}): ReadonlyMap<string, number> {
+  const { normalizeProjectCwd, projects, threadListExtraPagesByProjectCwd } = input;
+  const collapsedProjectCwds = new Set(
+    projects
+      .filter((project) => !project.expanded)
+      .map((project) => normalizeProjectCwd(project.cwd))
+      .filter((cwd) => cwd.length > 0),
+  );
+  if (collapsedProjectCwds.size === 0) return threadListExtraPagesByProjectCwd;
+
+  let changed = false;
+  const next = new Map<string, number>();
+  for (const [cwd, extraPages] of threadListExtraPagesByProjectCwd) {
+    if (collapsedProjectCwds.has(cwd)) {
+      changed = true;
+    } else {
+      next.set(cwd, extraPages);
+    }
+  }
+  return changed ? next : threadListExtraPagesByProjectCwd;
+}
+
+export type SidebarThreadListPaging = {
+  effectiveExtraPages: number;
+  previewLimit: number;
+  canShowMore: boolean;
+  canShowLess: boolean;
+};
+
+export function resolveSidebarThreadListPaging(input: {
+  totalCount: number;
+  baseLimit: number;
+  pageSize: number;
+  requestedExtraPages: number;
+}): SidebarThreadListPaging {
+  const { baseLimit, pageSize, totalCount } = input;
+  const hiddenBeyondBase = Math.max(0, totalCount - baseLimit);
+  const maxExtraPages = pageSize > 0 ? Math.ceil(hiddenBeyondBase / pageSize) : 0;
+  const requestedExtraPages = Number.isFinite(input.requestedExtraPages)
+    ? Math.floor(input.requestedExtraPages)
+    : 0;
+  const effectiveExtraPages = Math.min(Math.max(0, requestedExtraPages), maxExtraPages);
+  const previewLimit = baseLimit + effectiveExtraPages * pageSize;
+  return {
+    effectiveExtraPages,
+    previewLimit,
+    canShowMore: totalCount > previewLimit,
+    canShowLess: effectiveExtraPages > 0,
+  };
+}
+
+export function partitionSidebarThreadsByProjectIds<
+  T extends Pick<SidebarThreadSummary, "projectId">,
+>(
+  threads: readonly T[],
+  studioProjectIds: ReadonlySet<ProjectId>,
+): { readonly studioThreads: T[]; readonly nonStudioThreads: T[] } {
+  const studioThreads: T[] = [];
+  const nonStudioThreads: T[] = [];
+  for (const thread of threads) {
+    (studioProjectIds.has(thread.projectId) ? studioThreads : nonStudioThreads).push(thread);
+  }
+  return { studioThreads, nonStudioThreads };
+}
 
 export type SidebarThreadHoverMetadata = {
   projectName: string | null;

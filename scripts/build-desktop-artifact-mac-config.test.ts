@@ -44,6 +44,7 @@ describe("createDesktopPlatformBuildConfig", () => {
     assert.equal(mac.hardenedRuntime, true);
     assert.equal(mac.entitlements, MAC_ENTITLEMENTS_PATH);
     assert.equal(mac.entitlementsInherit, MAC_INHERITED_ENTITLEMENTS_PATH);
+    assert.equal(mac.requirements, MAC_BRIDGE_REQUIREMENTS_PATH);
     assert.equal(mac.notarize, true);
   });
 

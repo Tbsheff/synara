@@ -37,6 +37,7 @@ import {
   shouldAutoDeleteTerminalThreadOnLastClose,
   shouldConsumePendingCustomBinaryConfirmation,
   shouldEnableComposerPastedTextCollapse,
+  shouldHandlePromptHistoryNavigationKey,
   shouldMaintainTranscriptTailFollow,
   shouldRenderProviderHealthBanner,
   shouldShowComposerModelBootstrapSkeleton,

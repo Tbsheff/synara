@@ -2846,7 +2846,7 @@ function readPersistedAttachmentIdsFromStorage(threadId: ThreadId): string[] {
   }
 }
 
-function readPersistedPromptHistoryAttachmentIdsFromStorage(threadId: ThreadId): string[] {
+function readPersistedPromptHistoryAttachmentIdsFromStorage(threadId: ThreadId): string[] | null {
   if (threadId.length === 0) {
     return [];
   }
@@ -2864,7 +2864,7 @@ function readPersistedPromptHistoryAttachmentIdsFromStorage(threadId: ThreadId):
     }
     return (savedDraft.attachments ?? []).map((attachment) => attachment.id);
   } catch {
-    return [];
+    return null;
   }
 }
 
@@ -2928,12 +2928,21 @@ function verifyPromptHistorySavedDraftPersistedAttachments(
     replace?: false,
   ) => void,
 ): void {
-  let persistedIdSet = new Set<string>();
+  let persistedIdSet: Set<string> | null = null;
   try {
     composerDebouncedStorage.flush();
-    persistedIdSet = new Set(readPersistedPromptHistoryAttachmentIdsFromStorage(threadId));
+    const persistedIds = readPersistedPromptHistoryAttachmentIdsFromStorage(threadId);
+    if (persistedIds !== null) {
+      persistedIdSet = new Set(persistedIds);
+    }
   } catch {
-    persistedIdSet = new Set();
+    persistedIdSet = null;
+  }
+  // Storage can be unavailable (private browsing, quota/security errors, or a
+  // non-browser runtime). Keep the in-memory persisted attachment handoff in
+  // that case instead of incorrectly downgrading it to a failed write.
+  if (persistedIdSet === null) {
+    return;
   }
   set((state) => {
     const current = state.draftsByThreadId[threadId];

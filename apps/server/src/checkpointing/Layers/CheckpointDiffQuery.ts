@@ -42,7 +42,6 @@ function buildTurnDiffResult(input: {
 const make = Effect.gen(function* () {
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const checkpointStore = yield* CheckpointStore;
-  const runtimeWorkspaceDiff = yield* RuntimeWorkspaceDiff;
 
   // A remote-runtime thread's edits land in the sandbox, not the host repo, so
   // the host CheckpointStore has nothing to diff. Returns the sandbox working-
@@ -75,6 +74,7 @@ const make = Effect.gen(function* () {
       if (remoteInstance === null) {
         return null;
       }
+      const runtimeWorkspaceDiff = yield* RuntimeWorkspaceDiff;
       const workspaceDiff = yield* runtimeWorkspaceDiff.read({
         instanceId: remoteInstance.instanceId,
         provider: remoteInstance.provider,

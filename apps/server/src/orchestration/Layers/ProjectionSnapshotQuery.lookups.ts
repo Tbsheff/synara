@@ -31,6 +31,7 @@ export const makeSnapshotLookups = (queries: SnapshotQueries) => {
     getFirstActiveThreadIdByProject,
     getThreadCheckpointContextThreadRow,
     listCheckpointRowsByThread,
+    listFileChangeActivityPayloadsByThread,
     getFullThreadDiffContextRow,
   } = queries;
 
@@ -129,6 +130,7 @@ export const makeSnapshotLookups = (queries: SnapshotQueries) => {
 
   const getThreadCheckpointContext: ProjectionSnapshotQueryShape["getThreadCheckpointContext"] = (
     threadId,
+    options,
   ) =>
     Effect.gen(function* () {
       const threadRow = yield* getThreadCheckpointContextThreadRow({ threadId }).pipe(
@@ -151,10 +153,22 @@ export const makeSnapshotLookups = (queries: SnapshotQueries) => {
           ),
         ),
       );
+      const fileChangeActivityPayloads = options?.includeFileChangeActivityPayloads
+        ? yield* listFileChangeActivityPayloadsByThread({ threadId }).pipe(
+            Effect.mapError(
+              toPersistenceSqlOrDecodeError(
+                "ProjectionSnapshotQuery.getThreadCheckpointContext:listFileChangeActivities:query",
+                "ProjectionSnapshotQuery.getThreadCheckpointContext:listFileChangeActivities:decodeRows",
+              ),
+            ),
+            Effect.map((rows) => rows.map((row) => row.payload)),
+          )
+        : undefined;
 
       return Option.some({
         threadId: threadRow.value.threadId,
         projectId: threadRow.value.projectId,
+        projectKind: threadRow.value.projectKind,
         workspaceRoot: threadRow.value.workspaceRoot,
         envMode: threadRow.value.envMode,
         worktreePath: threadRow.value.worktreePath,
@@ -169,6 +183,7 @@ export const makeSnapshotLookups = (queries: SnapshotQueries) => {
             completedAt: row.completedAt,
           }),
         ),
+        ...(fileChangeActivityPayloads ? { fileChangeActivityPayloads } : {}),
       });
     });
 
@@ -195,10 +210,12 @@ export const makeSnapshotLookups = (queries: SnapshotQueries) => {
       return Option.some({
         threadId: row.value.threadId,
         projectId: row.value.projectId,
+        projectKind: row.value.projectKind,
         workspaceRoot: row.value.workspaceRoot,
         envMode: row.value.envMode,
         worktreePath: row.value.worktreePath,
         latestCheckpointTurnCount: row.value.latestCheckpointTurnCount ?? 0,
+        baselineCheckpointRef: row.value.baselineCheckpointRef,
         toCheckpointRef: row.value.toCheckpointRef,
       });
     });

@@ -75,6 +75,7 @@ import { bufferLiveUiStream, type LiveUiStreamDropReport } from "./wsStreamBackp
 
 const MAX_DIAGNOSTIC_CHILD_PROCESSES = 80;
 const MAX_DIAGNOSTIC_ARGS_CHARS = 500;
+const CHAT_WORKSPACE_SUBDIRECTORIES = ["work", "outputs"] as const;
 
 function parseGitHubRepositoryNameWithOwnerFromRemoteUrl(url: string | null): string | null {
   const trimmed = url?.trim() ?? "";

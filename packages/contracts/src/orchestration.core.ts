@@ -182,6 +182,10 @@ export type AssistantDeliveryMode = typeof AssistantDeliveryMode.Type;
 export const TurnDispatchMode = Schema.Literals(["queue", "steer"]);
 export type TurnDispatchMode = typeof TurnDispatchMode.Type;
 export const DEFAULT_TURN_DISPATCH_MODE: TurnDispatchMode = "queue";
+// Marks who dispatched a user turn. Older persisted messages omit this and are
+// interpreted as user-dispatched by their consumers.
+export const MessageDispatchOrigin = Schema.Literals(["user", "automation"]);
+export type MessageDispatchOrigin = typeof MessageDispatchOrigin.Type;
 export const ProviderReviewTarget = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("uncommittedChanges"),
@@ -532,6 +536,13 @@ export const OrchestrationThreadPullRequest = Schema.Struct({
   baseBranch: TrimmedNonEmptyString,
   headBranch: TrimmedNonEmptyString,
   state: Schema.Literals(["open", "closed", "merged"]),
+  // Optional so last_known_pr_json rows persisted before these fields existed still
+  // decode. Literals stay inline to avoid a contracts import cycle through git.ts.
+  isDraft: Schema.optional(Schema.Boolean),
+  mergeability: Schema.optional(Schema.Literals(["mergeable", "conflicting", "unknown"])),
+  additions: Schema.optional(Schema.NullOr(NonNegativeInt)),
+  deletions: Schema.optional(Schema.NullOr(NonNegativeInt)),
+  changedFiles: Schema.optional(Schema.NullOr(NonNegativeInt)),
 });
 export type OrchestrationThreadPullRequest = typeof OrchestrationThreadPullRequest.Type;
 

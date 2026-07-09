@@ -56,6 +56,7 @@ import { ServerSettingsLive } from "./serverSettings";
 import { WorkspaceLayerLive } from "./workspace/runtimeLayer";
 import { ProjectFaviconResolverLive } from "./project/Layers/ProjectFaviconResolver";
 import { ProfileStatsQueryLive } from "./profileStats";
+import { ProfileStatsArchiveLive } from "./profileStatsArchive";
 import { ServerEnvironmentLive } from "./environment/Layers/ServerEnvironment";
 import { AutomationRepositoryLive } from "./persistence/Layers/AutomationRepository";
 import { ProjectionTurnRepositoryLive } from "./persistence/Layers/ProjectionTurns";
@@ -159,6 +160,9 @@ export function makeServerRuntimeServicesLayer() {
     RuntimeReceiptBusLive,
   );
   const runtimeIngestionLayer = ProviderRuntimeIngestionLive.pipe(
+    Layer.provideMerge(runtimeServicesLayer),
+  );
+  const studioOutputReactorLayer = StudioOutputReactorLive.pipe(
     Layer.provideMerge(runtimeServicesLayer),
   );
 

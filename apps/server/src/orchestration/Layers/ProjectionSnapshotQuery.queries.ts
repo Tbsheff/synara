@@ -4,6 +4,7 @@
 import { Schema } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
+import { STUDIO_OUTPUTS_ACTIVITY_KIND } from "@t3tools/contracts";
 
 import {
   FullThreadDiffContextLookupInput,
@@ -13,6 +14,8 @@ import {
   ProjectionCheckpointDbRowSchema,
   ProjectionCountsRowSchema,
   ProjectionFullThreadDiffContextRowSchema,
+  ProjectionFileChangeActivityPayloadDbRowSchema,
+  ProjectionGeneratedImageActivityDbRowSchema,
   ProjectionLatestTurnDbRowSchema,
   ProjectionProjectDbRowSchema,
   ProjectionProjectLookupRowSchema,
@@ -27,6 +30,8 @@ import {
   ProjectionThreadSessionDbRowSchema,
   SyntheticSubagentParentLookupInput,
   ThreadIdLookupInput,
+  ThreadMessagesByThreadLookupInput,
+  ThreadTurnLookupInput,
   WorkspaceRootLookupInput,
 } from "./ProjectionSnapshotQuery.schemas.ts";
 
@@ -510,9 +515,9 @@ export const makeSnapshotQueries = (sql: SqlClient.SqlClient) => {
   });
 
   const listThreadMessageRowsByThread = SqlSchema.findAll({
-    Request: ThreadIdLookupInput,
+    Request: ThreadMessagesByThreadLookupInput,
     Result: ProjectionThreadMessageDbRowSchema,
-    execute: ({ threadId }) =>
+    execute: ({ threadId, maxMessages }) =>
       sql`
           SELECT
             message_id AS "messageId",
@@ -539,7 +544,7 @@ export const makeSnapshotQueries = (sql: SqlClient.SqlClient) => {
             WHERE thread_id = ${threadId}
           )
           WHERE thread_id = ${threadId}
-            AND message_rank <= ${MAX_THREAD_MESSAGES}
+            AND (${maxMessages} IS NULL OR message_rank <= ${maxMessages})
           ORDER BY created_at ASC, message_id ASC
         `,
   });
@@ -734,6 +739,7 @@ export const makeSnapshotQueries = (sql: SqlClient.SqlClient) => {
           SELECT
             threads.thread_id AS "threadId",
             threads.project_id AS "projectId",
+            projects.kind AS "projectKind",
             projects.workspace_root AS "workspaceRoot",
             threads.env_mode AS "envMode",
             threads.worktree_path AS "worktreePath"
@@ -778,6 +784,7 @@ export const makeSnapshotQueries = (sql: SqlClient.SqlClient) => {
           SELECT
             threads.thread_id AS "threadId",
             threads.project_id AS "projectId",
+            projects.kind AS "projectKind",
             projects.workspace_root AS "workspaceRoot",
             threads.env_mode AS "envMode",
             threads.worktree_path AS "worktreePath",
@@ -788,6 +795,15 @@ export const makeSnapshotQueries = (sql: SqlClient.SqlClient) => {
                 AND turns.checkpoint_turn_count IS NOT NULL
                 AND turns.completed_at IS NOT NULL
             ) AS "latestCheckpointTurnCount",
+            (
+              SELECT turns.checkpoint_ref
+              FROM projection_turns AS turns
+              WHERE turns.thread_id = threads.thread_id
+                AND turns.checkpoint_turn_count IS NOT NULL
+                AND turns.completed_at IS NOT NULL
+              ORDER BY turns.checkpoint_turn_count ASC
+              LIMIT 1
+            ) AS "baselineCheckpointRef",
             (
               SELECT turns.checkpoint_ref
               FROM projection_turns AS turns
@@ -803,6 +819,45 @@ export const makeSnapshotQueries = (sql: SqlClient.SqlClient) => {
             AND threads.deleted_at IS NULL
           LIMIT 1
         `,
+  });
+
+  const listGeneratedImageActivityRowsByTurn = SqlSchema.findAll({
+    Request: ThreadTurnLookupInput,
+    Result: ProjectionGeneratedImageActivityDbRowSchema,
+    execute: ({ threadId, turnId }) =>
+      sql`
+        SELECT kind, payload_json AS "payload"
+        FROM projection_thread_activities
+        WHERE thread_id = ${threadId}
+          AND turn_id = ${turnId}
+          AND (
+            (kind = 'tool.completed' AND json_extract(payload_json, '$.itemType') = 'image_generation')
+            OR (
+              kind = ${STUDIO_OUTPUTS_ACTIVITY_KIND}
+              AND json_type(payload_json, '$.data.generatedImage') = 'object'
+            )
+          )
+        GROUP BY kind, payload_json
+        ORDER BY MIN(created_at) ASC, MIN(activity_id) ASC
+        LIMIT 64
+      `,
+  });
+
+  const listFileChangeActivityPayloadsByThread = SqlSchema.findAll({
+    Request: ThreadIdLookupInput,
+    Result: ProjectionFileChangeActivityPayloadDbRowSchema,
+    execute: ({ threadId }) =>
+      sql`
+        SELECT payload_json AS "payload"
+        FROM projection_thread_activities
+        WHERE thread_id = ${threadId}
+          AND (
+            (kind = 'tool.completed' AND json_extract(payload_json, '$.itemType') = 'file_change')
+            OR kind = ${STUDIO_OUTPUTS_ACTIVITY_KIND}
+          )
+        ORDER BY created_at DESC, activity_id DESC
+        LIMIT 2000
+      `,
   });
 
   return {
@@ -830,6 +885,8 @@ export const makeSnapshotQueries = (sql: SqlClient.SqlClient) => {
     getLatestTurnRowByThread,
     getThreadCheckpointContextThreadRow,
     listCheckpointRowsByThread,
+    listGeneratedImageActivityRowsByTurn,
+    listFileChangeActivityPayloadsByThread,
     getFullThreadDiffContextRow,
   };
 };
