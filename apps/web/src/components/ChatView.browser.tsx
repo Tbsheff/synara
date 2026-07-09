@@ -4211,6 +4211,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
       draftsByThreadId: {
         [draftThreadId]: {
           prompt: "",
+          promptHistorySavedDraft: null,
           images: [],
           files: [],
           nonPersistedImageIds: [],

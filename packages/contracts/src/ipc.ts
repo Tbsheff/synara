@@ -40,6 +40,8 @@ import type {
   GitPreparePullRequestThreadInput,
   GitPreparePullRequestThreadResult,
   GitPullRequestRefInput,
+  GitPullRequestSnapshotInput,
+  GitPullRequestSnapshotResult,
   GitCreateWorktreeInput,
   GitCreateWorktreeResult,
   GitInitInput,
@@ -137,6 +139,7 @@ import type {
   ReviewWalkthroughResult,
 } from "./review";
 import type { FilesystemBrowseInput, FilesystemBrowseResult } from "./filesystem";
+import type { StudioListThreadOutputsInput, StudioListThreadOutputsResult } from "./studio";
 import type {
   ServerConfig,
   ServerDiagnosticsResult,
@@ -368,6 +371,12 @@ export interface DesktopWindowState {
   isFullscreen: boolean;
 }
 
+export interface SynaraStorageSnapshot {
+  readonly version: 1;
+  readonly exportedAt: string;
+  readonly entries: Readonly<Record<string, string>>;
+}
+
 export interface DesktopBridge {
   getWsUrl: () => string | null;
   pickFolder: () => Promise<string | null>;
@@ -408,6 +417,11 @@ export interface DesktopBridge {
   notifications: {
     isSupported: () => Promise<boolean>;
     show: (input: DesktopNotificationInput) => Promise<boolean>;
+  };
+  storageMigration: {
+    saveSnapshot: (snapshot: SynaraStorageSnapshot) => Promise<boolean>;
+    readSnapshot: () => SynaraStorageSnapshot | null;
+    acknowledgeSnapshot: () => Promise<void>;
   };
   server?: {
     transcribeVoice: (
@@ -480,6 +494,11 @@ export interface NativeApi {
   filesystem: {
     browse: (input: FilesystemBrowseInput) => Promise<FilesystemBrowseResult>;
   };
+  studio: {
+    listThreadOutputs: (
+      input: StudioListThreadOutputsInput,
+    ) => Promise<StudioListThreadOutputsResult>;
+  };
   shell: {
     openInEditor: (cwd: string, editor: EditorId) => Promise<void>;
     openExternal: (url: string) => Promise<void>;
@@ -505,6 +524,9 @@ export interface NativeApi {
     unstageFiles: (input: GitUnstageFilesInput) => Promise<GitUnstageFilesResult>;
     handoffThread: (input: GitHandoffThreadInput) => Promise<GitHandoffThreadResult>;
     resolvePullRequest: (input: GitPullRequestRefInput) => Promise<GitResolvePullRequestResult>;
+    pullRequestSnapshot: (
+      input: GitPullRequestSnapshotInput,
+    ) => Promise<GitPullRequestSnapshotResult>;
     preparePullRequestThread: (
       input: GitPreparePullRequestThreadInput,
     ) => Promise<GitPreparePullRequestThreadResult>;

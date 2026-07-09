@@ -22,7 +22,7 @@ import {
   useRef,
 } from "react";
 import { type TimestampFormat } from "../../appSettings";
-import { type TurnDiffSummary } from "../../types";
+import { type TurnDiffSummary, type WorktreeSetupSnapshot } from "../../types";
 import { ArrowDownIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { DISCLOSURE_CONTENT_MOTION_CLASS } from "~/lib/disclosureMotion";
@@ -92,6 +92,7 @@ interface ChatTranscriptPaneProps {
   timestampFormat: TimestampFormat;
   turnDiffSummaryByAssistantMessageId: Map<MessageId, TurnDiffSummary>;
   workspaceRoot: string | undefined;
+  worktreeSetup: WorktreeSetupSnapshot | null;
 }
 
 export const ChatTranscriptPane = memo(function ChatTranscriptPane({
@@ -152,6 +153,7 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
   timestampFormat,
   turnDiffSummaryByAssistantMessageId,
   workspaceRoot,
+  worktreeSetup,
 }: ChatTranscriptPaneProps) {
   const latestMessageEntry = (() => {
     for (let index = timelineEntries.length - 1; index >= 0; index -= 1) {
@@ -237,6 +239,7 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
             key={activeThreadId}
             hasMessages={hasMessages}
             isWorking={isWorking}
+            worktreeSetup={worktreeSetup}
             activeTurnId={activeTurnId ?? null}
             activeTurnInProgress={activeTurnInProgress}
             activeTurnStartedAt={activeTurnStartedAt}

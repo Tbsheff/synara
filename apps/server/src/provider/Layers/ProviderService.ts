@@ -543,20 +543,55 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               allowRecovery: true,
             });
             const turn = yield* routed.adapter.sendTurn(input);
-            yield* directory.upsert({
-              threadId: input.threadId,
-              provider: routed.adapter.provider,
-              status: "running",
-              ...(turn.resumeCursor !== undefined ? { resumeCursor: turn.resumeCursor } : {}),
-              runtimePayload: {
-                ...(input.modelSelection !== undefined
-                  ? { modelSelection: input.modelSelection }
-                  : {}),
-                activeTurnId: turn.turnId,
-                lastRuntimeEvent: "provider.sendTurn",
-                lastRuntimeEventAt: new Date().toISOString(),
-              },
-            });
+            // A turn can settle before this write lands (e.g. a pre-start
+            // cancellation completes inside the adapter fork); re-marking the
+            // thread as running then would strand it with a stale active turn.
+            // Durable metadata (model selection, resume cursor) is still
+            // persisted — status stays untouched (upsert keeps the existing
+            // value when omitted) and runtimePayload merges per key. The
+            // binding-write lock makes the check and the write atomic with the
+            // runtime-event handler, so a terminal event cannot slip between
+            // them and then be overwritten.
+            yield* withBindingWriteLock(
+              input.threadId,
+              Effect.gen(function* () {
+                if (consumeRecentlyCompletedTurn(input.threadId, String(turn.turnId))) {
+                  // On the live-fallback path the terminal event can arrive
+                  // before any directory row exists (the runtime-event handler
+                  // skips threads without a binding), and upsert defaults a
+                  // NEW row's omitted status to "running" — so a settled turn
+                  // must write an explicit terminal status when it creates the
+                  // first row. Existing rows keep their handler-written status.
+                  const existingBinding = Option.getOrUndefined(
+                    yield* directory.getBinding(input.threadId),
+                  );
+                  yield* directory.upsert({
+                    threadId: input.threadId,
+                    provider: routed.adapter.provider,
+                    ...(existingBinding === undefined ? { status: "stopped" as const } : {}),
+                    ...(turn.resumeCursor !== undefined ? { resumeCursor: turn.resumeCursor } : {}),
+                    ...(input.modelSelection !== undefined
+                      ? { runtimePayload: { modelSelection: input.modelSelection } }
+                      : {}),
+                  });
+                } else {
+                  yield* directory.upsert({
+                    threadId: input.threadId,
+                    provider: routed.adapter.provider,
+                    status: "running",
+                    ...(turn.resumeCursor !== undefined ? { resumeCursor: turn.resumeCursor } : {}),
+                    runtimePayload: {
+                      ...(input.modelSelection !== undefined
+                        ? { modelSelection: input.modelSelection }
+                        : {}),
+                      activeTurnId: turn.turnId,
+                      lastRuntimeEvent: "provider.sendTurn",
+                      lastRuntimeEventAt: new Date().toISOString(),
+                    },
+                  });
+                }
+              }),
+            );
             yield* analytics.record("provider.turn.sent", {
               provider: routed.adapter.provider,
               model: input.modelSelection?.model,

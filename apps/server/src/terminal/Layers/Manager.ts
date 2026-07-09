@@ -6,8 +6,6 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 
-import treeKill from "tree-kill";
-
 import {
   type TerminalAckOutputInput,
   type TerminalClearInput,
@@ -144,6 +142,7 @@ interface TerminalManagerOptions {
   ptyAdapter: PtyAdapterShape;
   shellResolver?: () => string;
   subprocessChecker?: TerminalSubprocessChecker;
+  processTreeKiller?: ProcessTreeKiller;
   subprocessPollIntervalMs?: number;
   processKillGraceMs?: number;
   maxRetainedInactiveSessions?: number;
@@ -152,6 +151,8 @@ interface TerminalManagerOptions {
 interface KillEscalationHandle {
   timer: ReturnType<typeof setTimeout>;
   unsubscribeExit: (() => void) | null;
+  retainAfterRootExit: boolean;
+  rootExited: boolean;
 }
 
 export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> {
@@ -166,6 +167,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
   private readonly historyStore: TerminalHistoryStore;
   private readonly threadLocks = new Map<string, Promise<void>>();
   private readonly subprocessChecker: TerminalSubprocessChecker;
+  private readonly processTreeKiller: ProcessTreeKiller;
   private readonly useDefaultSubprocessChecker: boolean;
   private readonly subprocessPollIntervalMs: number;
   private readonly processKillGraceMs: number;
@@ -196,6 +198,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
       logger: this.logger,
     });
     this.subprocessChecker = options.subprocessChecker ?? defaultSubprocessChecker;
+    this.processTreeKiller = options.processTreeKiller ?? defaultProcessTreeKiller;
     // Only the built-in checker can share a single process snapshot across the
     // poll cycle; injected checkers (tests) keep the per-pid path.
     this.useDefaultSubprocessChecker = options.subprocessChecker === undefined;
@@ -459,6 +462,20 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
   }
 
   dispose(): void {
+    this.disposeInternal({ keepEscalationTimers: false });
+  }
+
+  async disposeForShutdown(): Promise<void> {
+    const pendingEscalations = this.disposeInternal({ keepEscalationTimers: true });
+    if (pendingEscalations > 0) {
+      await new Promise((resolve) =>
+        setTimeout(resolve, this.processKillGraceMs + SHUTDOWN_ESCALATION_SETTLE_MS),
+      );
+    }
+    this.clearAllKillEscalationTimers();
+  }
+
+  private disposeInternal(options: { keepEscalationTimers: boolean }): number {
     this.stopSubprocessPolling();
     const sessions = [...this.sessions.values()];
     this.sessions.clear();
@@ -681,7 +698,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
   private onProcessExit(session: TerminalSessionState, event: PtyExitEvent): void {
     // Drain any remaining batched output before emitting the exit event.
     this.flushOutputBuffer(session);
-    this.clearKillEscalationTimer(session.process);
+    this.clearKillEscalationTimer(session.process, { force: false });
     this.cleanupProcessHandles(session);
     session.process = null;
     session.pid = null;
@@ -751,25 +768,31 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     session.unsubscribeExit = null;
   }
 
-  private clearKillEscalationTimer(process: PtyProcess | null): void {
+  private clearKillEscalationTimer(
+    process: PtyProcess | null,
+    options: { force: boolean } = { force: true },
+  ): void {
     if (!process) return;
     const handle = this.killEscalationTimers.get(process);
     if (!handle) return;
+    if (!options.force && handle.retainAfterRootExit) return;
     clearTimeout(handle.timer);
     handle.unsubscribeExit?.();
     this.killEscalationTimers.delete(process);
   }
 
   private killProcessWithEscalation(
-    process: PtyProcess,
+    ptyProcess: PtyProcess,
     threadId: string,
     terminalId: string,
   ): void {
-    this.clearKillEscalationTimer(process);
-    const pid = process.pid;
-    const signalProcess = (signal: "SIGTERM" | "SIGKILL") => {
+    this.clearKillEscalationTimer(ptyProcess);
+    const pid = ptyProcess.pid;
+    const tree = this.processTreeKiller.capture(pid);
+    const retainAfterRootExit = tree.descendants.length > 0;
+    const signalProcess = (signal: TerminalKillSignal) => {
       try {
-        process.kill(signal);
+        ptyProcess.kill(signal);
       } catch (error) {
         const errno = error as NodeJS.ErrnoException;
         if (errno?.code === "ESRCH") {
@@ -784,45 +807,64 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
         });
       }
     };
+    const signalTree = (
+      signal: TerminalKillSignal,
+      options: { includeRootTree?: boolean } = {},
+    ) => {
+      this.processTreeKiller.signal({
+        rootPid: pid,
+        signal,
+        tree,
+        includeRootTree: options.includeRootTree,
+        onError: (error, context) => {
+          this.logger.warn(
+            context.source === "tree-kill"
+              ? `tree-kill ${signal} failed`
+              : `captured process ${signal} failed`,
+            {
+              threadId,
+              terminalId,
+              pid: context.pid,
+              rootPid: pid,
+              error: error.message,
+            },
+          );
+        },
+      });
+    };
 
-    // Use tree-kill to terminate the entire process tree (shell + children).
-    treeKill(pid, "SIGTERM", (err) => {
-      if (err) {
-        this.logger.warn("tree-kill SIGTERM failed", {
-          threadId,
-          terminalId,
-          pid,
-          error: err.message,
-        });
-      }
-    });
+    signalTree("SIGTERM");
     // Also signal the PTY handle directly for adapter compatibility and test doubles.
     signalProcess("SIGTERM");
 
-    const unsubscribeExit = process.onExit(() => {
-      this.clearKillEscalationTimer(process);
+    const unsubscribeExit = ptyProcess.onExit(() => {
+      const handle = this.killEscalationTimers.get(ptyProcess);
+      if (handle?.retainAfterRootExit) {
+        handle.rootExited = true;
+      }
+      this.clearKillEscalationTimer(ptyProcess, { force: false });
     });
 
     const timer = setTimeout(() => {
-      const handle = this.killEscalationTimers.get(process);
+      const handle = this.killEscalationTimers.get(ptyProcess);
       if (handle) {
         handle.unsubscribeExit?.();
       }
-      this.killEscalationTimers.delete(process);
-      treeKill(pid, "SIGKILL", (err) => {
-        if (err) {
-          this.logger.warn("tree-kill SIGKILL failed", {
-            threadId,
-            terminalId,
-            pid,
-            error: err.message,
-          });
-        }
-      });
-      signalProcess("SIGKILL");
+      this.killEscalationTimers.delete(ptyProcess);
+      const rootExited = handle?.rootExited === true;
+      signalTree("SIGKILL", { includeRootTree: !rootExited });
+      // Once the root exit is observed, only the captured descendants are safe to signal.
+      if (!rootExited) {
+        signalProcess("SIGKILL");
+      }
     }, this.processKillGraceMs);
     timer.unref?.();
-    this.killEscalationTimers.set(process, { timer, unsubscribeExit });
+    this.killEscalationTimers.set(ptyProcess, {
+      timer,
+      unsubscribeExit,
+      retainAfterRootExit,
+      rootExited: false,
+    });
   }
 
   private evictInactiveSessionsIfNeeded(): void {
@@ -1088,7 +1130,7 @@ export const TerminalManagerLive = Layer.effect(
     const ptyAdapter = yield* PtyAdapter;
     const runtime = yield* Effect.acquireRelease(
       Effect.sync(() => new TerminalManagerRuntime({ logsDir: terminalLogsDir, ptyAdapter })),
-      (r) => Effect.sync(() => r.dispose()),
+      (r) => Effect.promise(() => r.disposeForShutdown()),
     );
 
     return {
@@ -1135,7 +1177,7 @@ export const TerminalManagerLive = Layer.effect(
             runtime.off("event", listener);
           };
         }),
-      dispose: Effect.sync(() => runtime.dispose()),
+      dispose: Effect.promise(() => runtime.disposeForShutdown()),
     } satisfies TerminalManagerShape;
   }),
 );

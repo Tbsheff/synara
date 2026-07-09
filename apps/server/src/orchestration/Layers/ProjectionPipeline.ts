@@ -93,6 +93,7 @@ import {
 } from "./ProjectionPipeline.helpers.ts";
 
 export const ORCHESTRATION_PROJECTOR_NAMES = {
+  hot: "projection.hot",
   projects: "projection.projects",
   threads: "projection.threads",
   threadShellSummaries: "projection.thread-shell-summaries",
@@ -126,15 +127,6 @@ interface AttachmentSideEffects {
 }
 
 const REQUIRED_SNAPSHOT_PROJECTORS = PROJECT_METADATA_SNAPSHOT_PROJECTORS;
-const THREAD_SHELL_SUMMARY_ACTIVITY_KINDS = new Set([
-  "approval.requested",
-  "approval.resolved",
-  "provider.approval.respond.failed",
-  "user-input.requested",
-  "user-input.resolved",
-  "provider.user-input.respond.failed",
-]);
-
 const materializeAttachmentsForProjection = Effect.fn(
   (input: { readonly attachments: ReadonlyArray<ChatAttachment> }) =>
     Effect.succeed(input.attachments.length === 0 ? [] : input.attachments),
@@ -186,23 +178,59 @@ function isStalePendingApprovalFailure(payload: unknown): boolean {
   );
 }
 
-function shouldRefreshThreadShellSummary(event: OrchestrationEvent): boolean {
-  switch (event.type) {
-    case "thread.message-sent":
-      return event.payload.role === "user";
-    case "thread.proposed-plan-upserted":
-    case "thread.approval-response-requested":
-    case "thread.user-input-response-requested":
-    case "thread.reverted":
-    case "thread.conversation-rolled-back":
-    case "thread.session-set":
-    case "thread.turn-diff-completed":
-      return true;
-    case "thread.activity-appended":
-      return THREAD_SHELL_SUMMARY_ACTIVITY_KINDS.has(event.payload.activity.kind);
-    default:
-      return false;
+const PROJECT_EVENT_TYPES = new Set<OrchestrationEvent["type"]>([
+  "project.created",
+  "project.meta-updated",
+  "project.deleted",
+]);
+
+const THREAD_MESSAGE_PROJECTION_EVENT_TYPES = new Set<OrchestrationEvent["type"]>([
+  "thread.message-sent",
+  "thread.reverted",
+  "thread.conversation-rolled-back",
+]);
+
+const THREAD_PROPOSED_PLAN_PROJECTION_EVENT_TYPES = new Set<OrchestrationEvent["type"]>([
+  "thread.proposed-plan-upserted",
+  "thread.reverted",
+  "thread.conversation-rolled-back",
+]);
+
+const THREAD_ACTIVITY_PROJECTION_EVENT_TYPES = new Set<OrchestrationEvent["type"]>([
+  "thread.activity-appended",
+  "thread.reverted",
+  "thread.conversation-rolled-back",
+]);
+
+const THREAD_TURN_PROJECTION_EVENT_TYPES = new Set<OrchestrationEvent["type"]>([
+  "thread.turn-start-requested",
+  "thread.session-set",
+  "thread.turn-diff-completed",
+  "thread.reverted",
+  "thread.conversation-rolled-back",
+]);
+
+function shouldApplyThreadTurnsProjection(event: OrchestrationEvent): boolean {
+  if (THREAD_TURN_PROJECTION_EVENT_TYPES.has(event.type)) {
+    return true;
   }
+  return (
+    event.type === "thread.message-sent" &&
+    event.payload.role === "assistant" &&
+    event.payload.turnId !== null
+  );
+}
+
+function shouldApplyPendingApprovalsProjection(event: OrchestrationEvent): boolean {
+  if (event.type === "thread.approval-response-requested") {
+    return true;
+  }
+  return (
+    event.type === "thread.activity-appended" &&
+    (event.payload.activity.kind === "approval.requested" ||
+      event.payload.activity.kind === "approval.resolved" ||
+      event.payload.activity.kind === "provider.approval.respond.failed")
+  );
 }
 
 // Recompute the denormalized sidebar shell summary after per-thread timeline changes.
@@ -215,14 +243,14 @@ const withRefreshedThreadShellSummary = Effect.fn(function* (input: {
   readonly summaryUserInputResponseRequestId?: string;
   readonly summaryUserInputResponseCreatedAt?: string;
 }) {
-  const [messages, activities, proposedPlans, pendingApprovals] = yield* Effect.all([
-    input.projectionThreadMessageRepository.listByThreadId({
+  const [latestUserMessageAt, activities, proposedPlans, pendingApprovals] = yield* Effect.all([
+    input.projectionThreadMessageRepository.getLatestUserMessageAt({
       threadId: input.thread.threadId,
     }),
-    input.projectionThreadActivityRepository.listByThreadId({
+    input.projectionThreadActivityRepository.listSummaryByThreadId({
       threadId: input.thread.threadId,
     }),
-    input.projectionThreadProposedPlanRepository.listByThreadId({
+    input.projectionThreadProposedPlanRepository.listSummaryByThreadId({
       threadId: input.thread.threadId,
     }),
     input.projectionPendingApprovalRepository.listByThreadId({
@@ -230,7 +258,10 @@ const withRefreshedThreadShellSummary = Effect.fn(function* (input: {
     }),
   ]);
   const summary = deriveThreadSummaryState({
-    messages,
+    messages:
+      latestUserMessageAt === null
+        ? []
+        : [{ role: "user" as const, createdAt: latestUserMessageAt }],
     activities: [
       ...activities.map((activity) => ({
         id: activity.activityId,
@@ -1136,6 +1167,9 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             ...(event.payload.dispatchMode !== undefined
               ? { dispatchMode: event.payload.dispatchMode }
               : {}),
+            ...(event.payload.dispatchOrigin !== undefined
+              ? { dispatchOrigin: event.payload.dispatchOrigin }
+              : {}),
             isStreaming: event.payload.streaming,
             source: event.payload.source,
             createdAt:
@@ -1893,16 +1927,19 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
     {
       name: ORCHESTRATION_PROJECTOR_NAMES.projects,
       phase: "hot",
+      shouldApply: (event) => PROJECT_EVENT_TYPES.has(event.type),
       apply: applyProjectsProjection,
     },
     {
       name: ORCHESTRATION_PROJECTOR_NAMES.threadMessages,
       phase: "hot",
+      shouldApply: (event) => THREAD_MESSAGE_PROJECTION_EVENT_TYPES.has(event.type),
       apply: applyThreadMessagesProjection,
     },
     {
       name: ORCHESTRATION_PROJECTOR_NAMES.threadProposedPlans,
       phase: "hot",
+      shouldApply: (event) => THREAD_PROPOSED_PLAN_PROJECTION_EVENT_TYPES.has(event.type),
       apply: applyThreadProposedPlansProjection,
     },
     {
@@ -1913,11 +1950,13 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
     {
       name: ORCHESTRATION_PROJECTOR_NAMES.threadActivities,
       phase: "hot",
+      shouldApply: (event) => THREAD_ACTIVITY_PROJECTION_EVENT_TYPES.has(event.type),
       apply: applyThreadActivitiesProjection,
     },
     {
       name: ORCHESTRATION_PROJECTOR_NAMES.threadSessions,
       phase: "hot",
+      shouldApply: (event) => event.type === "thread.session-set",
       apply: applyThreadSessionsProjection,
     },
     {
@@ -1928,21 +1967,25 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
     {
       name: ORCHESTRATION_PROJECTOR_NAMES.threadTurns,
       phase: "hot",
+      shouldApply: shouldApplyThreadTurnsProjection,
       apply: applyThreadTurnsProjection,
     },
     {
       name: ORCHESTRATION_PROJECTOR_NAMES.checkpoints,
       phase: "hot",
+      shouldApply: () => false,
       apply: applyCheckpointsProjection,
     },
     {
       name: ORCHESTRATION_PROJECTOR_NAMES.pendingApprovals,
       phase: "hot",
+      shouldApply: shouldApplyPendingApprovalsProjection,
       apply: applyPendingApprovalsProjection,
     },
     {
       name: ORCHESTRATION_PROJECTOR_NAMES.threads,
       phase: "hot",
+      shouldApply: shouldApplyThreadsProjection,
       apply: applyThreadsProjection,
     },
     {
@@ -1983,21 +2026,46 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
     }
   };
 
-  const runProjectorForEvent = (projector: ProjectorDefinition, event: OrchestrationEvent) =>
+  const runProjectorsForEvent = (
+    selectedProjectors: ReadonlyArray<ProjectorDefinition>,
+    event: OrchestrationEvent,
+    phaseCursor?: ProjectorName,
+  ) =>
     Effect.gen(function* () {
+      if (selectedProjectors.length === 0 && phaseCursor === undefined) {
+        return;
+      }
       const attachmentSideEffects: AttachmentSideEffects = {
         deletedThreadIds: new Set<string>(),
         prunedThreadRelativePaths: new Map<string, Set<string>>(),
       };
 
       yield* sql.withTransaction(
-        projector.apply(event, attachmentSideEffects).pipe(
+        Effect.forEach(
+          selectedProjectors,
+          (projector) =>
+            projector.apply(event, attachmentSideEffects).pipe(
+              Effect.flatMap(() => {
+                if (projector.name === phaseCursor) {
+                  return Effect.void;
+                }
+                return projectionStateRepository.upsert({
+                  projector: projector.name,
+                  lastAppliedSequence: event.sequence,
+                  updatedAt: event.occurredAt,
+                });
+              }),
+            ),
+          { concurrency: 1 },
+        ).pipe(
           Effect.flatMap(() =>
-            projectionStateRepository.upsert({
-              projector: projector.name,
-              lastAppliedSequence: event.sequence,
-              updatedAt: event.occurredAt,
-            }),
+            phaseCursor === undefined
+              ? Effect.void
+              : projectionStateRepository.upsert({
+                  projector: phaseCursor,
+                  lastAppliedSequence: event.sequence,
+                  updatedAt: event.occurredAt,
+                }),
           ),
         ),
       );
@@ -2005,7 +2073,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
       yield* runAttachmentSideEffects(attachmentSideEffects).pipe(
         Effect.catch((cause) =>
           Effect.logWarning("failed to apply projected attachment side-effects", {
-            projector: projector.name,
+            projectors: selectedProjectors.map((projector) => projector.name),
             sequence: event.sequence,
             eventType: event.type,
             cause,
@@ -2013,6 +2081,72 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
         ),
       );
     });
+
+  const runProjectorForEvent = (projector: ProjectorDefinition, event: OrchestrationEvent) =>
+    runProjectorsForEvent([projector], event);
+
+  const initializeHotProjectionCursor = Effect.gen(function* () {
+    const hotProjectorNames = new Set(
+      projectors
+        .filter((projector) => projector.phase === "hot")
+        .map((projector) => projector.name),
+    );
+    const sourceRows = (yield* projectionStateRepository.listAll()).filter((row) =>
+      hotProjectorNames.has(row.projector as ProjectorName),
+    );
+    if (sourceRows.length === 0) {
+      return;
+    }
+
+    const oldestCursor = sourceRows.reduce((oldest, row) =>
+      row.lastAppliedSequence < oldest.lastAppliedSequence ? row : oldest,
+    );
+    yield* projectionStateRepository.upsert({
+      projector: ORCHESTRATION_PROJECTOR_NAMES.hot,
+      lastAppliedSequence: oldestCursor.lastAppliedSequence,
+      updatedAt: oldestCursor.updatedAt,
+    });
+  });
+
+  const fastForwardHotProjectorCursors = Effect.gen(function* () {
+    const stateRows = yield* projectionStateRepository.listAll();
+    const stateByProjector = new Map(stateRows.map((row) => [row.projector, row] as const));
+    const hotState = stateByProjector.get(ORCHESTRATION_PROJECTOR_NAMES.hot);
+    if (!hotState) {
+      return;
+    }
+
+    const laggingProjectors = projectors.filter((projector) => {
+      if (projector.phase !== "hot") {
+        return false;
+      }
+      const projectorState = stateByProjector.get(projector.name);
+      return (
+        projectorState !== undefined &&
+        projectorState.lastAppliedSequence < hotState.lastAppliedSequence
+      );
+    });
+    if (laggingProjectors.length === 0) {
+      return;
+    }
+
+    // The hot cursor commits in the same transaction as every selected hot projector. A
+    // lagging per-projector cursor therefore covers only events that its predicate rejected.
+    // Align existing cursors before replay so a long-lived process does not rescan that backlog
+    // on its next restart. Missing cursors still replay from the beginning for upgrade safety.
+    yield* sql.withTransaction(
+      Effect.forEach(
+        laggingProjectors,
+        (projector) =>
+          projectionStateRepository.upsert({
+            projector: projector.name,
+            lastAppliedSequence: hotState.lastAppliedSequence,
+            updatedAt: hotState.updatedAt,
+          }),
+        { concurrency: 1 },
+      ),
+    );
+  });
 
   const advanceProjectorStateToEvent = (
     projector: ProjectorDefinition,
@@ -2089,13 +2223,18 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
     );
 
   const projectEvent: OrchestrationProjectionPipelineShape["projectEvent"] = (event) =>
-    Effect.forEach(
-      selectProjectorsForEvent(event),
-      (projector) => runProjectorForEvent(projector, event),
-      {
-        concurrency: 1,
-      },
+    runProjectorsForEvent(
+      selectProjectorsForEvent(event, "hot"),
+      event,
+      ORCHESTRATION_PROJECTOR_NAMES.hot,
     ).pipe(
+      Effect.flatMap(() =>
+        runProjectorsForEvent(
+          selectProjectorsForEvent(event, "deferred"),
+          event,
+          ORCHESTRATION_PROJECTOR_NAMES.threadShellSummaries,
+        ),
+      ),
       Effect.flatMap(() => {
         switch (event.type) {
           case "project.created":
@@ -2116,12 +2255,10 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
     );
 
   const projectHotEvent: OrchestrationProjectionPipelineShape["projectHotEvent"] = (event) =>
-    Effect.forEach(
+    runProjectorsForEvent(
       selectProjectorsForEvent(event, "hot"),
-      (projector) => runProjectorForEvent(projector, event),
-      {
-        concurrency: 1,
-      },
+      event,
+      ORCHESTRATION_PROJECTOR_NAMES.hot,
     ).pipe(
       Effect.provideService(FileSystem.FileSystem, fileSystem),
       Effect.provideService(Path.Path, path),
@@ -2135,12 +2272,10 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
   const projectDeferredEvent: OrchestrationProjectionPipelineShape["projectDeferredEvent"] = (
     event,
   ) =>
-    Effect.forEach(
+    runProjectorsForEvent(
       selectProjectorsForEvent(event, "deferred"),
-      (projector) => runProjectorForEvent(projector, event),
-      {
-        concurrency: 1,
-      },
+      event,
+      ORCHESTRATION_PROJECTOR_NAMES.threadShellSummaries,
     ).pipe(
       Effect.provideService(FileSystem.FileSystem, fileSystem),
       Effect.provideService(Path.Path, path),
@@ -2153,24 +2288,27 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
       ),
     );
 
-  const bootstrap: OrchestrationProjectionPipelineShape["bootstrap"] = Effect.forEach(
-    projectors,
-    bootstrapProjector,
-    { concurrency: 1 },
-  ).pipe(
-    Effect.provideService(FileSystem.FileSystem, fileSystem),
-    Effect.provideService(Path.Path, path),
-    Effect.provideService(ServerConfig, serverConfig),
-    Effect.asVoid,
-    Effect.tap(() =>
-      Effect.log("orchestration projection pipeline bootstrapped").pipe(
-        Effect.annotateLogs({ projectors: projectors.length }),
+  const bootstrap: OrchestrationProjectionPipelineShape["bootstrap"] =
+    fastForwardHotProjectorCursors.pipe(
+      Effect.flatMap(() =>
+        Effect.forEach(projectors, bootstrapProjector, {
+          concurrency: 1,
+        }),
       ),
-    ),
-    Effect.catchTag("SqlError", (sqlError) =>
-      Effect.fail(toPersistenceSqlError("ProjectionPipeline.bootstrap:query")(sqlError)),
-    ),
-  );
+      Effect.flatMap(() => initializeHotProjectionCursor),
+      Effect.provideService(FileSystem.FileSystem, fileSystem),
+      Effect.provideService(Path.Path, path),
+      Effect.provideService(ServerConfig, serverConfig),
+      Effect.asVoid,
+      Effect.tap(() =>
+        Effect.log("orchestration projection pipeline bootstrapped").pipe(
+          Effect.annotateLogs({ projectors: projectors.length }),
+        ),
+      ),
+      Effect.catchTag("SqlError", (sqlError) =>
+        Effect.fail(toPersistenceSqlError("ProjectionPipeline.bootstrap:query")(sqlError)),
+      ),
+    );
 
   return {
     bootstrap,

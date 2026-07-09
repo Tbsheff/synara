@@ -22,7 +22,10 @@ import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
 import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
-import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
+import {
+  ProjectionSnapshotQuery,
+  type ProjectionGeneratedImageActivityRecord,
+} from "../Services/ProjectionSnapshotQuery.ts";
 import {
   ProviderRuntimeIngestionService,
   type ProviderRuntimeIngestionShape,
@@ -126,6 +129,47 @@ const eventWithBufferedToolOutput = (
   };
 };
 
+function activityUpdateDedupeKey(
+  event: ProviderRuntimeEvent,
+  threadId: ThreadId,
+  activity: OrchestrationThreadActivity,
+): string | undefined {
+  const prefix = `${threadId}:${event.provider}:${activity.kind}`;
+  if (
+    activity.kind === "context-window.updated" ||
+    activity.kind === "account.rate-limits.updated"
+  ) {
+    return prefix;
+  }
+
+  const payload = asObject(activity.payload);
+  if (activity.kind === "task.progress") {
+    const taskId = asString(payload?.taskId);
+    return taskId ? `${prefix}:${taskId}` : undefined;
+  }
+  if (activity.kind !== "tool.updated") {
+    return undefined;
+  }
+
+  const data = asObject(payload?.data);
+  const toolUpdateId =
+    event.itemId ??
+    asString(data?.toolUseId) ??
+    asString(data?.toolCallId) ??
+    asString(data?.callId) ??
+    asString(data?.callID);
+  return toolUpdateId ? `${prefix}:${toolUpdateId}` : undefined;
+}
+
+function activityUpdateFingerprint(activity: OrchestrationThreadActivity): string {
+  return stringifyJsonLike({
+    kind: activity.kind,
+    summary: activity.summary,
+    payload: activity.payload,
+    turnId: activity.turnId,
+  });
+}
+
 const make = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
@@ -150,6 +194,45 @@ const make = Effect.gen(function* () {
     appendBufferedProposedPlan,
     clearTurnStateForSession,
   } = state;
+
+  const dispatchActivityUpdate = Effect.fnUntraced(function* (
+    event: ProviderRuntimeEvent,
+    threadId: ThreadId,
+    activity: OrchestrationThreadActivity,
+  ) {
+    const key = activityUpdateDedupeKey(event, threadId, activity);
+    const fingerprint = key ? activityUpdateFingerprint(activity) : undefined;
+    if (key && fingerprint) {
+      const previous = yield* Cache.getOption(latestActivityUpdateFingerprintByKey, key);
+      if (Option.isSome(previous) && previous.value === fingerprint) {
+        return;
+      }
+    }
+
+    yield* orchestrationEngine.dispatch({
+      type: "thread.activity.append",
+      commandId: providerCommandId(event, "thread-activity-append"),
+      threadId,
+      activity,
+      createdAt: activity.createdAt,
+    });
+    if (key && fingerprint) {
+      yield* Cache.set(latestActivityUpdateFingerprintByKey, key, fingerprint);
+    }
+  });
+
+  const clearActivityUpdateFingerprints = Effect.fnUntraced(function* (threadId: ThreadId) {
+    const keyPrefix = `${threadId}:`;
+    const keys = Array.from(yield* Cache.keys(latestActivityUpdateFingerprintByKey));
+    yield* Effect.forEach(
+      keys,
+      (key) =>
+        key.startsWith(keyPrefix)
+          ? Cache.invalidate(latestActivityUpdateFingerprintByKey, key)
+          : Effect.void,
+      { concurrency: 1 },
+    );
+  });
 
   const getThreadDetail = Effect.fnUntraced(function* (
     threadId: ThreadId,
@@ -651,13 +734,45 @@ const make = Effect.gen(function* () {
       const generatedImagePath = generatedImagePathFromRuntimeEvent(event);
       if (generatedImagePath) {
         const generatedImageTurnId = toTurnId(event.turnId) ?? activeTurnId ?? undefined;
-        yield* appendGeneratedImageReference({
+        // Studio threads get a durable in-workspace copy (plus direct Output panel
+        // attribution); the transcript then references that copy so the image outlives
+        // any Codex-home cleanup. Non-Studio threads keep the original path.
+        const copied = yield* materializeStudioGeneratedImage({
           event,
           thread,
           imagePath: generatedImagePath,
-          ...(generatedImageTurnId ? { turnId: generatedImageTurnId } : {}),
+          turnId: generatedImageTurnId,
           createdAt: now,
         });
+        const displayPath = copied?.fullPath ?? generatedImagePath;
+        if (generatedImageTurnId) {
+          // Defer the transcript reference to turn settle (see the flush helper); the
+          // "Generated image" work row already surfaces progress mid-turn.
+          yield* rememberPendingGeneratedImage(thread.id, generatedImageTurnId, displayPath);
+        } else {
+          // No turn to correlate with: attach immediately to the same provider item
+          // (replay) or an existing reference, else a standalone image-only message.
+          const messages = thread.messages;
+          const sameItemMessageId = event.itemId
+            ? MessageId.makeUnsafe(`assistant:${event.itemId}`)
+            : undefined;
+          const markdown = generatedImageMarkdown(displayPath);
+          const targetMessage = messages.find(
+            (message) =>
+              message.role === "assistant" &&
+              (message.id === sameItemMessageId ||
+                message.text.includes(displayPath) ||
+                message.text.includes(markdown)),
+          );
+          yield* appendGeneratedImagesToAssistantMessage({
+            event,
+            threadId: thread.id,
+            targetMessage,
+            newMessageId: MessageId.makeUnsafe(`assistant:image:${event.itemId ?? event.eventId}`),
+            imagePaths: [displayPath],
+            createdAt: now,
+          });
+        }
       }
 
       if (isTerminalTurnEvent) {
@@ -684,6 +799,16 @@ const make = Effect.gen(function* () {
           yield* clearAssistantMessageIdsForTurn(thread.id, finalizedTurnId);
           assistantDeliveryModesByTurn.delete(deliveryModeKey(thread.id, finalizedTurnId));
           providerDiffPlaceholdersByTurn.delete(deliveryModeKey(thread.id, finalizedTurnId));
+
+          // After finalization the turn's terminal assistant message is settled;
+          // hand it the images the turn produced (an artifact-only turn's final
+          // message is intentionally empty — the image markdown becomes its body).
+          yield* flushPendingGeneratedImagesForTurn({
+            event,
+            thread,
+            turnId: finalizedTurnId,
+            createdAt: now,
+          });
 
           yield* finalizeBufferedProposedPlan({
             event,
@@ -828,8 +953,12 @@ const make = Effect.gen(function* () {
       ).pipe(Effect.asVoid);
     });
 
-  const processDomainEvent = (event: TurnStartRequestedDomainEvent) =>
+  const processDomainEvent = (event: RuntimeIngestionDomainEvent) =>
     Effect.gen(function* () {
+      if (event.type === "thread.reverted" || event.type === "thread.conversation-rolled-back") {
+        yield* clearActivityUpdateFingerprints(event.payload.threadId);
+        return;
+      }
       const nextAssistantDeliveryMode =
         event.payload.assistantDeliveryMode ?? DEFAULT_ASSISTANT_DELIVERY_MODE;
       pendingAssistantDeliveryModesByThread.set(
@@ -898,7 +1027,11 @@ const make = Effect.gen(function* () {
     );
     yield* Effect.forkScoped(
       Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) => {
-        if (event.type !== "thread.turn-start-requested") {
+        if (
+          event.type !== "thread.turn-start-requested" &&
+          event.type !== "thread.reverted" &&
+          event.type !== "thread.conversation-rolled-back"
+        ) {
           return Effect.void;
         }
         return worker.enqueue({ source: "domain", event });

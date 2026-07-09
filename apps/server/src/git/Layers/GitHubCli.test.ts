@@ -7,7 +7,7 @@ vi.mock("../../processRunner", () => ({
 }));
 
 import { runProcess } from "../../processRunner";
-import { GitHubCli } from "../Services/GitHubCli.ts";
+import { GitHubCli, PULL_REQUEST_SUMMARY_JSON_FIELDS } from "../Services/GitHubCli.ts";
 import { GitHubCliLive } from "./GitHubCli.ts";
 
 const mockedRunProcess = vi.mocked(runProcess);
@@ -29,6 +29,11 @@ layer("GitHubCliLive", (it) => {
           headRefName: "feature/pr-threads",
           state: "OPEN",
           mergedAt: null,
+          isDraft: true,
+          mergeable: "CONFLICTING",
+          additions: 38,
+          deletions: 36,
+          changedFiles: 3,
           isCrossRepository: true,
           headRepository: {
             nameWithOwner: "octocat/codething-mvp",
@@ -36,6 +41,7 @@ layer("GitHubCliLive", (it) => {
           headRepositoryOwner: {
             login: "octocat",
           },
+          updatedAt: "2026-07-05T09:30:00Z",
         }),
         stderr: "",
         code: 0,
@@ -58,21 +64,100 @@ layer("GitHubCliLive", (it) => {
         baseRefName: "main",
         headRefName: "feature/pr-threads",
         state: "open",
+        isDraft: true,
+        mergeability: "conflicting",
+        additions: 38,
+        deletions: 36,
+        changedFiles: 3,
         isCrossRepository: true,
         headRepositoryNameWithOwner: "octocat/codething-mvp",
         headRepositoryOwnerLogin: "octocat",
+        updatedAt: "2026-07-05T09:30:00Z",
       });
+      expect(mockedRunProcess).toHaveBeenCalledWith(
+        "gh",
+        ["pr", "view", "#42", "--json", PULL_REQUEST_SUMMARY_JSON_FIELDS],
+        expect.objectContaining({ cwd: "/repo" }),
+      );
+    }),
+  );
+
+  it.effect("lists any-state pull requests with the shared field list", () =>
+    Effect.gen(function* () {
+      mockedRunProcess.mockResolvedValueOnce({
+        stdout: JSON.stringify([
+          {
+            number: 7,
+            title: "Merged work",
+            url: "https://github.com/o/r/pull/7",
+            baseRefName: "main",
+            headRefName: "feature/merged-work",
+            state: "MERGED",
+            mergedAt: "2026-07-01T08:00:00Z",
+            updatedAt: "2026-07-01T08:00:00Z",
+          },
+        ]),
+        stderr: "",
+        code: 0,
+        signal: null,
+        timedOut: false,
+      });
+
+      const result = yield* Effect.gen(function* () {
+        const gh = yield* GitHubCli;
+        return yield* gh.listPullRequests({ cwd: "/repo", headSelector: "feature/merged-work" });
+      });
+
+      assert.equal(result.length, 1);
+      assert.equal(result[0]?.state, "merged");
+      assert.equal(result[0]?.updatedAt, "2026-07-01T08:00:00Z");
+      assert.equal(result[0]?.mergeability, "unknown");
       expect(mockedRunProcess).toHaveBeenCalledWith(
         "gh",
         [
           "pr",
-          "view",
-          "#42",
+          "list",
+          "--head",
+          "feature/merged-work",
+          "--state",
+          "all",
+          "--limit",
+          "20",
           "--json",
-          "number,title,url,baseRefName,headRefName,state,mergedAt,isCrossRepository,headRepository,headRepositoryOwner",
+          PULL_REQUEST_SUMMARY_JSON_FIELDS,
         ],
         expect.objectContaining({ cwd: "/repo" }),
       );
+    }),
+  );
+
+  it.effect("skips malformed list entries instead of hiding the healthy ones", () =>
+    Effect.gen(function* () {
+      mockedRunProcess.mockResolvedValueOnce({
+        stdout: JSON.stringify([
+          { number: -1, title: "", url: "" },
+          {
+            number: 8,
+            title: "Healthy PR",
+            url: "https://github.com/o/r/pull/8",
+            baseRefName: "main",
+            headRefName: "feature/healthy",
+            state: "OPEN",
+          },
+        ]),
+        stderr: "",
+        code: 0,
+        signal: null,
+        timedOut: false,
+      });
+
+      const result = yield* Effect.gen(function* () {
+        const gh = yield* GitHubCli;
+        return yield* gh.listPullRequests({ cwd: "/repo", headSelector: "feature/healthy" });
+      });
+
+      assert.equal(result.length, 1);
+      assert.equal(result[0]?.number, 8);
     }),
   );
 
