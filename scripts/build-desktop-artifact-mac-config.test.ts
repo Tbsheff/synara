@@ -2,6 +2,7 @@ import { assert, describe, it } from "@effect/vitest";
 
 import {
   createDesktopPlatformBuildConfig,
+  MAC_BRIDGE_REQUIREMENTS_PATH,
   MAC_ENTITLEMENTS_PATH,
   MAC_INHERITED_ENTITLEMENTS_PATH,
   MICROPHONE_USAGE_DESCRIPTION,
@@ -77,6 +78,18 @@ describe("createDesktopPlatformBuildConfig", () => {
       target: ["nsis"],
       icon: "icon.ico",
       azureSignOptions: { publisherName: "T3 Tools" },
+    });
+  });
+
+  it("keeps Windows signing optional", () => {
+    const config = createDesktopPlatformBuildConfig({
+      platform: "win",
+      target: "nsis",
+    });
+
+    assert.deepStrictEqual(config.win, {
+      target: ["nsis"],
+      icon: "icon.ico",
     });
   });
 

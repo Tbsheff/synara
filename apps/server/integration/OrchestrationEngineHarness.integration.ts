@@ -48,6 +48,7 @@ import { ExecutionRuntimeServiceLive } from "../src/executionRuntime/Layers/Exec
 import { ExecutionRuntimePlanningTestLive } from "../src/executionRuntime/Layers/testSupport.ts";
 import { FakeRuntimeProviderAdapterLive } from "../src/executionRuntime/Layers/FakeRuntimeProviderAdapter.ts";
 import { CheckpointReactorLive } from "../src/orchestration/Layers/CheckpointReactor.ts";
+import { StudioOutputReactorLive } from "../src/orchestration/Layers/StudioOutputReactor.ts";
 import { OrchestrationEngineLive } from "../src/orchestration/Layers/OrchestrationEngine.ts";
 import { OrchestrationProjectionPipelineLive } from "../src/orchestration/Layers/ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "../src/orchestration/Layers/ProjectionSnapshotQuery.ts";
@@ -325,6 +326,7 @@ export const makeOrchestrationIntegrationHarness = (
     const providerCommandReactorLayer = ProviderCommandReactorLive.pipe(
       Layer.provideMerge(executionRuntimeServiceLayer),
       Layer.provideMerge(runtimeServicesLayer),
+      Layer.provideMerge(studioOutputReactorLayer),
       Layer.provideMerge(gitCoreLayer),
       Layer.provideMerge(textGenerationLayer),
       Layer.provideMerge(ServerSettingsService.layerTest()),
@@ -337,6 +339,7 @@ export const makeOrchestrationIntegrationHarness = (
       Layer.provideMerge(runtimeIngestionLayer),
       Layer.provideMerge(providerCommandReactorLayer),
       Layer.provideMerge(checkpointReactorLayer),
+      Layer.provideMerge(studioOutputReactorLayer),
     );
     const layer = orchestrationReactorLayer.pipe(
       Layer.provide(persistenceLayer),

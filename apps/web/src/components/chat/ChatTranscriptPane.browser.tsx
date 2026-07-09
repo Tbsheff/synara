@@ -420,6 +420,7 @@ function TranscriptPerfHarness(props: { onTranscriptRender: () => void }) {
           hasMessages
           isRevertingCheckpoint={false}
           isWorking={false}
+          worktreeSetup={null}
           followLiveOutput={false}
           listRef={listRef}
           transcriptContainerRef={transcriptContainerRef}
@@ -823,6 +824,7 @@ describe("ChatTranscriptPane", () => {
         hasMessages
         isRevertingCheckpoint={false}
         isWorking={false}
+        worktreeSetup={null}
         followLiveOutput={false}
         listRef={{ current: null }}
         markdownCwd={undefined}
@@ -899,6 +901,7 @@ describe("ChatTranscriptPane", () => {
         hasMessages
         isRevertingCheckpoint={false}
         isWorking={false}
+        worktreeSetup={null}
         followLiveOutput={false}
         listRef={{ current: null }}
         markdownCwd={undefined}

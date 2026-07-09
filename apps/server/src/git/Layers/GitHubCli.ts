@@ -258,47 +258,52 @@ const makeGitHubCli = Effect.sync(() => {
       catch: (error) => normalizeGitHubCliError("execute", error),
     });
 
+  // One implementation behind both list methods so the field list, decoding, and
+  // normalization cannot drift between the open-only and any-state lookups.
+  const listPullRequestsWithState = (
+    input: { readonly cwd: string; readonly headSelector: string; readonly limit?: number },
+    options: {
+      readonly state: "open" | "all";
+      readonly defaultLimit: number;
+      readonly operation: "listOpenPullRequests" | "listPullRequests";
+    },
+  ) =>
+    execute({
+      cwd: input.cwd,
+      args: [
+        "pr",
+        "list",
+        "--head",
+        input.headSelector,
+        "--state",
+        options.state,
+        "--limit",
+        String(input.limit ?? options.defaultLimit),
+        "--json",
+        PULL_REQUEST_SUMMARY_JSON_FIELDS,
+      ],
+    }).pipe(
+      Effect.flatMap((result) => decodePullRequestListJson(result.stdout, options.operation)),
+    );
+
   const service = {
     execute,
     listOpenPullRequests: (input) =>
-      execute({
-        cwd: input.cwd,
-        args: [
-          "pr",
-          "list",
-          "--head",
-          input.headSelector,
-          "--state",
-          "open",
-          "--limit",
-          String(input.limit ?? 1),
-          "--json",
-          "number,title,url,baseRefName,headRefName,state,mergedAt,isCrossRepository,headRepository,headRepositoryOwner",
-        ],
-      }).pipe(
-        Effect.map((result) => result.stdout.trim()),
-        Effect.flatMap((raw) =>
-          raw.length === 0
-            ? Effect.succeed([])
-            : decodeGitHubJson(
-                raw,
-                Schema.Array(RawGitHubPullRequestSchema),
-                "listOpenPullRequests",
-                "GitHub CLI returned invalid PR list JSON.",
-              ),
-        ),
-        Effect.map((pullRequests) => pullRequests.map(normalizePullRequestSummary)),
-      ),
+      listPullRequestsWithState(input, {
+        state: "open",
+        defaultLimit: 1,
+        operation: "listOpenPullRequests",
+      }),
+    listPullRequests: (input) =>
+      listPullRequestsWithState(input, {
+        state: "all",
+        defaultLimit: 20,
+        operation: "listPullRequests",
+      }),
     getPullRequest: (input) =>
       execute({
         cwd: input.cwd,
-        args: [
-          "pr",
-          "view",
-          input.reference,
-          "--json",
-          "number,title,url,baseRefName,headRefName,state,mergedAt,isCrossRepository,headRepository,headRepositoryOwner",
-        ],
+        args: ["pr", "view", input.reference, "--json", PULL_REQUEST_SUMMARY_JSON_FIELDS],
       }).pipe(
         Effect.map((result) => result.stdout.trim()),
         Effect.flatMap((raw) =>

@@ -10,6 +10,7 @@ import type {
   GitActionProgressEvent,
   GitActionProgressPhase,
   GitStackedAction,
+  ModelSelection,
   ProviderStartOptions,
 } from "@t3tools/contracts";
 import { resolveAutoFeatureBranchName, sanitizeFeatureBranchName } from "@t3tools/shared/git";
@@ -31,6 +32,7 @@ import {
 import { GitCore } from "../Services/GitCore.ts";
 import { GitHubCli } from "../Services/GitHubCli.ts";
 import { TextGeneration } from "../Services/TextGeneration.ts";
+import { buildGitTextGenerationCallInput } from "../textGenerationSelection.ts";
 import { ServerConfig } from "../../config.ts";
 import {
   COMMIT_TIMEOUT_MS,
@@ -124,17 +126,16 @@ export const makeGitManager = Effect.gen(function* () {
 
   const { handoffThread } = makeHandoff({ gitCore, path, worktreesDir });
 
-  const resolveCommitAndBranchSuggestion = (input: {
-    cwd: string;
-    branch: string | null;
-    commitMessage?: string;
-    codexHomePath?: string;
-    providerOptions?: ProviderStartOptions;
-    /** When true, also produce a semantic feature branch name. */
-    includeBranch?: boolean;
-    filePaths?: readonly string[];
-    model?: string;
-  }) =>
+  const resolveCommitAndBranchSuggestion = (
+    input: {
+      cwd: string;
+      branch: string | null;
+      commitMessage?: string;
+      /** When true, also produce a semantic feature branch name. */
+      includeBranch?: boolean;
+      filePaths?: readonly string[];
+    } & GitTextGenerationParams,
+  ) =>
     Effect.gen(function* () {
       const context = yield* gitCore.prepareCommitContext(input.cwd, input.filePaths);
       if (!context) {
@@ -159,10 +160,8 @@ export const makeGitManager = Effect.gen(function* () {
           branch: input.branch,
           stagedSummary: limitContext(context.stagedSummary, 8_000),
           stagedPatch: limitContext(context.stagedPatch, 50_000),
-          ...(input.codexHomePath ? { codexHomePath: input.codexHomePath } : {}),
-          ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
           ...(input.includeBranch ? { includeBranch: true } : {}),
-          ...(input.model ? { model: input.model } : {}),
+          ...buildGitTextGenerationCallInput(input),
         })
         .pipe(
           Effect.map((result) => sanitizeCommitMessage(result)),
@@ -195,9 +194,7 @@ export const makeGitManager = Effect.gen(function* () {
     commitMessage?: string,
     preResolvedSuggestion?: CommitAndBranchSuggestion,
     filePaths?: readonly string[],
-    codexHomePath?: string,
-    providerOptions?: ProviderStartOptions,
-    model?: string,
+    textGenerationParams?: GitTextGenerationParams,
     progressReporter?: GitActionProgressReporter,
     actionId?: string,
   ) =>
@@ -227,9 +224,7 @@ export const makeGitManager = Effect.gen(function* () {
           branch,
           ...(commitMessage ? { commitMessage } : {}),
           ...(filePaths ? { filePaths } : {}),
-          ...(codexHomePath ? { codexHomePath } : {}),
-          ...(providerOptions ? { providerOptions } : {}),
-          ...(model ? { model } : {}),
+          ...(textGenerationParams ?? {}),
         });
       }
       if (!suggestion) {
@@ -309,9 +304,7 @@ export const makeGitManager = Effect.gen(function* () {
   const runPrStep = (
     cwd: string,
     fallbackBranch: string | null,
-    codexHomePath?: string,
-    providerOptions?: ProviderStartOptions,
-    model?: string,
+    textGenerationParams?: GitTextGenerationParams,
   ) =>
     Effect.gen(function* () {
       const details = yield* gitCore.statusDetails(cwd);
@@ -362,9 +355,7 @@ export const makeGitManager = Effect.gen(function* () {
         commitSummary: limitContext(rangeContext.commitSummary, 20_000),
         diffSummary: limitContext(rangeContext.diffSummary, 20_000),
         diffPatch: limitContext(rangeContext.diffPatch, 60_000),
-        ...(codexHomePath ? { codexHomePath } : {}),
-        ...(providerOptions ? { providerOptions } : {}),
-        ...(model ? { model } : {}),
+        ...buildGitTextGenerationCallInput(textGenerationParams ?? {}),
       });
 
       const bodyFile = path.join(tempDir, `t3code-pr-body-${process.pid}-${randomUUID()}.md`);
@@ -433,7 +424,8 @@ export const makeGitManager = Effect.gen(function* () {
             branch: details.branch,
             upstreamRef: details.upstreamRef,
           }).pipe(
-            Effect.map((latest) => (latest ? toStatusPr(latest) : null)),
+            // Status and PR-resolution surfaces share one mapper so their shapes cannot drift.
+            Effect.map((latest) => (latest ? toResolvedPullRequest(latest) : null)),
             Effect.catch(() => Effect.succeed(null)),
           )
         : null;
@@ -476,9 +468,12 @@ export const makeGitManager = Effect.gen(function* () {
     const generated = yield* textGeneration.generateDiffSummary({
       cwd: input.cwd,
       patch,
-      ...(input.codexHomePath ? { codexHomePath: input.codexHomePath } : {}),
-      ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
-      ...(input.textGenerationModel ? { model: input.textGenerationModel } : {}),
+      ...buildGitTextGenerationCallInput({
+        textGenerationModel: input.textGenerationModel,
+        textGenerationModelSelection: input.textGenerationModelSelection,
+        codexHomePath: input.codexHomePath,
+        providerOptions: input.providerOptions,
+      }),
     });
 
     return {
@@ -496,6 +491,58 @@ export const makeGitManager = Effect.gen(function* () {
         .pipe(Effect.map((resolved) => toResolvedPullRequest(resolved)));
 
       return { pullRequest };
+    },
+  );
+
+  const pullRequestSnapshot: GitManagerShape["pullRequestSnapshot"] = Effect.fnUntraced(
+    function* (input) {
+      const reference = normalizePullRequestReference(input.reference);
+      // Summary + checks ride one `gh pr view` call: one process/API round trip per poll,
+      // and no separate checks failure mode that could discard an otherwise-usable snapshot.
+      const { summary, checks } = yield* gitHubCli.getPullRequestWithChecks({
+        cwd: input.cwd,
+        reference,
+      });
+      const pullRequest = toResolvedPullRequest(summary);
+
+      const repository = parsePullRequestRepositoryFromUrl(pullRequest.url);
+      if (!repository) {
+        return yield* gitManagerError(
+          "pullRequestSnapshot",
+          `Could not determine the repository from the pull request URL: ${pullRequest.url}`,
+        );
+      }
+
+      const commentsResult = yield* gitHubCli
+        .getPullRequestReviewComments({
+          cwd: input.cwd,
+          host: repository.host,
+          owner: repository.owner,
+          repo: repository.repo,
+          number: pullRequest.number,
+        })
+        .pipe(
+          Effect.map((result) => ({
+            comments: result.comments,
+            commentsTruncated: result.truncated,
+            commentsError: null,
+          })),
+          Effect.catch((error) =>
+            Effect.succeed({
+              comments: [],
+              commentsTruncated: false,
+              commentsError: error.message,
+            }),
+          ),
+        );
+
+      return {
+        pullRequest,
+        checks,
+        comments: commentsResult.comments,
+        commentsTruncated: commentsResult.commentsTruncated,
+        commentsError: commentsResult.commentsError,
+      };
     },
   );
 
@@ -649,9 +696,7 @@ export const makeGitManager = Effect.gen(function* () {
     branch: string | null,
     commitMessage?: string,
     filePaths?: readonly string[],
-    codexHomePath?: string,
-    providerOptions?: ProviderStartOptions,
-    model?: string,
+    textGenerationParams?: GitTextGenerationParams,
     options?: FeatureBranchStepOptions,
   ) =>
     Effect.gen(function* () {
@@ -660,10 +705,8 @@ export const makeGitManager = Effect.gen(function* () {
         branch,
         ...(commitMessage ? { commitMessage } : {}),
         ...(filePaths ? { filePaths } : {}),
-        ...(codexHomePath ? { codexHomePath } : {}),
-        ...(providerOptions ? { providerOptions } : {}),
         includeBranch: true,
-        ...(model ? { model } : {}),
+        ...(textGenerationParams ?? {}),
       });
       if (!suggestion && !options?.allowCommittedHead) {
         return yield* gitManagerError(
@@ -785,6 +828,12 @@ export const makeGitManager = Effect.gen(function* () {
 
       const runAction = Effect.gen(function* () {
         const initialStatus = yield* gitCore.statusDetails(input.cwd);
+        const textGenerationParams: GitTextGenerationParams = {
+          textGenerationModel: input.textGenerationModel,
+          textGenerationModelSelection: input.textGenerationModelSelection,
+          codexHomePath: input.codexHomePath,
+          providerOptions: input.providerOptions,
+        };
         const wantsCommit = isCommitAction(input.action);
         const wantsPush =
           input.action === "push" ||
@@ -850,9 +899,7 @@ export const makeGitManager = Effect.gen(function* () {
             initialStatus.branch,
             input.commitMessage,
             input.filePaths,
-            input.codexHomePath,
-            input.providerOptions,
-            input.textGenerationModel,
+            textGenerationParams,
             {
               allowCommittedHead: !wantsCommit,
               restoreOriginalBranchRef: committedHeadRestoreRef,
@@ -877,9 +924,7 @@ export const makeGitManager = Effect.gen(function* () {
                 commitMessageForStep,
                 preResolvedCommitSuggestion,
                 input.filePaths,
-                input.codexHomePath,
-                input.providerOptions,
-                input.textGenerationModel,
+                textGenerationParams,
                 options?.progressReporter,
                 progress.actionId,
               );
@@ -914,13 +959,7 @@ export const makeGitManager = Effect.gen(function* () {
                 Effect.flatMap(() =>
                   Effect.gen(function* () {
                     currentPhase = "pr";
-                    return yield* runPrStep(
-                      input.cwd,
-                      currentBranch,
-                      input.codexHomePath,
-                      input.providerOptions,
-                      input.textGenerationModel,
-                    );
+                    return yield* runPrStep(input.cwd, currentBranch, textGenerationParams);
                   }),
                 ),
               )
@@ -960,6 +999,7 @@ export const makeGitManager = Effect.gen(function* () {
     readWorkingTreeDiff,
     summarizeDiff,
     resolvePullRequest,
+    pullRequestSnapshot,
     preparePullRequestThread,
     handoffThread,
     runStackedAction,
