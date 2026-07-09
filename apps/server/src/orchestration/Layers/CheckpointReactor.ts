@@ -17,7 +17,6 @@ import { parseCheckpointFilesFromUnifiedDiff } from "../../checkpointing/Diffs.t
 import {
   checkpointRefForThreadMessageStart,
   checkpointRefForThreadTurn,
-  checkpointRefForThreadTurnInManagedFamily,
   checkpointRefForThreadTurnLive,
   checkpointRefForThreadTurnStart,
   resolveThreadWorkspaceCwd,
@@ -448,24 +447,11 @@ const make = Effect.gen(function* () {
     const turnStartCheckpointRef = checkpointRefForThreadTurnStart(thread.id, turnId);
     let hasTurnStartBaseline = false;
     if (messageId !== undefined) {
-      const messageStartCheckpointRef = checkpointRefForThreadMessageStart(thread.id, messageId);
-      const copyMessageStartBaseline = checkpointStore.copyCheckpointRef({
+      const copied = yield* checkpointStore.copyCheckpointRef({
         cwd: checkpointCwd,
-        fromCheckpointRef: messageStartCheckpointRef,
+        fromCheckpointRef: checkpointRefForThreadMessageStart(thread.id, messageId),
         toCheckpointRef: turnStartCheckpointRef,
       });
-      let copied = yield* copyMessageStartBaseline;
-      if (!copied) {
-        // Startup and domain-event backup paths can still leave the message
-        // baseline missing. Capture it with first-writer-wins semantics before
-        // aliasing the provider turn-start ref.
-        yield* checkpointStore.captureCheckpoint({
-          cwd: checkpointCwd,
-          checkpointRef: messageStartCheckpointRef,
-          skipIfExists: true,
-        });
-        copied = yield* copyMessageStartBaseline;
-      }
       hasTurnStartBaseline = copied;
       pendingMessageStartByThread.delete(thread.id);
       if (!copied) {
@@ -557,7 +543,6 @@ const make = Effect.gen(function* () {
         yield* checkpointStore.captureCheckpoint({
           cwd: checkpointCwd,
           checkpointRef: messageStartCheckpointRef,
-          skipIfExists: true,
         });
       }
     }
@@ -625,19 +610,9 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    const earliestManagedBaselineRef = thread.checkpoints
-      .toSorted((left, right) => left.checkpointTurnCount - right.checkpointTurnCount)
-      .map((checkpoint) =>
-        checkpointRefForThreadTurnInManagedFamily(
-          checkpoint.checkpointRef,
-          event.payload.threadId,
-          0,
-        ),
-      )
-      .find((checkpointRef) => checkpointRef !== null);
     const targetCheckpointRef =
       event.payload.turnCount === 0
-        ? (earliestManagedBaselineRef ?? checkpointRefForThreadTurn(event.payload.threadId, 0))
+        ? checkpointRefForThreadTurn(event.payload.threadId, 0)
         : thread.checkpoints.find(
             (checkpoint) => checkpoint.checkpointTurnCount === event.payload.turnCount,
           )?.checkpointRef;

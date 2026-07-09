@@ -140,7 +140,6 @@ export function useKanbanTaskComposerEditor(input: UseKanbanTaskComposerEditorIn
       value: promptRef.current,
       cursor: composerCursor,
       expandedCursor: expandCollapsedComposerCursor(promptRef.current, composerCursor),
-      selectionCollapsed: true,
       terminalContextIds: composerTerminalContexts.map((context) => context.id),
     };
   }, [composerCursor, composerEditorRef, composerTerminalContexts, promptRef]);

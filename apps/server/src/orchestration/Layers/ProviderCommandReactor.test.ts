@@ -38,10 +38,6 @@ import { ProviderCommandReactorLive } from "./ProviderCommandReactor.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import { ProviderCommandReactor } from "../Services/ProviderCommandReactor.ts";
-import {
-  StudioOutputReactor,
-  type StudioOutputReactorShape,
-} from "../Services/StudioOutputReactor.ts";
 import { attachmentRelativePath } from "../../attachmentStore.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { checkpointRefForThreadTurn } from "../../checkpointing/Utils.ts";
@@ -112,8 +108,6 @@ describe("ProviderCommandReactor", () => {
     readonly baseDir?: string;
     readonly threadModelSelection?: ModelSelection;
     readonly sessionModelSwitch?: "unsupported" | "in-session" | "restart-session";
-    readonly checkpointStore?: Partial<CheckpointStoreShape>;
-    readonly studioOutputReactor?: Partial<StudioOutputReactorShape>;
   }) {
     const now = new Date().toISOString();
     const baseDir = input?.baseDir ?? fs.mkdtempSync(path.join(os.tmpdir(), "t3code-reactor-"));
@@ -171,38 +165,6 @@ describe("ProviderCommandReactor", () => {
         turnId: asTurnId("turn-1"),
       }),
     );
-    // Mirrors adapter behavior: the reactor consults live provider sessions
-    // (status + activeTurnId) to decide whether a turn is genuinely running.
-    const setRuntimeSessionTurnState = (input: {
-      readonly threadId: string;
-      readonly status: ProviderSession["status"];
-      readonly activeTurnId?: TurnId;
-    }) => {
-      const threadId = ThreadId.makeUnsafe(input.threadId);
-      const index = runtimeSessions.findIndex((session) => session.threadId === threadId);
-      const base: ProviderSession = runtimeSessions[index] ?? {
-        provider: modelSelection.provider,
-        status: "ready",
-        runtimeMode: "full-access",
-        threadId,
-        resumeCursor: { opaque: "resume-synthetic" },
-        createdAt: now,
-        updatedAt: now,
-      };
-      const next: ProviderSession = {
-        ...base,
-        status: input.status,
-        ...(input.activeTurnId !== undefined ? { activeTurnId: input.activeTurnId } : {}),
-      };
-      if (input.activeTurnId === undefined) {
-        delete (next as { activeTurnId?: TurnId }).activeTurnId;
-      }
-      if (index >= 0) {
-        runtimeSessions[index] = next;
-      } else {
-        runtimeSessions.push(next);
-      }
-    };
     const steerTurn = vi.fn((_: unknown) =>
       Effect.succeed({
         threadId: ThreadId.makeUnsafe("thread-1"),
@@ -245,7 +207,6 @@ describe("ProviderCommandReactor", () => {
       restoreCheckpoint,
       diffCheckpoints: () => Effect.succeed(""),
       deleteCheckpointRefs: () => Effect.void,
-      ...input?.checkpointStore,
     };
     const stopSession = vi.fn((input: unknown) =>
       Effect.sync(() => {
@@ -320,18 +281,6 @@ describe("ProviderCommandReactor", () => {
         }),
       ),
     );
-    const captureStudioOutputBaseline = vi.fn<
-      StudioOutputReactorShape["captureBaselineBeforeTurn"]
-    >(input?.studioOutputReactor?.captureBaselineBeforeTurn ?? (() => Effect.void));
-    const cancelPendingStudioOutputBaseline = vi.fn<
-      StudioOutputReactorShape["cancelPendingTurnBaseline"]
-    >(input?.studioOutputReactor?.cancelPendingTurnBaseline ?? (() => Effect.void));
-    const studioOutputReactor: StudioOutputReactorShape = {
-      captureBaselineBeforeTurn: captureStudioOutputBaseline,
-      cancelPendingTurnBaseline: cancelPendingStudioOutputBaseline,
-      start: input?.studioOutputReactor?.start ?? Effect.void,
-      drain: input?.studioOutputReactor?.drain ?? Effect.void,
-    };
 
     const unsupported = () => Effect.die(new Error("Unsupported provider call in test")) as never;
     const service: ProviderServiceShape = {
@@ -379,7 +328,6 @@ describe("ProviderCommandReactor", () => {
       Layer.provideMerge(orchestrationLayer),
       Layer.provideMerge(OrchestrationProjectionSnapshotQueryLive),
       Layer.provideMerge(Layer.succeed(ProviderService, service)),
-      Layer.provideMerge(Layer.succeed(StudioOutputReactor, studioOutputReactor)),
       Layer.provideMerge(Layer.succeed(CheckpointStore, checkpointStore)),
       Layer.provideMerge(
         Layer.succeed(GitCore, { renameBranch, publishBranch } as unknown as GitCoreShape),
@@ -464,8 +412,6 @@ describe("ProviderCommandReactor", () => {
       publishBranch,
       generateBranchName,
       generateThreadTitle,
-      captureStudioOutputBaseline,
-      cancelPendingStudioOutputBaseline,
       stateDir,
       drain,
       emitRuntimeEvent,
@@ -814,11 +760,6 @@ describe("ProviderCommandReactor", () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
 
-    harness.setRuntimeSessionTurnState({
-      threadId: "thread-1",
-      status: "running",
-      activeTurnId: asTurnId("turn-running-edit-queued"),
-    });
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.session.set",
@@ -876,7 +817,6 @@ describe("ProviderCommandReactor", () => {
     expect(harness.rollbackConversation).not.toHaveBeenCalled();
     expect(harness.sendTurn).not.toHaveBeenCalled();
 
-    harness.setRuntimeSessionTurnState({ threadId: "thread-1", status: "ready" });
     await harness.emitRuntimeEvent({
       type: "turn.completed",
       eventId: asEventId("evt-turn-completed-edited-queue"),
@@ -1758,9 +1698,6 @@ describe("ProviderCommandReactor", () => {
     expect(
       thread?.activities.some((activity) => activity.kind === "provider.turn.start.failed"),
     ).toBe(true);
-    expect(harness.cancelPendingStudioOutputBaseline).toHaveBeenCalledWith(
-      ThreadId.makeUnsafe("thread-1"),
-    );
   });
 
   it("uses the runtime mode requested by thread.turn.start when starting the provider session", async () => {
@@ -1922,7 +1859,7 @@ describe("ProviderCommandReactor", () => {
         type: "thread.meta.update",
         commandId: CommandId.makeUnsafe("cmd-thread-title-gemini-generated"),
         threadId: ThreadId.makeUnsafe("thread-1"),
-        title: "Summarize provider startup failures without Codex",
+        title: "Summarize provider startup failures",
       }),
     );
 
@@ -2006,7 +1943,7 @@ describe("ProviderCommandReactor", () => {
       const readModel = await Effect.runPromise(harness.engine.getReadModel());
       return (
         readModel.threads.find((entry) => entry.id === ThreadId.makeUnsafe("thread-1"))?.title ===
-        "Summarize provider startup failures without Codex"
+        "Summarize provider startup failures"
       );
     });
     expect(harness.generateThreadTitle).toHaveBeenCalledTimes(1);
@@ -2225,11 +2162,6 @@ describe("ProviderCommandReactor", () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
 
-    harness.setRuntimeSessionTurnState({
-      threadId: "thread-1",
-      status: "running",
-      activeTurnId: asTurnId("turn-running"),
-    });
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.session.set",
@@ -2271,7 +2203,6 @@ describe("ProviderCommandReactor", () => {
     expect(harness.sendTurn).not.toHaveBeenCalled();
     expect(harness.interruptTurn).not.toHaveBeenCalled();
 
-    harness.setRuntimeSessionTurnState({ threadId: "thread-1", status: "ready" });
     await harness.emitRuntimeEvent({
       type: "turn.completed",
       eventId: asEventId("evt-turn-completed-queue"),
@@ -2289,113 +2220,6 @@ describe("ProviderCommandReactor", () => {
     expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
       threadId: ThreadId.makeUnsafe("thread-1"),
       input: "queue this next",
-    });
-  });
-
-  it("promotes a queued turn immediately when the provider turn already settled", async () => {
-    const harness = await createHarness();
-    const now = new Date().toISOString();
-
-    // Projection still says the thread is running (stale), but the provider
-    // turn has already settled: its terminal event was consumed before this
-    // message was queued, so no future drain trigger will ever arrive.
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.makeUnsafe("cmd-session-stale-running"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        session: {
-          threadId: ThreadId.makeUnsafe("thread-1"),
-          status: "running",
-          providerName: "codex",
-          runtimeMode: "approval-required",
-          activeTurnId: asTurnId("turn-already-settled"),
-          lastError: null,
-          updatedAt: now,
-        },
-        createdAt: now,
-      }),
-    );
-
-    harness.sendTurn.mockClear();
-
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-turn-queue-stale"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        message: {
-          messageId: asMessageId("msg-queue-stale"),
-          role: "user",
-          text: "recover me",
-          attachments: [],
-        },
-        runtimeMode: "approval-required",
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        createdAt: now,
-      }),
-    );
-
-    // No turn.completed/turn.aborted is emitted: the recovery drain alone
-    // must promote the queued message.
-    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
-    expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
-      threadId: ThreadId.makeUnsafe("thread-1"),
-      input: "recover me",
-    });
-  });
-
-  it("re-queues a direct turn start that races a live provider turn", async () => {
-    const harness = await createHarness();
-    const now = new Date().toISOString();
-
-    // The provider is mid-turn but the projection has no running session yet
-    // (e.g. the gap between a steer interrupt and the steered turn's start):
-    // the decider dispatches directly instead of queueing.
-    harness.setRuntimeSessionTurnState({
-      threadId: "thread-1",
-      status: "running",
-      activeTurnId: asTurnId("turn-live-race"),
-    });
-
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-turn-start-race"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        message: {
-          messageId: asMessageId("msg-turn-race"),
-          role: "user",
-          text: "wait your turn",
-          attachments: [],
-        },
-        runtimeMode: "approval-required",
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        createdAt: now,
-      }),
-    );
-
-    await harness.drain();
-    expect(harness.sendTurn).not.toHaveBeenCalled();
-
-    harness.setRuntimeSessionTurnState({ threadId: "thread-1", status: "ready" });
-    await harness.emitRuntimeEvent({
-      type: "turn.completed",
-      eventId: asEventId("evt-turn-completed-race"),
-      provider: "codex",
-      threadId: ThreadId.makeUnsafe("thread-1"),
-      createdAt: new Date().toISOString(),
-      turnId: asTurnId("turn-live-race"),
-      payload: {
-        state: "completed",
-      },
-      providerRefs: {},
-    } as ProviderRuntimeEvent);
-
-    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
-    expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
-      threadId: ThreadId.makeUnsafe("thread-1"),
-      input: "wait your turn",
     });
   });
 
@@ -2462,11 +2286,6 @@ describe("ProviderCommandReactor", () => {
     });
     const now = new Date().toISOString();
 
-    harness.setRuntimeSessionTurnState({
-      threadId: "thread-1",
-      status: "running",
-      activeTurnId: asTurnId("turn-running"),
-    });
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.session.set",
@@ -2512,7 +2331,6 @@ describe("ProviderCommandReactor", () => {
     expect(harness.sendTurn).not.toHaveBeenCalled();
     expect(harness.interruptTurn.mock.calls.length).toBe(1);
 
-    harness.setRuntimeSessionTurnState({ threadId: "thread-1", status: "ready" });
     await harness.emitRuntimeEvent({
       type: "turn.completed",
       eventId: asEventId("evt-turn-completed-steer-claude"),
@@ -2693,7 +2511,7 @@ describe("ProviderCommandReactor", () => {
     });
   });
 
-  it("restarts an idle Claude session only for spawn-fixed model selection changes", async () => {
+  it("restarts an idle Claude session immediately when thread model selection changes", async () => {
     const harness = await createHarness({
       threadModelSelection: { provider: "claudeAgent", model: "claude-opus-4-7" },
     });
@@ -2718,17 +2536,8 @@ describe("ProviderCommandReactor", () => {
 
     await waitFor(() => harness.startSession.mock.calls.length === 1);
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
-    expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
-      modelSelection: {
-        provider: "claudeAgent",
-        model: "claude-opus-4-7",
-      },
-    });
     harness.startSession.mockClear();
 
-    // Context-window changes switch in-session via setModel on the next turn.
-    // Restarting would resume via --resume and replay the whole conversation
-    // as uncached input tokens.
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.meta.update",
@@ -2744,197 +2553,14 @@ describe("ProviderCommandReactor", () => {
       }),
     );
 
-    // Effort is fixed at subprocess spawn, so an effort change still restarts.
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.makeUnsafe("cmd-thread-meta-update-claude-effort"),
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        modelSelection: {
-          provider: "claudeAgent",
-          model: "claude-opus-4-7",
-          options: {
-            effort: "max",
-          },
-        },
-      }),
-    );
-
     await waitFor(() => harness.startSession.mock.calls.length === 1);
     expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
       modelSelection: {
         provider: "claudeAgent",
         model: "claude-opus-4-7",
         options: {
-          effort: "max",
+          contextWindow: "1m",
         },
-      },
-    });
-  });
-
-  it("restarts a directly started Claude session when spawn-fixed options change", async () => {
-    const initialSelection: ModelSelection = {
-      provider: "claudeAgent",
-      model: "claude-opus-4-7",
-    };
-    const harness = await createHarness({ threadModelSelection: initialSelection });
-    const threadId = ThreadId.makeUnsafe("thread-1");
-    const now = new Date().toISOString();
-
-    // Mirrors native import: ProviderService owns the runtime start directly,
-    // while the reactor learns the original selection from thread.created.
-    await harness.drain();
-    const importedSession = await Effect.runPromise(
-      harness.startSession(threadId, {
-        threadId,
-        provider: "claudeAgent",
-        runtimeMode: "approval-required",
-        modelSelection: initialSelection,
-      }),
-    );
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.makeUnsafe("cmd-direct-claude-session-set"),
-        threadId,
-        session: {
-          threadId,
-          status: "ready",
-          providerName: "claudeAgent",
-          runtimeMode: "approval-required",
-          activeTurnId: null,
-          lastError: null,
-          updatedAt: importedSession.updatedAt,
-        },
-        createdAt: importedSession.updatedAt,
-      }),
-    );
-    harness.startSession.mockClear();
-
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.makeUnsafe("cmd-direct-claude-effort-update"),
-        threadId,
-        modelSelection: {
-          provider: "claudeAgent",
-          model: "claude-opus-4-7",
-          options: { effort: "max" },
-        },
-      }),
-    );
-
-    await waitFor(() => harness.startSession.mock.calls.length === 1);
-    expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
-      modelSelection: {
-        provider: "claudeAgent",
-        model: "claude-opus-4-7",
-        options: { effort: "max" },
-      },
-    });
-  });
-
-  it("keeps the applied Claude spawn profile while metadata changes mid-turn", async () => {
-    const harness = await createHarness({
-      threadModelSelection: { provider: "claudeAgent", model: "claude-opus-4-7" },
-    });
-    const threadId = ThreadId.makeUnsafe("thread-1");
-    const turnId = asTurnId("turn-active-selection-change");
-    const now = new Date().toISOString();
-
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-active-selection-bootstrap"),
-        threadId,
-        message: {
-          messageId: asMessageId("user-message-active-selection-bootstrap"),
-          role: "user",
-          text: "bootstrap",
-          attachments: [],
-        },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        createdAt: now,
-      }),
-    );
-    await waitFor(() => harness.startSession.mock.calls.length === 1);
-    harness.startSession.mockClear();
-
-    harness.setRuntimeSessionTurnState({ threadId, status: "running", activeTurnId: turnId });
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.makeUnsafe("cmd-active-selection-session-running"),
-        threadId,
-        session: {
-          threadId,
-          status: "running",
-          providerName: "claudeAgent",
-          runtimeMode: "approval-required",
-          activeTurnId: turnId,
-          lastError: null,
-          updatedAt: now,
-        },
-        createdAt: now,
-      }),
-    );
-
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.makeUnsafe("cmd-active-selection-effort"),
-        threadId,
-        modelSelection: {
-          provider: "claudeAgent",
-          model: "claude-opus-4-7",
-          options: { effort: "max" },
-        },
-      }),
-    );
-    await harness.drain();
-    expect(harness.startSession).not.toHaveBeenCalled();
-
-    harness.setRuntimeSessionTurnState({ threadId, status: "ready" });
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.session.set",
-        commandId: CommandId.makeUnsafe("cmd-active-selection-session-ready"),
-        threadId,
-        session: {
-          threadId,
-          status: "ready",
-          providerName: "claudeAgent",
-          runtimeMode: "approval-required",
-          activeTurnId: null,
-          lastError: null,
-          updatedAt: now,
-        },
-        createdAt: now,
-      }),
-    );
-
-    // The context-only edit is compared with the profile that is actually live,
-    // so the pending effort change still forces exactly one replacement.
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.makeUnsafe("cmd-active-selection-context"),
-        threadId,
-        modelSelection: {
-          provider: "claudeAgent",
-          model: "claude-opus-4-7",
-          options: { effort: "max", contextWindow: "1m" },
-        },
-      }),
-    );
-
-    await waitFor(() => harness.startSession.mock.calls.length === 1);
-    expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
-      modelSelection: {
-        provider: "claudeAgent",
-        model: "claude-opus-4-7",
-        options: { effort: "max", contextWindow: "1m" },
       },
     });
   });

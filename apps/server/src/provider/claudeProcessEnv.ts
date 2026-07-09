@@ -51,11 +51,6 @@ function tryParseJsonRecord(content: string): Record<string, unknown> | undefine
   }
 }
 
-export interface ClaudeCliCredentialsSummary {
-  readonly usable: boolean;
-  readonly subscriptionType?: string;
-}
-
 export function resolveClaudeCredentialsPaths(input?: {
   readonly env?: NodeJS.ProcessEnv;
   readonly homeDir?: string;
@@ -72,28 +67,16 @@ export function resolveClaudeCredentialsPaths(input?: {
 }
 
 export function hasUsableClaudeCliCredentialsContent(content: string, nowMs = Date.now()): boolean {
-  return readClaudeCliCredentialsContentSummary(content, nowMs).usable;
-}
-
-export function readClaudeCliCredentialsContentSummary(
-  content: string,
-  nowMs = Date.now(),
-): ClaudeCliCredentialsSummary {
   const root = tryParseJsonRecord(content);
   const oauth = readRecord(root?.claudeAiOauth);
   const accessToken = readNonEmptyString(oauth?.accessToken);
   const refreshToken = readNonEmptyString(oauth?.refreshToken);
   if (!accessToken && !refreshToken) {
-    return { usable: false };
+    return false;
   }
 
   const expiresAtMs = typeof oauth?.expiresAt === "number" ? oauth.expiresAt : undefined;
-  const usable = expiresAtMs === undefined || expiresAtMs > nowMs || refreshToken !== undefined;
-  const subscriptionType = readNonEmptyString(oauth?.subscriptionType);
-  return {
-    usable,
-    ...(subscriptionType ? { subscriptionType } : {}),
-  };
+  return expiresAtMs === undefined || expiresAtMs > nowMs || refreshToken !== undefined;
 }
 
 export function hasUsableClaudeCliCredentials(input?: {
@@ -102,27 +85,14 @@ export function hasUsableClaudeCliCredentials(input?: {
   readonly nowMs?: number;
   readonly readFile?: (path: string) => string;
 }): boolean {
-  return readClaudeCliCredentialsSummary(input).usable;
-}
-
-export function readClaudeCliCredentialsSummary(input?: {
-  readonly env?: NodeJS.ProcessEnv;
-  readonly homeDir?: string;
-  readonly nowMs?: number;
-  readonly readFile?: (path: string) => string;
-}): ClaudeCliCredentialsSummary {
   const readFile = input?.readFile ?? ((path: string) => readFileSync(path, "utf8"));
-  for (const path of resolveClaudeCredentialsPaths(input)) {
+  return resolveClaudeCredentialsPaths(input).some((path) => {
     try {
-      const summary = readClaudeCliCredentialsContentSummary(readFile(path), input?.nowMs);
-      if (summary.usable) {
-        return summary;
-      }
+      return hasUsableClaudeCliCredentialsContent(readFile(path), input?.nowMs);
     } catch {
-      continue;
+      return false;
     }
-  }
-  return { usable: false };
+  });
 }
 
 export function buildClaudeProcessEnv(input?: {
@@ -131,9 +101,6 @@ export function buildClaudeProcessEnv(input?: {
   readonly hasClaudeCliCredentials?: boolean;
 }): NodeJS.ProcessEnv {
   const env = { ...(input?.env ?? process.env) };
-  if (input?.homeDir) {
-    env.HOME = input.homeDir;
-  }
   const credentialInput = input?.homeDir ? { env, homeDir: input.homeDir } : { env };
   const hasLocalClaudeAuth =
     input?.hasClaudeCliCredentials ?? hasUsableClaudeCliCredentials(credentialInput);

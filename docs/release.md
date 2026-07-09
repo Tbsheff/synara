@@ -4,18 +4,17 @@ This document covers how to run desktop releases from one tag, including the cur
 
 ## What the workflow does
 
-- Triggers:
-  - Manual dispatch defaults to build-only validation and uploads workflow artifacts without publishing anything.
-  - A pushed tag matching `v*.*.*` publishes after successful builds.
-  - Manual publication requires the explicit `publish_release=true` input.
+- Trigger: push tag matching `v*.*.*`.
 - Runs quality gates first: lint, typecheck, test.
 - Builds four artifacts in parallel:
   - macOS `arm64` DMG
   - macOS `x64` DMG
   - Linux `x64` AppImage
   - Windows `x64` NSIS installer
-- Publishes one versioned GitHub Release with all produced files.
+- Publishes one GitHub Release with all produced files.
   - Versions with a suffix after `X.Y.Z` (for example `1.2.3-alpha.1`) are published as GitHub prereleases.
+  - Only plain `X.Y.Z` releases are marked as the repository's latest release.
+- Includes Electron auto-update metadata (for example `latest*.yml` and `*.blockmap`) in release assets.
 - Publishes the CLI package (`apps/server`, npm package `t3`) with OIDC trusted publishing.
 - macOS signing is enabled when Apple signing/notarization secrets are present. Without those secrets, the workflow intentionally publishes unsigned macOS artifacts.
 - Windows signing is enabled when Azure Trusted Signing secrets are present.
@@ -28,21 +27,13 @@ This document covers how to run desktop releases from one tag, including the cur
   - New updates are prepared/downloaded in the background after detection; install/restart stays manual.
   - The desktop UI shows a rocket update button while preparing and switches to an install action once the update is ready.
 - Provider: GitHub Releases (`provider: github`) configured at build time.
-- Repository visibility: public. The authenticated private-repository provider does not honor custom channel filenames.
-- Runtime channel: `synara`. The default `latest` channel is reserved for the permanent compatibility hop.
 - Repository slug source:
   - `T3CODE_DESKTOP_UPDATE_REPOSITORY` (format `owner/repo`), if set.
   - otherwise `GITHUB_REPOSITORY` from GitHub Actions.
-- Required Synara release assets for updater:
+- Required release assets for updater:
   - platform installers (`.exe`, `.dmg`, `.AppImage`, plus macOS `.zip` for Squirrel.Mac update payloads)
-  - `synara-mac.yml`, `synara.yml`, and `synara-linux.yml` metadata
+  - `latest*.yml` metadata
   - `*.blockmap` files, except the macOS update `.zip.blockmap` removed after zip repack
-- Enforced upgrade path:
-  - The compatibility version from `scripts/release-update-policy.json` remains GitHub Latest permanently and owns `latest*.yml`.
-  - Predecessor installations can therefore see only that compatibility version on their default channel.
-  - The compatibility build migrates local state and then checks the dedicated `synara` channel.
-  - Every clean Synara release is created with `make_latest=false`. Its payloads are uploaded to the pinned compatibility release first, and its three channel manifests are uploaded last.
-  - Both preflight and publication fail closed if GitHub Latest is not the configured compatibility tag.
 - Production desktop builds omit web/server/desktop source maps by default to keep update payloads small. Set `SYNARA_WEB_SOURCEMAP=1`, `SYNARA_SERVER_SOURCEMAP=1`, or `SYNARA_DESKTOP_SOURCEMAP=1` only for a diagnostic release that needs them.
 - macOS metadata note:
   - `electron-updater` reads `latest-mac.yml` for both Intel and Apple Silicon.
@@ -75,25 +66,25 @@ Checklist:
 
 ## Synara notes
 
-- The desktop updater expects the pinned compatibility release in this repository to include the generated updater metadata files, not just the installers.
+- `Synara` keeps the same release architecture as upstream `T3Code`, but publishes desktop artifacts under the Synara branding.
+- The desktop updater expects the GitHub Release in this repository to include the generated updater metadata files, not just the installers.
 - The published release title should read `Synara vX.Y.Z`.
 - By default, the first-party desktop release path does not require CLI publish or post-release version-bump automation.
 - Optional jobs stay disabled unless repository variables enable them:
   - `DPCODE_PUBLISH_CLI=1`
   - `DPCODE_FINALIZE_RELEASE=1`
 
-## 1) Build-only native CI validation
+## 1) Dry-run release without signing
 
 Use this to validate the current unsigned macOS release pipeline.
 
-1. Push the release-candidate branch so GitHub Actions can check it out.
-2. Start the workflow in build-only mode:
-   - `gh workflow run release.yml --ref BRANCH -f version=X.Y.Z -f publish_release=false`
+1. Confirm no signing secrets are required for this test.
+2. Create a test tag:
+   - `git tag v0.0.0-test.1`
+   - `git push origin v0.0.0-test.1`
 3. Wait for `.github/workflows/release.yml` to finish.
-4. Confirm preflight and all four native matrix builds pass.
-5. Download the workflow artifacts and sanity-check installation on each OS.
-
-To publish from a manual dispatch instead of a tag push, pass `publish_release=true`. This is intentionally opt-in.
+4. Verify the GitHub Release contains all platform artifacts.
+5. Download each artifact and sanity-check installation on each OS.
 
 Unsigned macOS artifacts are blocked by Gatekeeper when downloaded through a browser. That is expected without Apple Developer ID signing/notarization. To run an unsigned build after dragging it to Applications:
 
@@ -136,10 +127,7 @@ Notes:
 
 ## 3) Azure Trusted Signing setup (Windows)
 
-Windows signing is optional for both the `0.4.2` compatibility bridge and the
-clean `0.5.0` release. When any Azure signing secret is absent, the workflow
-continues and produces an unsigned NSIS installer, matching previous releases.
-Signing is enabled only when all of the following secrets are present:
+Required secrets used by the workflow:
 
 - `AZURE_TENANT_ID`
 - `AZURE_CLIENT_ID`
@@ -149,7 +137,7 @@ Signing is enabled only when all of the following secrets are present:
 - `AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME`
 - `AZURE_TRUSTED_SIGNING_PUBLISHER_NAME`
 
-Optional signing checklist:
+Checklist:
 
 1. Create Azure Trusted Signing account and certificate profile.
 2. Record ATS values:
@@ -161,11 +149,7 @@ Optional signing checklist:
 4. Grant service principal permissions required by Trusted Signing.
 5. Create a client secret for the service principal.
 6. Add Azure secrets listed above in GitHub Actions secrets.
-7. Re-run a build-only workflow and confirm the Windows installer is signed.
-
-If Windows signing is not being configured, no placeholder or empty secrets are
-needed. Leave them absent and verify the workflow reports that it is building an
-unsigned installer.
+7. Re-run a tag release and confirm Windows installer is signed.
 
 ## 4) Ongoing release checklist
 

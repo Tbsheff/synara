@@ -85,7 +85,6 @@ export default function WorkspaceView({ workspaceId }: { workspaceId: string }) 
         setServerWorkspacePaths({
           homeDir: payload.homeDir,
           chatWorkspaceRoot: payload.chatWorkspaceRoot,
-          studioWorkspaceRoot: payload.studioWorkspaceRoot,
         }),
       ),
     [setServerWorkspacePaths],
@@ -98,12 +97,10 @@ export default function WorkspaceView({ workspaceId }: { workspaceId: string }) 
     setServerWorkspacePaths({
       homeDir: serverConfigQuery.data.homeDir,
       chatWorkspaceRoot: serverConfigQuery.data.chatWorkspaceRoot,
-      studioWorkspaceRoot: serverConfigQuery.data.studioWorkspaceRoot,
     });
   }, [
     serverConfigQuery.data?.chatWorkspaceRoot,
     serverConfigQuery.data?.homeDir,
-    serverConfigQuery.data?.studioWorkspaceRoot,
     setServerWorkspacePaths,
   ]);
 

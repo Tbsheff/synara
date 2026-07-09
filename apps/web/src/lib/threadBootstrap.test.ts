@@ -47,7 +47,6 @@ function makeComposerDraftState(
 ): ComposerThreadDraftState {
   return {
     prompt: "",
-    promptHistorySavedDraft: null,
     images: [],
     files: [],
     nonPersistedImageIds: [],

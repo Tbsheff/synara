@@ -93,13 +93,6 @@ export default function GitActionsControl({
 }: GitActionsControlProps) {
   const { settings } = useAppSettings();
   const providerOptions = useMemo(() => getProviderStartOptions(settings), [settings]);
-  const gitTextGenerationModelSelection = useMemo(
-    (): ModelSelection => ({
-      provider: settings.textGenerationProvider ?? "codex",
-      model: settings.textGenerationModel ?? DEFAULT_GIT_TEXT_GENERATION_MODEL,
-    }),
-    [settings.textGenerationModel, settings.textGenerationProvider],
-  );
   const activeThread = useStore(
     useMemo(() => createThreadSelector(activeThreadId), [activeThreadId]),
   );
@@ -159,7 +152,6 @@ export default function GitActionsControl({
       queryClient,
       codexHomePath: settings.codexHomePath || null,
       model: settings.textGenerationModel ?? null,
-      modelSelection: gitTextGenerationModelSelection,
       ...(providerOptions ? { providerOptions } : {}),
     }),
   );
@@ -172,11 +164,6 @@ export default function GitActionsControl({
       baseBranch: string;
       headBranch: string;
       state: "open" | "closed" | "merged";
-      isDraft?: boolean;
-      mergeability?: "mergeable" | "conflicting" | "unknown";
-      additions?: number | null;
-      deletions?: number | null;
-      changedFiles?: number | null;
     }) => {
       if (!activeThreadId) {
         return;

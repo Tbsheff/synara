@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { inspectSubprocessActivity } from "./Manager";
-import type { ProcessChildrenMap } from "../processTreeKiller";
+import { inspectSubprocessActivity, type ProcessChildrenMap } from "./Manager";
 
 function buildChildrenMap(
   entries: Array<{ ppid: number; pid: number; command: string }>,

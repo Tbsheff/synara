@@ -98,10 +98,6 @@ type ThreadProviderItemUpsertedEvent = Extract<
   OrchestrationEvent,
   { type: "thread.provider-item-upserted" }
 >;
-type ApplyOrchestrationEventOptions = {
-  updateThreadArray?: boolean;
-  updateSidebarSummary?: boolean;
-};
 
 const PERSISTED_STATE_KEY = "synara:renderer-state:v8";
 const LEGACY_PERSISTED_STATE_KEYS = [
@@ -902,7 +898,6 @@ function normalizeChatMessage(
     previous.role === incoming.role &&
     previous.text === incoming.text &&
     previous.dispatchMode === incoming.dispatchMode &&
-    previous.dispatchOrigin === incoming.dispatchOrigin &&
     previous.turnId === incoming.turnId &&
     previous.createdAt === incoming.createdAt &&
     previous.streaming === incoming.streaming &&
@@ -920,7 +915,6 @@ function normalizeChatMessage(
     role: incoming.role,
     text: incoming.text,
     ...(incoming.dispatchMode ? { dispatchMode: incoming.dispatchMode } : {}),
-    ...(incoming.dispatchOrigin ? { dispatchOrigin: incoming.dispatchOrigin } : {}),
     turnId: incoming.turnId,
     createdAt: incoming.createdAt,
     streaming: incoming.streaming,
@@ -982,7 +976,6 @@ function readModelMessageFromChatMessage(
     role: message.role,
     text: message.text,
     ...(message.dispatchMode ? { dispatchMode: message.dispatchMode } : {}),
-    ...(message.dispatchOrigin ? { dispatchOrigin: message.dispatchOrigin } : {}),
     turnId: message.turnId ?? null,
     streaming: message.streaming,
     source: message.source ?? "native",
@@ -1068,7 +1061,6 @@ function mergeReadModelMessagesWithLiveHotPath(
       ...incomingMessage,
       text: previousMessage.text,
       dispatchMode: previousMessage.dispatchMode ?? incomingMessage.dispatchMode,
-      dispatchOrigin: previousMessage.dispatchOrigin ?? incomingMessage.dispatchOrigin,
       turnId: previousMessage.turnId ?? incomingMessage.turnId ?? null,
       source: previousMessage.source ?? incomingMessage.source ?? "native",
       streaming: previousMessage.streaming,
@@ -2874,10 +2866,6 @@ function mergeStreamingMessage(
     incomingMessage.dispatchMode !== undefined
       ? incomingMessage.dispatchMode
       : existingMessage.dispatchMode;
-  const nextDispatchOrigin =
-    incomingMessage.dispatchOrigin !== undefined
-      ? incomingMessage.dispatchOrigin
-      : existingMessage.dispatchOrigin;
   const nextSource = incomingMessage.source ?? existingMessage.source;
 
   if (
@@ -2889,7 +2877,6 @@ function mergeStreamingMessage(
     existingMessage.completedAt === nextCompletedAt &&
     existingMessage.turnId === nextTurnId &&
     existingMessage.dispatchMode === nextDispatchMode &&
-    existingMessage.dispatchOrigin === nextDispatchOrigin &&
     existingMessage.source === nextSource
   ) {
     return null;
@@ -2904,7 +2891,6 @@ function mergeStreamingMessage(
     ...(nextMentions && nextMentions.length > 0 ? { mentions: [...nextMentions] } : {}),
     ...(nextTurnId !== undefined ? { turnId: nextTurnId } : {}),
     ...(nextDispatchMode !== undefined ? { dispatchMode: nextDispatchMode } : {}),
-    ...(nextDispatchOrigin !== undefined ? { dispatchOrigin: nextDispatchOrigin } : {}),
     ...(nextSource !== undefined ? { source: nextSource } : {}),
     ...(nextCompletedAt !== undefined ? { completedAt: nextCompletedAt } : {}),
   };
@@ -2918,7 +2904,6 @@ function applyThreadMessageSentEvent(thread: Thread, event: ThreadMessageSentEve
       role: payload.role,
       text: payload.text,
       dispatchMode: payload.dispatchMode,
-      dispatchOrigin: payload.dispatchOrigin,
       turnId: payload.turnId,
       attachments: payload.attachments ?? [],
       ...(payload.skills !== undefined ? { skills: payload.skills } : {}),
@@ -3024,7 +3009,10 @@ function applyThreadProviderItemUpsertedEvent(
 function applyOrchestrationEvent(
   state: AppState,
   event: OrchestrationEvent,
-  options?: ApplyOrchestrationEventOptions,
+  options?: {
+    updateThreadArray?: boolean;
+    updateSidebarSummary?: boolean;
+  },
 ): AppState {
   switch (event.type) {
     case "project.created":
@@ -3866,52 +3854,6 @@ function applyOrchestrationEvent(
   }
 }
 
-function applyThreadActivityEventBatch(
-  state: AppState,
-  events: ReadonlyArray<ThreadActivityAppendedEvent>,
-  options: ApplyOrchestrationEventOptions,
-): AppState {
-  const firstEvent = events[0];
-  if (!firstEvent) {
-    return state;
-  }
-  const updatesSummary = events.some(threadActivityUpdatesSummary);
-  return applyThreadUpdate(
-    state,
-    firstEvent.payload.threadId,
-    (thread) => {
-      let nextActivities = thread.activities;
-      let updatedAt = thread.updatedAt ?? thread.createdAt;
-      for (const event of events) {
-        const normalizedActivities = normalizeActivities(
-          [...nextActivities, event.payload.activity],
-          nextActivities,
-        );
-        if (normalizedActivities === nextActivities) {
-          continue;
-        }
-        nextActivities = normalizedActivities;
-        if (event.payload.activity.createdAt > updatedAt) {
-          updatedAt = event.payload.activity.createdAt;
-        }
-      }
-      if (nextActivities === thread.activities) {
-        return thread;
-      }
-      return {
-        ...thread,
-        activities: nextActivities,
-        updatedAt,
-      };
-    },
-    {
-      ...options,
-      recomputeSummarySignals: updatesSummary,
-      updateSidebarSummary: options.updateSidebarSummary === true || updatesSummary,
-    },
-  );
-}
-
 export function applyOrchestrationEvents(
   state: AppState,
   events: ReadonlyArray<OrchestrationEvent>,
@@ -3925,31 +3867,17 @@ export function applyOrchestrationEvents(
 export function applyOrchestrationEventsHotPath(
   state: AppState,
   events: ReadonlyArray<OrchestrationEvent>,
-  options?: ApplyOrchestrationEventOptions,
+  options?: {
+    updateThreadArray?: boolean;
+    updateSidebarSummary?: boolean;
+  },
 ): AppState {
   const normalizedOptions = {
     updateThreadArray: options?.updateThreadArray ?? true,
     updateSidebarSummary: options?.updateSidebarSummary ?? false,
   };
   let nextState = state;
-  for (let index = 0; index < events.length; index += 1) {
-    const event = events[index]!;
-    if (event.type === "thread.activity-appended") {
-      const activityEvents = [event];
-      while (index + 1 < events.length) {
-        const nextEvent = events[index + 1];
-        if (
-          nextEvent?.type !== "thread.activity-appended" ||
-          nextEvent.payload.threadId !== event.payload.threadId
-        ) {
-          break;
-        }
-        activityEvents.push(nextEvent);
-        index += 1;
-      }
-      nextState = applyThreadActivityEventBatch(nextState, activityEvents, normalizedOptions);
-      continue;
-    }
+  for (const event of events) {
     nextState = applyOrchestrationEvent(nextState, event, normalizedOptions);
   }
   return nextState;

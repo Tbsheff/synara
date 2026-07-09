@@ -392,7 +392,6 @@ interface ChatRouteChildren {
   ChatKanbanProjectIdRoute: typeof ChatKanbanProjectIdRoute
   ChatWorkspaceWorkspaceIdRoute: typeof ChatWorkspaceWorkspaceIdRoute
   ChatKanbanIndexRoute: typeof ChatKanbanIndexRoute
-  ChatStudioIndexRoute: typeof ChatStudioIndexRoute
   ChatWorkspaceIndexRoute: typeof ChatWorkspaceIndexRoute
 }
 
@@ -408,7 +407,6 @@ const ChatRouteChildren: ChatRouteChildren = {
   ChatKanbanProjectIdRoute: ChatKanbanProjectIdRoute,
   ChatWorkspaceWorkspaceIdRoute: ChatWorkspaceWorkspaceIdRoute,
   ChatKanbanIndexRoute: ChatKanbanIndexRoute,
-  ChatStudioIndexRoute: ChatStudioIndexRoute,
   ChatWorkspaceIndexRoute: ChatWorkspaceIndexRoute,
 }
 

@@ -4,7 +4,6 @@
 
 import type {
   ModelSelection,
-  MessageDispatchOrigin,
   OrchestrationMessageSource,
   TurnDispatchMode,
   OrchestrationLatestTurn,
@@ -110,7 +109,6 @@ export interface ChatMessage {
   skills?: ProviderSkillReference[];
   mentions?: ProviderMentionReference[];
   dispatchMode?: TurnDispatchMode;
-  dispatchOrigin?: MessageDispatchOrigin;
   turnId?: TurnId | null;
   createdAt: string;
   completedAt?: string | undefined;
@@ -143,26 +141,6 @@ export interface TurnDiffSummary {
   checkpointRef?: CheckpointRef | undefined;
   assistantMessageId?: MessageId | undefined;
   checkpointTurnCount?: number | undefined;
-}
-
-// Ephemeral client-side progress of the "New worktree" first-send setup
-// sequence (create worktree → link thread → start session). Rendered as a
-// transient transcript row; never persisted.
-export type WorktreeSetupStepId =
-  | "create-worktree"
-  | "prepare-thread"
-  | "run-setup-action"
-  | "start-session";
-export type WorktreeSetupStepStatus = "pending" | "active" | "done" | "error";
-
-export interface WorktreeSetupStep {
-  id: WorktreeSetupStepId;
-  label: string;
-  status: WorktreeSetupStepStatus;
-}
-
-export interface WorktreeSetupSnapshot {
-  steps: WorktreeSetupStep[];
 }
 
 export interface Project {

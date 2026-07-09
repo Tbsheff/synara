@@ -21,6 +21,5 @@ export * from "./cloudflareRuntimeBridge";
 export * from "./editor";
 export * from "./environment";
 export * from "./project";
-export * from "./studio";
 export * from "./filesystem";
 export * from "./rpc";

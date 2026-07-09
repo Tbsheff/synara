@@ -19,22 +19,6 @@ export function resolveElectronUpdaterPendingCacheDir(args: {
   readonly localAppData?: string | null;
   readonly xdgCacheHome?: string | null;
 }): string | null {
-  const cacheDir = resolveElectronUpdaterCacheDir(args);
-  if (!cacheDir) {
-    return null;
-  }
-
-  const pathForPlatform = args.platform === "win32" ? Path.win32 : Path.posix;
-  return pathForPlatform.join(cacheDir, "pending");
-}
-
-export function resolveElectronUpdaterCacheDir(args: {
-  readonly cacheDirName: string | null;
-  readonly platform: NodeJS.Platform;
-  readonly homeDir: string;
-  readonly localAppData?: string | null;
-  readonly xdgCacheHome?: string | null;
-}): string | null {
   if (!args.cacheDirName) {
     return null;
   }
@@ -47,22 +31,7 @@ export function resolveElectronUpdaterCacheDir(args: {
       : args.platform === "darwin"
         ? pathForPlatform.join(args.homeDir, "Library", "Caches")
         : args.xdgCacheHome || pathForPlatform.join(args.homeDir, ".cache");
-  return pathForPlatform.join(baseCachePath, args.cacheDirName);
-}
-
-export function resolveElectronUpdaterLegacyZipPath(args: {
-  readonly cacheDirName: string | null;
-  readonly platform: NodeJS.Platform;
-  readonly homeDir: string;
-  readonly localAppData?: string | null;
-  readonly xdgCacheHome?: string | null;
-}): string | null {
-  const cacheDir = resolveElectronUpdaterCacheDir(args);
-  if (!cacheDir) {
-    return null;
-  }
-  const pathForPlatform = args.platform === "win32" ? Path.win32 : Path.posix;
-  return pathForPlatform.join(cacheDir, "update.zip");
+  return pathForPlatform.join(baseCachePath, args.cacheDirName, "pending");
 }
 
 export class PendingUpdateCacheClearQueue {

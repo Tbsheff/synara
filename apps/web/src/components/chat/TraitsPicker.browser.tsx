@@ -87,7 +87,6 @@ async function mountClaudePicker(props?: {
   const draftsByThreadId: Record<ThreadId, ComposerThreadDraftState> = {
     [CLAUDE_THREAD_ID]: {
       prompt: props?.prompt ?? "",
-      promptHistorySavedDraft: null,
       images: [],
       files: [],
       nonPersistedImageIds: [],
@@ -294,7 +293,7 @@ describe("TraitsPicker (Claude)", () => {
     });
   });
 
-  it("keeps the claude context window per-thread instead of sticky", async () => {
+  it("persists sticky claude context window when changed", async () => {
     await using _ = await mountClaudePicker({
       model: "claude-opus-4-6",
       options: { contextWindow: "200k" },
@@ -303,12 +302,14 @@ describe("TraitsPicker (Claude)", () => {
     await page.getByRole("button").click();
     await page.getByRole("menuitemradio", { name: "1M" }).click();
 
-    // A 1M thread can grow far beyond the normal compaction point: keep the explicit
-    // thread choice, but never leak it into sticky defaults for future threads.
-    const sticky = useComposerDraftStore.getState().stickyModelSelectionByProvider.claudeAgent;
-    expect(sticky?.provider === "claudeAgent" ? sticky.options?.contextWindow : undefined).toBe(
-      undefined,
-    );
+    expect(
+      useComposerDraftStore.getState().stickyModelSelectionByProvider.claudeAgent,
+    ).toMatchObject({
+      provider: "claudeAgent",
+      options: {
+        contextWindow: "1m",
+      },
+    });
   });
 });
 
@@ -320,7 +321,6 @@ async function mountCodexPicker(props: { model?: string; options?: CodexModelOpt
   const draftsByThreadId: Record<ThreadId, ComposerThreadDraftState> = {
     [threadId]: {
       prompt: "",
-      promptHistorySavedDraft: null,
       images: [],
       files: [],
       nonPersistedImageIds: [],
@@ -657,7 +657,6 @@ async function mountOpenCodePicker(props?: {
   const draftsByThreadId: Record<ThreadId, ComposerThreadDraftState> = {
     [OPENCODE_THREAD_ID]: {
       prompt: "",
-      promptHistorySavedDraft: null,
       images: [],
       files: [],
       nonPersistedImageIds: [],

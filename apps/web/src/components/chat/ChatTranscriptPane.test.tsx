@@ -19,7 +19,6 @@ function renderTranscriptPaneMarkup(
       hasMessages
       isRevertingCheckpoint={false}
       isWorking={false}
-      worktreeSetup={null}
       followLiveOutput={false}
       listRef={createRef<LegendListRef | null>()}
       markdownCwd={undefined}

@@ -1,24 +1,9 @@
-// FILE: ComposerPendingApprovalPanel.tsx
-// Purpose: Detached card, floating just above the composer, that surfaces a pending
-// tool approval — the command / file context plus approve / decline / cancel actions
-// rendered as list-style choice rows. Mirrors ComposerPendingUserInputPanel (same
-// surface, spacing, chips, and scoped keyboard shortcuts) so approvals and AskUserQuestion
-// prompts read as one coherent decision surface instead of the old fused-banner look.
-// Layer: Chat composer UI
-// Exports: ComposerPendingApprovalPanel
-
-import { type ApprovalRequestId, type ProviderApprovalDecision } from "@t3tools/contracts";
-import { type KeyboardEvent, memo, useMemo } from "react";
+import { memo, useMemo } from "react";
 import { type PendingApproval } from "../../session-logic";
-import { cn } from "~/lib/utils";
-import { ComposerChoiceRow, type ComposerChoiceTone } from "./ComposerChoiceRow";
-import { COMPOSER_INPUT_SURFACE_CLASS_NAME } from "./composerPickerStyles";
 
 interface ComposerPendingApprovalPanelProps {
   approval: PendingApproval;
   pendingCount: number;
-  isResponding: boolean;
-  onRespond: (requestId: ApprovalRequestId, decision: ProviderApprovalDecision) => Promise<void>;
 }
 
 type ParsedApproval = {
@@ -29,75 +14,18 @@ type ParsedApproval = {
   fallback: string | null;
 };
 
-type ApprovalAction = {
-  decision: ProviderApprovalDecision;
-  label: string;
-  description: string;
-  tone: ComposerChoiceTone;
-};
-
-// Order is the card-local shortcut order (1-4): recommended action first, stop-everything last.
-const APPROVAL_ACTIONS: ReadonlyArray<ApprovalAction> = [
-  {
-    decision: "accept",
-    label: "Approve once",
-    description: "Allow just this request",
-    tone: "primary",
-  },
-  {
-    decision: "acceptForSession",
-    label: "Always allow this session",
-    description: "Don't ask again this session",
-    tone: "neutral",
-  },
-  {
-    decision: "decline",
-    label: "Decline",
-    description: "Reject and let the agent continue",
-    tone: "destructive",
-  },
-  {
-    decision: "cancel",
-    label: "Cancel turn",
-    description: "Stop the current turn",
-    tone: "neutral",
-  },
-];
-
-const KIND_PROMPT: Record<PendingApproval["requestKind"], string> = {
-  command: "Approve this command?",
-  "file-read": "Approve reading this file?",
-  "file-change": "Approve this file change?",
+const KIND_LABEL: Record<PendingApproval["requestKind"], string> = {
+  command: "COMMAND",
+  "file-read": "FILE READ",
+  "file-change": "FILE CHANGE",
 };
 
 export const ComposerPendingApprovalPanel = memo(function ComposerPendingApprovalPanel({
   approval,
   pendingCount,
-  isResponding,
-  onRespond,
 }: ComposerPendingApprovalPanelProps) {
   const parsed = useMemo(() => parseApprovalDetail(approval.detail), [approval.detail]);
-  const requestId = approval.requestId;
-
-  // Digit shortcuts bubble from focused controls inside this card only; a bare
-  // number key elsewhere in the app must never approve a tool request.
-  const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (isResponding || event.metaKey || event.ctrlKey || event.altKey) return;
-    const target = event.target;
-    if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) return;
-    if (
-      target instanceof HTMLElement &&
-      target.closest('[contenteditable]:not([contenteditable="false"])')
-    ) {
-      return;
-    }
-    const digit = Number.parseInt(event.key, 10);
-    if (Number.isNaN(digit) || digit < 1 || digit > APPROVAL_ACTIONS.length) return;
-    const action = APPROVAL_ACTIONS[digit - 1];
-    if (!action) return;
-    event.preventDefault();
-    void onRespond(requestId, action.decision);
-  };
+  const kindLabel = KIND_LABEL[approval.requestKind];
 
   return (
     <div
@@ -125,37 +53,24 @@ export const ComposerPendingApprovalPanel = memo(function ComposerPendingApprova
               · {parsed.tool}
             </span>
           ) : null}
-        </p>
+        </div>
         {pendingCount > 1 ? (
           <span className="flex h-4 shrink-0 items-center rounded bg-[var(--color-background-elevated-secondary)] px-1 text-[9.5px] font-medium tabular-nums text-[var(--color-text-foreground-secondary)]">
             1/{pendingCount}
           </span>
         ) : null}
       </div>
-      <ApprovalDetail parsed={parsed} />
-      <div className="mt-2.5 space-y-0.5">
-        {APPROVAL_ACTIONS.map((action, index) => (
-          <ComposerChoiceRow
-            key={action.decision}
-            shortcut={index + 1}
-            label={action.label}
-            description={action.description}
-            tone={action.tone}
-            disabled={isResponding}
-            onSelect={() => void onRespond(requestId, action.decision)}
-          />
-        ))}
-      </div>
+      <ApprovalBody parsed={parsed} />
     </div>
   );
 });
 
-function ApprovalDetail({ parsed }: { parsed: ParsedApproval }) {
+function ApprovalBody({ parsed }: { parsed: ParsedApproval }) {
   if (parsed.fileName) {
     return (
-      <div className="mt-2">
+      <>
         <p
-          className="truncate text-[12.5px] font-medium leading-tight text-foreground/85"
+          className="mt-1 truncate text-[13px] font-medium leading-tight text-foreground/90"
           title={parsed.fileDir ? `${parsed.fileDir}/${parsed.fileName}` : parsed.fileName}
         >
           {parsed.fileName}
@@ -168,24 +83,34 @@ function ApprovalDetail({ parsed }: { parsed: ParsedApproval }) {
             {shortenPath(parsed.fileDir)}
           </p>
         ) : null}
-      </div>
+      </>
     );
   }
 
-  const code = parsed.command ?? parsed.fallback;
-  if (code) {
+  if (parsed.command) {
     return (
       <pre
-        className="mt-2 overflow-hidden rounded-md bg-[var(--color-background-elevated-secondary)] px-2.5 py-1.5 font-mono text-[11.5px] leading-snug text-foreground/85"
-        title={code}
+        className="mt-1 overflow-hidden font-mono text-[11.5px] leading-snug text-foreground/85"
+        title={parsed.command}
       >
-        <code className="block truncate">{code}</code>
+        <code className="block truncate">{parsed.command}</code>
       </pre>
     );
   }
 
+  if (parsed.fallback) {
+    return (
+      <p
+        className="mt-1 truncate font-mono text-[11px] text-muted-foreground/65"
+        title={parsed.fallback}
+      >
+        {parsed.fallback}
+      </p>
+    );
+  }
+
   return (
-    <p className="mt-2 text-[12px] text-muted-foreground/65">Review the request to continue.</p>
+    <p className="mt-1 text-[12px] text-muted-foreground/65">Review the request to continue.</p>
   );
 }
 

@@ -7,11 +7,7 @@ import { buildSuggestedWorktreeName } from "../components/ChatView.logic";
 import { toastManager } from "../components/ui/toast";
 import { newCommandId } from "../lib/utils";
 import { readNativeApi } from "../nativeApi";
-import {
-  setupProjectScript,
-  type ProjectScriptRunOptions,
-  type ProjectScriptRunResult,
-} from "../projectScripts";
+import { setupProjectScript } from "../projectScripts";
 import type { Project, ProjectScript, Thread, ThreadWorkspacePatch } from "../types";
 
 export function useThreadWorkspaceHandoff(input: {
@@ -27,8 +23,13 @@ export function useThreadWorkspaceHandoff(input: {
   stopActiveThreadSession: () => Promise<void>;
   runProjectScript: (
     script: ProjectScript,
-    options?: ProjectScriptRunOptions,
-  ) => Promise<ProjectScriptRunResult | null>;
+    options?: {
+      cwd?: string;
+      worktreePath?: string | null;
+      rememberAsLastInvoked?: boolean;
+      env?: Record<string, string>;
+    },
+  ) => Promise<void>;
   setStoreThreadWorkspace: (threadId: ThreadId, patch: ThreadWorkspacePatch) => void;
   syncServerShellSnapshot: (snapshot: OrchestrationShellSnapshot) => void;
 }) {

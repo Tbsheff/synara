@@ -100,14 +100,12 @@ async function enrichWithLocalUsage(
   return { ...snapshot, usageLines: [...snapshot.usageLines, ...localLines] };
 }
 
-/** Plain async batch fetch for supported providers. Never throws. */
+/** Plain async batch fetch for every supported provider. Never throws. */
 export async function collectProviderUsageSnapshots(
   ctx: ProviderUsageContext,
-  options: { forceRefresh?: boolean; provider?: ProviderKind } = {},
+  options: { forceRefresh?: boolean } = {},
 ): Promise<ServerProviderUsageSnapshot[]> {
-  const providers = options.provider
-    ? ([options.provider] as ProviderKind[])
-    : (Object.keys(PROVIDER_USAGE_FETCHERS) as ProviderKind[]);
+  const providers = Object.keys(PROVIDER_USAGE_FETCHERS) as ProviderKind[];
   const settled = await Promise.allSettled(
     providers.map(async (provider) => {
       const snapshot = await fetchProviderUsageCached(provider, ctx, options);
@@ -129,10 +127,7 @@ export const listProviderUsage = Effect.fn(function* (input: ServerListProviderU
           ...buildContext(),
           homeDir: serverConfig.homeDir,
         },
-        {
-          forceRefresh: input.forceRefresh === true,
-          ...(input.provider ? { provider: input.provider } : {}),
-        },
+        { forceRefresh: input.forceRefresh === true },
       ),
     catch: () => [] as unknown as ServerListProviderUsageResult,
   });

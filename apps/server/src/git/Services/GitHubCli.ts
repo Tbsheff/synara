@@ -7,21 +7,9 @@
  */
 import { ServiceMap } from "effect";
 import type { Effect } from "effect";
-import type { GitPullRequestCheck, GitPullRequestComment } from "@t3tools/contracts";
 
 import type { ProcessRunResult } from "../../processRunner";
 import type { GitHubCliError } from "../Errors.ts";
-
-/**
- * Field list for `gh pr view/list --json` calls that decode into
- * {@link GitHubPullRequestSummary} — one source so call sites and tests cannot drift.
- *
- * Note: `mergeable` is computed lazily by GitHub (it answers UNKNOWN while recomputing),
- * so list calls may pay a small extra API cost for it. The remote-status cache bounds
- * that cost; if status polling ever feels slow, this field is the first suspect.
- */
-export const PULL_REQUEST_SUMMARY_JSON_FIELDS =
-  "number,title,url,baseRefName,headRefName,state,mergedAt,isDraft,mergeable,additions,deletions,changedFiles,isCrossRepository,headRepository,headRepositoryOwner,updatedAt";
 
 export interface GitHubPullRequestSummary {
   readonly number: number;
@@ -30,16 +18,9 @@ export interface GitHubPullRequestSummary {
   readonly baseRefName: string;
   readonly headRefName: string;
   readonly state?: "open" | "closed" | "merged";
-  readonly isDraft?: boolean;
-  readonly mergeability?: "mergeable" | "conflicting" | "unknown";
-  readonly additions?: number | null;
-  readonly deletions?: number | null;
-  readonly changedFiles?: number | null;
   readonly isCrossRepository?: boolean;
   readonly headRepositoryNameWithOwner?: string | null;
   readonly headRepositoryOwnerLogin?: string | null;
-  /** ISO timestamp of the last PR update; used to rank multiple PRs for one branch. */
-  readonly updatedAt?: string | null;
 }
 
 export interface GitHubRepositoryCloneUrls {
@@ -344,16 +325,6 @@ export interface GitHubCliShape {
    * List open pull requests for a head branch.
    */
   readonly listOpenPullRequests: (input: {
-    readonly cwd: string;
-    readonly headSelector: string;
-    readonly limit?: number;
-  }) => Effect.Effect<ReadonlyArray<GitHubPullRequestSummary>, GitHubCliError>;
-
-  /**
-   * List pull requests for a head branch in any state (open, closed, merged).
-   * Used to resolve the branch's most relevant PR when no open PR exists.
-   */
-  readonly listPullRequests: (input: {
     readonly cwd: string;
     readonly headSelector: string;
     readonly limit?: number;

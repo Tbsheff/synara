@@ -63,19 +63,6 @@ interface ProjectScriptRuntimeEnvInput {
   extraEnv?: Record<string, string>;
 }
 
-export interface ProjectScriptRunOptions {
-  cwd?: string;
-  env?: Record<string, string>;
-  worktreePath?: string | null;
-  preferNewTerminal?: boolean;
-  rememberAsLastInvoked?: boolean;
-  throwOnError?: boolean;
-}
-
-export interface ProjectScriptRunResult {
-  terminalId: string;
-}
-
 export function projectScriptCwd(input: {
   project: {
     cwd: string;

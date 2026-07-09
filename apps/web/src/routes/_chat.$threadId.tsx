@@ -118,12 +118,6 @@ import {
   createPanelResizeOverlay,
   removePanelResizeOverlay,
 } from "../lib/panelResize";
-import {
-  EDITOR_CHAT_PANE_SCOPE_ID,
-  SINGLE_CHAT_PANE_SCOPE_ID,
-  dockSidechatPaneScopeId,
-  splitViewPaneScopeId,
-} from "../lib/chatPaneScope";
 import { getSidechatCreator } from "../lib/sidechatCreatorRegistry";
 import { toastManager } from "../components/ui/toast";
 import { useAppSettings } from "../appSettings";
@@ -781,7 +775,7 @@ function SplitPaneSurface(props: {
     side: SplitDropSide;
   }) => void;
 }) {
-  const paneScopeId = splitViewPaneScopeId(props.splitView.id, props.paneId);
+  const paneScopeId = `${props.splitView.id}:${props.paneId}`;
   const panelOpen = props.panelState.panel !== null;
   const shouldRenderPanelContent = panelOpen || props.panelState.hasOpenedPanel;
 
@@ -1918,10 +1912,6 @@ function SingleChatSurface(props: {
       const previousSidebarWidth = wrapper.style.getPropertyValue("--sidebar-width");
       return canComposerHandlePanelWidth({
         nextWidth,
-        // The dock coexists only with the single-pane chat, but dock sidechat
-        // panes mount their own composer forms — scope the probe so it always
-        // measures the main composer instead of "first form in the document".
-        paneScopeId: SINGLE_CHAT_PANE_SCOPE_ID,
         applyWidth: (width) => {
           wrapper.style.setProperty("--sidebar-width", `${width}px`);
         },
@@ -2057,7 +2047,7 @@ function SingleChatSurface(props: {
           return (
             <DeferredChatView
               threadId={pane.threadId}
-              paneScopeId={dockSidechatPaneScopeId(pane.id)}
+              paneScopeId={`dock-sidechat:${pane.id}`}
               deferMount={false}
               surfaceMode="split"
               isFocusedPane={false}
@@ -2201,7 +2191,7 @@ function SingleChatSurface(props: {
               >
                 <DeferredChatView
                   threadId={props.threadId}
-                  paneScopeId={EDITOR_CHAT_PANE_SCOPE_ID}
+                  paneScopeId="editor-chat"
                   deferMount={false}
                   surfaceMode="split"
                   presentationMode="editor"
@@ -2234,7 +2224,7 @@ function SingleChatSurface(props: {
           <RouteInsetSurface surfaceClassName={CHAT_BACKGROUND_CLASS_NAME}>
             <DeferredChatView
               threadId={props.threadId}
-              paneScopeId={SINGLE_CHAT_PANE_SCOPE_ID}
+              paneScopeId="single"
               deferMount={false}
               surfaceMode="single"
               isFocusedPane

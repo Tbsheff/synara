@@ -173,12 +173,9 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
             const isSelected = progress.selectedOptionLabels.includes(option.label);
             const shortcutKey = index < 9 ? index + 1 : null;
             return (
-              <ComposerChoiceRow
+              <button
                 key={`${activeQuestion.id}:${option.label}`}
-                shortcut={shortcutKey}
-                label={option.label}
-                description={option.description}
-                selected={isSelected}
+                type="button"
                 disabled={isResponding}
                 aria-pressed={isSelected}
                 onClick={() => handleOptionSelection(activeQuestion.id, option.label)}

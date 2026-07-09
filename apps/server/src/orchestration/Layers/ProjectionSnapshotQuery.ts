@@ -740,25 +740,19 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         );
 
   // Hydrate a full thread detail projection without opening its own transaction.
-  const loadThreadDetail = (
-    threadId: ThreadId,
-    options: { readonly messageLimit: number | null; readonly tracePrefix: string } = {
-      messageLimit: MAX_THREAD_MESSAGES,
-      tracePrefix: "ProjectionSnapshotQuery.getThreadDetailById",
-    },
-  ) =>
+  const loadThreadDetail = (threadId: ThreadId) =>
     Effect.gen(function* () {
       const threadRow = yield* getThreadRowById({ threadId }).pipe(
         Effect.mapError(
           toPersistenceSqlOrDecodeError(
-            `${options.tracePrefix}:getThread:query`,
-            `${options.tracePrefix}:getThread:decodeRow`,
+            "ProjectionSnapshotQuery.getThreadDetailById:getThread:query",
+            "ProjectionSnapshotQuery.getThreadDetailById:getThread:decodeRow",
           ),
         ),
         Effect.flatMap((option) =>
           decodeProjectionThreadOption(
             option,
-            `${options.tracePrefix}:getThread:decodeModelSelection`,
+            "ProjectionSnapshotQuery.getThreadDetailById:getThread:decodeModelSelection",
           ),
         ),
       );
@@ -776,27 +770,27 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         sessionRow,
         runtimeRow,
       ] = yield* Effect.all([
-        listThreadMessageRowsByThread({ threadId, maxMessages: options.messageLimit }).pipe(
+        listThreadMessageRowsByThread({ threadId }).pipe(
           Effect.mapError(
             toPersistenceSqlOrDecodeError(
-              `${options.tracePrefix}:listMessages:query`,
-              `${options.tracePrefix}:listMessages:decodeRows`,
+              "ProjectionSnapshotQuery.getThreadDetailById:listMessages:query",
+              "ProjectionSnapshotQuery.getThreadDetailById:listMessages:decodeRows",
             ),
           ),
         ),
         listThreadProposedPlanRowsByThread({ threadId }).pipe(
           Effect.mapError(
             toPersistenceSqlOrDecodeError(
-              `${options.tracePrefix}:listPlans:query`,
-              `${options.tracePrefix}:listPlans:decodeRows`,
+              "ProjectionSnapshotQuery.getThreadDetailById:listPlans:query",
+              "ProjectionSnapshotQuery.getThreadDetailById:listPlans:decodeRows",
             ),
           ),
         ),
         listThreadActivityRowsByThread({ threadId }).pipe(
           Effect.mapError(
             toPersistenceSqlOrDecodeError(
-              `${options.tracePrefix}:listActivities:query`,
-              `${options.tracePrefix}:listActivities:decodeRows`,
+              "ProjectionSnapshotQuery.getThreadDetailById:listActivities:query",
+              "ProjectionSnapshotQuery.getThreadDetailById:listActivities:decodeRows",
             ),
           ),
         ),
@@ -811,24 +805,24 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         listCheckpointRowsByThread({ threadId }).pipe(
           Effect.mapError(
             toPersistenceSqlOrDecodeError(
-              `${options.tracePrefix}:listCheckpoints:query`,
-              `${options.tracePrefix}:listCheckpoints:decodeRows`,
+              "ProjectionSnapshotQuery.getThreadDetailById:listCheckpoints:query",
+              "ProjectionSnapshotQuery.getThreadDetailById:listCheckpoints:decodeRows",
             ),
           ),
         ),
         getLatestTurnRowByThread({ threadId }).pipe(
           Effect.mapError(
             toPersistenceSqlOrDecodeError(
-              `${options.tracePrefix}:getLatestTurn:query`,
-              `${options.tracePrefix}:getLatestTurn:decodeRow`,
+              "ProjectionSnapshotQuery.getThreadDetailById:getLatestTurn:query",
+              "ProjectionSnapshotQuery.getThreadDetailById:getLatestTurn:decodeRow",
             ),
           ),
         ),
         getThreadSessionRowByThread({ threadId }).pipe(
           Effect.mapError(
             toPersistenceSqlOrDecodeError(
-              `${options.tracePrefix}:getSession:query`,
-              `${options.tracePrefix}:getSession:decodeRow`,
+              "ProjectionSnapshotQuery.getThreadDetailById:getSession:query",
+              "ProjectionSnapshotQuery.getThreadDetailById:getSession:decodeRow",
             ),
           ),
         ),
@@ -858,7 +852,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
 
       return yield* decodeThreadDetail(thread).pipe(
         Effect.map((decodedThread) => Option.some(decodedThread)),
-        Effect.mapError(toPersistenceDecodeError(`${options.tracePrefix}:decodeThread`)),
+        Effect.mapError(
+          toPersistenceDecodeError("ProjectionSnapshotQuery.getThreadDetailById:decodeThread"),
+        ),
       );
     });
 
@@ -871,26 +867,6 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         return toPersistenceSqlError("ProjectionSnapshotQuery.getThreadDetailById:query")(error);
       }),
     );
-
-  const getThreadDetailForExportById: ProjectionSnapshotQueryShape["getThreadDetailForExportById"] =
-    (threadId) =>
-      sql
-        .withTransaction(
-          loadThreadDetail(threadId, {
-            messageLimit: null,
-            tracePrefix: "ProjectionSnapshotQuery.getThreadDetailForExportById",
-          }),
-        )
-        .pipe(
-          Effect.mapError((error) => {
-            if (isPersistenceError(error)) {
-              return error;
-            }
-            return toPersistenceSqlError(
-              "ProjectionSnapshotQuery.getThreadDetailForExportById:query",
-            )(error);
-          }),
-        );
 
   // Capture the projection cursor and thread detail in one transaction so the
   // snapshot fence cannot advance past the detail payload the client receives.
@@ -949,12 +925,10 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     getProjectShellById,
     getFirstActiveThreadIdByProjectId,
     getThreadCheckpointContext,
-    listGeneratedImageActivitiesByTurn,
     getFullThreadDiffContext,
     getThreadShellById,
     findSyntheticSubagentParentThread,
     getThreadDetailById,
-    getThreadDetailForExportById,
     getThreadDetailSnapshotById,
   } satisfies ProjectionSnapshotQueryShape;
 });

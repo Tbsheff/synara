@@ -8,7 +8,6 @@ import { DEFAULT_CHAT_FONT_SIZE_PX, normalizeChatFontSizePx } from "../appSettin
 import { deriveDisplayedUserMessageState } from "../lib/terminalContext";
 import { buildInlineTerminalContextText } from "./chat/userMessageTerminalContexts";
 import { deriveUserMessagePreviewState } from "./chat/userMessagePreview";
-import { hasLeadingUserMedia, resolveUserTurnMarker } from "./chat/userTurnMarker";
 import {
   getChatTranscriptAssistantCharWidthPx,
   getChatTranscriptLineHeightPx,
@@ -63,7 +62,6 @@ interface TimelineMessageHeightInput {
   text: string;
   attachments?: ReadonlyArray<{ id: string; type?: "image" | "file" | "assistant-selection" }>;
   dispatchMode?: "queue" | "steer";
-  dispatchOrigin?: "user" | "automation";
   diffSummaryFiles?: ReadonlyArray<TurnDiffFileChange>;
   diffSummaryFileListExpanded?: boolean;
   inlineToolEntries?: ReadonlyArray<TimelineWorkEntryHeightInput>;
@@ -330,15 +328,13 @@ export function estimateTimelineMessageHeight(
           (renderedText.length > 0 ? USER_ATTACHMENT_ROW_MARGIN_BOTTOM_PX : 0)
         : 0;
     const dispatchChipHeight =
-      resolveUserTurnMarker(message) !== null
+      message.dispatchMode === "steer"
         ? USER_DISPATCH_CHIP_HEIGHT_PX +
-          (hasLeadingUserMedia({
-            imageCount: imageAttachmentCount,
-            fileCount: fileAttachmentCount,
-            assistantSelectionCount,
-            fileCommentCount,
-            pastedTextCount,
-          })
+          (imageAttachmentCount > 0 ||
+          fileAttachmentCount > 0 ||
+          assistantSelectionCount > 0 ||
+          fileCommentCount > 0 ||
+          pastedTextCount > 0
             ? USER_DISPATCH_CHIP_WITH_MEDIA_MARGIN_BOTTOM_PX
             : USER_DISPATCH_CHIP_MARGIN_BOTTOM_PX)
         : 0;

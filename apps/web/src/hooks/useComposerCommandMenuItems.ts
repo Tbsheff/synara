@@ -58,8 +58,6 @@ export function useComposerCommandMenuItems(input: {
   canOfferReviewCommand: boolean;
   canOfferForkCommand: boolean;
   canOfferSideCommand: boolean;
-  canOfferExportCommand: boolean;
-  surfaceAppSlashCommands?: ReadonlySet<string>;
   dynamicAgents: readonly { name: string; displayName: string; description?: string }[];
 }): ComposerCommandItem[] {
   const {
@@ -75,8 +73,6 @@ export function useComposerCommandMenuItems(input: {
     canOfferReviewCommand,
     canOfferForkCommand,
     canOfferSideCommand,
-    canOfferExportCommand,
-    surfaceAppSlashCommands,
     dynamicAgents,
   } = input;
 

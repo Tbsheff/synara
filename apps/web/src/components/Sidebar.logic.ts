@@ -174,11 +174,11 @@ export function resolveSidebarNewThreadEnvMode(input: {
 export function pruneExpandedProjectThreadListsForCollapsedProjects<
   T extends Pick<Project, "cwd" | "expanded">,
 >(input: {
-  threadListExtraPagesByProjectCwd: ReadonlyMap<string, number>;
+  expandedProjectThreadListCwds: ReadonlySet<string>;
   projects: readonly T[];
   normalizeProjectCwd: (cwd: string) => string;
-}): ReadonlyMap<string, number> {
-  const { normalizeProjectCwd, projects, threadListExtraPagesByProjectCwd } = input;
+}): ReadonlySet<string> {
+  const { expandedProjectThreadListCwds, normalizeProjectCwd, projects } = input;
   const collapsedProjectCwds = new Set(
     projects
       .filter((project) => !project.expanded)
@@ -187,20 +187,20 @@ export function pruneExpandedProjectThreadListsForCollapsedProjects<
   );
 
   if (collapsedProjectCwds.size === 0) {
-    return threadListExtraPagesByProjectCwd;
+    return expandedProjectThreadListCwds;
   }
 
   let changed = false;
-  const nextThreadListExtraPagesByProjectCwd = new Map<string, number>();
-  for (const [cwd, extraPages] of threadListExtraPagesByProjectCwd) {
+  const nextExpandedProjectThreadListCwds = new Set<string>();
+  for (const cwd of expandedProjectThreadListCwds) {
     if (collapsedProjectCwds.has(cwd)) {
       changed = true;
       continue;
     }
-    nextThreadListExtraPagesByProjectCwd.set(cwd, extraPages);
+    nextExpandedProjectThreadListCwds.add(cwd);
   }
 
-  return changed ? nextThreadListExtraPagesByProjectCwd : threadListExtraPagesByProjectCwd;
+  return changed ? nextExpandedProjectThreadListCwds : expandedProjectThreadListCwds;
 }
 
 /**

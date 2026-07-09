@@ -20,7 +20,6 @@ export function createInitialDesktopUpdateState(
     message: null,
     errorContext: null,
     canRetry: false,
-    installFailureCount: 0,
     releaseUrl: null,
   };
 }
@@ -61,7 +60,6 @@ export function reduceDesktopUpdateStateOnUpdateAvailable(
   version: string,
   checkedAt: string,
 ): DesktopUpdateState {
-  const installFailureCount = state.availableVersion === version ? state.installFailureCount : 0;
   return {
     ...state,
     status: "available",
@@ -72,7 +70,6 @@ export function reduceDesktopUpdateStateOnUpdateAvailable(
     message: null,
     errorContext: null,
     canRetry: false,
-    installFailureCount,
   };
 }
 
@@ -90,7 +87,6 @@ export function reduceDesktopUpdateStateOnNoUpdate(
     message: null,
     errorContext: null,
     canRetry: false,
-    installFailureCount: 0,
   };
 }
 
@@ -148,7 +144,6 @@ export function reduceDesktopUpdateStateOnDownloadComplete(
     message: null,
     errorContext: null,
     canRetry: true,
-    installFailureCount: state.availableVersion === version ? state.installFailureCount : 0,
   };
 }
 
@@ -162,24 +157,5 @@ export function reduceDesktopUpdateStateOnInstallFailure(
     message,
     errorContext: "install",
     canRetry: true,
-  };
-}
-
-export function reduceDesktopUpdateStateOnInstallRestartFailure(
-  state: DesktopUpdateState,
-  toVersion: string,
-  consecutiveFailures: number,
-  message: string,
-): DesktopUpdateState {
-  return {
-    ...state,
-    status: "error",
-    availableVersion: toVersion,
-    downloadedVersion: null,
-    downloadPercent: null,
-    message,
-    errorContext: "install",
-    canRetry: true,
-    installFailureCount: consecutiveFailures,
   };
 }

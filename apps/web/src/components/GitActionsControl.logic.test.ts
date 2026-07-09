@@ -55,7 +55,14 @@ describe("when: branch is clean and has an open PR", () => {
   it("resolveQuickAction opens the existing PR", () => {
     const quick = resolveQuickAction(
       status({
-        pr: statusPr({ number: 10, title: "Open PR", url: "https://example.com/pr/10" }),
+        pr: {
+          number: 10,
+          title: "Open PR",
+          url: "https://example.com/pr/10",
+          baseBranch: "main",
+          headBranch: "feature/test",
+          state: "open",
+        },
       }),
       false,
     );
@@ -65,7 +72,14 @@ describe("when: branch is clean and has an open PR", () => {
   it("buildMenuItems disables commit/push and enables open PR", () => {
     const items = buildMenuItems(
       status({
-        pr: statusPr({ number: 11, title: "Existing PR", url: "https://example.com/pr/11" }),
+        pr: {
+          number: 11,
+          title: "Existing PR",
+          url: "https://example.com/pr/11",
+          baseBranch: "main",
+          headBranch: "feature/test",
+          state: "open",
+        },
       }),
       false,
     );
@@ -161,7 +175,14 @@ describe("when: branch is clean, ahead, and has an open PR", () => {
     const quick = resolveQuickAction(
       status({
         aheadCount: 3,
-        pr: statusPr({ number: 13, title: "Open PR", url: "https://example.com/pr/13" }),
+        pr: {
+          number: 13,
+          title: "Open PR",
+          url: "https://example.com/pr/13",
+          baseBranch: "main",
+          headBranch: "feature/test",
+          state: "open",
+        },
       }),
       false,
     );
@@ -172,7 +193,14 @@ describe("when: branch is clean, ahead, and has an open PR", () => {
     const items = buildMenuItems(
       status({
         aheadCount: 2,
-        pr: statusPr({ number: 12, title: "Existing PR", url: "https://example.com/pr/12" }),
+        pr: {
+          number: 12,
+          title: "Existing PR",
+          url: "https://example.com/pr/12",
+          baseBranch: "main",
+          headBranch: "feature/test",
+          state: "open",
+        },
       }),
       false,
     );
@@ -520,7 +548,14 @@ describe("when: working tree has local changes", () => {
     const quick = resolveQuickAction(
       status({
         hasWorkingTreeChanges: true,
-        pr: statusPr({ number: 16, title: "Existing PR", url: "https://example.com/pr/16" }),
+        pr: {
+          number: 16,
+          title: "Existing PR",
+          url: "https://example.com/pr/16",
+          baseBranch: "main",
+          headBranch: "feature/test",
+          state: "open",
+        },
       }),
       false,
     );
@@ -816,7 +851,14 @@ describe("when: branch has no upstream configured", () => {
       status({
         hasUpstream: false,
         aheadCount: 0,
-        pr: statusPr({ number: 14, title: "Existing PR", url: "https://example.com/pr/14" }),
+        pr: {
+          number: 14,
+          title: "Existing PR",
+          url: "https://example.com/pr/14",
+          baseBranch: "main",
+          headBranch: "feature/test",
+          state: "open",
+        },
       }),
       false,
     );
@@ -832,7 +874,14 @@ describe("when: branch has no upstream configured", () => {
       status({
         hasUpstream: false,
         aheadCount: 1,
-        pr: statusPr({ number: 15, title: "Existing PR", url: "https://example.com/pr/15" }),
+        pr: {
+          number: 15,
+          title: "Existing PR",
+          url: "https://example.com/pr/15",
+          baseBranch: "main",
+          headBranch: "feature/test",
+          state: "open",
+        },
       }),
       false,
     );

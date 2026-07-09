@@ -27,7 +27,6 @@ const baseState: DesktopUpdateState = {
   message: null,
   errorContext: null,
   canRetry: false,
-  installFailureCount: 0,
   releaseUrl: null,
 };
 

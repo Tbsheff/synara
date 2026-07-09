@@ -305,7 +305,6 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
         ? [
             {
               id: project.id,
-              kind: project.kind,
               workspaceRoot: project.workspaceRoot,
             },
           ]

@@ -40,7 +40,6 @@ import {
   serializeLaunchVersionRecord,
   shouldRefreshIconCache,
 } from "./macIconCacheRefresh";
-import { collectMacUpdateDiagnostics } from "./macUpdateDiagnostics";
 import { openInitialBackendWindow } from "./initialBackendWindowOpen";
 import { shouldAllowMediaPermissionRequest } from "./mediaPermissions";
 import {
@@ -908,11 +907,6 @@ function resolveUserDataPath(): string {
       sourcePath: seedResult.sourcePath,
       targetPath: seedResult.targetPath,
     });
-  } else if (seedResult.status === "repaired-browser-partition") {
-    console.info("[desktop] Restored Synara browser session from legacy profile", {
-      sourcePath: seedResult.sourcePath,
-      targetPath: seedResult.targetPath,
-    });
   } else if (seedResult.status === "seed-failed") {
     console.warn("[desktop] Failed to seed Synara Electron profile from legacy profile", {
       sourcePath: seedResult.sourcePath,
@@ -1455,13 +1449,6 @@ app.on("before-quit", (event) => {
 
   if (updateController.isQuitAndInstallInFlight()) {
     // Electron's updater owns this quit; canceling it would turn install into a plain app quit.
-    try {
-      markInstallHandoffSync(getUpdateInstallMarkerPath());
-    } catch (error) {
-      console.error(
-        `[desktop-updater] Failed to persist install handoff marker during quit: ${formatErrorMessage(error)}`,
-      );
-    }
     writeDesktopLogHeader("before-quit allowing updater quit-and-install");
     return;
   }
@@ -1540,15 +1527,6 @@ app.on("window-all-closed", () => {
 });
 
 if (process.platform !== "win32") {
-  process.on("uncaughtException", (error: unknown) => {
-    if (!isBrokenPipeError(error)) {
-      throw error;
-    }
-    if (desktopShutdownPromise) return;
-    writeDesktopLogHeader("EPIPE received");
-    requestGracefulAppQuit("EPIPE");
-  });
-
   process.on("SIGINT", () => {
     if (desktopShutdownPromise) return;
     writeDesktopLogHeader("SIGINT received");
