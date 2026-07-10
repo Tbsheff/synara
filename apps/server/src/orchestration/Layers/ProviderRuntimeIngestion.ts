@@ -71,6 +71,7 @@ import { makeIngestionState } from "./ProviderRuntimeIngestion.state.ts";
 import { makeIngestionMessages } from "./ProviderRuntimeIngestion.messages.ts";
 import type {
   RuntimeIngestionInput,
+  RuntimeIngestionDomainEvent,
   SubagentIdentity,
   TurnStartRequestedDomainEvent,
 } from "./ProviderRuntimeIngestion.types.ts";
@@ -373,7 +374,9 @@ const make = Effect.gen(function* () {
             }).pipe(Effect.as<ReadonlyArray<ProjectionGeneratedImageActivityRecord>>([])),
           ),
         );
-      const imagePaths = [...new Set([...cached, ...collectPersistedGeneratedImagePaths(persisted)])];
+      const imagePaths = [
+        ...new Set([...cached, ...collectPersistedGeneratedImagePaths(persisted)]),
+      ];
       yield* Effect.forEach(
         imagePaths,
         (imagePath) =>
@@ -398,7 +401,10 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       const project = yield* getProjectShell(input.thread);
       if (!project || project.kind !== "studio") return null;
-      const workspaceRoot = resolveThreadWorkspaceCwd({ thread: input.thread, projects: [project] });
+      const workspaceRoot = resolveThreadWorkspaceCwd({
+        thread: input.thread,
+        projects: [project],
+      });
       if (!workspaceRoot) return null;
       return yield* copyAndAttributeStudioGeneratedImage({
         orchestrationEngine,
@@ -886,24 +892,10 @@ const make = Effect.gen(function* () {
         } else {
           // No turn to correlate with: attach immediately to the same provider item
           // (replay) or an existing reference, else a standalone image-only message.
-          const messages = thread.messages;
-          const sameItemMessageId = event.itemId
-            ? MessageId.makeUnsafe(`assistant:${event.itemId}`)
-            : undefined;
-          const markdown = generatedImageMarkdown(displayPath);
-          const targetMessage = messages.find(
-            (message) =>
-              message.role === "assistant" &&
-              (message.id === sameItemMessageId ||
-                message.text.includes(displayPath) ||
-                message.text.includes(markdown)),
-          );
-          yield* appendGeneratedImagesToAssistantMessage({
+          yield* appendGeneratedImageReference({
             event,
-            threadId: thread.id,
-            targetMessage,
-            newMessageId: MessageId.makeUnsafe(`assistant:image:${event.itemId ?? event.eventId}`),
-            imagePaths: [displayPath],
+            thread,
+            imagePath: displayPath,
             createdAt: now,
           });
         }

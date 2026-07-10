@@ -265,6 +265,11 @@ export function toThreadPr(
         baseBranch: string;
         headBranch: string;
         state: "open" | "closed" | "merged";
+        isDraft?: boolean;
+        mergeability?: "unknown" | "mergeable" | "conflicting";
+        additions?: number | null;
+        deletions?: number | null;
+        changedFiles?: number | null;
       },
 ): ThreadPr {
   return {
@@ -274,6 +279,11 @@ export function toThreadPr(
     baseBranch: pr.baseBranch,
     headBranch: pr.headBranch,
     state: pr.state,
+    isDraft: pr.isDraft ?? false,
+    mergeability: pr.mergeability ?? "unknown",
+    additions: pr.additions ?? 0,
+    deletions: pr.deletions ?? 0,
+    changedFiles: pr.changedFiles ?? 0,
   };
 }
 

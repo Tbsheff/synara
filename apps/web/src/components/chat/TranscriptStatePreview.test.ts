@@ -5,10 +5,7 @@ import {
   rateLimitActivityForState,
   type TranscriptStatePreviewPhase,
 } from "./TranscriptStatePreviewMeta";
-import {
-  buildTranscriptScenarioState,
-  type TranscriptScenarioId,
-} from "./transcriptStateFixtures";
+import { buildTranscriptScenarioState, type TranscriptScenarioId } from "./transcriptStateFixtures";
 
 function previewPhaseForScenario(scenarioId: TranscriptScenarioId): TranscriptStatePreviewPhase {
   return deriveTranscriptStatePreviewMeta(buildTranscriptScenarioState(scenarioId, 12)).phase;

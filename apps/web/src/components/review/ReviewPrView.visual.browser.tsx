@@ -343,7 +343,7 @@ async function mountReviewPrView(
 }
 
 function colorChannelValues(color: string): [number, number, number] {
-  const rgbMatch = /rgb\((\d+),\s*(\d+),\s*(\d+)\)/.exec(color);
+  const rgbMatch = /rgba?\((\d+),\s*(\d+),\s*(\d+)/.exec(color);
   if (rgbMatch) {
     return [Number(rgbMatch[1]) / 255, Number(rgbMatch[2]) / 255, Number(rgbMatch[3]) / 255];
   }
@@ -354,8 +354,20 @@ function colorChannelValues(color: string): [number, number, number] {
   throw new Error(`Unsupported color format: ${color}`);
 }
 
-function approximateLuminance(color: string): number {
-  const [red, green, blue] = colorChannelValues(color);
+function renderedBackgroundColor(element: Element): string {
+  let current: Element | null = element;
+  while (current) {
+    const color = getComputedStyle(current).backgroundColor;
+    if (color !== "transparent" && !/^rgba\([^)]*,\s*0(?:\.0+)?\)$/.test(color)) {
+      return color;
+    }
+    current = current.parentElement;
+  }
+  return getComputedStyle(document.documentElement).backgroundColor;
+}
+
+function approximateBackgroundLuminance(element: Element): number {
+  const [red, green, blue] = colorChannelValues(renderedBackgroundColor(element));
   return red * 0.2126 + green * 0.7152 + blue * 0.0722;
 }
 
@@ -430,13 +442,9 @@ describe("ReviewPrView visual composition", () => {
       expect(workbench!.getBoundingClientRect().bottom).toBeGreaterThanOrEqual(
         (host?.getBoundingClientRect().bottom ?? 0) - 1,
       );
-      expect(approximateLuminance(getComputedStyle(workbench!).backgroundColor)).toBeLessThan(0.16);
-      expect(
-        approximateLuminance(diffViewport ? getComputedStyle(diffViewport).backgroundColor : ""),
-      ).toBeLessThan(0.18);
-      expect(
-        approximateLuminance(fileRail ? getComputedStyle(fileRail).backgroundColor : ""),
-      ).toBeLessThan(0.18);
+      expect(approximateBackgroundLuminance(workbench!)).toBeLessThan(0.16);
+      expect(approximateBackgroundLuminance(diffViewport!)).toBeLessThan(0.18);
+      expect(approximateBackgroundLuminance(fileRail!)).toBeLessThan(0.18);
       const workbenchHeight = workbench?.getBoundingClientRect().height ?? 0;
 
       expect(fileRailWidth).toBeGreaterThanOrEqual(270);
@@ -503,12 +511,8 @@ describe("ReviewPrView visual composition", () => {
       const diffViewport = document.querySelector<HTMLElement>(".review-diff-viewport");
       expect(workbench).toBeTruthy();
       expect(diffViewport).toBeTruthy();
-      expect(approximateLuminance(getComputedStyle(workbench!).backgroundColor)).toBeGreaterThan(
-        0.72,
-      );
-      expect(approximateLuminance(getComputedStyle(diffViewport!).backgroundColor)).toBeGreaterThan(
-        0.68,
-      );
+      expect(approximateBackgroundLuminance(workbench!)).toBeGreaterThan(0.72);
+      expect(approximateBackgroundLuminance(diffViewport!)).toBeGreaterThan(0.68);
     } finally {
       await mounted.cleanup();
     }

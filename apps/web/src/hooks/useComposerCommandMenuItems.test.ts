@@ -42,7 +42,9 @@ describe("useComposerCommandMenuItems", () => {
       providerNativeCommands: [{ name: "export", description: "Provider export" }],
     });
 
-    expect(items).toContainEqual(expect.objectContaining({ type: "slash-command", command: "export" }));
+    expect(items).toContainEqual(
+      expect.objectContaining({ type: "slash-command", command: "export" }),
+    );
     expect(items).not.toContainEqual(
       expect.objectContaining({ type: "provider-native-command", command: "export" }),
     );

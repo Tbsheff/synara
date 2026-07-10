@@ -15,6 +15,7 @@ import type {
 export function createEmptyThreadDraft(): ComposerThreadDraftState {
   return {
     prompt: "",
+    promptHistorySavedDraft: null,
     images: [],
     files: [],
     nonPersistedImageIds: [],

@@ -521,6 +521,8 @@ import {
   resolveRuntimeModeAfterApprovalDecision,
   revokeBlobPreviewUrl,
   revokeUserMessagePreviewUrls,
+  resolveQueuedSteerGateTransition,
+  type QueuedSteerGate,
 } from "./ChatView.logic";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { useComposerSlashCommands } from "../hooks/useComposerSlashCommands";
@@ -4825,17 +4827,17 @@ export default function ChatView({
     programmaticScrollUntilRef.current = performance.now() + 200;
     scrollContainer.scrollTop += delta;
   }, [composerStackedChromeHeight]);
-  const latestAssistantTranscriptMessage = useMemo(() => {
+  const latestTranscriptMessage = useMemo(() => {
     for (let index = timelineEntries.length - 1; index >= 0; index -= 1) {
       const entry = timelineEntries[index];
-      if (entry?.kind === "message" && entry.message.role === "assistant") {
+      if (entry?.kind === "message") {
         return entry.message;
       }
     }
     return null;
   }, [timelineEntries]);
-  const transcriptTailKey = latestAssistantTranscriptMessage
-    ? deriveTranscriptTailFollowKey({ latestMessage: latestAssistantTranscriptMessage })
+  const transcriptTailKey = latestTranscriptMessage
+    ? deriveTranscriptTailFollowKey({ latestMessage: latestTranscriptMessage })
     : "empty";
   const maintainTranscriptTailFollow = shouldMaintainTranscriptTailFollow({
     previousTailKey: previousTranscriptTailKeyRef.current,

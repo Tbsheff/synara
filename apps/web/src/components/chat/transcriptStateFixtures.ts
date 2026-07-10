@@ -366,8 +366,7 @@ function buildWorkEntries(scenarioId: TranscriptScenarioId): WorkLogEntry[] {
           createdAt: isoAt(9),
           turnId: ACTIVE_TURN_ID,
           label: "Stale pending request",
-          detail:
-            "Provider callback state did not survive restart. Restart the turn to continue.",
+          detail: "Provider callback state did not survive restart. Restart the turn to continue.",
           tone: "error",
         },
       ];

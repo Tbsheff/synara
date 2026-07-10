@@ -87,12 +87,7 @@ export function TranscriptStateReadyComposer({
           </div>
           <div className={cn(COMPOSER_FOOTER_ROW_CLASS_NAME, "gap-2")}>
             <TranscriptStateComposerStatus label={statusLabel} />
-            <Button
-              type="submit"
-              size="sm"
-              className="rounded-full px-4"
-              disabled={!hasContent}
-            >
+            <Button type="submit" size="sm" className="rounded-full px-4" disabled={!hasContent}>
               {composerActionLabel(mode, state)}
             </Button>
           </div>

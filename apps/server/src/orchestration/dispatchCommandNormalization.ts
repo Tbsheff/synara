@@ -206,6 +206,7 @@ export function makeDispatchCommandNormalizer<E>(options: DispatchCommandNormali
     } = input;
     if (
       command.kind !== kind ||
+      command.type !== "project.create" ||
       command.createWorkspaceRootIfMissing !== true ||
       !configuredWorkspaceRoot ||
       !prepare

@@ -945,7 +945,7 @@ function terminalStatusFromThreadState(input: {
 
 function prStatusIndicator(pr: ThreadPr): PrStatusIndicator | null {
   if (!pr) return null;
-  const presentation = resolvePrStatePresentation(pr);
+  const presentation = resolvePrStatePresentation(pr.state);
   return {
     label: presentation.label,
     colorClass: presentation.colorClass,
@@ -4377,6 +4377,7 @@ export default function Sidebar() {
     const { visibleEntries } = getVisibleSidebarEntriesForPreview({
       entries: visibleChatPreviewEntries,
       activeEntryId: activeChatPreviewEntry?.rowId,
+      isExpanded: false,
       previewLimit: paging.previewLimit,
     });
     return {

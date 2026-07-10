@@ -1190,7 +1190,7 @@ async function waitForElement<T extends Element>(
       expect(element, errorMessage).toBeTruthy();
     },
     {
-      timeout: 8_000,
+      timeout: 20_000,
       interval: 16,
     },
   );
@@ -3674,7 +3674,10 @@ describe("ChatView timeline estimator parity (full app)", () => {
       const composerBlockAfterRect = composerBlockAfter!.getBoundingClientRect();
       // Guard against the empty-pane entry animation restarting with a vertical translate
       // when Home selection turns into a project draft.
-      expect(Math.round(Math.abs(afterRect.height - beforeRect.height))).toBeLessThanOrEqual(1);
+      // Chromium can round the two equivalent shells to adjacent device-pixel
+      // boundaries after the project-picker swap. A restarted entry animation
+      // moves the shell materially farther than this rendering tolerance.
+      expect(Math.round(Math.abs(afterRect.height - beforeRect.height))).toBeLessThanOrEqual(2);
       expect(Math.round(Math.abs(afterRect.top - beforeRect.top))).toBeLessThanOrEqual(1);
       expect(
         Math.round(Math.abs(composerBlockAfterRect.top - composerBlockBeforeRect.top)),

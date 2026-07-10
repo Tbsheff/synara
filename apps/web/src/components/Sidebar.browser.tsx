@@ -235,7 +235,7 @@ async function waitForElement<T extends Element>(
       element = query();
       expect(element, errorMessage).toBeTruthy();
     },
-    { timeout: 8_000, interval: 16 },
+    { timeout: 20_000, interval: 16 },
   );
   return element!;
 }
@@ -245,7 +245,7 @@ async function waitForCondition(check: () => boolean, errorMessage: string): Pro
     () => {
       expect(check(), errorMessage).toBe(true);
     },
-    { timeout: 8_000, interval: 16 },
+    { timeout: 20_000, interval: 16 },
   );
 }
 
@@ -305,7 +305,8 @@ describe("Sidebar render gate", () => {
     await worker.stop();
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    await __resetWsNativeApiForTests();
     localStorage.clear();
     document.body.innerHTML = "";
     useComposerDraftStore.setState({

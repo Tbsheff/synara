@@ -254,82 +254,84 @@ export function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
       ],
     }).pipe(Effect.flatMap((result) => decodePullRequestListJson(result.stdout)));
 
-  return {
-    service: {
-      execute,
-      listOpenPullRequests: (input) =>
-        listPullRequestsWithState(input, { state: "open", defaultLimit: 1 }),
-      listPullRequests: (input) =>
-        listPullRequestsWithState(input, { state: "all", defaultLimit: 20 }),
-      createPullRequest: (input) =>
-        execute({
-          cwd: input.cwd,
-          args: [
-            "pr",
-            "create",
-            "--base",
-            input.baseBranch,
-            "--head",
-            input.headSelector,
-            "--title",
-            input.title,
-            "--body-file",
-            input.bodyFile,
-          ],
-        }).pipe(Effect.asVoid),
-      getDefaultBranch: (input) =>
-        execute({
-          cwd: input.cwd,
-          args: ["repo", "view", "--json", "defaultBranchRef", "--jq", ".defaultBranchRef.name"],
-        }).pipe(
-          Effect.map((result) => {
-            const value = result.stdout.trim();
-            return value.length > 0 ? value : null;
-          }),
-        ),
-      getPullRequest: (input) =>
-        execute({
-          cwd: input.cwd,
-          args: ["pr", "view", input.reference, "--json", PULL_REQUEST_SUMMARY_JSON_FIELDS],
-        }).pipe(Effect.map((result) => JSON.parse(result.stdout) as GitHubPullRequestSummary)),
-      getRepositoryCloneUrls: (input) =>
-        execute({
-          cwd: input.cwd,
-          args: ["repo", "view", input.repository, "--json", "nameWithOwner,url,sshUrl"],
-        }).pipe(Effect.map((result) => JSON.parse(result.stdout))),
-      checkoutPullRequest: (input) =>
-        execute({
-          cwd: input.cwd,
-          args: ["pr", "checkout", input.reference, ...(input.force ? ["--force"] : [])],
-        }).pipe(Effect.asVoid),
-      getPullRequestWithChecks: (input) =>
-        execute({
-          cwd: input.cwd,
-          args: [
-            "pr",
-            "view",
-            input.reference,
-            "--json",
-            `${PULL_REQUEST_SUMMARY_JSON_FIELDS},statusCheckRollup`,
-          ],
-        }).pipe(
-          Effect.map((result) => ({
-            summary: JSON.parse(result.stdout) as GitHubPullRequestSummary,
-            checks: scenario.pullRequestChecks ?? [],
-          })),
-        ),
-      getPullRequestReviewComments: (input) => {
-        ghCalls.push(
-          `api graphql reviewThreads ${input.host}/${input.owner}/${input.repo}#${input.number}`,
-        );
-        return scenario.reviewCommentsError
-          ? Effect.fail(scenario.reviewCommentsError)
-          : Effect.succeed({
-              comments: scenario.pullRequestReviewComments ?? [],
-              truncated: scenario.pullRequestReviewCommentsTruncated ?? false,
-            });
-      },
+  const service: Partial<GitHubCliShape> = {
+    execute,
+    listOpenPullRequests: (input) =>
+      listPullRequestsWithState(input, { state: "open", defaultLimit: 1 }),
+    listPullRequests: (input) =>
+      listPullRequestsWithState(input, { state: "all", defaultLimit: 20 }),
+    createPullRequest: (input) =>
+      execute({
+        cwd: input.cwd,
+        args: [
+          "pr",
+          "create",
+          "--base",
+          input.baseBranch,
+          "--head",
+          input.headSelector,
+          "--title",
+          input.title,
+          "--body-file",
+          input.bodyFile,
+        ],
+      }).pipe(Effect.asVoid),
+    getDefaultBranch: (input) =>
+      execute({
+        cwd: input.cwd,
+        args: ["repo", "view", "--json", "defaultBranchRef", "--jq", ".defaultBranchRef.name"],
+      }).pipe(
+        Effect.map((result) => {
+          const value = result.stdout.trim();
+          return value.length > 0 ? value : null;
+        }),
+      ),
+    getPullRequest: (input) =>
+      execute({
+        cwd: input.cwd,
+        args: ["pr", "view", input.reference, "--json", PULL_REQUEST_SUMMARY_JSON_FIELDS],
+      }).pipe(Effect.map((result) => JSON.parse(result.stdout) as GitHubPullRequestSummary)),
+    getRepositoryCloneUrls: (input) =>
+      execute({
+        cwd: input.cwd,
+        args: ["repo", "view", input.repository, "--json", "nameWithOwner,url,sshUrl"],
+      }).pipe(Effect.map((result) => JSON.parse(result.stdout))),
+    checkoutPullRequest: (input) =>
+      execute({
+        cwd: input.cwd,
+        args: ["pr", "checkout", input.reference, ...(input.force ? ["--force"] : [])],
+      }).pipe(Effect.asVoid),
+    getPullRequestWithChecks: (input) =>
+      execute({
+        cwd: input.cwd,
+        args: [
+          "pr",
+          "view",
+          input.reference,
+          "--json",
+          `${PULL_REQUEST_SUMMARY_JSON_FIELDS},statusCheckRollup`,
+        ],
+      }).pipe(
+        Effect.map((result) => ({
+          summary: JSON.parse(result.stdout) as GitHubPullRequestSummary,
+          checks: scenario.pullRequestChecks ?? [],
+        })),
+      ),
+    getPullRequestReviewComments: (input) => {
+      ghCalls.push(
+        `api graphql reviewThreads ${input.host}/${input.owner}/${input.repo}#${input.number}`,
+      );
+      return scenario.reviewCommentsError
+        ? Effect.fail(scenario.reviewCommentsError)
+        : Effect.succeed({
+            comments: scenario.pullRequestReviewComments ?? [],
+            truncated: scenario.pullRequestReviewCommentsTruncated ?? false,
+          });
     },
+  };
+
+  return {
+    service: service as GitHubCliShape,
     ghCalls,
   };
 }

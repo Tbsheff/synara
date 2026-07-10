@@ -8,9 +8,11 @@ import { cn } from "~/lib/utils";
 
 export function SidebarRowHoverActions({
   threadId,
+  pinnedVisible = false,
   children,
 }: {
   threadId: string;
+  pinnedVisible?: boolean;
   children: ReactNode;
 }) {
   return (
@@ -18,7 +20,9 @@ export function SidebarRowHoverActions({
       data-testid={`thread-hover-actions-${threadId}`}
       className={cn(
         "pointer-events-none absolute inset-y-0 right-0 my-auto inline-flex items-center",
-        "opacity-0 transition-opacity group-hover/thread-row:pointer-events-auto group-hover/thread-row:opacity-100 group-focus-within/thread-row:pointer-events-auto group-focus-within/thread-row:opacity-100",
+        pinnedVisible
+          ? "pointer-events-auto opacity-100"
+          : "opacity-0 transition-opacity group-hover/thread-row:pointer-events-auto group-hover/thread-row:opacity-100 group-focus-within/thread-row:pointer-events-auto group-focus-within/thread-row:opacity-100",
       )}
     >
       {children}

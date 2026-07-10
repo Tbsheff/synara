@@ -250,5 +250,9 @@ export async function ensureStudioProject(paths: ServerWorkspacePaths): Promise<
 }
 
 export function prewarmStudioProject(paths: ServerWorkspacePaths): void {
-  void ensureStudioProject(paths);
+  // Prewarming is deliberately best-effort. The interactive create path calls
+  // ensureStudioProject again and surfaces any actionable error to the user;
+  // letting this detached promise reject instead creates an unhandled browser
+  // error (notably when the app runtime is disposed during navigation/tests).
+  void ensureStudioProject(paths).catch(() => {});
 }

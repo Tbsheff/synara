@@ -21,6 +21,8 @@
  * @module providers/contract/describeRuntimeProviderContract
  */
 import { existsSync } from "node:fs";
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import nodePath from "node:path";
 
 import type { ExecutionInstanceId, RuntimeRole } from "@t3tools/contracts";
@@ -105,8 +107,7 @@ const assertDescriptorHonest = (descriptor: RuntimeProviderDescriptor): void => 
 
 /** Seed a bare git remote with one commit, standing in for a private repo. */
 const makeBareRemote = async (): Promise<string> => {
-  const base = await runProcess("mktemp", ["-d", "-t", "synara-contract-git"]);
-  const root = base.stdout.trim();
+  const root = await mkdtemp(nodePath.join(tmpdir(), "synara-contract-git-"));
   const remote = nodePath.join(root, "remote.git");
   const seed = nodePath.join(root, "seed");
   await runProcess("git", ["init", "--bare", remote]);

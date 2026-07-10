@@ -21,6 +21,7 @@ import {
   type GitHubReviewTimelineEvent,
 } from "../../git/Services/GitHubCli.ts";
 import { GitManager, type GitManagerShape } from "../../git/Services/GitManager.ts";
+import { createGitHubCliWithFakeGh } from "../../git/testing/fakeGitHubCli.ts";
 import { TextGeneration, type TextGenerationShape } from "../../git/Services/TextGeneration.ts";
 import {
   type ReviewCacheEnvelope,
@@ -310,6 +311,7 @@ function makeLayer(options: {
   const tokenIdentity = `gh-user-v2:${viewerLogin}`;
 
   const gitHubCli: GitHubCliShape = {
+    ...createGitHubCliWithFakeGh().service,
     getAuthenticatedUser: () =>
       Effect.sync(() => {
         recorded.authenticatedUserCalls += 1;
@@ -453,6 +455,7 @@ function makeLayer(options: {
     status: () => unexpectedEffect("GitManager.status"),
     readWorkingTreeDiff: () => unexpectedEffect("GitManager.readWorkingTreeDiff"),
     summarizeDiff: () => unexpectedEffect("GitManager.summarizeDiff"),
+    pullRequestSnapshot: () => unexpectedEffect("GitManager.pullRequestSnapshot"),
     resolvePullRequest: () => unexpectedEffect("GitManager.resolvePullRequest"),
     preparePullRequestThread: () => unexpectedEffect("GitManager.preparePullRequestThread"),
     handoffThread: () => unexpectedEffect("GitManager.handoffThread"),
@@ -617,6 +620,7 @@ function makeSurfaceLayer(
   ] satisfies ReadonlyArray<GitHubReviewTimelineEvent>;
 
   const gitHubCli: GitHubCliShape = {
+    ...createGitHubCliWithFakeGh().service,
     getAuthenticatedUser: () =>
       Effect.succeed({
         login: "tyler",
@@ -726,6 +730,7 @@ function makeSurfaceLayer(
     status: () => unexpectedEffect("GitManager.status"),
     readWorkingTreeDiff: () => unexpectedEffect("GitManager.readWorkingTreeDiff"),
     summarizeDiff: () => unexpectedEffect("GitManager.summarizeDiff"),
+    pullRequestSnapshot: () => unexpectedEffect("GitManager.pullRequestSnapshot"),
     resolvePullRequest: () => unexpectedEffect("GitManager.resolvePullRequest"),
     preparePullRequestThread: () => unexpectedEffect("GitManager.preparePullRequestThread"),
     handoffThread: () => unexpectedEffect("GitManager.handoffThread"),
@@ -797,6 +802,7 @@ function makeWalkthroughLayer(
   };
 
   const gitHubCli: GitHubCliShape = {
+    ...createGitHubCliWithFakeGh().service,
     getAuthenticatedUser: () =>
       Effect.succeed({
         login: "tyler",
@@ -922,9 +928,15 @@ function makeWalkthroughLayer(
           baseBranch: overview.detail.baseBranch,
           headBranch: overview.detail.headBranch,
           state: "open",
+          isDraft: false,
+          mergeability: "unknown",
+          additions: null,
+          deletions: null,
+          changedFiles: null,
         },
       }),
     preparePullRequestThread: () => unexpectedEffect("GitManager.preparePullRequestThread"),
+    pullRequestSnapshot: () => unexpectedEffect("GitManager.pullRequestSnapshot"),
     handoffThread: () => unexpectedEffect("GitManager.handoffThread"),
     runStackedAction: () => unexpectedEffect("GitManager.runStackedAction"),
   };

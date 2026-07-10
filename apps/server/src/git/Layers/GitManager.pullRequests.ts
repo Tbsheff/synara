@@ -272,7 +272,7 @@ export function parsePullRequestList(raw: unknown): PullRequestInfo[] {
           ? "mergeable"
           : mergeability === "conflicting" || mergeability === "CONFLICTING"
             ? "conflicting"
-          : "unknown",
+            : "unknown",
       additions: typeof additions === "number" ? additions : null,
       deletions: typeof deletions === "number" ? deletions : null,
       changedFiles: typeof changedFiles === "number" ? changedFiles : null,

@@ -252,10 +252,7 @@ export function makeIngestionMessages(deps: IngestionMessagesDeps) {
       );
       const finalTurnMessage = input.turnId
         ? messages
-            .filter(
-              (message) =>
-                message.role === "assistant" && message.turnId === input.turnId,
-            )
+            .filter((message) => message.role === "assistant" && message.turnId === input.turnId)
             .toSorted(
               (left, right) =>
                 right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id),

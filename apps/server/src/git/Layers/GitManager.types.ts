@@ -30,6 +30,11 @@ export interface OpenPrInfo {
 export interface PullRequestInfo extends OpenPrInfo {
   state: "open" | "closed" | "merged";
   updatedAt: string | null;
+  isDraft: boolean;
+  mergeability: "mergeable" | "conflicting" | "unknown";
+  additions: number | null;
+  deletions: number | null;
+  changedFiles: number | null;
 }
 
 export interface ResolvedPullRequest {

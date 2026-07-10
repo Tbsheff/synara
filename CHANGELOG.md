@@ -26,6 +26,15 @@
 - Ordered renderer storage migration before app hydration and guarded renderer bootstrap ordering.
 - Preserved composer drafts more reliably through the storage-key migration.
 - Restored fork behavior that had been dropped by the upstream merge, including desktop identity migration and durable update-install recovery.
+- Protected packaged updates from leaving the application in a partially swapped state by validating and recovering the `app.asar` and static snapshot replacement together.
+
+### Verification
+
+- Web tests passed: 2,749 tests.
+- Desktop tests passed: 262 tests.
+- Shared package tests passed: 274 tests.
+- Web and desktop production builds passed.
+- `bun run release:smoke` passed.
 
 ### Upgrade note
 

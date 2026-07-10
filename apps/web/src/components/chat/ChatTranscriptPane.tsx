@@ -251,7 +251,7 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
             {...(enteringUserMessageIds ? { enteringUserMessageIds } : {})}
             timelineEntries={timelineEntries}
             turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
-            nowIso={nowIso}
+            {...(nowIso ? { nowIso } : {})}
             onOpenTurnDiff={onOpenTurnDiff}
             onOpenThread={onOpenThread}
             {...(onOpenAutomation ? { onOpenAutomation } : {})}

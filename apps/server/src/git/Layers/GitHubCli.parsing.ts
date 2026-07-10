@@ -760,6 +760,7 @@ export function decodeGitHubJson<S extends Schema.Top>(
   schema: S,
   operation:
     | "listOpenPullRequests"
+    | "listPullRequests"
     | "getPullRequest"
     | "getRepositoryCloneUrls"
     | "listRepositoryPullRequests"
