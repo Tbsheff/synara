@@ -1,6 +1,6 @@
 # Release Checklist
 
-This document covers how to run desktop releases from one tag, including the current unsigned macOS release path.
+This document covers build-only native validation and publishing desktop releases from one tag.
 
 ## What the workflow does
 
@@ -17,8 +17,9 @@ This document covers how to run desktop releases from one tag, including the cur
 - Publishes one versioned GitHub Release with all produced files.
   - Versions with a suffix after `X.Y.Z` (for example `1.2.3-alpha.1`) are published as GitHub prereleases.
 - Publishes the CLI package (`apps/server`, npm package `t3`) with OIDC trusted publishing.
-- macOS signing is enabled when Apple signing/notarization secrets are present. Without those secrets, the workflow intentionally publishes unsigned macOS artifacts.
-- Windows signing is enabled when Azure Trusted Signing secrets are present.
+  - The compatibility release is marked as GitHub Latest permanently; later clean releases never replace it.
+- Publishes default-channel compatibility metadata, then uses the dedicated `synara` channel after migration.
+- Signing is optional and auto-detected per platform from secrets.
 
 ## Desktop auto-update notes
 
@@ -45,10 +46,10 @@ This document covers how to run desktop releases from one tag, including the cur
   - Both preflight and publication fail closed if GitHub Latest is not the configured compatibility tag.
 - Production desktop builds omit web/server/desktop source maps by default to keep update payloads small. Set `SYNARA_WEB_SOURCEMAP=1`, `SYNARA_SERVER_SOURCEMAP=1`, or `SYNARA_DESKTOP_SOURCEMAP=1` only for a diagnostic release that needs them.
 - macOS metadata note:
-  - `electron-updater` reads `latest-mac.yml` for both Intel and Apple Silicon.
-  - The workflow merges the per-arch mac manifests into one `latest-mac.yml` before publishing the GitHub Release.
-  - The desktop build script repacks the macOS update `.zip` with `ditto`, verifies Electron framework symlinks, extracts the zip, validates the extracted app signature when signing is enabled, patches the matching `latest-mac*.yml` hash/size, and removes the stale `.zip.blockmap`.
-  - macOS updater downloads intentionally use the full zip payload so Squirrel.Mac installs the exact archive validated by release build.
+  - The build initially emits `latest-mac.yml` for both Intel and Apple Silicon.
+  - The workflow merges the per-arch manifests and then renames the merged file to `synara-mac.yml` before publication.
+  - The desktop build script repacks the macOS update `.zip` with `ditto`, verifies Electron framework symlinks, extracts the zip, validates the extracted app signature, patches the matching `latest-mac*.yml` hash/size, and removes the stale `.zip.blockmap`.
+  - macOS updater downloads intentionally use the full zip payload so Squirrel.Mac installs the exact signed archive validated by release build.
 - Local smoke test:
   - Run `bun run release:smoke:mac-update -- --skip-build --build-version 0.1.5` on macOS after local desktop/server/web dist files exist.
   - The smoke builds a mock update artifact, validates manifest hash/size, serves a HEAD-only local endpoint, confirms the manifest and zip are addressable without downloading the zip body, then cleans up its temp output.
@@ -84,7 +85,7 @@ Checklist:
 
 ## 1) Build-only native CI validation
 
-Use this to validate the current unsigned macOS release pipeline.
+Use this before publication to validate the real native macOS, Linux, and Windows build matrix. Build-only mode does not create a tag, GitHub Release, npm package, updater manifest, or version-bump commit.
 
 1. Push the release-candidate branch so GitHub Actions can check it out.
 2. Start the workflow in build-only mode:
@@ -95,13 +96,6 @@ Use this to validate the current unsigned macOS release pipeline.
 
 To publish from a manual dispatch instead of a tag push, pass `publish_release=true`. This is intentionally opt-in.
 
-Unsigned macOS artifacts are blocked by Gatekeeper when downloaded through a browser. That is expected without Apple Developer ID signing/notarization. To run an unsigned build after dragging it to Applications:
-
-```bash
-xattr -dr com.apple.quarantine /Applications/Synara.app
-open /Applications/Synara.app
-```
-
 ## 2) Apple signing + notarization setup (macOS)
 
 Required secrets used by the workflow:
@@ -111,7 +105,6 @@ Required secrets used by the workflow:
 - `APPLE_API_KEY`
 - `APPLE_API_KEY_ID`
 - `APPLE_API_ISSUER`
-- `APPLE_TEAM_ID`
 
 Checklist:
 
@@ -126,7 +119,6 @@ Checklist:
    - `APPLE_API_KEY`: contents of the downloaded `.p8`
    - `APPLE_API_KEY_ID`: Key ID
    - `APPLE_API_ISSUER`: Issuer ID
-   - `APPLE_TEAM_ID`: Team ID
 8. Re-run a tag release and confirm macOS artifacts are signed/notarized.
 
 Notes:
@@ -170,23 +162,24 @@ unsigned installer.
 ## 4) Ongoing release checklist
 
 1. Ensure `main` is green in CI.
-2. Bump app version as needed.
-3. Create release tag: `vX.Y.Z`.
-4. Push tag.
-5. Verify workflow steps: preflight passes, all matrix builds pass, signed macOS DMGs pass release signature verification when signing secrets are configured, and the release job uploads expected files.
-6. Smoke test downloaded artifacts.
+2. Run the build-only native CI validation for the release-candidate branch and version.
+3. Bump app version as needed.
+4. Confirm `gh api repos/OWNER/REPO/releases/latest --jq .tag_name` returns the compatibility tag configured in `scripts/release-update-policy.json`.
+5. Create release tag: `vX.Y.Z`.
+6. Push tag.
+7. Verify workflow steps:
+   - preflight passes
+   - all matrix builds pass
+   - release job uploads expected files
+8. Confirm the new versioned release is not GitHub Latest and the pinned compatibility release contains the new payloads plus `synara.yml`, `synara-mac.yml`, and `synara-linux.yml`.
+9. Smoke test downloaded artifacts.
 
 ## 5) Troubleshooting
 
-- macOS unsigned download shows "damaged" or cannot be opened:
-  - This is Gatekeeper quarantine on an unsigned downloaded app. Remove quarantine locally with `xattr -dr com.apple.quarantine /Applications/Synara.app`.
-- macOS signing is skipped unexpectedly:
+- macOS build unsigned when expected signed:
   - Check all Apple secrets are populated and non-empty.
-  - Required secrets are `CSC_LINK`, `CSC_KEY_PASSWORD`, `APPLE_API_KEY`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER`, and `APPLE_TEAM_ID`.
-- macOS release signature verification fails:
-  - Confirm electron-builder signed/notarized the app and DMG with the expected Developer ID certificate.
 - Windows build unsigned when expected signed:
   - Check all Azure ATS and auth secrets are populated and non-empty.
 - Build fails with signing error:
-  - Retry locally without signing to confirm packaging still works.
+  - Retry with all Azure signing secrets removed to use the supported unsigned path.
   - Re-check certificate/profile names and tenant/client credentials.

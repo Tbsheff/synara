@@ -97,20 +97,6 @@ export function useComposerCommandMenuItems(input: {
     [providerPlugins],
   );
 
-  const searchableNativeCommands = useMemo(
-    () =>
-      providerNativeCommands
-        .filter(
-          (command) => !shouldHideProviderNativeCommandFromComposerMenu(provider, command.name),
-        )
-        .map((command) => ({
-          command,
-          blob: buildCommandSearchBlob(command),
-          terms: getProviderNativeSlashCommandSearchTerms(provider, command.name),
-        })),
-    [provider, providerNativeCommands],
-  );
-
   const searchableAgents = useMemo(() => {
     // Dynamic agents when available, static aliases otherwise. The blob matches
     // the original (raw lowercase, no discovery normalization) so behavior is
@@ -144,6 +130,7 @@ export function useComposerCommandMenuItems(input: {
         canOfferReviewCommand,
         canOfferForkCommand,
         canOfferSideCommand,
+        canOfferExportCommand,
         providerNativeCommandNames: providerNativeCommands.map((command) => command.name),
       }),
     [
@@ -151,10 +138,41 @@ export function useComposerCommandMenuItems(input: {
       canOfferForkCommand,
       canOfferReviewCommand,
       canOfferSideCommand,
+      canOfferExportCommand,
       provider,
       providerNativeCommands,
       supportsFastSlashCommand,
     ],
+  );
+
+  const visibleAppSlashCommands = useMemo(
+    () =>
+      surfaceAppSlashCommands
+        ? availableSlashCommands.filter((command) => surfaceAppSlashCommands.has(command))
+        : availableSlashCommands,
+    [availableSlashCommands, surfaceAppSlashCommands],
+  );
+
+  const visibleAppSlashCommandSet = useMemo(
+    () => new Set(visibleAppSlashCommands),
+    [visibleAppSlashCommands],
+  );
+
+  const searchableNativeCommands = useMemo(
+    () =>
+      providerNativeCommands
+        .filter(
+          (command) =>
+            !shouldHideProviderNativeCommandFromComposerMenu(provider, command.name, {
+              availableAppCommands: visibleAppSlashCommandSet,
+            }),
+        )
+        .map((command) => ({
+          command,
+          blob: buildCommandSearchBlob(command),
+          terms: getProviderNativeSlashCommandSearchTerms(provider, command.name),
+        })),
+    [provider, providerNativeCommands, visibleAppSlashCommandSet],
   );
 
   return useMemo<ComposerCommandItem[]>(() => {
@@ -214,7 +232,7 @@ export function useComposerCommandMenuItems(input: {
       const query = normalizeProviderDiscoveryText(composerTrigger.query);
       const builtInItems = filterComposerSlashCommands(
         composerTrigger.query,
-        availableSlashCommands,
+        visibleAppSlashCommands,
       ).map((definition) => ({
         id: `slash:${definition.command}`,
         type: "slash-command" as const,
@@ -283,7 +301,6 @@ export function useComposerCommandMenuItems(input: {
         description: `${providerLabel} · ${slug}`,
       }));
   }, [
-    availableSlashCommands,
     composerTrigger,
     provider,
     searchableAgents,
@@ -291,6 +308,7 @@ export function useComposerCommandMenuItems(input: {
     searchableNativeCommands,
     searchablePlugins,
     searchableSkills,
+    visibleAppSlashCommands,
     workspaceEntries,
   ]);
 }

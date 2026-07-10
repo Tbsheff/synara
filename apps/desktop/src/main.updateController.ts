@@ -27,12 +27,14 @@ import {
   reduceDesktopUpdateStateOnDownloadProgress,
   reduceDesktopUpdateStateOnDownloadStart,
   reduceDesktopUpdateStateOnInstallFailure,
+  reduceDesktopUpdateStateOnInstallRestartFailure,
   reduceDesktopUpdateStateOnNoUpdate,
   reduceDesktopUpdateStateOnUpdateAvailable,
 } from "./updateMachine";
 import {
   PendingUpdateCacheClearQueue,
   resolveElectronUpdaterCacheDirName,
+  resolveElectronUpdaterLegacyZipPath,
   resolveElectronUpdaterPendingCacheDir,
 } from "./updatePendingCache";
 import {
@@ -44,6 +46,15 @@ import {
 import { CachedGitHubUpdateFeedRefresher } from "./updateFeedCache";
 import { isArm64HostRunningIntelBuild } from "./runtimeArch";
 import { StalledDownloadCancellationSuppression } from "./updateStallSuppression";
+import {
+  clearInstallMarker,
+  createUpdateInstallMarker,
+  markInstallHandoffSync,
+  readInstallMarker,
+  resolveInstallMarkerOutcome,
+  writeInstallMarker,
+  type UpdateInstallMarker,
+} from "./updateInstallMarker";
 
 type DesktopUpdateErrorContext = DesktopUpdateState["errorContext"];
 
@@ -64,6 +75,9 @@ export interface DesktopUpdateControllerDeps {
   readonly getIsQuitting: () => boolean;
   readonly setIsQuitting: (value: boolean) => void;
   readonly stopBackendAndWaitForExit: () => Promise<void>;
+  readonly restartBackend: () => void;
+  readonly getInstallMarkerPath: () => string;
+  readonly logInstallDiagnostics: (context: string) => Promise<void>;
   readonly clearNotificationBadge: () => void;
   readonly formatErrorMessage: (error: unknown) => string;
   readonly githubToken: () => string;
@@ -78,6 +92,7 @@ export interface DesktopUpdateControllerDeps {
     readonly feedRefreshTimeoutMs: number;
     readonly foregroundRecheckMinBackgroundMs: number;
     readonly foregroundRecheckMinIntervalMs: number;
+    readonly installWatchdogMs: number;
     readonly pollIntervalMs: number;
     readonly stalledCancellationSuppressionMs: number;
     readonly startupDelayMs: number;
@@ -95,6 +110,7 @@ export class DesktopUpdateController {
   private updateStartupTimer: ReturnType<typeof setTimeout> | null = null;
   private updateCheckTimeoutTimer: ReturnType<typeof setTimeout> | null = null;
   private updateDownloadStallTimer: ReturnType<typeof setTimeout> | null = null;
+  private updateInstallWatchdogTimer: ReturnType<typeof setTimeout> | null = null;
   private updateBackgroundBlurTimer: ReturnType<typeof setTimeout> | null = null;
   private updateBackgroundedAtMs: number | null = null;
   private updateDownloadCancellationToken: CancellationTokenType | null = null;
@@ -104,6 +120,7 @@ export class DesktopUpdateController {
   private configuredGitHubUpdateToken = "";
   private configuredGitHubUpdateFeedRefresher: CachedGitHubUpdateFeedRefresher | null = null;
   private configuredUpdaterCacheDirName: string | null = null;
+  private automaticUpdateActivitySuppressed = false;
   private readonly stalledDownloadCancellationSuppression: StalledDownloadCancellationSuppression;
   private readonly pendingUpdateCacheClearQueue = new PendingUpdateCacheClearQueue();
 
@@ -158,7 +175,175 @@ export class DesktopUpdateController {
     }
     this.isUpdaterInstallPreparing = false;
     this.isUpdaterQuitAndInstallInFlight = false;
+    this.clearInstallWatchdog();
     this.deps.setIsQuitting(false);
+  }
+
+  private recordInstallMarkerFailure(nowIso: string): number {
+    const result = readInstallMarker(this.deps.getInstallMarkerPath());
+    if (result.status !== "valid") {
+      console.error(
+        `[desktop-updater] Could not record durable install failure: marker is ${result.status}${result.status === "invalid" ? ` (${result.error})` : ""}.`,
+      );
+      return Math.max(1, this.updateState.installFailureCount + 1);
+    }
+    if (result.marker.phase === "failed") {
+      return result.marker.consecutiveFailures;
+    }
+    const failedMarker: UpdateInstallMarker = {
+      ...result.marker,
+      phase: "failed",
+      consecutiveFailures: result.marker.consecutiveFailures + 1,
+      lastFailureAt: nowIso,
+    };
+    try {
+      writeInstallMarker(this.deps.getInstallMarkerPath(), failedMarker);
+    } catch (error) {
+      console.error(
+        `[desktop-updater] Failed to persist install failure marker: ${this.deps.formatErrorMessage(error)}`,
+      );
+    }
+    return failedMarker.consecutiveFailures;
+  }
+
+  private clearInstallWatchdog(): void {
+    if (this.updateInstallWatchdogTimer) {
+      clearTimeout(this.updateInstallWatchdogTimer);
+      this.updateInstallWatchdogTimer = null;
+    }
+  }
+
+  private scheduleUpdatePoll(): void {
+    if (this.updatePollTimer || this.automaticUpdateActivitySuppressed) {
+      return;
+    }
+    this.updatePollTimer = setInterval(() => {
+      void this.checkForUpdates("poll");
+    }, this.deps.constants.pollIntervalMs);
+    this.updatePollTimer.unref();
+  }
+
+  private armInstallWatchdog(): void {
+    this.clearInstallWatchdog();
+    this.updateInstallWatchdogTimer = setTimeout(() => {
+      this.updateInstallWatchdogTimer = null;
+      if (!this.isUpdaterQuitAndInstallInFlight) {
+        return;
+      }
+      this.clearUpdaterInstallInFlightAfterError();
+      this.deps.restartBackend();
+      this.scheduleUpdatePoll();
+      const consecutiveFailures = this.recordInstallMarkerFailure(new Date().toISOString());
+      this.setUpdateState({
+        ...reduceDesktopUpdateStateOnInstallFailure(
+          this.updateState,
+          "The update couldn’t be installed automatically.",
+        ),
+        installFailureCount: consecutiveFailures,
+      });
+      console.error(
+        "[desktop-updater] quitAndInstall did not exit the app within the watchdog window; surfacing manual-download fallback.",
+      );
+    }, this.deps.constants.installWatchdogMs);
+    this.updateInstallWatchdogTimer.unref();
+  }
+
+  private clearLegacyUpdaterZipAfterVerifiedInstall(): void {
+    const legacyZipPath = resolveElectronUpdaterLegacyZipPath({
+      cacheDirName: this.configuredUpdaterCacheDirName,
+      platform: process.platform,
+      homeDir: OS.homedir(),
+      localAppData: process.env.LOCALAPPDATA ?? null,
+      xdgCacheHome: process.env.XDG_CACHE_HOME ?? null,
+    });
+    if (!legacyZipPath) return;
+    try {
+      FS.rmSync(legacyZipPath, { force: true });
+      console.info("[desktop-updater] Cleared legacy top-level update.zip after verified install.");
+    } catch (error) {
+      console.warn(
+        `[desktop-updater] Failed to clear legacy top-level update.zip: ${this.deps.formatErrorMessage(error)}`,
+      );
+    }
+  }
+
+  private quarantineInstallMarker(reason: string): void {
+    console.warn(`[desktop-updater] Discarding update install marker (${reason}).`);
+    try {
+      clearInstallMarker(this.deps.getInstallMarkerPath());
+    } catch (error) {
+      console.warn(
+        `[desktop-updater] Failed to delete quarantined update install marker: ${this.deps.formatErrorMessage(error)}`,
+      );
+    }
+  }
+
+  private processInstallMarkerOnStartup(): void {
+    const filePath = this.deps.getInstallMarkerPath();
+    const readResult = readInstallMarker(filePath);
+    if (readResult.status === "missing") return;
+    if (readResult.status === "invalid") {
+      this.quarantineInstallMarker(`invalid or unreadable: ${readResult.error}`);
+      return;
+    }
+
+    const marker = readResult.marker;
+    const nowIso = new Date().toISOString();
+    const outcome = resolveInstallMarkerOutcome(marker, this.deps.getAppVersion(), nowIso);
+    if (outcome === "success") {
+      console.info(
+        `[desktop-updater] Update to ${marker.toVersion} installed successfully (from ${marker.fromVersion})`,
+      );
+      try {
+        clearInstallMarker(filePath);
+      } catch (error) {
+        console.warn(
+          `[desktop-updater] Failed to clear successful update install marker: ${this.deps.formatErrorMessage(error)}`,
+        );
+      }
+      this.clearLegacyUpdaterZipAfterVerifiedInstall();
+      return;
+    }
+    if (outcome === "stale" || outcome === "invalid") {
+      this.quarantineInstallMarker(outcome);
+      return;
+    }
+
+    let consecutiveFailures = marker.consecutiveFailures;
+    if (outcome === "failure") {
+      consecutiveFailures += 1;
+      try {
+        writeInstallMarker(filePath, {
+          ...marker,
+          phase: "failed",
+          consecutiveFailures,
+          lastFailureAt: nowIso,
+        });
+      } catch (error) {
+        console.error(
+          `[desktop-updater] Failed to persist restart install failure: ${this.deps.formatErrorMessage(error)}`,
+        );
+      }
+    }
+
+    this.automaticUpdateActivitySuppressed = true;
+    const message = `Synara restarted, but update ${marker.toVersion} was not installed. Try again.`;
+    this.setUpdateState(
+      reduceDesktopUpdateStateOnInstallRestartFailure(
+        this.updateState,
+        marker.toVersion,
+        consecutiveFailures,
+        message,
+      ),
+    );
+    console.error(
+      `[desktop-updater] UPDATE INSTALL FAILED: still running ${this.deps.getAppVersion()} after attempting ${marker.toVersion}; consecutive failures=${consecutiveFailures}. Automatic update checks are suppressed until the user retries.`,
+    );
+    void this.deps.logInstallDiagnostics("startup install verification failure");
+  }
+
+  markInstallHandoff(): void {
+    markInstallHandoffSync(this.deps.getInstallMarkerPath());
   }
 
   private applyConfiguredGitHubUpdateFeed(latestRelease: LatestGitHubRelease): void {
@@ -369,6 +554,19 @@ export class DesktopUpdateController {
 
   async checkForUpdates(reason: string): Promise<void> {
     if (this.deps.getIsQuitting() || !this.updaterConfigured || this.updateCheckInFlight) return;
+    if (this.automaticUpdateActivitySuppressed) {
+      if (!this.shouldForceUpdateFeedRefresh(reason)) {
+        console.info(
+          `[desktop-updater] Skipping automatic update check (${reason}) after an unverified install failure.`,
+        );
+        return;
+      }
+      this.automaticUpdateActivitySuppressed = false;
+      console.info(
+        `[desktop-updater] User requested update recovery (${reason}); automatic checks are enabled for this session.`,
+      );
+      this.scheduleUpdatePoll();
+    }
     if (
       this.updateState.status === "checking" ||
       this.updateState.status === "downloading" ||
@@ -506,26 +704,54 @@ export class DesktopUpdateController {
       return { accepted: false, completed: false };
     }
 
-    this.deps.setIsQuitting(true);
-    this.isUpdaterInstallPreparing = true;
-    this.clearPollTimer();
+    const markerPath = this.deps.getInstallMarkerPath();
+    const existingMarkerResult = readInstallMarker(markerPath);
+    const existingMarker =
+      existingMarkerResult.status === "valid" &&
+      existingMarkerResult.marker.toVersion === versionToInstall
+        ? existingMarkerResult.marker
+        : null;
+    const marker = createUpdateInstallMarker({
+      fromVersion: this.deps.getAppVersion(),
+      toVersion: versionToInstall,
+      requestedAt: new Date().toISOString(),
+      consecutiveFailures: existingMarker?.consecutiveFailures ?? 0,
+      lastFailureAt: existingMarker?.lastFailureAt ?? null,
+    });
+    let markerWritten = false;
     try {
+      writeInstallMarker(markerPath, marker);
+      markerWritten = true;
+      this.deps.setIsQuitting(true);
+      this.isUpdaterInstallPreparing = true;
+      this.clearPollTimer();
       await this.deps.stopBackendAndWaitForExit();
+      await this.deps.logInstallDiagnostics("before install handoff");
       this.isUpdaterQuitAndInstallInFlight = true;
       this.deps.autoUpdater.quitAndInstall();
-      return { accepted: true, completed: true };
+      this.armInstallWatchdog();
+      return { accepted: true, completed: false };
     } catch (error: unknown) {
       const message = this.deps.formatErrorMessage(error);
       this.isUpdaterInstallPreparing = false;
       this.isUpdaterQuitAndInstallInFlight = false;
       this.deps.setIsQuitting(false);
-      this.setUpdateState(reduceDesktopUpdateStateOnInstallFailure(this.updateState, message));
+      const consecutiveFailures = markerWritten
+        ? this.recordInstallMarkerFailure(new Date().toISOString())
+        : this.updateState.installFailureCount;
+      this.deps.restartBackend();
+      this.scheduleUpdatePoll();
+      this.setUpdateState({
+        ...reduceDesktopUpdateStateOnInstallFailure(this.updateState, message),
+        installFailureCount: consecutiveFailures,
+      });
       console.error(`[desktop-updater] Failed to install update: ${message}`);
       return { accepted: true, completed: false };
     }
   }
 
   clearPollTimer(): void {
+    this.clearInstallWatchdog();
     if (this.updateStartupTimer) {
       clearTimeout(this.updateStartupTimer);
       this.updateStartupTimer = null;
@@ -548,6 +774,7 @@ export class DesktopUpdateController {
       enabled,
       status: enabled ? "idle" : "disabled",
     });
+    this.processInstallMarkerOnStartup();
     if (!enabled) {
       this.configuredGitHubUpdateSource = null;
       this.configuredGitHubUpdateToken = "";
@@ -644,6 +871,14 @@ export class DesktopUpdateController {
         return;
       }
       this.clearUpdaterInstallInFlightAfterError();
+      const installFailureCount =
+        errorContext === "install"
+          ? this.recordInstallMarkerFailure(new Date().toISOString())
+          : this.updateState.installFailureCount;
+      if (errorContext === "install") {
+        this.deps.restartBackend();
+        this.scheduleUpdatePoll();
+      }
       if (!this.updateCheckInFlight && !this.updateDownloadInFlight) {
         this.setUpdateState({
           status: "error",
@@ -654,6 +889,7 @@ export class DesktopUpdateController {
           canRetry:
             this.updateState.availableVersion !== null ||
             this.updateState.downloadedVersion !== null,
+          installFailureCount,
         });
       }
       console.error(`[desktop-updater] Updater error: ${message}`);
@@ -701,9 +937,12 @@ export class DesktopUpdateController {
     }, this.deps.constants.startupDelayMs);
     this.updateStartupTimer.unref();
 
-    this.updatePollTimer = setInterval(() => {
-      void this.checkForUpdates("poll");
-    }, this.deps.constants.pollIntervalMs);
-    this.updatePollTimer.unref();
+    if (this.automaticUpdateActivitySuppressed) {
+      console.info(
+        "[desktop-updater] Startup and periodic update checks suppressed after failed install verification.",
+      );
+      return;
+    }
+    this.scheduleUpdatePoll();
   }
 }

@@ -15,7 +15,7 @@ export default mergeConfig(
       },
     },
     test: {
-      include: ["src/components/**/*.browser.tsx"],
+      include: ["src/components/**/*.browser.tsx", "src/lib/**/*.browser.ts?(x)"],
       server: {
         port: process.env.VITEST_BROWSER_PORT ? Number(process.env.VITEST_BROWSER_PORT) : undefined,
         strictPort: false,

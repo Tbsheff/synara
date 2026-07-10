@@ -44,9 +44,14 @@ export const AUTO_UPDATE_DOWNLOAD_SETTLE_TIMEOUT_MS = 30 * 1000;
 export const AUTO_UPDATE_STALLED_DOWNLOAD_CANCELLATION_SUPPRESSION_MS = 2 * 60 * 1000;
 export const AUTO_UPDATE_FEED_CACHE_TTL_MS = 30 * 60 * 1000;
 export const AUTO_UPDATE_FEED_REFRESH_TIMEOUT_MS = 10 * 1000;
+// quitAndInstall() has no completion callback. Recover the app when the OS
+// installer never takes ownership of the process within this window.
+export const AUTO_UPDATE_INSTALL_WATCHDOG_MS = 15 * 1000;
+export const AUTO_UPDATE_DIAGNOSTICS_TIMEOUT_MS = 2_800;
+export const UPDATE_INSTALL_MARKER_FILE_NAME = "pending-update-install.json";
 export const BACKEND_FORCE_KILL_DELAY_MS = 8_000;
 export const BACKEND_SHUTDOWN_TIMEOUT_MS = 10_000;
-export const DESKTOP_UPDATE_CHANNEL = "latest";
+export const DESKTOP_UPDATE_CHANNEL = "synara";
 export const DESKTOP_UPDATE_ALLOW_PRERELEASE = false;
 export const BROWSER_PERF_SAMPLE_INTERVAL_MS = 5_000;
 export const DESKTOP_MENU_ZOOM_FACTOR_STEP = 1.1;

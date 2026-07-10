@@ -4435,6 +4435,24 @@ describe("deriveTimelineEntries", () => {
   });
 });
 
+describe("deriveWorkLogEntries Studio output handling", () => {
+  it("keeps environment-only Studio output metadata out of transcript work", () => {
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "studio-output-captured",
+          kind: "studio.outputs.captured",
+          summary: "Captured Studio outputs",
+          tone: "info",
+        }),
+      ],
+      undefined,
+    );
+
+    expect(entries).toEqual([]);
+  });
+});
+
 describe("deriveWorkLogEntries context window handling", () => {
   it("excludes context window updates from the work log", () => {
     const entries = deriveWorkLogEntries(

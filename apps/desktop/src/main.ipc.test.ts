@@ -2,6 +2,9 @@
 // Purpose: Lock the main-process IPC channel registration and dispatch against injected deps.
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as FS from "node:fs";
+import * as OS from "node:os";
+import * as Path from "node:path";
 
 const electronMocks = vi.hoisted(() => ({
   getFocusedWindow: vi.fn(),
@@ -47,6 +50,7 @@ import {
   UPDATE_INSTALL_CHANNEL,
 } from "./main.constants";
 import { DESKTOP_WS_URL_CHANNEL } from "./desktopWsBridge";
+import { STORAGE_MIGRATION_IPC_CHANNELS } from "./desktopStorageMigration";
 
 type HandleFn = (event: unknown, ...args: unknown[]) => unknown;
 type OnFn = (event: unknown, ...args: unknown[]) => void;
@@ -82,6 +86,7 @@ function createDeps(overrides: Partial<MainIpcDeps> = {}): MainIpcDeps {
       accepted: true,
       completed: true,
     })),
+    storageSnapshotPath: "/tmp/synara-storage-test.json",
     registerExtraHandlers: vi.fn(),
     ...overrides,
   };
@@ -99,6 +104,7 @@ describe("registerMainIpc", () => {
     registerMainIpc(ipcMain, createDeps());
 
     expect(listeners.has(DESKTOP_WS_URL_CHANNEL)).toBe(true);
+    expect(listeners.has(STORAGE_MIGRATION_IPC_CHANNELS.read)).toBe(true);
     for (const channel of [
       PICK_FOLDER_CHANNEL,
       CONFIRM_CHANNEL,
@@ -108,6 +114,8 @@ describe("registerMainIpc", () => {
       UPDATE_INSTALL_CHANNEL,
       NOTIFICATIONS_IS_SUPPORTED_CHANNEL,
       NOTIFICATIONS_SHOW_CHANNEL,
+      STORAGE_MIGRATION_IPC_CHANNELS.save,
+      STORAGE_MIGRATION_IPC_CHANNELS.acknowledge,
     ]) {
       expect(handlers.has(channel)).toBe(true);
     }
@@ -126,6 +134,32 @@ describe("registerMainIpc", () => {
     const event = { returnValue: "" };
     listeners.get(DESKTOP_WS_URL_CHANNEL)?.(event);
     expect(event.returnValue).toBe("resolved:ws://127.0.0.1:1234/?token=abc");
+  });
+
+  it("saves, synchronously reads, and acknowledges the renderer storage handoff", async () => {
+    const directory = FS.mkdtempSync(Path.join(OS.tmpdir(), "synara-main-ipc-"));
+    const storageSnapshotPath = Path.join(directory, "snapshot.json");
+    try {
+      const { ipcMain, handlers, listeners } = createFakeIpcMain();
+      registerMainIpc(ipcMain, createDeps({ storageSnapshotPath }));
+      const snapshot = {
+        version: 1,
+        exportedAt: "2026-07-09T00:00:00.000Z",
+        entries: { "synara:theme": "dark" },
+      };
+
+      await expect(
+        handlers.get(STORAGE_MIGRATION_IPC_CHANNELS.save)?.({}, snapshot),
+      ).resolves.toBe(true);
+      const event = { returnValue: null as unknown };
+      listeners.get(STORAGE_MIGRATION_IPC_CHANNELS.read)?.(event);
+      expect(event.returnValue).toEqual(snapshot);
+
+      await handlers.get(STORAGE_MIGRATION_IPC_CHANNELS.acknowledge)?.({});
+      expect(FS.existsSync(storageSnapshotPath)).toBe(false);
+    } finally {
+      FS.rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   it("confirm channel delegates to showConfirmDialog and short-circuits non-strings", async () => {

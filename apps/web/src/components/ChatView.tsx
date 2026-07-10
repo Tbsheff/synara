@@ -504,6 +504,7 @@ import {
   collectUserMessageBlobPreviewUrls,
   deriveComposerSendState,
   deriveTranscriptTailFollowKey,
+  failWorktreeSetupSnapshot,
   filterSidechatTranscriptMessages,
   hasServerAcknowledgedLocalDispatch,
   resolveNextLocalDispatchSnapshot,

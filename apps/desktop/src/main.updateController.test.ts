@@ -2,9 +2,22 @@
 // Purpose: Lock auto-updater state transitions and the install handshake with a fake autoUpdater.
 
 import { EventEmitter } from "node:events";
+import * as FS from "node:fs";
+import * as OS from "node:os";
+import * as Path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DesktopUpdateController, type DesktopUpdateControllerDeps } from "./main.updateController";
+import { DESKTOP_UPDATE_CHANNEL } from "./main.constants";
+import { createUpdateInstallMarker, readInstallMarker, writeInstallMarker } from "./updateInstallMarker";
+
+const temporaryDirectories: string[] = [];
+
+function createInstallMarkerPath(): string {
+  const directory = FS.mkdtempSync(Path.join(OS.tmpdir(), "synara-update-controller-"));
+  temporaryDirectories.push(directory);
+  return Path.join(directory, "pending-update-install.json");
+}
 
 class FakeAutoUpdater extends EventEmitter {
   autoDownload = true;
@@ -21,6 +34,7 @@ class FakeAutoUpdater extends EventEmitter {
 
 function createController(overrides: Partial<DesktopUpdateControllerDeps> = {}) {
   const autoUpdater = new FakeAutoUpdater();
+  const installMarkerPath = createInstallMarkerPath();
   let quitting = false;
   const deps: DesktopUpdateControllerDeps = {
     autoUpdater: autoUpdater as unknown as DesktopUpdateControllerDeps["autoUpdater"],
@@ -47,6 +61,9 @@ function createController(overrides: Partial<DesktopUpdateControllerDeps> = {}) 
       quitting = value;
     }),
     stopBackendAndWaitForExit: vi.fn(async () => {}),
+    restartBackend: vi.fn(),
+    getInstallMarkerPath: vi.fn(() => installMarkerPath),
+    logInstallDiagnostics: vi.fn(async () => {}),
     clearNotificationBadge: vi.fn(),
     formatErrorMessage: vi.fn((e) => (e instanceof Error ? e.message : String(e))),
     githubToken: vi.fn(() => ""),
@@ -61,6 +78,7 @@ function createController(overrides: Partial<DesktopUpdateControllerDeps> = {}) 
       feedRefreshTimeoutMs: 10_000,
       foregroundRecheckMinBackgroundMs: 60_000,
       foregroundRecheckMinIntervalMs: 300_000,
+      installWatchdogMs: 15_000,
       pollIntervalMs: 3_600_000,
       stalledCancellationSuppressionMs: 5_000,
       startupDelayMs: 10_000,
@@ -75,12 +93,19 @@ function createController(overrides: Partial<DesktopUpdateControllerDeps> = {}) 
 }
 
 describe("DesktopUpdateController", () => {
+  it("uses the dedicated Synara update channel", () => {
+    expect(DESKTOP_UPDATE_CHANNEL).toBe("synara");
+  });
+
   beforeEach(() => {
     vi.useFakeTimers();
   });
   afterEach(() => {
     vi.runOnlyPendingTimers();
     vi.useRealTimers();
+    for (const directory of temporaryDirectories.splice(0)) {
+      FS.rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   it("configure() enables updates, configures autoUpdater, and arms the poll timers", () => {
@@ -151,12 +176,113 @@ describe("DesktopUpdateController", () => {
     expect(controller.getState().status).toBe("downloaded");
 
     const result = await controller.installDownloadedUpdate();
-    expect(result).toEqual({ accepted: true, completed: true });
+    expect(result).toEqual({ accepted: true, completed: false });
     expect(deps.stopBackendAndWaitForExit).toHaveBeenCalled();
     expect(deps.setIsQuitting).toHaveBeenCalledWith(true);
     expect(autoUpdater.quitAndInstall).toHaveBeenCalled();
     expect(controller.isInstallPreparing()).toBe(true);
     expect(controller.isQuitAndInstallInFlight()).toBe(true);
+    expect(readInstallMarker(deps.getInstallMarkerPath()).status).toBe("valid");
+  });
+
+  it("recovers the backend and records a durable failure when quitAndInstall hangs", async () => {
+    const markerPath = createInstallMarkerPath();
+    const { controller, deps, autoUpdater } = createController({
+      getInstallMarkerPath: vi.fn(() => markerPath),
+      readAppUpdateYml: vi.fn(() => null),
+    });
+    controller.configure();
+    autoUpdater.emit("update-available", { version: "2.0.0" });
+    autoUpdater.emit("update-downloaded", { version: "2.0.0" });
+
+    await controller.installDownloadedUpdate();
+    await vi.advanceTimersByTimeAsync(15_000);
+
+    expect(deps.restartBackend).toHaveBeenCalledOnce();
+    expect(deps.setIsQuitting).toHaveBeenLastCalledWith(false);
+    expect(controller.getState()).toMatchObject({
+      status: "downloaded",
+      errorContext: "install",
+      installFailureCount: 1,
+    });
+    expect(readInstallMarker(markerPath)).toMatchObject({
+      status: "valid",
+      marker: { phase: "failed", consecutiveFailures: 1 },
+    });
+  });
+
+  it("marks the durable install attempt as handed off when updater-owned quit begins", async () => {
+    const markerPath = createInstallMarkerPath();
+    const { controller, autoUpdater } = createController({
+      getInstallMarkerPath: vi.fn(() => markerPath),
+    });
+    controller.configure();
+    autoUpdater.emit("update-available", { version: "2.0.0" });
+    autoUpdater.emit("update-downloaded", { version: "2.0.0" });
+    await controller.installDownloadedUpdate();
+
+    controller.markInstallHandoff();
+
+    expect(readInstallMarker(markerPath)).toMatchObject({
+      status: "valid",
+      marker: { phase: "handoff", handoffAt: expect.any(String) },
+    });
+  });
+
+  it("clears a verified install marker after starting the installed version", () => {
+    const markerPath = createInstallMarkerPath();
+    writeInstallMarker(
+      markerPath,
+      createUpdateInstallMarker({
+        fromVersion: "1.0.0",
+        toVersion: "2.0.0",
+        requestedAt: new Date().toISOString(),
+        consecutiveFailures: 0,
+      }),
+    );
+    const { controller } = createController({
+      getAppVersion: vi.fn(() => "2.0.0"),
+      getInstallMarkerPath: vi.fn(() => markerPath),
+      readAppUpdateYml: vi.fn(() => null),
+    });
+
+    controller.configure();
+
+    expect(readInstallMarker(markerPath).status).toBe("missing");
+    expect(controller.getState()).toMatchObject({ status: "idle", installFailureCount: 0 });
+  });
+
+  it("surfaces a failed prior install at startup and suppresses automatic checks", async () => {
+    const markerPath = createInstallMarkerPath();
+    writeInstallMarker(
+      markerPath,
+      createUpdateInstallMarker({
+        fromVersion: "0.9.0",
+        toVersion: "2.0.0",
+        requestedAt: new Date().toISOString(),
+        consecutiveFailures: 0,
+      }),
+    );
+    const { controller, deps, autoUpdater } = createController({
+      getInstallMarkerPath: vi.fn(() => markerPath),
+      readAppUpdateYml: vi.fn(() => null),
+    });
+
+    controller.configure();
+    expect(controller.getState()).toMatchObject({
+      status: "error",
+      availableVersion: "2.0.0",
+      errorContext: "install",
+      installFailureCount: 1,
+    });
+    expect(deps.logInstallDiagnostics).toHaveBeenCalledWith(
+      "startup install verification failure",
+    );
+
+    await controller.checkForUpdates("poll");
+    expect(autoUpdater.checkForUpdates).not.toHaveBeenCalled();
+    await controller.checkForUpdates("renderer");
+    expect(autoUpdater.checkForUpdates).toHaveBeenCalledOnce();
   });
 
   it("install is refused when not in downloaded state", async () => {

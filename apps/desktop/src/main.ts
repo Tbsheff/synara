@@ -89,10 +89,12 @@ import {
   AUTO_UPDATE_CHECK_TIMEOUT_MS,
   AUTO_UPDATE_DOWNLOAD_SETTLE_TIMEOUT_MS,
   AUTO_UPDATE_DOWNLOAD_STALL_TIMEOUT_MS,
+  AUTO_UPDATE_DIAGNOSTICS_TIMEOUT_MS,
   AUTO_UPDATE_FEED_CACHE_TTL_MS,
   AUTO_UPDATE_FEED_REFRESH_TIMEOUT_MS,
   AUTO_UPDATE_FOREGROUND_RECHECK_MIN_BACKGROUND_MS,
   AUTO_UPDATE_FOREGROUND_RECHECK_MIN_INTERVAL_MS,
+  AUTO_UPDATE_INSTALL_WATCHDOG_MS,
   AUTO_UPDATE_POLL_INTERVAL_MS,
   AUTO_UPDATE_STALLED_DOWNLOAD_CANCELLATION_SUPPRESSION_MS,
   AUTO_UPDATE_STARTUP_DELAY_MS,
@@ -109,6 +111,7 @@ import {
   MENU_ACTION_CHANNEL,
   SYNARA_BROWSER_LABEL,
   UPDATE_STATE_CHANNEL,
+  UPDATE_INSTALL_MARKER_FILE_NAME,
   WINDOW_STATE_CHANNEL,
   ZOOM_FACTOR_CHANGED_CHANNEL,
 } from "./main.constants";
@@ -124,6 +127,8 @@ import { NotificationBadgeState } from "./main.notificationBadge";
 import { registerMainIpc } from "./main.ipc";
 import { BackendProcessController } from "./main.backendProcess";
 import { DesktopUpdateController } from "./main.updateController";
+import { isBrokenPipeError } from "./desktopProcessErrors";
+import { resolveSynaraStorageSnapshotPath } from "./desktopStorageMigration";
 
 // Capture the real archive identity before any explicit app.asar lookup. Static
 // snapshotting and the runtime watcher both use this same generation as their
@@ -467,6 +472,30 @@ function initializePackagedLogging(): void {
 
 initializePackagedLogging();
 
+async function logMacUpdateDiagnostics(context: string): Promise<void> {
+  let timeout: ReturnType<typeof setTimeout> | null = null;
+  try {
+    const diagnostics = await Promise.race([
+      collectMacUpdateDiagnostics(APP_USER_MODEL_ID),
+      new Promise<string>((resolve) => {
+        timeout = setTimeout(
+          () => resolve("Diagnostic collection timed out."),
+          AUTO_UPDATE_DIAGNOSTICS_TIMEOUT_MS,
+        );
+      }),
+    ]);
+    if (diagnostics) {
+      console.info(`[desktop-updater] diagnostics (${context})\n${diagnostics}`);
+    }
+  } catch (error) {
+    console.info(
+      `[desktop-updater] diagnostics (${context}) unavailable: ${formatErrorMessage(error)}`,
+    );
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
 function getDestructiveMenuIcon(): Electron.NativeImage | undefined {
   if (process.platform !== "darwin") return undefined;
   if (destructiveMenuIconCache !== undefined) {
@@ -503,6 +532,9 @@ const updateController = new DesktopUpdateController({
     isQuitting = value;
   },
   stopBackendAndWaitForExit: () => stopBackendAndWaitForExit(),
+  restartBackend: () => startBackend(),
+  getInstallMarkerPath: () => Path.join(app.getPath("userData"), UPDATE_INSTALL_MARKER_FILE_NAME),
+  logInstallDiagnostics: logMacUpdateDiagnostics,
   clearNotificationBadge: () => notificationBadge.clear(),
   formatErrorMessage,
   githubToken: () =>
@@ -518,6 +550,7 @@ const updateController = new DesktopUpdateController({
     feedRefreshTimeoutMs: AUTO_UPDATE_FEED_REFRESH_TIMEOUT_MS,
     foregroundRecheckMinBackgroundMs: AUTO_UPDATE_FOREGROUND_RECHECK_MIN_BACKGROUND_MS,
     foregroundRecheckMinIntervalMs: AUTO_UPDATE_FOREGROUND_RECHECK_MIN_INTERVAL_MS,
+    installWatchdogMs: AUTO_UPDATE_INSTALL_WATCHDOG_MS,
     pollIntervalMs: AUTO_UPDATE_POLL_INTERVAL_MS,
     stalledCancellationSuppressionMs: AUTO_UPDATE_STALLED_DOWNLOAD_CANCELLATION_SUPPRESSION_MS,
     startupDelayMs: AUTO_UPDATE_STARTUP_DELAY_MS,
@@ -1461,6 +1494,7 @@ function registerIpcHandlers(): void {
     checkForUpdates,
     downloadAvailableUpdate,
     installDownloadedUpdate,
+    storageSnapshotPath: resolveSynaraStorageSnapshotPath(app.getPath("userData")),
     registerExtraHandlers: (registeredIpcMain) => {
       registerDesktopVoiceTranscriptionHandler();
       startBrowserPerformanceLogging();

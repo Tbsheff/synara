@@ -4,6 +4,7 @@
 // Exports: WorkLogEntry, WorkLogSubagent, WorkLogSubagentAction, WORK_LOG_PRESENTATION_VERSION,
 //   deriveWorkLogEntries, formatWorkLogEntryLabel, formatWorkLogEntryDetail.
 import {
+  STUDIO_OUTPUTS_ACTIVITY_KIND,
   type OrchestrationThreadActivity,
   type RuntimeContentStreamKind,
   type RuntimeItemStatus,
@@ -173,6 +174,7 @@ export function deriveWorkLogEntries(
         activity.kind !== "context-window.updated" && activity.kind !== "context-window.configured",
     )
     .filter((activity) => activity.summary !== "Checkpoint captured")
+    .filter((activity) => activity.kind !== STUDIO_OUTPUTS_ACTIVITY_KIND)
     .filter((activity) => !isPlanBoundaryToolActivity(activity))
     .filter((activity) => !isUninformativeCommandStartActivity(activity))
     .map(toDerivedWorkLogEntry);

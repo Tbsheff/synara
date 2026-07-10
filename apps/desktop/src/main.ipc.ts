@@ -47,6 +47,12 @@ import {
 } from "./main.constants";
 import { getSafeExternalUrl, getSafeTheme, isSaveFileInput } from "./main.inputGuards";
 import { DESKTOP_WS_URL_CHANNEL } from "./desktopWsBridge";
+import {
+  acknowledgeSynaraStorageSnapshot,
+  readSynaraStorageSnapshot,
+  saveSynaraStorageSnapshot,
+  STORAGE_MIGRATION_IPC_CHANNELS,
+} from "./desktopStorageMigration";
 
 interface UpdateActionResult {
   readonly accepted: boolean;
@@ -90,12 +96,28 @@ export interface MainIpcDeps {
   readonly checkForUpdates: (reason: string) => Promise<void>;
   readonly downloadAvailableUpdate: () => Promise<UpdateActionResult>;
   readonly installDownloadedUpdate: () => Promise<UpdateActionResult>;
+  readonly storageSnapshotPath: string;
   readonly registerExtraHandlers: (ipcMain: IpcMain) => void;
 }
 
 // Registers every renderer-facing IPC channel for the main process. Channel names and
 // dispatch behavior must stay identical to the original inline registration.
 export function registerMainIpc(ipcMain: IpcMain, deps: MainIpcDeps): void {
+  ipcMain.removeAllListeners(STORAGE_MIGRATION_IPC_CHANNELS.read);
+  ipcMain.on(STORAGE_MIGRATION_IPC_CHANNELS.read, (event: IpcMainEvent) => {
+    event.returnValue = readSynaraStorageSnapshot(deps.storageSnapshotPath);
+  });
+
+  ipcMain.removeHandler(STORAGE_MIGRATION_IPC_CHANNELS.save);
+  ipcMain.handle(STORAGE_MIGRATION_IPC_CHANNELS.save, async (_event, snapshot: unknown) =>
+    saveSynaraStorageSnapshot(deps.storageSnapshotPath, snapshot),
+  );
+
+  ipcMain.removeHandler(STORAGE_MIGRATION_IPC_CHANNELS.acknowledge);
+  ipcMain.handle(STORAGE_MIGRATION_IPC_CHANNELS.acknowledge, async () => {
+    await acknowledgeSynaraStorageSnapshot(deps.storageSnapshotPath);
+  });
+
   ipcMain.removeAllListeners(DESKTOP_WS_URL_CHANNEL);
   ipcMain.on(DESKTOP_WS_URL_CHANNEL, (event: IpcMainEvent) => {
     // The backend port is reserved at runtime, so preload asks main for the

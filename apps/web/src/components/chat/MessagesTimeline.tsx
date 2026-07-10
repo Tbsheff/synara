@@ -36,12 +36,16 @@ import ChatMarkdown from "../ChatMarkdown";
 import { InlineLinkChip } from "../InlineLinkChip";
 import {
   ChangesIcon,
+  CircleAlertIcon,
+  CircleCheckIcon,
   ClockIcon,
+  LoaderIcon,
   type LucideIcon,
   NewThreadIcon,
   PinIcon,
   SteerIcon,
   Undo2Icon,
+  WorktreeIcon,
 } from "~/lib/icons";
 import { pinActionLabel } from "~/lib/pin";
 import { Button } from "../ui/button";
