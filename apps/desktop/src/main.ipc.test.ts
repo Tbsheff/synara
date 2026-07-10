@@ -148,9 +148,9 @@ describe("registerMainIpc", () => {
         entries: { "synara:theme": "dark" },
       };
 
-      await expect(
-        handlers.get(STORAGE_MIGRATION_IPC_CHANNELS.save)?.({}, snapshot),
-      ).resolves.toBe(true);
+      await expect(handlers.get(STORAGE_MIGRATION_IPC_CHANNELS.save)?.({}, snapshot)).resolves.toBe(
+        true,
+      );
       const event = { returnValue: null as unknown };
       listeners.get(STORAGE_MIGRATION_IPC_CHANNELS.read)?.(event);
       expect(event.returnValue).toEqual(snapshot);

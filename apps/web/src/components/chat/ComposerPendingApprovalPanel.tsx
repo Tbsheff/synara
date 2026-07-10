@@ -132,19 +132,21 @@ export const ComposerPendingApprovalPanel = memo(function ComposerPendingApprova
         ) : null}
       </div>
       <ApprovalDetail parsed={parsed} />
-      {onRespond ? <div className="mt-2.5 space-y-0.5">
-        {APPROVAL_ACTIONS.map((action, index) => (
-          <ComposerChoiceRow
-            key={action.decision}
-            shortcut={index + 1}
-            label={action.label}
-            description={action.description}
-            tone={action.tone}
-            disabled={isResponding}
-            onSelect={() => void onRespond(requestId, action.decision)}
-          />
-        ))}
-      </div> : null}
+      {onRespond ? (
+        <div className="mt-2.5 space-y-0.5">
+          {APPROVAL_ACTIONS.map((action, index) => (
+            <ComposerChoiceRow
+              key={action.decision}
+              shortcut={index + 1}
+              label={action.label}
+              description={action.description}
+              tone={action.tone}
+              disabled={isResponding}
+              onSelect={() => void onRespond(requestId, action.decision)}
+            />
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 });

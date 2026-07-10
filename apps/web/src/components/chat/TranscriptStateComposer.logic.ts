@@ -1,10 +1,7 @@
 import type { ProviderApprovalDecision } from "@t3tools/contracts";
 
 import { deriveTranscriptComposerState } from "../../session-logic";
-import {
-  LAB_PENDING_APPROVAL,
-  LAB_PENDING_USER_INPUTS,
-} from "./TranscriptStateComposer.fixtures";
+import { LAB_PENDING_APPROVAL, LAB_PENDING_USER_INPUTS } from "./TranscriptStateComposer.fixtures";
 import type { TranscriptScenarioState } from "./transcriptStateFixtures";
 
 export type TranscriptComposerMode =
@@ -17,9 +14,7 @@ export type TranscriptComposerMode =
   | "error"
   | "ready";
 
-export function composerModeForScenario(
-  state: TranscriptScenarioState,
-): TranscriptComposerMode {
+export function composerModeForScenario(state: TranscriptScenarioState): TranscriptComposerMode {
   const nativeState = deriveNativeComposerStateForScenario(state);
 
   if (nativeState.kind === "pending-approval") return "approval";

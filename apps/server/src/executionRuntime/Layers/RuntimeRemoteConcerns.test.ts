@@ -1,4 +1,6 @@
 import { existsSync } from "node:fs";
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import nodePath from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -31,8 +33,7 @@ type TestRuntime = ReturnType<typeof makeTestRuntime>;
 
 /** Build a bare git repo with one commit, standing in for a private remote. */
 const makeBareRemote = async (): Promise<{ readonly remote: string; readonly seed: string }> => {
-  const base = await runProcess("mktemp", ["-d", "-t", "synara-runtime-git"]);
-  const root = base.stdout.trim();
+  const root = await mkdtemp(nodePath.join(tmpdir(), "synara-runtime-git-"));
   const remote = nodePath.join(root, "remote.git");
   const seed = nodePath.join(root, "seed");
   await runProcess("git", ["init", "--bare", remote]);

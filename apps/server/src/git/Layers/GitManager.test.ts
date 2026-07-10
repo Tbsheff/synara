@@ -1,16 +1,26 @@
 import fs from "node:fs";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import { Effect, FileSystem, Layer, PlatformError, Scope } from "effect";
 import { expect } from "vitest";
-import type { GitActionProgressEvent } from "@t3tools/contracts";
+import type {
+  GitActionProgressEvent,
+  GitPullRequestCheck,
+  GitPullRequestComment,
+} from "@t3tools/contracts";
 import type { ModelSelection, ProviderStartOptions, ReviewFinding } from "@t3tools/contracts";
 
 import { GitCommandError, GitHubCliError, TextGenerationError } from "../Errors.ts";
 import { type GitManagerShape } from "../Services/GitManager.ts";
-import { GitHubCli, PULL_REQUEST_SUMMARY_JSON_FIELDS } from "../Services/GitHubCli.ts";
+import {
+  GitHubCli,
+  type GitHubCliShape,
+  type GitHubPullRequestSummary,
+  PULL_REQUEST_SUMMARY_JSON_FIELDS,
+} from "../Services/GitHubCli.ts";
 import {
   type AutomationIntentGenerationInput,
   type AutomationIntentGenerationResult,
@@ -24,12 +34,25 @@ import {
 } from "../Services/TextGeneration.ts";
 import { GitCoreLive } from "./GitCore.ts";
 import { GitCore } from "../Services/GitCore.ts";
-import { createGitHubCliWithFakeGh, type FakeGhScenario } from "../testing/fakeGitHubCli.ts";
+import {
+  createGitHubCliWithFakeGh,
+  type FakeGhScenario,
+  type FakePullRequest,
+} from "../testing/fakeGitHubCli.ts";
 import { makeGitManager } from "./GitManager.ts";
 import { ServerConfig } from "../../config.ts";
 
 function isGitHubCliError(error: unknown): error is GitHubCliError {
   return error instanceof GitHubCliError;
+}
+
+function runGitSyncForFakeGh(cwd: string, args: readonly string[]): void {
+  const result = spawnSync("git", args, { cwd, encoding: "utf8" });
+  if (result.status === 0) return;
+  throw new GitHubCliError({
+    operation: "execute",
+    detail: `Failed to simulate gh checkout with git ${args.join(" ")}: ${result.stderr?.trim() || "unknown error"}`,
+  });
 }
 
 interface FakeGitTextGeneration {
@@ -630,6 +653,7 @@ function createLegacyGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
             });
           }),
         ),
+      listPullRequests: () => Effect.succeed([]),
       createPullRequest: (input) =>
         execute({
           cwd: input.cwd,
@@ -659,14 +683,19 @@ function createLegacyGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
       getPullRequest: (input) =>
         execute({
           cwd: input.cwd,
-          args: [
-            "pr",
-            "view",
-            input.reference,
-            "--json",
-            PULL_REQUEST_SUMMARY_JSON_FIELDS,
-          ],
+          args: ["pr", "view", input.reference, "--json", PULL_REQUEST_SUMMARY_JSON_FIELDS],
         }).pipe(Effect.map((result) => JSON.parse(result.stdout) as GitHubPullRequestSummary)),
+      getPullRequestWithChecks: (input) =>
+        execute({
+          cwd: input.cwd,
+          args: ["pr", "view", input.reference, "--json", PULL_REQUEST_SUMMARY_JSON_FIELDS],
+        }).pipe(
+          Effect.map((result) => ({
+            summary: JSON.parse(result.stdout) as GitHubPullRequestSummary,
+            checks: [],
+          })),
+        ),
+      getPullRequestReviewComments: () => Effect.succeed({ comments: [], truncated: false }),
       listRepositoryPullRequests: () => Effect.succeed([]),
       getAuthenticatedUser: (input) =>
         execute({

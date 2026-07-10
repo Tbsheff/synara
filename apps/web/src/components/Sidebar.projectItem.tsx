@@ -101,8 +101,8 @@ export function SidebarProjectItem({
     orderedProjectThreadIds,
     projectStatus,
     visibleEntries,
-    hasHiddenThreads,
-    isThreadListExpanded,
+    canShowMoreThreads,
+    canShowLessThreads,
   } = projectSidebarData;
 
   return (
@@ -262,7 +262,7 @@ export function SidebarProjectItem({
               ),
             )}
 
-            {hasHiddenThreads && !isThreadListExpanded && (
+            {canShowMoreThreads && (
               <SidebarMenuSubItem className="w-full">
                 <SidebarMenuSubButton
                   render={<button type="button" />}
@@ -277,7 +277,7 @@ export function SidebarProjectItem({
                 </SidebarMenuSubButton>
               </SidebarMenuSubItem>
             )}
-            {hasHiddenThreads && isThreadListExpanded && (
+            {canShowLessThreads && (
               <SidebarMenuSubItem className="w-full">
                 <SidebarMenuSubButton
                   render={<button type="button" />}

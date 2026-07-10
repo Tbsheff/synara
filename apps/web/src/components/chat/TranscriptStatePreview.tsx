@@ -91,6 +91,7 @@ export function TranscriptStatePreview({
           timelineEntries={state.timelineEntries}
           timestampFormat="locale"
           turnDiffSummaryByAssistantMessageId={state.turnDiffSummaryByAssistantMessageId}
+          worktreeSetup={null}
           workspaceRoot={WORKSPACE_ROOT}
         />
       </div>

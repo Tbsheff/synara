@@ -192,14 +192,29 @@ export class WsTransport {
         ? (params as { command: unknown }).command
         : (params ?? {});
     const normalizedRpcInput = omitNullUserInputAnswers(rpcInput);
-    const call = (
-      client as unknown as Record<
-        string,
-        (input: unknown) => Effect.Effect<unknown, WsTransportRpcError, never>
-      >
-    )[method];
-    if (!call) throw new WsTransportRpcError({ message: `Unknown RPC method: ${method}` });
-    return (await this.runtime.runPromise(call(normalizedRpcInput))) as T;
+    const runRequest = async (rpcClient: RpcClientInstance): Promise<T> => {
+      const call = (
+        rpcClient as unknown as Record<
+          string,
+          (input: unknown) => Effect.Effect<unknown, WsTransportRpcError, never>
+        >
+      )[method];
+      if (!call) throw new WsTransportRpcError({ message: `Unknown RPC method: ${method}` });
+      return (await this.runtime.runPromise(call(normalizedRpcInput))) as T;
+    };
+
+    try {
+      return await runRequest(client);
+    } catch (error) {
+      // A stream failure can begin reconnecting after getClient() resolves but
+      // before the request is run, leaving this call attached to the runtime
+      // that reconnect just disposed. Retry once on the replacement session so
+      // user actions issued during that narrow handoff are not silently lost.
+      if (this.disposed || !String(error).includes("ManagedRuntime disposed")) {
+        throw error;
+      }
+      return runRequest(await this.reconnect());
+    }
   }
 
   subscribe<C extends WsPushChannel>(

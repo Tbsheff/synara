@@ -4,10 +4,7 @@ import { formatClockDuration } from "../../session-logic";
 import { Button } from "../ui/button";
 import { cn } from "~/lib/utils";
 import type { TranscriptStatePlaygroundLayout } from "./TranscriptStatePlayground.types";
-import {
-  TRANSCRIPT_SCENARIOS,
-  type TranscriptScenarioId,
-} from "./transcriptStateFixtures";
+import { TRANSCRIPT_SCENARIOS, type TranscriptScenarioId } from "./transcriptStateFixtures";
 
 interface TranscriptStateScenarioPanelProps {
   readonly compact: boolean;
@@ -58,6 +55,9 @@ export function TranscriptStateScenarioPanel({
     }
 
     const nextScenario = TRANSCRIPT_SCENARIOS[nextIndex];
+    if (!nextScenario) {
+      return;
+    }
     onSelectScenario(nextScenario.id);
     requestAnimationFrame(() => {
       document.getElementById(`transcript-lab-${layout}-scenario-${nextScenario.id}`)?.focus();

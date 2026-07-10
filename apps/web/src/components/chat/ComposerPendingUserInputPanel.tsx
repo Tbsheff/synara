@@ -8,7 +8,7 @@ import {
   derivePendingUserInputProgress,
   type PendingUserInputDraftAnswer,
 } from "../../pendingUserInput";
-import { CheckIcon } from "~/lib/icons";
+import { CheckIcon, ChevronLeftIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { ComposerChoiceRow } from "./ComposerChoiceRow";
 
@@ -19,6 +19,7 @@ interface PendingUserInputPanelProps {
   questionIndex: number;
   onToggleOption: (questionId: string, optionLabel: string) => PendingUserInputDraftAnswer | null;
   onAdvance: (answerOverrides?: Record<string, PendingUserInputDraftAnswer>) => void;
+  onPrevious?: () => void;
   onCancel: () => void;
 }
 
@@ -30,6 +31,7 @@ export const ComposerPendingUserInputPanel = memo(function ComposerPendingUserIn
   questionIndex,
   onToggleOption,
   onAdvance,
+  onPrevious,
   onCancel,
 }: PendingUserInputPanelProps) {
   if (pendingUserInputs.length === 0) return null;
@@ -45,6 +47,7 @@ export const ComposerPendingUserInputPanel = memo(function ComposerPendingUserIn
       questionIndex={questionIndex}
       onToggleOption={onToggleOption}
       onAdvance={onAdvance}
+      {...(onPrevious ? { onPrevious } : {})}
       onCancel={onCancel}
     />
   );
@@ -57,6 +60,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
   questionIndex,
   onToggleOption,
   onAdvance,
+  onPrevious,
   onCancel,
 }: {
   prompt: PendingUserInput;
@@ -65,6 +69,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
   questionIndex: number;
   onToggleOption: (questionId: string, optionLabel: string) => PendingUserInputDraftAnswer | null;
   onAdvance: (answerOverrides?: Record<string, PendingUserInputDraftAnswer>) => void;
+  onPrevious?: () => void;
   onCancel: () => void;
 }) {
   const progress = derivePendingUserInputProgress(prompt.questions, answers, questionIndex);
@@ -153,6 +158,17 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
         Input required. Question {questionIndex + 1} of {prompt.questions.length}.
       </span>
       <div className="flex items-center gap-3">
+        {questionIndex > 0 ? (
+          <button
+            type="button"
+            disabled={isResponding}
+            onClick={onPrevious}
+            className="flex size-5 items-center justify-center rounded-md text-muted-foreground/70 transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
+            aria-label="Previous question"
+          >
+            <ChevronLeftIcon className="size-3.5" />
+          </button>
+        ) : null}
         <div className="flex items-center gap-2">
           {prompt.questions.length > 1 ? (
             <span className="flex h-5 items-center rounded-md bg-[var(--color-background-elevated-secondary)] px-1.5 text-[10px] font-medium tabular-nums text-[var(--color-text-foreground-secondary)]">

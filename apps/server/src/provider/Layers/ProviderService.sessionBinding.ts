@@ -191,58 +191,61 @@ export const makeSessionBindingWriters = (deps: SessionBindingDeps): SessionBind
           return Effect.void;
       }
 
-      return withBindingWriteLock(event.threadId, Effect.gen(function* () {
-        if (
-          (event.type === "turn.completed" || event.type === "turn.aborted") &&
-          event.turnId !== undefined
-        ) {
-          recordRecentlyCompletedTurn(event.threadId, String(event.turnId));
-        }
-        const binding = Option.getOrUndefined(yield* directory.getBinding(event.threadId));
-        if (!binding) {
-          return;
-        }
+      return withBindingWriteLock(
+        event.threadId,
+        Effect.gen(function* () {
+          if (
+            (event.type === "turn.completed" || event.type === "turn.aborted") &&
+            event.turnId !== undefined
+          ) {
+            recordRecentlyCompletedTurn(event.threadId, String(event.turnId));
+          }
+          const binding = Option.getOrUndefined(yield* directory.getBinding(event.threadId));
+          if (!binding) {
+            return;
+          }
 
-        const currentPayload = runtimePayloadRecord(binding.runtimePayload);
-        const currentActiveTurnId = currentPayload.activeTurnId ?? null;
-        const activeTurnId =
-          event.type === "turn.started"
-            ? (event.turnId ?? null)
-            : event.type === "thread.state.changed" && event.payload.state === "compacted"
-              ? (event.turnId ?? currentActiveTurnId)
-              : event.type === "turn.completed" ||
-                  event.type === "turn.aborted" ||
-                  (event.type === "thread.state.changed" &&
-                    (event.payload.state === "archived" ||
-                      event.payload.state === "closed" ||
-                      event.payload.state === "error")) ||
-                  event.type === "session.exited" ||
-                  event.type === "runtime.error" ||
-                  (event.type === "session.state.changed" &&
-                    (event.payload.state === "ready" ||
-                      event.payload.state === "stopped" ||
-                      event.payload.state === "error"))
-                ? null
-                : currentActiveTurnId;
-        const lastError = runtimeLastErrorForEvent(event);
-        const resumeCursor = yield* refreshResumeCursorFromActiveSession(event, binding);
+          const currentPayload = runtimePayloadRecord(binding.runtimePayload);
+          const currentActiveTurnId = currentPayload.activeTurnId ?? null;
+          const activeTurnId =
+            event.type === "turn.started"
+              ? (event.turnId ?? null)
+              : event.type === "thread.state.changed" && event.payload.state === "compacted"
+                ? (event.turnId ?? currentActiveTurnId)
+                : event.type === "turn.completed" ||
+                    event.type === "turn.aborted" ||
+                    (event.type === "thread.state.changed" &&
+                      (event.payload.state === "archived" ||
+                        event.payload.state === "closed" ||
+                        event.payload.state === "error")) ||
+                    event.type === "session.exited" ||
+                    event.type === "runtime.error" ||
+                    (event.type === "session.state.changed" &&
+                      (event.payload.state === "ready" ||
+                        event.payload.state === "stopped" ||
+                        event.payload.state === "error"))
+                  ? null
+                  : currentActiveTurnId;
+          const lastError = runtimeLastErrorForEvent(event);
+          const resumeCursor = yield* refreshResumeCursorFromActiveSession(event, binding);
 
-        yield* directory.upsert({
-          threadId: event.threadId,
-          provider: binding.provider,
-          ...(binding.adapterKey !== undefined ? { adapterKey: binding.adapterKey } : {}),
-          ...(binding.runtimeMode !== undefined ? { runtimeMode: binding.runtimeMode } : {}),
-          status: runtimeStatusForEvent(event, activeTurnId),
-          ...(resumeCursor !== undefined ? { resumeCursor } : {}),
-          runtimePayload: {
-            ...currentPayload,
-            activeTurnId,
-            lastRuntimeEvent: event.type,
-            lastRuntimeEventAt: event.createdAt,
-            ...(lastError !== undefined ? { lastError } : {}),
-          },
-        });
-      })).pipe(
+          yield* directory.upsert({
+            threadId: event.threadId,
+            provider: binding.provider,
+            ...(binding.adapterKey !== undefined ? { adapterKey: binding.adapterKey } : {}),
+            ...(binding.runtimeMode !== undefined ? { runtimeMode: binding.runtimeMode } : {}),
+            status: runtimeStatusForEvent(event, activeTurnId),
+            ...(resumeCursor !== undefined ? { resumeCursor } : {}),
+            runtimePayload: {
+              ...currentPayload,
+              activeTurnId,
+              lastRuntimeEvent: event.type,
+              lastRuntimeEventAt: event.createdAt,
+              ...(lastError !== undefined ? { lastError } : {}),
+            },
+          });
+        }),
+      ).pipe(
         Effect.catchCause((cause) =>
           Effect.logWarning("provider.session.runtime_binding_update_failed", {
             threadId: event.threadId,

@@ -376,7 +376,10 @@ export interface GitHubCliShape {
     readonly cwd: string;
     readonly reference: string;
   }) => Effect.Effect<
-    { readonly summary: GitHubPullRequestSummary; readonly checks: ReadonlyArray<GitPullRequestCheck> },
+    {
+      readonly summary: GitHubPullRequestSummary;
+      readonly checks: ReadonlyArray<GitPullRequestCheck>;
+    },
     GitHubCliError
   >;
 

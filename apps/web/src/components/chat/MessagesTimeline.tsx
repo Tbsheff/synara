@@ -31,7 +31,11 @@ import {
   type WheelEvent,
 } from "react";
 import { deriveTimelineEntries, formatClockElapsed, type WorkLogEntry } from "../../session-logic";
-import { type TurnDiffSummary } from "../../types";
+import {
+  type TurnDiffSummary,
+  type WorktreeSetupSnapshot,
+  type WorktreeSetupStep,
+} from "../../types";
 import ChatMarkdown from "../ChatMarkdown";
 import { InlineLinkChip } from "../InlineLinkChip";
 import {
@@ -1511,7 +1515,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                 {renderWorkDisplay(leadingWorkDisplay, "leading")}
                 <div data-assistant-message-id={row.message.id}>
                   <ChatMarkdown
-                    text={messageText}
+                    text={messageText ?? ""}
                     cwd={markdownCwd}
                     isStreaming={assistantMarkdownStreaming}
                     style={chatTypographyStyle}
@@ -1653,7 +1657,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     <div className="mt-1 mb-4 overflow-hidden rounded-[0.65rem] border border-[color:var(--color-border-light)] dark:border-[color:color-mix(in_srgb,var(--color-border-light)_55%,transparent)]">
                       <div
                         className={cn(
-                        "flex items-center justify-between gap-3 bg-[var(--app-user-message-background)] px-3 py-[8px]",
+                          "flex items-center justify-between gap-3 bg-[var(--app-user-message-background)] px-3 py-[8px]",
                           fileChangesExpanded &&
                             "border-b border-[color:var(--color-border-light)]",
                         )}

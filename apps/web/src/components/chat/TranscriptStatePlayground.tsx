@@ -61,7 +61,10 @@ export function TranscriptStatePlayground(): ReactElement {
       </header>
       <main className="min-h-0 flex-1 overflow-y-auto p-3 lg:overflow-hidden">
         <div data-uidotsh-pick="Transcript lab layout" className="contents">
-          <div data-uidotsh-option="Scenario rail (current)" className="contents [&[hidden]]:hidden">
+          <div
+            data-uidotsh-option="Scenario rail (current)"
+            className="contents [&[hidden]]:hidden"
+          >
             <LabLayout
               layout="rail"
               state={state}
@@ -71,7 +74,11 @@ export function TranscriptStatePlayground(): ReactElement {
               onSelectScenario={selectScenario}
             />
           </div>
-          <div data-uidotsh-option="Transcript focus" className="contents [&[hidden]]:hidden" hidden>
+          <div
+            data-uidotsh-option="Transcript focus"
+            className="contents [&[hidden]]:hidden"
+            hidden
+          >
             <LabLayout
               layout="focus"
               state={state}

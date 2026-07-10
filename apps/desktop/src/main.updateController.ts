@@ -403,7 +403,7 @@ export class DesktopUpdateController {
     await this.configuredGitHubUpdateFeedRefresher?.refresh(options);
   }
 
-  private isKnownUpdateVersionNewer(version: string | null | undefined): boolean {
+  private isKnownUpdateVersionNewer(version: string | null | undefined): version is string {
     return typeof version === "string" && isUpdateVersionNewer(this.deps.getAppVersion(), version);
   }
 

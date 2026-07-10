@@ -40,6 +40,7 @@ import { createTerminalModeReplayTracker } from "../terminalModeReplay";
 import {
   defaultProcessTreeKiller,
   type ProcessTreeKiller,
+  type TerminalKillSignal,
 } from "../processTreeKiller";
 import {
   agentStateFromHookEvent,

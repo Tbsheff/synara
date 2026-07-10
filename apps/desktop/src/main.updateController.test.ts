@@ -9,7 +9,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DesktopUpdateController, type DesktopUpdateControllerDeps } from "./main.updateController";
 import { DESKTOP_UPDATE_CHANNEL } from "./main.constants";
-import { createUpdateInstallMarker, readInstallMarker, writeInstallMarker } from "./updateInstallMarker";
+import {
+  createUpdateInstallMarker,
+  readInstallMarker,
+  writeInstallMarker,
+} from "./updateInstallMarker";
 
 const temporaryDirectories: string[] = [];
 
@@ -275,9 +279,7 @@ describe("DesktopUpdateController", () => {
       errorContext: "install",
       installFailureCount: 1,
     });
-    expect(deps.logInstallDiagnostics).toHaveBeenCalledWith(
-      "startup install verification failure",
-    );
+    expect(deps.logInstallDiagnostics).toHaveBeenCalledWith("startup install verification failure");
 
     await controller.checkForUpdates("poll");
     expect(autoUpdater.checkForUpdates).not.toHaveBeenCalled();

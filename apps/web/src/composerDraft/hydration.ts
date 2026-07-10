@@ -120,6 +120,7 @@ export function toHydratedThreadDraft(
 
   return {
     prompt: persistedDraft.prompt,
+    promptHistorySavedDraft: null,
     images: hydrateImagesFromPersisted(persistedDraft.attachments),
     files: [],
     nonPersistedImageIds: [],

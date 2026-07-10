@@ -40,6 +40,7 @@ import {
   DEFAULT_PROVIDER_INTERACTION_MODE,
   DEFAULT_RUNTIME_MODE,
   DEFAULT_TURN_DISPATCH_MODE,
+  MessageDispatchOrigin,
   ModelSelection,
   OrchestrationCheckpointFile,
   OrchestrationCheckpointStatus,
@@ -377,6 +378,7 @@ export const ThreadTurnStartCommand = Schema.Struct({
   dispatchMode: Schema.optional(TurnDispatchMode).pipe(
     Schema.withDecodingDefault(() => DEFAULT_TURN_DISPATCH_MODE),
   ),
+  dispatchOrigin: Schema.optional(MessageDispatchOrigin),
   runtimeMode: RuntimeMode.pipe(Schema.withDecodingDefault(() => DEFAULT_RUNTIME_MODE)),
   interactionMode: ProviderInteractionMode.pipe(
     Schema.withDecodingDefault(() => DEFAULT_PROVIDER_INTERACTION_MODE),

@@ -36,6 +36,7 @@ import { extractCollabAction, extractCollabSubagents } from "./session-logic.wor
 export interface WorkLogEntry {
   id: string;
   createdAt: string;
+  activityKind?: OrchestrationThreadActivity["kind"];
   turnId?: TurnId | null;
   label: string;
   detail?: string;

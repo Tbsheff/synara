@@ -254,7 +254,10 @@ const decodeRawPullRequestEntry = Schema.decodeUnknownSync(RawGitHubPullRequestS
 
 export function decodePullRequestListJson(
   raw: string,
-  operation: "listOpenPullRequests" | "listPullRequests" = "listPullRequests",
+  operation:
+    | "listOpenPullRequests"
+    | "listPullRequests"
+    | "listRepositoryPullRequests" = "listOpenPullRequests",
 ): Effect.Effect<ReadonlyArray<GitHubPullRequestSummary>, GitHubCliError> {
   const trimmed = raw.trim();
   if (trimmed.length === 0) return Effect.succeed([]);
@@ -367,11 +370,15 @@ const makeGitHubCli = Effect.sync(() => {
                 const row = entry as Record<string, unknown>;
                 const name = typeof row.name === "string" ? row.name.trim() : "";
                 if (!name) return [];
-                const conclusion = String(row.conclusion ?? row.state ?? row.status ?? "").toUpperCase();
+                const conclusion = String(
+                  row.conclusion ?? row.state ?? row.status ?? "",
+                ).toUpperCase();
                 const status: GitPullRequestCheck["status"] =
                   conclusion === "SUCCESS"
                     ? "success"
-                    : conclusion === "FAILURE" || conclusion === "ERROR" || conclusion === "TIMED_OUT"
+                    : conclusion === "FAILURE" ||
+                        conclusion === "ERROR" ||
+                        conclusion === "TIMED_OUT"
                       ? "failure"
                       : conclusion === "SKIPPED"
                         ? "skipped"
@@ -380,11 +387,13 @@ const makeGitHubCli = Effect.sync(() => {
                           : conclusion === "CANCELLED"
                             ? "cancelled"
                             : "pending";
-                return [{
-                  name,
-                  status,
-                  url: typeof row.detailsUrl === "string" ? row.detailsUrl : null,
-                }];
+                return [
+                  {
+                    name,
+                    status,
+                    url: typeof row.detailsUrl === "string" ? row.detailsUrl : null,
+                  },
+                ];
               });
               return { summary: normalizePullRequestSummary(raw as never), checks };
             },
@@ -407,14 +416,16 @@ const makeGitHubCli = Effect.sync(() => {
             if (thread.isResolved) return [];
             const comment = thread.comments[0];
             if (!comment) return [];
-            return [{
-              id: comment.id ?? thread.id,
-              author: comment.author.trim() || null,
-              body: comment.body,
-              path: thread.path?.trim() || null,
-              url: comment.url ?? null,
-              createdAt: comment.createdAt?.trim() || null,
-            }];
+            return [
+              {
+                id: comment.id ?? thread.id,
+                author: comment.author.trim() || null,
+                body: comment.body,
+                path: thread.path?.trim() || null,
+                url: comment.url ?? null,
+                createdAt: comment.createdAt?.trim() || null,
+              },
+            ];
           });
           return { comments, truncated: false };
         }),

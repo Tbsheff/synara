@@ -14,6 +14,13 @@ export type TurnStartRequestedDomainEvent = Extract<
   { type: "thread.turn-start-requested" }
 >;
 
+export type RuntimeIngestionDomainEvent = Extract<
+  OrchestrationEvent,
+  {
+    type: "thread.turn-start-requested" | "thread.reverted" | "thread.conversation-rolled-back";
+  }
+>;
+
 export type RuntimeIngestionInput =
   | {
       source: "runtime";
@@ -21,7 +28,7 @@ export type RuntimeIngestionInput =
     }
   | {
       source: "domain";
-      event: TurnStartRequestedDomainEvent;
+      event: RuntimeIngestionDomainEvent;
     };
 
 export type ActivityPayload = OrchestrationThreadActivity["payload"];

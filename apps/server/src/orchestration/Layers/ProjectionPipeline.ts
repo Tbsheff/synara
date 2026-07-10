@@ -44,9 +44,7 @@ import {
   type ProjectionThreadProposedPlanRepositoryShape,
   ProjectionThreadProposedPlanRepository,
 } from "../../persistence/Services/ProjectionThreadProposedPlans.ts";
-import {
-  ProjectionThreadProviderItemRepository,
-} from "../../persistence/Services/ProjectionThreadProviderItems.ts";
+import { ProjectionThreadProviderItemRepository } from "../../persistence/Services/ProjectionThreadProviderItems.ts";
 import { ProjectionThreadSessionRepository } from "../../persistence/Services/ProjectionThreadSessions.ts";
 import { ProjectionThreadRuntimeRepository } from "../../persistence/Services/ProjectionThreadRuntime.ts";
 import {

@@ -3901,6 +3901,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             interruptRequestedTurnId: undefined,
             lastKnownContextWindow: resolveClaudeApiModelIdContextWindowMaxTokens(apiModelId),
             lastKnownTokenUsage: undefined,
+            lastThinkingItemId: undefined,
             lastAssistantUuid: resumeState?.resumeSessionAt,
             lastThreadStartedId: undefined,
             rerouteOriginalApiModelId: resumedRerouteOriginalApiModelId,

@@ -17,6 +17,7 @@ import {
   type GitHubReviewInlineComment,
 } from "../../git/Services/GitHubCli.ts";
 import { GitManager, type GitManagerShape } from "../../git/Services/GitManager.ts";
+import { createGitHubCliWithFakeGh } from "../../git/testing/fakeGitHubCli.ts";
 import { ReviewSubmission } from "../Services/ReviewSubmission.ts";
 import { ReviewSubmissionLive } from "./ReviewSubmission.ts";
 
@@ -105,18 +106,25 @@ function makeFakes(options: FakeOptions = {}): {
           baseBranch: "main",
           headBranch: "feature/pull-request",
           state: "open" as const,
+          isDraft: false,
+          mergeability: "unknown" as const,
+          additions: null,
+          deletions: null,
+          changedFiles: null,
         },
       });
     },
     status: () => unexpected("GitManager.status"),
     readWorkingTreeDiff: () => unexpected("GitManager.readWorkingTreeDiff"),
     summarizeDiff: () => unexpected("GitManager.summarizeDiff"),
+    pullRequestSnapshot: () => unexpected("GitManager.pullRequestSnapshot"),
     preparePullRequestThread: () => unexpected("GitManager.preparePullRequestThread"),
     handoffThread: () => unexpected("GitManager.handoffThread"),
     runStackedAction: () => unexpected("GitManager.runStackedAction"),
   };
 
   const gitHubCli: GitHubCliShape = {
+    ...createGitHubCliWithFakeGh().service,
     getReviewPullRequestOverview: () =>
       Effect.fail(
         new GitHubCliError({

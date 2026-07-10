@@ -6,10 +6,7 @@
 import { Effect } from "effect";
 
 import type { GitCoreShape } from "../Services/GitCore.ts";
-import {
-  PULL_REQUEST_SUMMARY_JSON_FIELDS,
-  type GitHubCliShape,
-} from "../Services/GitHubCli.ts";
+import { PULL_REQUEST_SUMMARY_JSON_FIELDS, type GitHubCliShape } from "../Services/GitHubCli.ts";
 import {
   OPEN_PR_LOOKUP_LIMIT,
   type BranchHeadContext,
@@ -304,6 +301,11 @@ export function makePrResolution(deps: PrResolutionDeps): PrResolution {
             headRefName: pullRequest.headRefName,
             state: pullRequest.state ?? "open",
             updatedAt: null,
+            isDraft: pullRequest.isDraft ?? false,
+            mergeability: pullRequest.mergeability ?? "unknown",
+            additions: pullRequest.additions ?? null,
+            deletions: pullRequest.deletions ?? null,
+            changedFiles: pullRequest.changedFiles ?? null,
             ...(pullRequest.isCrossRepository !== undefined
               ? { isCrossRepository: pullRequest.isCrossRepository }
               : {}),

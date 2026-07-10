@@ -370,6 +370,7 @@ it.effect("preserves explicit provider and runtime mode in thread.turn.start", (
         text: "hello",
         attachments: [],
       },
+      dispatchOrigin: "automation",
       modelSelection: {
         provider: "codex",
         model: "gpt-5.4",
@@ -378,6 +379,7 @@ it.effect("preserves explicit provider and runtime mode in thread.turn.start", (
       createdAt: "2026-01-01T00:00:00.000Z",
     });
     assert.strictEqual(parsed.modelSelection?.provider, "codex");
+    assert.strictEqual(parsed.dispatchOrigin, "automation");
     assert.strictEqual(parsed.runtimeMode, "full-access");
     assert.strictEqual(parsed.interactionMode, DEFAULT_PROVIDER_INTERACTION_MODE);
   }),

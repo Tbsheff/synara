@@ -63,6 +63,13 @@ import {
   sanitizeProgressText,
 } from "./GitManager.commits.ts";
 
+interface GitTextGenerationParams {
+  textGenerationModel?: string | undefined;
+  textGenerationModelSelection?: ModelSelection | undefined;
+  codexHomePath?: string | undefined;
+  providerOptions?: ProviderStartOptions | undefined;
+}
+
 function readUnknownErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }

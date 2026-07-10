@@ -148,6 +148,7 @@ const readModel: OrchestrationReadModel = {
       session: null,
       activities: [],
       proposedPlans: [],
+      providerItems: [],
       checkpoints: [],
       deletedAt: now,
     },

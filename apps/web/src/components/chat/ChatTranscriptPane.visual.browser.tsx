@@ -120,6 +120,7 @@ function TranscriptVisualFixture() {
               hasMessages
               isRevertingCheckpoint={false}
               isWorking={false}
+              worktreeSetup={null}
               followLiveOutput={false}
               listRef={listRef}
               markdownCwd="/Users/tylersheffield/code/synara"
@@ -218,7 +219,7 @@ describe("ChatTranscriptPane visual fixture", () => {
     try {
       await expect.element(page.getByText("Renderer update")).toBeVisible();
       expect(document.body.textContent ?? "").toContain("Streaming tail is still arriving");
-      expect(document.body.textContent ?? "").toContain("COMMAND");
+      expect(document.body.textContent ?? "").toContain("Searched for ChatMarkdown");
       expect(document.body.textContent ?? "").toContain("Review");
 
       await page.screenshot({

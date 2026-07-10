@@ -53,7 +53,10 @@ interface TranscriptStateComposerProps {
   readonly className?: string;
 }
 
-export function TranscriptStateComposer({ state, className }: TranscriptStateComposerProps): ReactElement {
+export function TranscriptStateComposer({
+  state,
+  className,
+}: TranscriptStateComposerProps): ReactElement {
   const mode = composerModeForScenario(state);
   const [approvalDecision, setApprovalDecision] = useState<ProviderApprovalDecision | null>(null);
   const [userInputAnswers, setUserInputAnswers] = useState<
@@ -78,8 +81,14 @@ export function TranscriptStateComposer({ state, className }: TranscriptStateCom
   const statusLabel = composerStatusLabel(mode, state, approvalDecision, userInputSubmitted);
   const userInputSubmitDisabled =
     userInputSubmitted ||
-    (userInputProgress.isLastQuestion ? !userInputProgress.isComplete : !userInputProgress.canAdvance);
-  const userInputSubmitLabel = userInputSubmitted ? "Submitting..." : userInputProgress.isLastQuestion ? "Submit answers" : "Next question";
+    (userInputProgress.isLastQuestion
+      ? !userInputProgress.isComplete
+      : !userInputProgress.canAdvance);
+  const userInputSubmitLabel = userInputSubmitted
+    ? "Submitting..."
+    : userInputProgress.isLastQuestion
+      ? "Submit answers"
+      : "Next question";
 
   const onRespondToApproval = useCallback(
     async (_requestId: ApprovalRequestId, decision: ProviderApprovalDecision): Promise<void> => {
@@ -164,7 +173,13 @@ export function TranscriptStateComposer({ state, className }: TranscriptStateCom
   );
 
   if (mode === "ready") {
-    return <TranscriptStateReadyComposer key={state.scenario.id} state={state} className={className} />;
+    return (
+      <TranscriptStateReadyComposer
+        key={state.scenario.id}
+        state={state}
+        {...(className !== undefined ? { className } : {})}
+      />
+    );
   }
 
   return (
@@ -193,6 +208,7 @@ export function TranscriptStateComposer({ state, className }: TranscriptStateCom
                 questionIndex={userInputQuestionIndex}
                 onToggleOption={onToggleUserInputOption}
                 onAdvance={onAdvanceUserInput}
+                onPrevious={onPreviousUserInputQuestion}
                 onCancel={onCancelUserInput}
               />
             </div>

@@ -34,6 +34,8 @@ import { resolveForkThreadEnvironment } from "../lib/threadEnvironment";
 import { type SplitViewId } from "../splitViewStore";
 import { useRightDockStore } from "../rightDockStore";
 import { registerSidechatCreator, type SidechatCreator } from "../lib/sidechatCreatorRegistry";
+import { downloadUrlAsBlob } from "../lib/browserDownload";
+import { resolveWsHttpUrl } from "../lib/wsHttpUrl";
 
 type ComposerSnapshot = {
   value: string;

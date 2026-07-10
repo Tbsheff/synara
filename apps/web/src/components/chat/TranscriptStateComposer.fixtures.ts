@@ -5,16 +5,13 @@ import type { PendingApproval, PendingUserInput } from "../../session-logic";
 const LAB_CREATED_AT = "2026-06-29T18:12:05.000Z";
 
 export const LAB_APPROVAL_REQUEST_ID = ApprovalRequestId.makeUnsafe("transcript-lab-approval");
-export const LAB_USER_INPUT_REQUEST_ID = ApprovalRequestId.makeUnsafe(
-  "transcript-lab-user-input",
-);
+export const LAB_USER_INPUT_REQUEST_ID = ApprovalRequestId.makeUnsafe("transcript-lab-user-input");
 
 export const LAB_PENDING_APPROVAL: PendingApproval = {
   requestId: LAB_APPROVAL_REQUEST_ID,
   requestKind: "command",
   createdAt: LAB_CREATED_AT,
-  detail:
-    'exec_command: {"command":"bun run typecheck","cwd":"/Users/tylersheffield/code/synara"}',
+  detail: 'exec_command: {"command":"bun run typecheck","cwd":"/Users/tylersheffield/code/synara"}',
 };
 
 export const LAB_PENDING_USER_INPUT: PendingUserInput = {
@@ -66,6 +63,4 @@ export const LAB_PENDING_USER_INPUT: PendingUserInput = {
 export const LAB_PENDING_USER_INPUTS: PendingUserInput[] = [LAB_PENDING_USER_INPUT];
 
 export const EMPTY_USER_INPUT_REQUEST_IDS: ApprovalRequestId[] = [];
-export const RESPONDING_USER_INPUT_REQUEST_IDS: ApprovalRequestId[] = [
-  LAB_USER_INPUT_REQUEST_ID,
-];
+export const RESPONDING_USER_INPUT_REQUEST_IDS: ApprovalRequestId[] = [LAB_USER_INPUT_REQUEST_ID];

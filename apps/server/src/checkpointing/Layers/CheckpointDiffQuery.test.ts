@@ -3,6 +3,7 @@ import {
   ExecutionInstanceId,
   type OrchestrationThread,
   ProjectId,
+  type ProjectKind,
   ThreadId,
   TurnId,
 } from "@t3tools/contracts";
@@ -175,6 +176,7 @@ describe("CheckpointDiffQueryLive", () => {
           getThreadShellById: () => Effect.die("unused"),
           findSyntheticSubagentParentThread: () => Effect.die("unused"),
           getThreadDetailById: () => Effect.succeed(Option.none()),
+          getThreadDetailForExportById: () => Effect.die("unused"),
           getThreadDetailSnapshotById: () => Effect.die("unused"),
         }),
       ),
@@ -243,10 +245,12 @@ describe("CheckpointDiffQueryLive", () => {
           getFirstActiveThreadIdByProjectId: () => Effect.die("unused"),
           getThreadCheckpointContext: () =>
             Effect.die("remote diff must short-circuit the host context"),
+          listGeneratedImageActivitiesByTurn: () => Effect.die("unused"),
           getFullThreadDiffContext: () => Effect.die("unused"),
           getThreadShellById: () => Effect.die("unused"),
           findSyntheticSubagentParentThread: () => Effect.die("unused"),
           getThreadDetailById: () => Effect.succeed(Option.some(makeRemoteThreadDetail("running"))),
+          getThreadDetailForExportById: () => Effect.die("unused"),
           getThreadDetailSnapshotById: () => Effect.die("unused"),
         }),
       ),
@@ -305,7 +309,9 @@ describe("CheckpointDiffQueryLive", () => {
           getFullThreadDiffContext: () => Effect.die("unused"),
           getThreadShellById: () => Effect.die("unused"),
           findSyntheticSubagentParentThread: () => Effect.die("unused"),
+          listGeneratedImageActivitiesByTurn: () => Effect.die("unused"),
           getThreadDetailById: () => Effect.succeed(Option.some(makeRemoteThreadDetail("stopped"))),
+          getThreadDetailForExportById: () => Effect.die("unused"),
           getThreadDetailSnapshotById: () => Effect.die("unused"),
         }),
       ),
@@ -379,6 +385,7 @@ describe("CheckpointDiffQueryLive", () => {
           getThreadShellById: () => Effect.die("unused"),
           findSyntheticSubagentParentThread: () => Effect.die("unused"),
           getThreadDetailById: () => Effect.succeed(Option.none()),
+          getThreadDetailForExportById: () => Effect.die("unused"),
           getThreadDetailSnapshotById: () => Effect.die("unused"),
         }),
       ),
@@ -444,6 +451,7 @@ describe("CheckpointDiffQueryLive", () => {
           getThreadShellById: () => Effect.die("unused"),
           findSyntheticSubagentParentThread: () => Effect.die("unused"),
           getThreadDetailById: () => Effect.succeed(Option.none()),
+          getThreadDetailForExportById: () => Effect.die("unused"),
           getThreadDetailSnapshotById: () => Effect.die("unused"),
         }),
       ),
@@ -507,6 +515,7 @@ describe("CheckpointDiffQueryLive", () => {
           getThreadShellById: () => Effect.die("unused"),
           findSyntheticSubagentParentThread: () => Effect.die("unused"),
           getThreadDetailById: () => Effect.succeed(Option.none()),
+          getThreadDetailForExportById: () => Effect.die("unused"),
           getThreadDetailSnapshotById: () => Effect.die("unused"),
         }),
       ),
@@ -554,6 +563,7 @@ describe("CheckpointDiffQueryLive", () => {
 
     const layer = CheckpointDiffQueryLive.pipe(
       Layer.provideMerge(Layer.succeed(CheckpointStore, checkpointStore)),
+      Layer.provideMerge(RuntimeWorkspaceDiffFakeLive),
       Layer.provideMerge(
         Layer.succeed(ProjectionSnapshotQuery, {
           getSnapshot: () => Effect.die("unused"),
@@ -623,6 +633,7 @@ describe("CheckpointDiffQueryLive", () => {
 
     const layer = CheckpointDiffQueryLive.pipe(
       Layer.provideMerge(Layer.succeed(CheckpointStore, checkpointStore)),
+      Layer.provideMerge(RuntimeWorkspaceDiffFakeLive),
       Layer.provideMerge(
         Layer.succeed(ProjectionSnapshotQuery, {
           getSnapshot: () => Effect.die("unused"),
@@ -705,6 +716,7 @@ describe("CheckpointDiffQueryLive", () => {
           getThreadShellById: () => Effect.die("unused"),
           findSyntheticSubagentParentThread: () => Effect.die("unused"),
           getThreadDetailById: () => Effect.succeed(Option.none()),
+          getThreadDetailForExportById: () => Effect.die("unused"),
           getThreadDetailSnapshotById: () => Effect.die("unused"),
         }),
       ),

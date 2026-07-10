@@ -4,6 +4,7 @@ import {
   DEFAULT_SERVER_SETTINGS,
   type ReviewSourceRef,
   type ReviewWalkthrough as ReviewWalkthroughData,
+  type ReviewWalkthroughResult,
 } from "@t3tools/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { page } from "vitest/browser";
@@ -88,11 +89,13 @@ function walkthroughWithFocusAreas(count: number): ReviewWalkthroughData {
 }
 
 const nativeApiMock = vi.hoisted(() => ({
-  generateWalkthrough: vi.fn(async () => ({
-    walkthrough: WALKTHROUGH,
-    reviewedHeadSha: "abc123",
-    patchSignature: "sig123",
-  })),
+  generateWalkthrough: vi.fn(
+    async (): Promise<ReviewWalkthroughResult> => ({
+      walkthrough: WALKTHROUGH,
+      reviewedHeadSha: "abc123",
+      patchSignature: "sig123",
+    }),
+  ),
   getSettings: vi.fn(),
   updateSettings: vi.fn(),
 }));
@@ -264,9 +267,7 @@ describe("ReviewWalkthrough", () => {
       await expect
         .element(page.getByRole("button", { name: "Chapter 1: Review chapter 1" }))
         .toBeVisible();
-      const railList = document.querySelector<HTMLElement>(
-        '[aria-label="Changes"] [role="list"]',
-      );
+      const railList = document.querySelector<HTMLElement>('[aria-label="Changes"] [role="list"]');
       expect(railList).toBeTruthy();
       expect(railList!.scrollHeight).toBeGreaterThan(railList!.clientHeight);
 
