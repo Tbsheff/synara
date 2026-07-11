@@ -1,4 +1,4 @@
-import type { GitStatusResult } from "@t3tools/contracts";
+import type { GitStatusResult } from "@synara/contracts";
 import { assert, describe, it } from "vitest";
 import {
   type ActiveGitActionProgress,
@@ -310,7 +310,7 @@ describe("when: branch is clean, up to date, and has no open PR", () => {
   it("resolveQuickAction keeps disabled commit when the branch tracks the default branch", () => {
     const quick = resolveQuickAction(
       status({
-        branch: "dpcode/pi-cleanup",
+        branch: "synara/pi-cleanup",
         upstreamBranch: "main",
         aheadCount: 0,
         behindCount: 0,
@@ -334,7 +334,7 @@ describe("when: branch is clean, up to date, and has no open PR", () => {
   it("resolveCreatePrActionAvailability blocks stale create-pr calls for default upstream", () => {
     const availability = resolveCreatePrActionAvailability({
       gitStatus: status({
-        branch: "dpcode/pi-cleanup",
+        branch: "synara/pi-cleanup",
         upstreamBranch: "main",
         aheadCount: 0,
         behindCount: 0,
@@ -370,7 +370,7 @@ describe("when: branch is clean, up to date, and has no open PR", () => {
   it("buildMenuItems disables create PR when the branch tracks the default branch", () => {
     const items = buildMenuItems(
       status({
-        branch: "dpcode/pi-cleanup",
+        branch: "synara/pi-cleanup",
         upstreamBranch: "main",
         aheadCount: 0,
         behindCount: 0,
@@ -1327,8 +1327,8 @@ describe("resolveDefaultCreateBranchName", () => {
     assert.equal(branch, "synara/fix-toast-copy");
   });
 
-  it("normalizes an existing legacy dpcode namespace", () => {
-    const branch = resolveDefaultCreateBranchName(["main"], "dpcode/refine-toolbar-actions");
+  it("normalizes an existing legacy synara namespace", () => {
+    const branch = resolveDefaultCreateBranchName(["main"], "synara/refine-toolbar-actions");
     assert.equal(branch, "synara/refine-toolbar-actions");
   });
 

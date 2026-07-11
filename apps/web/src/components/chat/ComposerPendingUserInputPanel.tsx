@@ -1,16 +1,19 @@
-// Note: option rows use raw <button> because they are selectable card/option
-// items with kbd shortcut chips and multi-state styling (selected / responding)
-// that don't fit the shadcn Button taxonomy.
-import { type ApprovalRequestId } from "@t3tools/contracts";
+// Note: option rows render through the shared ComposerChoiceRow (number chip +
+// label + description) so this card and the pending-approval card stay identical;
+// the nav arrows stay raw <button> since they are compact icon controls. The card
+// is rendered detached, floating just above the composer (not fused into the
+// composer surface), so it reuses the composer surface chrome to stay in-tint.
+import { type ApprovalRequestId } from "@synara/contracts";
 import { memo, useEffect, useEffectEvent, useRef } from "react";
 import { type PendingUserInput } from "../../session-logic";
 import {
   derivePendingUserInputProgress,
   type PendingUserInputDraftAnswer,
 } from "../../pendingUserInput";
-import { CheckIcon, ChevronLeftIcon } from "~/lib/icons";
+import { CheckIcon, ChevronLeftIcon, ChevronRightIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { ComposerChoiceRow } from "./ComposerChoiceRow";
+import { COMPOSER_INPUT_SURFACE_CLASS_NAME } from "./composerPickerStyles";
 
 interface PendingUserInputPanelProps {
   pendingUserInputs: PendingUserInput[];
@@ -19,9 +22,12 @@ interface PendingUserInputPanelProps {
   questionIndex: number;
   onToggleOption: (questionId: string, optionLabel: string) => PendingUserInputDraftAnswer | null;
   onAdvance: (answerOverrides?: Record<string, PendingUserInputDraftAnswer>) => void;
-  onPrevious?: () => void;
+  onPrevious: () => void;
   onCancel: () => void;
 }
+
+const NAV_BUTTON_CLASS_NAME =
+  "flex size-5 items-center justify-center rounded-md text-[var(--color-text-foreground-tertiary)] transition-colors duration-150 hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)] disabled:pointer-events-none disabled:opacity-30";
 
 // Keep pending-input choices neutral so they read like Codex list controls instead of accent buttons.
 export const ComposerPendingUserInputPanel = memo(function ComposerPendingUserInputPanel({
@@ -47,7 +53,7 @@ export const ComposerPendingUserInputPanel = memo(function ComposerPendingUserIn
       questionIndex={questionIndex}
       onToggleOption={onToggleOption}
       onAdvance={onAdvance}
-      {...(onPrevious ? { onPrevious } : {})}
+      onPrevious={onPrevious}
       onCancel={onCancel}
     />
   );
@@ -69,7 +75,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
   questionIndex: number;
   onToggleOption: (questionId: string, optionLabel: string) => PendingUserInputDraftAnswer | null;
   onAdvance: (answerOverrides?: Record<string, PendingUserInputDraftAnswer>) => void;
-  onPrevious?: () => void;
+  onPrevious: () => void;
   onCancel: () => void;
 }) {
   const progress = derivePendingUserInputProgress(prompt.questions, answers, questionIndex);
@@ -141,51 +147,48 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
     return null;
   }
 
+  const questionCount = prompt.questions.length;
+  const showNavigation = questionCount > 1;
+  const canGoBack = progress.questionIndex > 0;
+  const canGoForward = !progress.isLastQuestion && progress.canAdvance;
+
   return (
-    <div
-      role="group"
-      className="px-5 pt-3.5 pb-3.5 sm:px-6"
-      data-composer-blocker="pending-user-input"
-      aria-describedby={`pending-user-input-status-${prompt.requestId}`}
-    >
-      <span
-        id={`pending-user-input-status-${prompt.requestId}`}
-        className="sr-only"
-        role="status"
-        aria-live="polite"
-        aria-atomic="true"
-      >
-        Input required. Question {questionIndex + 1} of {prompt.questions.length}.
-      </span>
-      <div className="flex items-center gap-3">
-        {questionIndex > 0 ? (
-          <button
-            type="button"
-            disabled={isResponding}
-            onClick={onPrevious}
-            className="flex size-5 items-center justify-center rounded-md text-muted-foreground/70 transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground disabled:pointer-events-none disabled:opacity-30"
-            aria-label="Previous question"
-          >
-            <ChevronLeftIcon className="size-3.5" />
-          </button>
-        ) : null}
-        <div className="flex items-center gap-2">
-          {prompt.questions.length > 1 ? (
-            <span className="flex h-5 items-center rounded-md bg-[var(--color-background-elevated-secondary)] px-1.5 text-[10px] font-medium tabular-nums text-[var(--color-text-foreground-secondary)]">
-              {questionIndex + 1}/{prompt.questions.length}
+    <div className={cn(COMPOSER_INPUT_SURFACE_CLASS_NAME, "overflow-hidden px-3.5 py-3")}>
+      <div className="flex items-start justify-between gap-3">
+        <p className="min-w-0 text-[13px] font-medium leading-snug text-foreground/90">
+          {activeQuestion.question}
+        </p>
+        {showNavigation ? (
+          <div className="flex shrink-0 items-center gap-0.5 pt-px text-muted-foreground/70">
+            <button
+              type="button"
+              disabled={!canGoBack || isResponding}
+              onClick={onPrevious}
+              className={NAV_BUTTON_CLASS_NAME}
+              aria-label="Previous question"
+            >
+              <ChevronLeftIcon className="size-3.5" />
+            </button>
+            <span className="px-0.5 text-[11px] tabular-nums">
+              {progress.questionIndex + 1} of {questionCount}
             </span>
-          ) : null}
-          <span className="text-[11px] font-semibold tracking-widest text-muted-foreground/70 uppercase">
-            {activeQuestion.header}
-          </span>
-        </div>
+            <button
+              type="button"
+              disabled={!canGoForward || isResponding}
+              onClick={() => onAdvance()}
+              className={NAV_BUTTON_CLASS_NAME}
+              aria-label="Next question"
+            >
+              <ChevronRightIcon className="size-3.5" />
+            </button>
+          </div>
+        ) : null}
       </div>
-      <p className="mt-1.5 text-sm text-foreground/90">{activeQuestion.question}</p>
       {activeQuestion.multiSelect ? (
-        <p className="mt-1 text-xs text-muted-foreground/65">Select one or more options.</p>
+        <p className="mt-1 text-[11px] text-muted-foreground/55">Select one or more.</p>
       ) : null}
       {activeQuestion.options.length > 0 ? (
-        <div className="mt-3 space-y-1">
+        <div className="mt-2.5 space-y-0.5">
           {activeQuestion.options.map((option, index) => {
             const isSelected = progress.selectedOptionLabels.includes(option.label);
             const shortcutKey = index < 9 ? index + 1 : null;
@@ -200,7 +203,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
                 onSelect={() => handleOptionSelection(activeQuestion.id, option.label)}
                 trailing={
                   isSelected ? (
-                    <CheckIcon className="size-3.5 shrink-0 text-[var(--color-text-foreground)]" />
+                    <CheckIcon className="mt-0.5 size-3.5 shrink-0 text-[var(--color-text-foreground)]" />
                   ) : null
                 }
               />
@@ -208,14 +211,14 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
           })}
         </div>
       ) : (
-        <div className="mt-3 flex justify-end">
+        <div className="mt-2.5 flex justify-end">
           <button
             type="button"
             disabled={isResponding}
             onClick={onCancel}
             className={cn(
-              "rounded-full border border-[color:var(--color-border-light)] px-3 py-1.5 text-xs font-medium text-[var(--color-text-foreground-secondary)] transition-colors duration-150 hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)]",
-              isResponding && "opacity-50 cursor-not-allowed",
+              "rounded-md px-2 py-1 text-[12px] text-[var(--color-text-foreground-secondary)] transition-colors duration-150 hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)]",
+              isResponding && "cursor-not-allowed opacity-50",
             )}
           >
             Cancel

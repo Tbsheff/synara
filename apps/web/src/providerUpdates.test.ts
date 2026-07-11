@@ -3,12 +3,7 @@
 // Layer: Web utility tests
 // Exports: Vitest suites for providerUpdates.ts
 
-import {
-  DEFAULT_SERVER_SETTINGS,
-  type ProviderKind,
-  type ServerProviderStatus,
-  type ServerSettings,
-} from "@t3tools/contracts";
+import type { ProviderKind, ServerProviderStatus, ServerSettings } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -73,7 +68,6 @@ function serverSettings(overrides: Partial<ServerSettings["providers"]> = {}): S
       ...overrides,
     },
     skills: { disabled: [] },
-    sandboxes: DEFAULT_SERVER_SETTINGS.sandboxes,
   };
 }
 

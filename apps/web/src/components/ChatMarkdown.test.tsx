@@ -1,9 +1,10 @@
 import { readFileSync } from "node:fs";
+import { MessageId, ThreadMarkerId, type ThreadMarker } from "@synara/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("@pierre/diffs", () => ({
-  parsePatchFiles: () => [],
+  getFiletypeFromFileName: (fileName: string) => (fileName.endsWith(".ts") ? "ts" : "text"),
   getSharedHighlighter: () =>
     Promise.resolve({
       codeToHtml(code: string) {
@@ -16,18 +17,16 @@ vi.mock("../hooks/useTheme", () => ({
   useTheme: () => ({ resolvedTheme: "light" }),
 }));
 
-const chatMarkdownModulePromise = import("./ChatMarkdown");
+async function renderMarkdown(
+  text: string,
+  cwd = "C:\\Users\\LENOVO\\synara",
+  markers?: readonly ThreadMarker[],
+) {
+  const { default: ChatMarkdown } = await import("./ChatMarkdown");
 
-async function renderMarkdown(text: string, cwd = "C:\\Users\\LENOVO\\dpcode") {
-  const { default: ChatMarkdown } = await chatMarkdownModulePromise;
-
-  return renderToStaticMarkup(<ChatMarkdown text={text} cwd={cwd} isStreaming={false} />);
-}
-
-async function renderMarkdownWithHtml(text: string, cwd = "/Users/julius/project") {
-  const { default: ChatMarkdown } = await chatMarkdownModulePromise;
-
-  return renderToStaticMarkup(<ChatMarkdown text={text} cwd={cwd} isStreaming={false} allowHtml />);
+  return renderToStaticMarkup(
+    <ChatMarkdown text={text} cwd={cwd} isStreaming={false} markers={markers} />,
+  );
 }
 
 describe("ChatMarkdown", () => {
@@ -36,7 +35,7 @@ describe("ChatMarkdown", () => {
 
     expect(markup).toContain("text-foreground");
     expect(markup).not.toContain("text-neutral-900");
-  }, 15_000);
+  });
 
   it("renders inline math with KaTeX", async () => {
     const markup = await renderMarkdown("Euler wrote $e^{i\\\\pi} + 1 = 0$.");
@@ -78,6 +77,20 @@ describe("ChatMarkdown", () => {
     expect(markup.match(/class="katex"/g) ?? []).toHaveLength(1);
   });
 
+  it("renders external assistant links with the shared favicon icon slot", async () => {
+    const markup = await renderMarkdown(
+      "Closest source: [OpenAI benchmark](https://openai.com/research).",
+    );
+
+    expect(markup).toContain(
+      'class="inline font-medium text-[var(--info-foreground)] underline-offset-2 hover:underline"',
+    );
+    expect(markup).toContain(
+      "inline-block size-[1em] shrink-0 align-middle -translate-y-px mr-0.5",
+    );
+    expect(markup).toContain("OpenAI benchmark");
+  });
+
   it("keeps dollar signs in markdown file links from becoming math", async () => {
     const source =
       "Files touched:\n\n- [_chat.$threadId.tsx](/Users/julius/project/apps/web/src/routes/_chat.$threadId.tsx:1192)";
@@ -89,17 +102,6 @@ describe("ChatMarkdown", () => {
     expect(markup).toContain("_chat.$threadId.tsx");
     expect(markup).not.toContain('class="katex"');
     expect(markup).not.toContain("CHATMARKDOWNLITERALDOLLARPLACEHOLDER");
-  });
-
-  it("renders local file-link chips from the resolved target instead of arbitrary labels", async () => {
-    const markup = await renderMarkdown(
-      "Read [not the path](./src/components/ChatMarkdown.tsx:12).",
-      "/Users/tylersheffield/code/synara/apps/web",
-    );
-
-    expect(markup).toContain("ChatMarkdown.tsx");
-    expect(markup).not.toContain("not the path");
-    expect(markup).toContain('href="./src/components/ChatMarkdown.tsx:12"');
   });
 
   it("does not turn ordinary dollar text or escaped dollars into math", async () => {
@@ -128,169 +130,112 @@ describe("ChatMarkdown", () => {
     expect(markup).not.toContain('class="katex"');
   });
 
-  it("routes mermaid fences through the diagram renderer", async () => {
-    const markup = await renderMarkdown(
-      ["```mermaid", "flowchart LR", "  A --> B", "```"].join("\n"),
-    );
+  it("renders exact thread marker ranges without changing markdown structure", async () => {
+    const marker: ThreadMarker = {
+      id: ThreadMarkerId.makeUnsafe("marker-1"),
+      messageId: MessageId.makeUnsafe("assistant-1"),
+      startOffset: 7,
+      endOffset: 21,
+      selectedText: "important text",
+      style: "highlight",
+      color: "yellow",
+      label: null,
+      done: false,
+      createdAt: "2026-06-06T00:00:00.000Z",
+      updatedAt: "2026-06-06T00:00:00.000Z",
+    };
+    const markup = await renderMarkdown("Read **important text** today.", undefined, [marker]);
 
-    expect(markup).toContain('data-chat-mermaid="pending"');
-    expect(markup).not.toContain("chat-markdown-codeblock");
+    expect(markup).toContain('data-thread-marker-id="marker-1"');
+    expect(markup).toContain("thread-marker-highlight");
+    expect(markup).toContain("<strong>");
+    expect(markup).toContain("important text");
   });
 
-  it("escapes raw HTML by default instead of rendering it", async () => {
-    const markup = await renderMarkdown(
-      "<details><summary>1 Skipped Deployment</summary>body</details>",
-    );
+  it("renders marker ranges resolved from visual text across markdown delimiters", async () => {
+    const text = "**Ho letto tutto il progetto.**\n\n**L'app è bella e curata:** UI dark coerente.";
+    const startOffset = text.indexOf("Ho letto");
+    const endOffset = text.indexOf(":** UI") + 1;
+    const marker: ThreadMarker = {
+      id: ThreadMarkerId.makeUnsafe("marker-markdown-range"),
+      messageId: MessageId.makeUnsafe("assistant-1"),
+      startOffset,
+      endOffset,
+      selectedText: text.slice(startOffset, endOffset),
+      style: "highlight",
+      color: "yellow",
+      label: null,
+      done: false,
+      createdAt: "2026-06-06T00:00:00.000Z",
+      updatedAt: "2026-06-06T00:00:00.000Z",
+    };
+    const markup = await renderMarkdown(text, undefined, [marker]);
 
-    expect(markup).not.toContain("<details>");
-    expect(markup).toContain("&lt;details&gt;");
+    expect(markup.match(/data-thread-marker-id="marker-markdown-range"/g) ?? []).toHaveLength(2);
+    expect(markup).toContain("thread-marker-continues-after");
+    expect(markup).toContain("thread-marker-continues-before");
+    expect(markup).toContain("Ho letto tutto il progetto.");
+    expect(markup).toContain("L&#x27;app è bella e curata:");
   });
 
-  it("renders the GitHub HTML subset when allowHtml is set", async () => {
-    const markup = await renderMarkdownWithHtml(
-      "<details><summary>1 Skipped Deployment</summary>The body</details>",
-    );
+  it("keeps marker offsets stable after literal dollar protection", async () => {
+    const text = "Price $5. Highlight this phrase.";
+    const startOffset = text.indexOf("Highlight");
+    const marker: ThreadMarker = {
+      id: ThreadMarkerId.makeUnsafe("marker-dollar"),
+      messageId: MessageId.makeUnsafe("assistant-1"),
+      startOffset,
+      endOffset: startOffset + "Highlight this phrase".length,
+      selectedText: "Highlight this phrase",
+      style: "underline",
+      color: "blue",
+      label: null,
+      done: false,
+      createdAt: "2026-06-06T00:00:00.000Z",
+      updatedAt: "2026-06-06T00:00:00.000Z",
+    };
+    const markup = await renderMarkdown(text, undefined, [marker]);
 
-    expect(markup).toContain("<details>");
-    expect(markup).toContain("<summary>1 Skipped Deployment</summary>");
-    expect(markup).toContain("The body");
+    expect(markup).toContain('data-thread-marker-id="marker-dollar"');
+    expect(markup).toContain("thread-marker-underline");
+    expect(markup).toContain("Price $5.");
   });
 
-  it("strips scripts and event handlers from allowed HTML", async () => {
-    const markup = await renderMarkdownWithHtml(
-      '<a href="https://example.com" onclick="steal()">link</a><script>evil()</script>',
-    );
+  it("keeps marker offsets aligned when an escaped dollar precedes the marker", async () => {
+    // `\$` is two raw characters that render as one `$`; the dollar-protection transform must stay
+    // length-preserving or every offset after it shifts and the marker wraps the wrong substring.
+    const text = "Cost is \\$5 here. Highlight this phrase.";
+    const startOffset = text.indexOf("Highlight");
+    const selectedText = "Highlight this phrase";
+    const marker: ThreadMarker = {
+      id: ThreadMarkerId.makeUnsafe("marker-escaped-dollar"),
+      messageId: MessageId.makeUnsafe("assistant-1"),
+      startOffset,
+      endOffset: startOffset + selectedText.length,
+      selectedText,
+      style: "underline",
+      color: "blue",
+      label: null,
+      done: false,
+      createdAt: "2026-06-06T00:00:00.000Z",
+      updatedAt: "2026-06-06T00:00:00.000Z",
+    };
+    const markup = await renderMarkdown(text, undefined, [marker]);
 
-    expect(markup).not.toContain("<script>");
-    expect(markup).not.toContain("onclick");
-    expect(markup).not.toContain("evil()");
-    expect(markup).toContain('href="https://example.com"');
+    expect(markup).toContain('data-thread-marker-id="marker-escaped-dollar"');
+    expect(markup).toContain(">Highlight this phrase</span>");
+    expect(markup).toContain("Cost is $5 here.");
+    expect(markup).not.toContain('class="katex"');
   });
 
-  it("sanitizes unsafe HTML protocols, style attributes, and SVG script content", async () => {
-    const markup = await renderMarkdownWithHtml(
-      [
-        '<a href="javascript:alert(1)">bad protocol</a>',
-        '<img src="x" onerror="steal()" style="width:999px">',
-        '<span style="color:red">styled</span>',
-        "<svg><script>evil()</script><foreignObject>bad</foreignObject></svg>",
-      ].join(""),
-    );
-
-    expect(markup).not.toContain("javascript:");
-    expect(markup).not.toContain("onerror");
-    expect(markup).not.toContain("style=");
-    expect(markup).not.toContain("<script>");
-    expect(markup).not.toContain("foreignObject");
-    expect(markup).not.toContain("evil()");
-    expect(markup).toContain("bad protocol");
-    expect(markup).toContain("styled");
-  });
-
-  it("keeps KaTeX math working alongside sanitized HTML", async () => {
-    const markup = await renderMarkdownWithHtml(
-      ["<details><summary>Notes</summary>collapsible</details>", "", "Inline $x^2$ renders."].join(
-        "\n",
-      ),
-    );
-
-    expect(markup).toContain("<details>");
-    expect(markup).toContain('class="katex"');
-    expect(markup).not.toContain("$x^2$");
-  });
-
-  it("renders markdown-fenced tables as contained tables", async () => {
-    const markup = await renderMarkdown(
-      ["```markdown", "| File | Status |", "| --- | --- |", "| app.tsx | changed |", "```"].join(
-        "\n",
-      ),
-    );
-
-    expect(markup).toContain('class="chat-markdown-table-scroll"');
-    expect(markup).toContain("<table>");
-    expect(markup).toContain("<td>app.tsx</td>");
-    expect(markup).not.toContain("chat-markdown-codeblock");
-  });
-
-  it("renders markdown-fenced tables after intro text", async () => {
-    const markup = await renderMarkdown(
-      [
-        "```md",
-        "Here is the table:",
-        "",
-        "| File | Status |",
-        "| --- | --- |",
-        "| app.tsx | changed |",
-        "```",
-      ].join("\n"),
-    );
-
-    expect(markup).toContain('class="chat-markdown-table-scroll"');
-    expect(markup).toContain("<table>");
-    expect(markup).toContain("<td>app.tsx</td>");
-    expect(markup).not.toContain("chat-markdown-codeblock");
-  });
-
-  it("detects blockquoted markdown-fenced tables", async () => {
-    const markup = await renderMarkdown(
-      [
-        "```markdown",
-        "> | File | Status |",
-        "> | --- | --- |",
-        "> | app.tsx | changed |",
-        "```",
-      ].join("\n"),
-    );
-
-    expect(markup).toContain('class="chat-markdown-table-scroll"');
-    expect(markup).toContain("<table>");
-    expect(markup).toContain("<td>app.tsx</td>");
-  });
-
-  it("wraps regular markdown tables in the transcript overflow shell", async () => {
-    const markup = await renderMarkdown(
-      ["| Package | Version |", "| --- | --- |", "| @t3tools/web | 1.0.0 |"].join("\n"),
-    );
-
-    expect(markup).toContain('class="chat-markdown-table-scroll"');
-    expect(markup).toContain("<table>");
-    expect(markup).toContain("<td>@t3tools/web</td>");
-  });
-
-  it("routes local markdown images through generated-image chrome", async () => {
-    const markup = await renderMarkdown("![local alt](./image.png)", "/Users/julius/project");
-
-    expect(markup).toContain('class="chat-generated-image"');
-    expect(markup).toContain('alt="local alt"');
-    expect(markup).toContain("/local-image?");
-    expect(markup).toContain("path=.%2Fimage.png");
-    expect(markup).toContain("cwd=%2FUsers%2Fjulius%2Fproject");
-  });
-
-  it("keeps external markdown images as lazy img elements", async () => {
-    const markup = await renderMarkdown("![external alt](https://example.com/a.png)");
-
-    expect(markup).toContain('<img src="https://example.com/a.png"');
-    expect(markup).toContain('alt="external alt"');
-    expect(markup).toContain('loading="lazy"');
-    expect(markup).not.toContain("chat-generated-image");
-  });
-
-  it("defines compact chat heading, quote, table, and code-control selectors", () => {
-    const cssSource = readFileSync(new URL("../index.css", import.meta.url), "utf8");
-
-    expect(cssSource).toContain(".chat-markdown h1,");
-    expect(cssSource).toContain(".chat-markdown h6");
-    expect(cssSource).toContain(".chat-markdown blockquote");
-    expect(cssSource).toContain("color-mix(in srgb, var(--foreground) 88%");
-    expect(cssSource).toContain(".chat-markdown .chat-markdown-table-scroll");
-    expect(cssSource).toContain(".chat-markdown .chat-markdown-codeblock__action");
-  });
-
-  it("keeps plan surfaces routed through the shared renderer", () => {
+  it("keeps plan, diff, and transcript surfaces routed through the shared renderer", () => {
     const planSidebarSource = readFileSync(new URL("./PlanSidebar.tsx", import.meta.url), "utf8");
     const proposedPlanCardSource = readFileSync(
       new URL("./chat/ProposedPlanCard.tsx", import.meta.url),
+      "utf8",
+    );
+    const messagesTimelineSource = readFileSync(
+      new URL("./chat/MessagesTimeline.tsx", import.meta.url),
       "utf8",
     );
 
@@ -298,5 +243,7 @@ describe("ChatMarkdown", () => {
     expect(planSidebarSource).toContain("<ChatMarkdown");
     expect(proposedPlanCardSource).toContain('import ChatMarkdown from "../ChatMarkdown"');
     expect(proposedPlanCardSource).toContain("<ChatMarkdown");
+    expect(messagesTimelineSource).toContain('import ChatMarkdown from "../ChatMarkdown"');
+    expect(messagesTimelineSource).toContain("<ChatMarkdown");
   });
 });

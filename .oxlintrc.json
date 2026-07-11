@@ -7,8 +7,7 @@
     "bun.lock",
     "*.tsbuildinfo",
     "**/routeTree.gen.ts",
-    ".dpcode-*",
-    ".claude/worktrees"
+    ".synara-*"
   ],
   "plugins": ["eslint", "oxc", "react", "unicorn", "typescript"],
   "categories": {
