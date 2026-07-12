@@ -2,7 +2,7 @@
 // Layer: a self-contained discovery Effect parameterized on its spawner + binary/endpoint deps — no session context.
 // Exports: discoverCursorModels.
 
-import { type ProviderListModelsResult } from "@t3tools/contracts";
+import { type ProviderListModelsResult } from "@synara/contracts";
 import { Effect, Option } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 

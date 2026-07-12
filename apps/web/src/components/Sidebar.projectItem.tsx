@@ -5,7 +5,7 @@
 
 import type { MutableRefObject, ReactNode } from "react";
 import { DisposableThreadIcon, NewThreadIcon, TerminalIcon } from "~/lib/icons";
-import type { ProjectId, ThreadId } from "@t3tools/contracts";
+import type { ProjectId, ThreadId } from "@synara/contracts";
 import { cn } from "~/lib/utils";
 import type { Project, SidebarThreadSummary } from "../types";
 import {

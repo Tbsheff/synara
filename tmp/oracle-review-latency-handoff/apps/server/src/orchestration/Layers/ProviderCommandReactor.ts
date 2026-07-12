@@ -10,9 +10,9 @@ import {
   type ModelSelection,
   type ProviderStartOptions,
   type RuntimeMode,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Cache, Cause, Deferred, Effect, Layer, Stream } from "effect";
-import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
+import { makeDrainableWorker } from "@synara/shared/DrainableWorker";
 
 import { CheckpointStore } from "../../checkpointing/Services/CheckpointStore.ts";
 import { GitCore } from "../../git/Services/GitCore.ts";

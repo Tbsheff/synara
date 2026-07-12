@@ -5,7 +5,7 @@ import {
   ApprovalRequestId,
   type OrchestrationThreadActivity,
   type UserInputQuestion,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 
 import { isStalePendingRequestFailureDetail } from "./lib/pendingInteraction";
 import { compareActivitiesByOrder, requestKindFromRequestType } from "./session-logic.shared";

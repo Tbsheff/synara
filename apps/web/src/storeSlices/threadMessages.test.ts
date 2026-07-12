@@ -1,4 +1,4 @@
-import { MessageId, type OrchestrationReadModel } from "@t3tools/contracts";
+import { MessageId, type OrchestrationReadModel } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import type { ChatAttachment } from "../types";

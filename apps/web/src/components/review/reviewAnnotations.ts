@@ -4,7 +4,7 @@ import type {
   ReviewFinding,
   ReviewLocalComment,
   ReviewRemoteThread,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import type { ReviewDraftComment } from "~/reviewStore.logic";
 
 export interface ReviewLocalDraftAnnotation {

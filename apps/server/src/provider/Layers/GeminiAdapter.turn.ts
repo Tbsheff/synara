@@ -7,7 +7,7 @@ import {
   type ProviderRuntimeEvent,
   type ThreadTokenUsageSnapshot,
   type TurnId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Effect } from "effect";
 
 import { ProviderAdapterProcessError } from "../Errors.ts";

@@ -11,7 +11,7 @@ import type {
   RuntimeProcessSummary,
   RuntimeRouteSummary,
   RuntimeSnapshotSummary,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { FiCpu, FiServer } from "react-icons/fi";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";

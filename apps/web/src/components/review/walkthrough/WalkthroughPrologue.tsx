@@ -1,4 +1,4 @@
-import type { ReviewWalkthroughPrologue } from "@t3tools/contracts";
+import type { ReviewWalkthroughPrologue } from "@synara/contracts";
 import type { ReactElement } from "react";
 
 import {

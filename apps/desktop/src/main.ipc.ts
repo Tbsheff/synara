@@ -22,7 +22,7 @@ import type {
   DesktopWindowState,
   DesktopUpdateActionResult,
   DesktopUpdateState,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 
 import {
   CONFIRM_CHANNEL,
@@ -50,7 +50,6 @@ import { DESKTOP_WS_URL_CHANNEL } from "./desktopWsBridge";
 import {
   acknowledgeSynaraStorageSnapshot,
   readSynaraStorageSnapshot,
-  saveSynaraStorageSnapshot,
   STORAGE_MIGRATION_IPC_CHANNELS,
 } from "./desktopStorageMigration";
 
@@ -107,11 +106,6 @@ export function registerMainIpc(ipcMain: IpcMain, deps: MainIpcDeps): void {
   ipcMain.on(STORAGE_MIGRATION_IPC_CHANNELS.read, (event: IpcMainEvent) => {
     event.returnValue = readSynaraStorageSnapshot(deps.storageSnapshotPath);
   });
-
-  ipcMain.removeHandler(STORAGE_MIGRATION_IPC_CHANNELS.save);
-  ipcMain.handle(STORAGE_MIGRATION_IPC_CHANNELS.save, async (_event, snapshot: unknown) =>
-    saveSynaraStorageSnapshot(deps.storageSnapshotPath, snapshot),
-  );
 
   ipcMain.removeHandler(STORAGE_MIGRATION_IPC_CHANNELS.acknowledge);
   ipcMain.handle(STORAGE_MIGRATION_IPC_CHANNELS.acknowledge, async () => {

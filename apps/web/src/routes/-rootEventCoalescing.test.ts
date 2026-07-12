@@ -10,7 +10,7 @@ import {
   TurnId,
   type OrchestrationEvent,
   type OrchestrationThreadActivity,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import {

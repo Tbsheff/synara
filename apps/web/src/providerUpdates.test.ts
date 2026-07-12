@@ -3,7 +3,12 @@
 // Layer: Web utility tests
 // Exports: Vitest suites for providerUpdates.ts
 
-import type { ProviderKind, ServerProviderStatus, ServerSettings } from "@synara/contracts";
+import {
+  DEFAULT_SERVER_SETTINGS,
+  type ProviderKind,
+  type ServerProviderStatus,
+  type ServerSettings,
+} from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -45,6 +50,7 @@ function serverSettings(overrides: Partial<ServerSettings["providers"]> = {}): S
   };
 
   return {
+    ...DEFAULT_SERVER_SETTINGS,
     enableAssistantStreaming: false,
     enableProviderUpdateChecks: true,
     defaultThreadEnvMode: "local",

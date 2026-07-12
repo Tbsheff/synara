@@ -8,8 +8,8 @@ import {
   type ProviderSkillReference,
   type ProjectId,
   type ThreadId,
-} from "@t3tools/contracts";
-import { workspaceRootsEqual } from "@t3tools/shared/threadWorkspace";
+} from "@synara/contracts";
+import { workspaceRootsEqual } from "@synara/shared/threadWorkspace";
 
 import { readNativeApi } from "../nativeApi";
 import { useStore, type AppState } from "../store";

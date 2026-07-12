@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { type OrchestrationThreadActivity, type TurnId } from "@t3tools/contracts";
+import { type OrchestrationThreadActivity, type TurnId } from "@synara/contracts";
 import {
   deriveActiveBackgroundTasksState,
   deriveActiveTaskListState,

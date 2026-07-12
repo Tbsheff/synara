@@ -1,9 +1,9 @@
-import { type ProviderRuntimeEvent, ThreadId, TurnId } from "@t3tools/contracts";
+import { type ProviderRuntimeEvent, ThreadId, TurnId } from "@synara/contracts";
 import {
   buildSubagentIdentityDirectory,
   extractSubagentIdentityHints,
   resolveSubagentIdentityFromDirectory,
-} from "@t3tools/shared/subagents";
+} from "@synara/shared/subagents";
 
 import {
   asObject,

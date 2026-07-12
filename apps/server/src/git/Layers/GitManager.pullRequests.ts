@@ -8,7 +8,7 @@
 //   normalizePullRequestReference, toResolvedPullRequest, shouldPreferSshRemote,
 //   toPullRequestHeadRemoteInfo, inferPullRequestHeadRemoteInfoFromSelector.
 
-import { parseRepositoryNameFromPullRequestUrl, sanitizeBranchFragment } from "@t3tools/shared/git";
+import { parseRepositoryNameFromPullRequestUrl, sanitizeBranchFragment } from "@synara/shared/git";
 
 import type { GitHubPullRequestSummary } from "../Services/GitHubCli.ts";
 import type {

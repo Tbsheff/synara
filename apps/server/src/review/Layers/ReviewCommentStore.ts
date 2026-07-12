@@ -5,7 +5,7 @@ import {
   type ReviewLocalComment,
   type ReviewRemoveCommentResult,
   type ReviewTargetKey,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Clock, Effect, FileSystem, Layer, Path, Ref, Schema } from "effect";
 import * as Semaphore from "effect/Semaphore";
 

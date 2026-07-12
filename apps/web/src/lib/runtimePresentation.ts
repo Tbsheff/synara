@@ -13,7 +13,7 @@ import {
   type OrchestrationThreadRuntime,
   type RuntimeInstanceStatus,
   type RuntimePlan,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 
 /** Display label for each execution target the UI offers at thread creation. */
 export const EXECUTION_TARGET_LABELS: Record<ExecutionTargetKind, string> = {

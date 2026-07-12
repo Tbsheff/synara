@@ -20,9 +20,9 @@ import type {
   ReviewUpdateCommentInput,
   ReviewUpdatedPayload,
   ReviewWalkthroughResult,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { type QueryClient, mutationOptions, queryOptions } from "@tanstack/react-query";
-import { serializeReviewTargetKey } from "@t3tools/shared/reviewTargetKey";
+import { serializeReviewTargetKey } from "@synara/shared/reviewTargetKey";
 import { ensureNativeApi } from "../nativeApi";
 
 const REVIEW_LIST_STALE_TIME_MS = 300_000;

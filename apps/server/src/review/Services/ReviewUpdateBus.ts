@@ -1,4 +1,4 @@
-import type { ReviewUpdatedPayload } from "@t3tools/contracts";
+import type { ReviewUpdatedPayload } from "@synara/contracts";
 import { ServiceMap } from "effect";
 import type { Effect, Stream } from "effect";
 

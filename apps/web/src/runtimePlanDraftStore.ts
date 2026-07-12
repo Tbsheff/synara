@@ -5,7 +5,7 @@
 // creation is unaffected — no entry here means no `runtimePlan` on create.
 // Layer: Web UI state store (non-persisted, ephemeral per draft thread)
 
-import type { ThreadId } from "@t3tools/contracts";
+import type { ThreadId } from "@synara/contracts";
 import { create } from "zustand";
 import { DEFAULT_RUNTIME_PLAN_DRAFT, type RuntimePlanDraft } from "./lib/runtimePresentation";
 

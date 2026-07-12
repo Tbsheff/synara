@@ -7,8 +7,8 @@ import type {
   OrchestrationEvent,
   OrchestrationReadModel,
   ProjectKind,
-} from "@t3tools/contracts";
-import { MAX_PINNED_PROJECTS } from "@t3tools/contracts";
+} from "@synara/contracts";
+import { MAX_PINNED_PROJECTS } from "@synara/contracts";
 import { Effect } from "effect";
 
 import { OrchestrationCommandInvariantError } from "./Errors.ts";

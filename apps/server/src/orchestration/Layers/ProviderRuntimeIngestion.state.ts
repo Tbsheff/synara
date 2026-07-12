@@ -1,4 +1,4 @@
-import { MessageId, ThreadId, TurnId } from "@t3tools/contracts";
+import { MessageId, ThreadId, TurnId } from "@synara/contracts";
 import { Cache, Effect, Option } from "effect";
 
 import {

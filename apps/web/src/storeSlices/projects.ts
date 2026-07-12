@@ -3,7 +3,7 @@
 // Layer: Pure project transition helpers consumed by store.ts's Zustand actions.
 // Exports: normalizeProjectFromReadModel/Shell, upsertProjectFromReadModel/Shell.
 
-import { type OrchestrationReadModel, type OrchestrationShellSnapshot } from "@t3tools/contracts";
+import { type OrchestrationReadModel, type OrchestrationShellSnapshot } from "@synara/contracts";
 import { type AppState } from "../store";
 import { arraysShallowEqual, deepEqualJson, normalizeModelSelection } from "./equality";
 import {

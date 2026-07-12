@@ -3,7 +3,7 @@
 // Layer: Web dev tooling
 // Exports: TRANSCRIPT_SCENARIOS, buildTranscriptScenarioState, TranscriptScenarioId
 
-import { MessageId, ThreadId, TurnId } from "@t3tools/contracts";
+import { MessageId, ThreadId, TurnId } from "@synara/contracts";
 
 import { deriveTimelineEntries, type WorkLogEntry } from "../../session-logic";
 import type { ChatMessage, TurnDiffSummary } from "../../types";

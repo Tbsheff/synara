@@ -2,7 +2,7 @@
 // badge, highlighted text). Kept beside the palette so the container file stays
 // focused on state and layout.
 import { DeviceLaptopIcon, MoonIcon, SunIcon } from "~/lib/icons";
-import { type ProviderKind } from "@t3tools/contracts";
+import { type ProviderKind } from "@synara/contracts";
 import { BsChat } from "react-icons/bs";
 import { LuArrowDownToLine } from "react-icons/lu";
 import { type ComponentType, useMemo } from "react";

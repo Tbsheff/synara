@@ -2,7 +2,7 @@
 // Layer: synchronous helpers + a couple of params-only Effects over a GrokSessionContext — no runtime services.
 // Exports: turn clearing, resume parsing, runtime-id scoping, cost recording, pending-settlement effects, cwd/plan-mode helpers.
 
-import { type ApprovalRequestId, type ProviderInteractionMode } from "@t3tools/contracts";
+import { type ApprovalRequestId, type ProviderInteractionMode } from "@synara/contracts";
 import * as nodePath from "node:path";
 
 import { Deferred, Effect } from "effect";
@@ -19,7 +19,7 @@ import {
   type PendingApproval,
   type PendingUserInput,
 } from "./GrokAdapter.types.ts";
-import type { TurnId } from "@t3tools/contracts";
+import type { TurnId } from "@synara/contracts";
 
 export function clearGrokActiveTurn(ctx: GrokSessionContext, turnId: TurnId): boolean {
   if (ctx.activeTurnId !== turnId) {

@@ -13,7 +13,7 @@
 import { ServiceMap } from "effect";
 import type { Effect } from "effect";
 
-import type { ExecutionRuntimeProvider } from "@t3tools/contracts";
+import type { ExecutionRuntimeProvider } from "@synara/contracts";
 
 import type { RuntimeProviderUnsupportedError } from "../Errors.ts";
 import type { ExecutionRuntimeProviderAdapterShape } from "./ExecutionRuntimeProviderAdapter.ts";

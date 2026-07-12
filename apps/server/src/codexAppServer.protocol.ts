@@ -9,7 +9,7 @@
 //   classifyCodexStderrLine, isRecoverableThreadResumeError,
 //   shouldRetrySkillsListWithCwdFallback, brandIfNonEmpty, normalizeProviderThreadId,
 //   readResumeCursorThreadId, toTurnId, toProviderItemId.
-import { ProviderItemId, TurnId } from "@t3tools/contracts";
+import { ProviderItemId, TurnId } from "@synara/contracts";
 
 import {
   ANSI_ESCAPE_REGEX,

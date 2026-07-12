@@ -31,7 +31,7 @@ import type {
   ProjectKind,
   RuntimeMode,
   ThreadEnvironmentMode,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import type { RuntimeHeaderPresentation } from "./lib/runtimePresentation";
 
 export type SessionPhase = "disconnected" | "connecting" | "ready" | "running";

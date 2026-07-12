@@ -25,7 +25,7 @@ WebSocket also accepts `?token=`).
 | PUT    | `/instances/:id/network-policy` | Set the outbound network policy                |
 | POST   | `/instances/:id/renew-activity` | Renew the keepalive lease                      |
 
-Wire shapes live in `@t3tools/contracts` (`cloudflareRuntimeBridge.ts`); both the
+Wire shapes live in `@synara/contracts` (`cloudflareRuntimeBridge.ts`); both the
 Worker and the Synara `CloudflareBridgeClient` adapter validate against them.
 
 ## Runtime flavors

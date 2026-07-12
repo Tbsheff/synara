@@ -10,8 +10,8 @@ import type {
   GitActionProgressEvent,
   GitPullRequestCheck,
   GitPullRequestComment,
-} from "@t3tools/contracts";
-import type { ModelSelection, ProviderStartOptions, ReviewFinding } from "@t3tools/contracts";
+} from "@synara/contracts";
+import type { ModelSelection, ProviderStartOptions, ReviewFinding } from "@synara/contracts";
 
 import { GitCommandError, GitHubCliError, TextGenerationError } from "../Errors.ts";
 import { type GitManagerShape } from "../Services/GitManager.ts";

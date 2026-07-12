@@ -22,7 +22,7 @@
  *
  * @module daytona/DaytonaRuntimeAdapter
  */
-import { ExecutionInstanceId, type RuntimeInstanceSummary } from "@t3tools/contracts";
+import { ExecutionInstanceId, type RuntimeInstanceSummary } from "@synara/contracts";
 import { Deferred, Effect, Exit, Layer, Scope, ServiceMap, Stream } from "effect";
 
 import {

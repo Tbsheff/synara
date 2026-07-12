@@ -16,8 +16,8 @@ import {
   type ProviderEvent,
   type ProviderSession,
   type ThreadId,
-} from "@t3tools/contracts";
-import { getModelSelectionBooleanOptionValue } from "@t3tools/shared/model";
+} from "@synara/contracts";
+import { getModelSelectionBooleanOptionValue } from "@synara/shared/model";
 import { Effect } from "effect";
 
 import { readObject, readString, readThreadIdFromResponse } from "./codexAppServer.parsers.ts";

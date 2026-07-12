@@ -14,10 +14,10 @@ import type {
   OrchestrationThreadActivity,
   OrchestrationThreadRuntime,
   OrchestrationThreadShell,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Schema } from "effect";
 
-import { deriveThreadSummaryMetadata } from "@t3tools/shared/threadSummary";
+import { deriveThreadSummaryMetadata } from "@synara/shared/threadSummary";
 import type { ProjectionThreadRuntime } from "../../persistence/Services/ProjectionThreadRuntime.ts";
 import {
   type ProjectionCheckpointDbRow,

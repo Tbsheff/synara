@@ -16,8 +16,8 @@ import { mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import type { ProviderUserInputAnswers, RuntimeMode, ThreadId } from "@t3tools/contracts";
-import { normalizeModelSlug } from "@t3tools/shared/model";
+import type { ProviderUserInputAnswers, RuntimeMode, ThreadId } from "@synara/contracts";
+import { normalizeModelSlug } from "@synara/shared/model";
 
 import { CODEX_DEFAULT_MODEL, CODEX_SPARK_MODEL } from "./codexAppServer.config.ts";
 import {

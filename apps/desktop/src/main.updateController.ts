@@ -7,7 +7,7 @@ import * as FS from "node:fs";
 import * as OS from "node:os";
 
 import type { AppUpdater, CancellationToken as CancellationTokenType } from "electron-updater";
-import type { DesktopRuntimeInfo, DesktopUpdateState } from "@t3tools/contracts";
+import type { DesktopRuntimeInfo, DesktopUpdateState } from "@synara/contracts";
 
 import {
   type DownloadProgressSample,

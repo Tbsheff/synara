@@ -21,7 +21,7 @@ import {
   type ProviderTurnStartResult,
   type ServerVoiceTranscriptionInput,
   type ServerVoiceTranscriptionResult,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Deferred, Effect, ServiceMap, Stream } from "effect";
 import type { ChildProcessSpawner } from "effect/unstable/process";
 

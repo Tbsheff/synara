@@ -1,4 +1,4 @@
-import { ExecutionInstanceId, type OrchestrationThreadRuntime } from "@t3tools/contracts";
+import { ExecutionInstanceId, type OrchestrationThreadRuntime } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import { resolveDiffableRemoteInstance } from "./remoteDiffability.ts";

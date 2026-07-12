@@ -1983,6 +1983,9 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
       // Release the cached history reference once the final write lands (the write
       // re-populates it on completion). The session is gone, so retaining it would
       // leak up to historyByteLimit per evicted key for the server's lifetime.
+      // Clear it before enqueueing as well: the cache may have been populated by a
+      // read of a missing file, and eviction must still materialize the final log.
+      this.persistedHistoryByKey.delete(key);
       void this.enqueuePersistWrite(
         session.threadId,
         session.terminalId,

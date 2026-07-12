@@ -15,7 +15,7 @@ import {
   type ProviderSession,
   type RuntimeMode,
   type TurnId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Deferred, Effect, Equal, Option, Schema } from "effect";
 
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
@@ -26,7 +26,7 @@ import type { ProviderSessionStartServerOptions } from "../../provider/Services/
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
-import { resolveThreadWorkspaceState } from "@t3tools/shared/threadEnvironment";
+import { resolveThreadWorkspaceState } from "@synara/shared/threadEnvironment";
 import {
   hasDedicatedTextGenerationProvider,
   isStaleCodexResumeError,

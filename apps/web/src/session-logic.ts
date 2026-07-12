@@ -7,7 +7,7 @@ import {
   type OrchestrationThreadActivity,
   type ProviderKind,
   type TurnId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 
 import { compareActivitiesByOrder } from "./session-logic.shared";
 import type { ChatMessage, SessionPhase, Thread, ThreadSession, TurnDiffSummary } from "./types";
@@ -261,21 +261,20 @@ export function deriveActiveTaskListState(
     }
   }
 
-  const currentTurnTaskList = latestTurnId
-    ? (allTaskListActivities
-        .filter((activity) => activity.turnId === latestTurnId)
-        .map(toActiveTaskListState)
-        .findLast((taskList) => taskList !== null) ?? null)
-    : null;
-  if (currentTurnTaskList) {
-    return currentTurnTaskList;
+  const currentTurnTaskActivity = latestTurnId
+    ? allTaskListActivities.findLast((activity) => activity.turnId === latestTurnId)
+    : undefined;
+  if (currentTurnTaskActivity) {
+    // The latest update owns the complete task-list state. In particular, an
+    // empty update is an explicit clear and must not reveal an older update.
+    return toActiveTaskListState(currentTurnTaskActivity);
   }
 
   // Keep the most recent unfinished prior task list visible so implementation turns
   // that have started but not emitted their own task update can still show progress.
-  const latestPriorTaskList =
-    allTaskListActivities.map(toActiveTaskListState).findLast((taskList) => taskList !== null) ??
-    null;
+  const latestPriorTaskList = allTaskListActivities.length
+    ? toActiveTaskListState(allTaskListActivities[allTaskListActivities.length - 1]!)
+    : null;
   if (!latestPriorTaskList) {
     return null;
   }

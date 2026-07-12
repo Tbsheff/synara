@@ -7,7 +7,7 @@ import {
   DEFAULT_GIT_TEXT_GENERATION_MODEL,
   PROVIDER_DISPLAY_NAMES,
   type ProviderKind,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { type Dispatch, type SetStateAction } from "react";
 import {
   type AppSettings,

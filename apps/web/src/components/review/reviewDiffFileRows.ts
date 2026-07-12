@@ -1,5 +1,5 @@
-import type { ReviewChangedFile } from "@t3tools/contracts";
-import { gitDiffHeaderMatchesPath, parseGitDiffHeaderPath } from "@t3tools/shared/gitDiffPaths";
+import type { ReviewChangedFile } from "@synara/contracts";
+import { gitDiffHeaderMatchesPath, parseGitDiffHeaderPath } from "@synara/shared/gitDiffPaths";
 
 export interface ReviewDiffFileRow {
   path: string;

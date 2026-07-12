@@ -12,11 +12,11 @@ import {
 import os from "node:os";
 import path from "node:path";
 import { Effect } from "effect";
-import { ApprovalRequestId, ThreadId, type ProviderEvent } from "@t3tools/contracts";
+import { ApprovalRequestId, ThreadId, type ProviderEvent } from "@synara/contracts";
 
 import {
   buildCodexProcessEnv,
-  disableDpCodeBrowserPluginInCodexConfig,
+  disableCodexConfigSections,
   resolveCodexBrowserUsePipePath,
 } from "./codexProcessEnv";
 import {
@@ -407,6 +407,7 @@ describe("isJsonObjectLine", () => {
 describe("buildCodexProcessEnv", () => {
   it("hydrates the active custom provider env_key from the effective CODEX_HOME", () => {
     const tempDir = mkdtempSync(path.join(os.tmpdir(), "t3-codex-env-"));
+    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-runtime-home-"));
     try {
       writeFileSync(
         path.join(tempDir, "config.toml"),
@@ -429,7 +430,7 @@ describe("buildCodexProcessEnv", () => {
         env: {
           SHELL: "/bin/zsh",
           PATH: "/usr/bin",
-          DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN: "0",
+          SYNARA_HOME: runtimeHome,
         },
         homePath: tempDir,
         platform: "darwin",
@@ -441,11 +442,12 @@ describe("buildCodexProcessEnv", () => {
         "SSH_AUTH_SOCK",
         "MY_COMPANY_PROXY_KEY",
       ]);
-      expect(env.CODEX_HOME).toBe(tempDir);
+      expect(env.CODEX_HOME).toBe(path.join(runtimeHome, "codex-home-overlay"));
       expect(env.MY_COMPANY_PROXY_KEY).toBe("proxy-secret");
       expect(env.PATH).toBe("/opt/homebrew/bin:/usr/bin");
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
+      rmSync(runtimeHome, { recursive: true, force: true });
     }
   });
 
@@ -615,9 +617,10 @@ describe("buildCodexProcessEnv", () => {
     }
   });
 
-  it("adds a disabled dpcode-browser plugin section when Codex config does not contain one", () => {
-    expect(disableDpCodeBrowserPluginInCodexConfig('model = "gpt-5.5"')).toContain(
-      '[plugins."dpcode-browser@local"]\nenabled = false',
+  it("adds a disabled conflicting browser plugin section when Codex config does not contain one", () => {
+    const section = '[plugins."legacy-browser@local"]';
+    expect(disableCodexConfigSections('model = "gpt-5.5"', [section], true)).toContain(
+      `${section}\nenabled = false`,
     );
   });
 });

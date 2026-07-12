@@ -2,7 +2,7 @@ import type {
   ReviewBoardLanesResult,
   ReviewListPullRequestsResult,
   ReviewPullRequestSummary,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useDebouncedValue } from "@tanstack/react-pacer";
 import { useNavigate } from "@tanstack/react-router";

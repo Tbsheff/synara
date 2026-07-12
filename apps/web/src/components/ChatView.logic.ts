@@ -10,13 +10,13 @@ import {
   type ServerProviderAuthStatus,
   type ServerProviderStatus,
   type ThreadId as ThreadIdType,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { normalizeCustomBinaryPath } from "~/lib/providerAvailability";
 import type { RateLimitStatus } from "./chat/RateLimitBanner";
-import { normalizeModelSlug } from "@t3tools/shared/model";
-import { buildSynaraBranchName } from "@t3tools/shared/git";
-import { isGenericChatThreadTitle } from "@t3tools/shared/chatThreads";
-import { isGenericTerminalThreadTitle } from "@t3tools/shared/terminalThreads";
+import { normalizeModelSlug } from "@synara/shared/model";
+import { buildSynaraBranchName } from "@synara/shared/git";
+import { isGenericChatThreadTitle } from "@synara/shared/chatThreads";
+import { isGenericTerminalThreadTitle } from "@synara/shared/terminalThreads";
 import {
   type ChatAssistantSelectionAttachment,
   type ChatMessage,

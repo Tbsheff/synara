@@ -11,7 +11,7 @@
  * @module ProviderHealth.commands
  */
 import * as OS from "node:os";
-import { parseCodexConfigModelProvider } from "@t3tools/shared/codexConfig";
+import { parseCodexConfigModelProvider } from "@synara/shared/codexConfig";
 import { query as claudeQuery, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { Effect, FileSystem, Option, Path, Result, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";

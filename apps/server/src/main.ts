@@ -20,6 +20,7 @@ import {
   type ServerConfigShape,
 } from "./config";
 import { fixPath, resolveBaseDir } from "./os-jank";
+import { migrateLegacyHomeIfNeeded } from "./homeMigration";
 import { Open } from "./open";
 import * as SqlitePersistence from "./persistence/Layers/Sqlite";
 import { makeServerProviderLayer, makeServerRuntimeServicesLayer } from "./serverLayers";
@@ -169,6 +170,19 @@ const ServerConfigLive = (input: CliInput) =>
       const configuredHome = Option.getOrUndefined(input.synaraHome) ?? env.synaraHome;
       const baseDir = yield* resolveBaseDir(configuredHome);
       const userHomeDir = OS.homedir();
+      yield* migrateLegacyHomeIfNeeded({
+        baseDir,
+        homeDir: userHomeDir,
+        devUrl,
+      }).pipe(
+        Effect.mapError(
+          (cause) =>
+            new StartupError({
+              message: "Failed to migrate legacy Synara home directory",
+              cause,
+            }),
+        ),
+      );
       const derivedPaths = yield* deriveServerPaths(baseDir, devUrl);
       const noBrowser = resolveBooleanFlag(input.noBrowser, env.noBrowser ?? mode === "desktop");
       const authToken = Option.getOrUndefined(input.authToken) ?? env.authToken;

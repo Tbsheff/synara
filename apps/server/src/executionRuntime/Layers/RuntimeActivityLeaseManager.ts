@@ -16,7 +16,7 @@ import {
   RuntimeActivityLeaseId,
   type ExecutionInstanceId,
   type RuntimeActivityLeaseSummary,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 
 import {
   RuntimeActivityLeaseManager,

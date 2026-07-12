@@ -10,7 +10,7 @@ import type {
   BrowserTabState,
   ThreadBrowserState,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 
 export const ABOUT_BLANK_URL = "about:blank";
 export const BROWSER_SESSION_PARTITION = "persist:synara-browser";

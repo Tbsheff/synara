@@ -1,6 +1,6 @@
 import { useMemo } from "react";
-import { type ThreadId } from "@t3tools/contracts";
-import { type TerminalActivityState, type TerminalCliKind } from "@t3tools/shared/terminalThreads";
+import { type ThreadId } from "@synara/contracts";
+import { type TerminalActivityState, type TerminalCliKind } from "@synara/shared/terminalThreads";
 import { type TerminalContextSelection } from "~/lib/terminalContext";
 import { selectThreadTerminalState } from "../../terminalStateStore";
 

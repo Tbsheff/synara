@@ -4,9 +4,21 @@
 import * as FS from "node:fs";
 import * as OS from "node:os";
 import * as Path from "node:path";
+import { randomUUID } from "node:crypto";
 
 const DEV_USER_DATA_DIR_NAME = "synara-dev";
 const PROD_USER_DATA_DIR_NAME = "synara";
+const DEV_LEGACY_USER_DATA_DIR_NAMES = ["dpcode-dev", "t3code-dev", "DP Code (Dev)"] as const;
+const PROD_LEGACY_USER_DATA_DIR_NAMES = ["dpcode", "t3code", "DP Code (Alpha)"] as const;
+const PROFILE_SEED_ENTRY_NAMES = [
+  "Local Storage",
+  "IndexedDB",
+  "Session Storage",
+  "Preferences",
+  "Cookies",
+  "Cookies-journal",
+  "Network Persistent State",
+] as const;
 const BRIDGE_PROFILE_MANIFEST_FILE_NAME = "synara-profile-seed.json";
 const CANONICAL_BROWSER_PARTITION_NAME = "synara-browser";
 const BROWSER_PARTITION_SEED_ENTRY_GROUPS = [
@@ -30,6 +42,13 @@ export interface BrowserProfileBridgeRepairResult {
   readonly sourcePath: string | null;
   readonly targetPath: string;
   readonly copiedEntries: readonly string[];
+  readonly error?: unknown;
+}
+
+export interface DesktopUserDataProfileSeedResult {
+  readonly status: "seeded" | "target-exists" | "legacy-missing" | "seed-failed";
+  readonly sourcePath: string | null;
+  readonly targetPath: string;
   readonly error?: unknown;
 }
 
@@ -59,6 +78,87 @@ export function resolveDesktopUserDataPath(input: {
     input.appDataBase,
     input.isDevelopment ? DEV_USER_DATA_DIR_NAME : PROD_USER_DATA_DIR_NAME,
   );
+}
+
+export function resolveLegacyDesktopUserDataPaths(input: {
+  readonly appDataBase: string;
+  readonly isDevelopment: boolean;
+}): string[] {
+  const names = input.isDevelopment
+    ? DEV_LEGACY_USER_DATA_DIR_NAMES
+    : PROD_LEGACY_USER_DATA_DIR_NAMES;
+  return names.map((name) => Path.join(input.appDataBase, name));
+}
+
+function findBrowserProfilePartition(profilePath: string): string | null {
+  const partitionsPath = Path.join(profilePath, "Partitions");
+  if (!FS.existsSync(partitionsPath)) return null;
+  const partition = FS.readdirSync(partitionsPath, { withFileTypes: true }).find(
+    (entry) => entry.isDirectory() && entry.name.endsWith("-browser"),
+  );
+  return partition ? Path.join(partitionsPath, partition.name) : null;
+}
+
+function hasSeedableProfileData(profilePath: string): boolean {
+  return (
+    PROFILE_SEED_ENTRY_NAMES.some((name) => FS.existsSync(Path.join(profilePath, name))) ||
+    findBrowserProfilePartition(profilePath) !== null
+  );
+}
+
+export function seedDesktopUserDataProfileFromLegacy(input: {
+  readonly targetPath: string;
+  readonly legacyPaths: readonly string[];
+}): DesktopUserDataProfileSeedResult {
+  if (FS.existsSync(input.targetPath)) {
+    return { status: "target-exists", sourcePath: null, targetPath: input.targetPath };
+  }
+
+  const sourcePaths = input.legacyPaths.filter(
+    (candidate) => FS.existsSync(candidate) && hasSeedableProfileData(candidate),
+  );
+  const sourcePath =
+    sourcePaths.find((candidate) => findBrowserProfilePartition(candidate) !== null) ??
+    sourcePaths[0] ??
+    null;
+  if (!sourcePath) {
+    return { status: "legacy-missing", sourcePath: null, targetPath: input.targetPath };
+  }
+
+  const stagingPath = `${input.targetPath}.seed-${process.pid}-${randomUUID()}`;
+  try {
+    FS.mkdirSync(stagingPath, { recursive: true });
+    for (const entryName of PROFILE_SEED_ENTRY_NAMES) {
+      const entrySourcePath = sourcePaths.find((candidate) =>
+        FS.existsSync(Path.join(candidate, entryName)),
+      );
+      if (!entrySourcePath) continue;
+      const sourceEntryPath = Path.join(entrySourcePath, entryName);
+      FS.cpSync(sourceEntryPath, Path.join(stagingPath, entryName), {
+        recursive: true,
+        errorOnExist: false,
+        force: false,
+      });
+    }
+    FS.writeFileSync(
+      Path.join(stagingPath, BRIDGE_PROFILE_MANIFEST_FILE_NAME),
+      `${JSON.stringify(
+        {
+          sourcePath,
+          sourcePaths,
+          seededAt: new Date().toISOString(),
+          entries: PROFILE_SEED_ENTRY_NAMES,
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    FS.renameSync(stagingPath, input.targetPath);
+    return { status: "seeded", sourcePath, targetPath: input.targetPath };
+  } catch (error) {
+    FS.rmSync(stagingPath, { recursive: true, force: true });
+    return { status: "seed-failed", sourcePath, targetPath: input.targetPath, error };
+  }
 }
 
 function readBridgeProfileSourcePath(targetPath: string): string | null {

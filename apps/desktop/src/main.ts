@@ -148,6 +148,8 @@ import {
   repairBrowserProfileFromBridgeManifest,
   resolveDesktopAppDataBase,
   resolveDesktopUserDataPath,
+  resolveLegacyDesktopUserDataPaths,
+  seedDesktopUserDataProfileFromLegacy,
 } from "./desktopUserDataProfile";
 import { isBrokenPipeError } from "./desktopProcessErrors";
 import {
@@ -1476,7 +1478,24 @@ function showDesktopNotification(input: {
  */
 function resolveUserDataPath(): string {
   const appDataBase = resolveDesktopAppDataBase();
-  return resolveDesktopUserDataPath({ appDataBase, isDevelopment });
+  const userDataPath = resolveDesktopUserDataPath({ appDataBase, isDevelopment });
+  const seedResult = seedDesktopUserDataProfileFromLegacy({
+    targetPath: userDataPath,
+    legacyPaths: resolveLegacyDesktopUserDataPaths({ appDataBase, isDevelopment }),
+  });
+  if (seedResult.status === "seeded") {
+    console.info("[desktop] Seeded Synara Electron profile from legacy profile", {
+      sourcePath: seedResult.sourcePath,
+      targetPath: seedResult.targetPath,
+    });
+  } else if (seedResult.status === "seed-failed") {
+    console.warn("[desktop] Failed to seed Synara Electron profile from legacy profile", {
+      sourcePath: seedResult.sourcePath,
+      targetPath: seedResult.targetPath,
+      error: seedResult.error,
+    });
+  }
+  return userDataPath;
 }
 
 function repairBrowserProfileBeforeElectronReady(userDataPath: string): void {

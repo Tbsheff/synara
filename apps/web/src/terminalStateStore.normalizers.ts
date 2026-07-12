@@ -6,8 +6,8 @@
  * checks, default-state constructors, and sanitizePersistedTerminalStateByThreadId.
  */
 
-import { type TerminalCliKind } from "@t3tools/shared/terminalThreads";
-import type { ThreadId } from "@t3tools/contracts";
+import { type TerminalCliKind } from "@synara/shared/terminalThreads";
+import type { ThreadId } from "@synara/contracts";
 import {
   DEFAULT_THREAD_TERMINAL_HEIGHT,
   DEFAULT_THREAD_TERMINAL_ID,

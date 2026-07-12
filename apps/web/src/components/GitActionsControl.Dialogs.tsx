@@ -3,7 +3,7 @@
 // Layer: Header action control (presentational)
 // Exports: CommitDialog, DefaultBranchActionDialog, CreateBranchDialog.
 
-import type { GitStatusResult } from "@t3tools/contracts";
+import type { GitStatusResult } from "@synara/contracts";
 import { Button } from "~/components/ui/button";
 import { Checkbox } from "~/components/ui/checkbox";
 import {

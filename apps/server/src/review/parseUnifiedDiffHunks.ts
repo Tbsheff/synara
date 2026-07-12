@@ -1,4 +1,4 @@
-import { normalizeGitPatchPath, unquoteGitPath } from "@t3tools/shared/gitDiffPaths";
+import { normalizeGitPatchPath, unquoteGitPath } from "@synara/shared/gitDiffPaths";
 
 export interface ParsedHunk {
   filePath: string;

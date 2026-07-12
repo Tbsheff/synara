@@ -11,7 +11,7 @@
  */
 import * as nodePath from "node:path";
 import * as OS from "node:os";
-import type { ServerProviderStatus } from "@t3tools/contracts";
+import type { ServerProviderStatus } from "@synara/contracts";
 import { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { Effect, FileSystem, Option, Path, Result } from "effect";
 import { ChildProcessSpawner } from "effect/unstable/process";

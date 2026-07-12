@@ -10,7 +10,7 @@ import {
   TurnId,
   type OrchestrationEvent,
   type ProviderRuntimeEvent,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 
 export type ReactorInput =
   | {

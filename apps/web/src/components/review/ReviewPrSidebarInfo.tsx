@@ -3,7 +3,7 @@ import type {
   ReviewPullRequestDetail,
   ReviewPullRequestHeaderDetail,
   ReviewTimelineEvent,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import type { ReactElement, ReactNode } from "react";
 
 import { GitCommitIcon, MessageCircleIcon } from "~/lib/icons";

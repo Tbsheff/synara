@@ -17,7 +17,7 @@ import type {
   RuntimeItemId,
   ThreadTokenUsageSnapshot,
   TurnId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 
 import type { ProviderAdapterRequestError } from "../Errors.ts";
 import type { EventNdjsonLogger } from "./EventNdjsonLogger.ts";

@@ -4,9 +4,9 @@
 // Layer: dependency-parameterized Effect helpers; built once per reactor via makeReactorHandlers(deps).
 // Exports: ReactorHandlersDeps, ReactorHandlers, makeReactorHandlers.
 
-import { ThreadId, TurnId } from "@t3tools/contracts";
+import { ThreadId, TurnId } from "@synara/contracts";
 import { Cache, Cause, Deferred, Effect, Option } from "effect";
-import { resolveTailUserMessageEditTarget } from "@t3tools/shared/conversationEdit";
+import { resolveTailUserMessageEditTarget } from "@synara/shared/conversationEdit";
 
 import { ExecutionRuntimeService } from "../../executionRuntime/Services/ExecutionRuntimeService.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";

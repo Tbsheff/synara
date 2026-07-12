@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { prepareWindowsSafeProcess } from "@t3tools/shared/windowsProcess";
+import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
 
 import {
   formatCodexCliUpgradeMessage,

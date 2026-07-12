@@ -8,7 +8,7 @@ import type {
   ProjectId,
   ThreadEnvironmentMode,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 
 import type { AppState } from "./store";
 import { collectByIds, getThreadFromState, getThreadsFromState } from "./threadDerivation";

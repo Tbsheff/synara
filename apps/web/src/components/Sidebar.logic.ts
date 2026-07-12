@@ -4,8 +4,8 @@
 // Layer: Sidebar logic (pure).
 // Exports: Sidebar row state derivation, add-project error helpers, sort utilities, status/PR indicators, and visibility helpers.
 
-import { MAX_PINNED_PROJECTS, type ProjectId, type ThreadId } from "@t3tools/contracts";
-import type { KeybindingCommand, ResolvedKeybindingsConfig } from "@t3tools/contracts";
+import { MAX_PINNED_PROJECTS, type ProjectId, type ThreadId } from "@synara/contracts";
+import type { KeybindingCommand, ResolvedKeybindingsConfig } from "@synara/contracts";
 import type { Project, SidebarThreadSummary, Thread } from "../types";
 import type { LastThreadRoute } from "../chatRouteRestore";
 import { cn } from "../lib/utils";
@@ -22,7 +22,7 @@ import {
   SIDEBAR_THREAD_ROW_BASE_CLASS_NAME,
 } from "../sidebarRowStyles";
 import { isDuplicateProjectCreateError } from "../lib/projectCreateRecovery";
-import { isWorkspaceRootWithin, workspaceRootsEqual } from "@t3tools/shared/threadWorkspace";
+import { isWorkspaceRootWithin, workspaceRootsEqual } from "@synara/shared/threadWorkspace";
 import { formatWorktreePathForDisplay } from "../worktreeCleanup";
 
 export {

@@ -6,7 +6,7 @@ import {
   ReviewRemoveCommentInput,
   ReviewRemoveCommentResult,
   ReviewUpdateCommentInput,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { ServiceMap } from "effect";
 import type { Effect } from "effect";
 

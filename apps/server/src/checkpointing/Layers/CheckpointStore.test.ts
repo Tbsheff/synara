@@ -37,6 +37,9 @@ describe("CheckpointStoreLive", () => {
     });
     const execute = vi.fn<GitCoreShape["execute"]>((input) => {
       const args = input.args.join(" ");
+      if (args === "status --porcelain=v1 -z --untracked-files=all -- .") {
+        return Effect.succeed({ code: 0, stdout: "?? dirty.txt\0", stderr: "" });
+      }
       if (args === "rev-parse --verify HEAD") {
         return Effect.succeed({ code: 1, stdout: "", stderr: "" });
       }
@@ -90,6 +93,9 @@ describe("CheckpointStoreLive", () => {
     let addCalls = 0;
     const execute = vi.fn<GitCoreShape["execute"]>((input) => {
       const args = input.args.join(" ");
+      if (args === "status --porcelain=v1 -z --untracked-files=all -- .") {
+        return Effect.succeed({ code: 0, stdout: "?? dirty.txt\0", stderr: "" });
+      }
       if (args === "rev-parse --verify HEAD") {
         return Effect.succeed({ code: 1, stdout: "", stderr: "" });
       }
@@ -159,6 +165,9 @@ describe("CheckpointStoreLive", () => {
       }
       if (args === `rev-parse --verify --quiet ${missingRef}^{commit}`) {
         return Effect.succeed({ code: 1, stdout: "", stderr: "" });
+      }
+      if (args === "status --porcelain=v1 -z --untracked-files=all -- .") {
+        return Effect.succeed({ code: 0, stdout: "?? dirty.txt\0", stderr: "" });
       }
       if (args === "rev-parse --verify HEAD") {
         return Effect.succeed({ code: 1, stdout: "", stderr: "" });

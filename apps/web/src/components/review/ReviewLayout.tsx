@@ -1,4 +1,4 @@
-import type { ReviewChangedFile, ReviewSourceRef, ReviewTargetKey } from "@t3tools/contracts";
+import type { ReviewChangedFile, ReviewSourceRef, ReviewTargetKey } from "@synara/contracts";
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { ReviewInlineComment } from "@t3tools/contracts";
+import type { ReviewInlineComment } from "@synara/contracts";
 import { validateInlineComments } from "./validateInlineComments.ts";
 
 const PATCH = [

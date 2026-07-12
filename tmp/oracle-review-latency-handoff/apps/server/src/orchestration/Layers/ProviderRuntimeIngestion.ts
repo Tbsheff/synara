@@ -7,15 +7,15 @@ import {
   TurnId,
   type OrchestrationThread,
   type ProviderRuntimeEvent,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Cause, Effect, Layer, Option, Stream } from "effect";
-import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
+import { makeDrainableWorker } from "@synara/shared/DrainableWorker";
 import {
   buildSubagentIdentityDirectory,
   collectSubagentProviderThreadIds,
   extractSubagentIdentityHints,
   resolveSubagentIdentityFromDirectory,
-} from "@t3tools/shared/subagents";
+} from "@synara/shared/subagents";
 
 import { generatedImagePathFromRuntimeEvent } from "../../codexGeneratedImages.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";

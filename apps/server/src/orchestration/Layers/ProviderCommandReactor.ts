@@ -19,7 +19,7 @@ import {
   type ProviderSession,
   type RuntimeMode,
   TurnId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import {
   Cache,
   Cause,
@@ -32,19 +32,19 @@ import {
   Schema,
   Stream,
 } from "effect";
-import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
+import { makeDrainableWorker } from "@synara/shared/DrainableWorker";
 import {
   buildPromptThreadTitleFallback,
   isGenericChatThreadTitle,
-} from "@t3tools/shared/chatThreads";
+} from "@synara/shared/chatThreads";
 import {
   collectTailTurnIds,
   resolveTailUserMessageEditTarget,
-} from "@t3tools/shared/conversationEdit";
-import { isTemporaryWorktreeBranch, WORKTREE_BRANCH_PREFIX } from "@t3tools/shared/git";
-import { claudeSelectionRequiresRestart } from "@t3tools/shared/model";
-import { buildStalePendingRequestFailureDetail } from "@t3tools/shared/threadSummary";
-import { resolveThreadWorkspaceState } from "@t3tools/shared/threadEnvironment";
+} from "@synara/shared/conversationEdit";
+import { isTemporaryWorktreeBranch, WORKTREE_BRANCH_PREFIX } from "@synara/shared/git";
+import { claudeSelectionRequiresRestart } from "@synara/shared/model";
+import { buildStalePendingRequestFailureDetail } from "@synara/shared/threadSummary";
+import { resolveThreadWorkspaceState } from "@synara/shared/threadEnvironment";
 
 import {
   checkpointRefForThreadMessageStart,

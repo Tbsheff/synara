@@ -7,7 +7,7 @@
 //   FailedWorktreeTransferRecovery, CommitAndBranchSuggestion,
 //   FeatureBranchStepOptions.
 
-import type { GitActionProgressEvent } from "@t3tools/contracts";
+import type { GitActionProgressEvent } from "@synara/contracts";
 
 export const COMMIT_TIMEOUT_MS = 10 * 60_000;
 export const MAX_PROGRESS_TEXT_LENGTH = 500;

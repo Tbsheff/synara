@@ -4,7 +4,7 @@
 // Exports: buildProviderItemSlice, normalizeProviderItems, upsertProviderItem,
 //   mergeReadModelProviderItemsWithLiveHotPath.
 
-import type { OrchestrationProviderItem } from "@t3tools/contracts";
+import type { OrchestrationProviderItem } from "@synara/contracts";
 
 import type { Thread } from "../types";
 import { arraysShallowEqual, deepEqualJson } from "./equality";

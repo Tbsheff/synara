@@ -8,7 +8,7 @@
  *
  * @module ProviderServiceSessionBinding
  */
-import { ThreadId, type ProviderRuntimeEvent, type ProviderSession } from "@t3tools/contracts";
+import { ThreadId, type ProviderRuntimeEvent, type ProviderSession } from "@synara/contracts";
 import { Cause, Effect, Option, Semaphore } from "effect";
 
 import {
@@ -181,6 +181,7 @@ export const makeSessionBindingWriters = (deps: SessionBindingDeps): SessionBind
         case "thread.started":
         case "thread.state.changed":
         case "turn.started":
+        case "turn.tasks.updated":
         case "model.rerouted":
         case "turn.completed":
         case "turn.aborted":

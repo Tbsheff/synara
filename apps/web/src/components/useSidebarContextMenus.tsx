@@ -12,7 +12,7 @@ import {
   type ProjectId,
   type ProviderKind,
   type ThreadId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import type { useNavigate } from "@tanstack/react-router";
 import { readNativeApi } from "../nativeApi";
 import { useStore } from "../store";
@@ -20,7 +20,7 @@ import { getThreadFromState } from "../threadDerivation";
 import { derivePendingApprovals, derivePendingUserInputs } from "../session-logic";
 import { newCommandId, randomUUID } from "../lib/utils";
 import { quotePosixShellArgument } from "../lib/shellQuote";
-import { resolveThreadWorkspaceCwd } from "@t3tools/shared/threadEnvironment";
+import { resolveThreadWorkspaceCwd } from "@synara/shared/threadEnvironment";
 import {
   canCreateThreadHandoff,
   resolveAvailableHandoffTargetProviders,

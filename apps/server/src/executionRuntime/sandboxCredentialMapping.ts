@@ -11,7 +11,7 @@
  *
  * @module sandboxCredentialMapping
  */
-import type { SandboxSettings } from "@t3tools/contracts";
+import type { SandboxSettings } from "@synara/contracts";
 
 import { resolveDaytonaCredentials } from "./providers/daytona/DaytonaConfig.ts";
 import { resolveModalCredentials } from "./providers/modal/ModalCredentials.ts";

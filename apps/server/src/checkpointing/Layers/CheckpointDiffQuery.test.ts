@@ -7,6 +7,7 @@ import {
   type ProjectionFullThreadDiffContext,
   type ProjectionThreadCheckpointContext,
 } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
+import { RuntimeWorkspaceDiff } from "../../executionRuntime/Services/RuntimeWorkspaceDiff.ts";
 import { checkpointRefForThreadTurn, checkpointRefForThreadTurnStart } from "../Utils.ts";
 import { CheckpointDiffQueryLive } from "./CheckpointDiffQuery.ts";
 import { CheckpointStore, type CheckpointStoreShape } from "../Services/CheckpointStore.ts";
@@ -68,6 +69,10 @@ function makeFullThreadDiffContext(input: {
   };
 }
 
+const runtimeWorkspaceDiffLayer = Layer.succeed(RuntimeWorkspaceDiff, {
+  read: () => Effect.succeed({ diff: "", changedPaths: [], degraded: false }),
+});
+
 describe("CheckpointDiffQueryLive", () => {
   it("prefers exact turn-start checkpoints for single-turn diffs", async () => {
     const projectId = ProjectId.makeUnsafe("project-1");
@@ -112,6 +117,7 @@ describe("CheckpointDiffQueryLive", () => {
     };
 
     const layer = CheckpointDiffQueryLive.pipe(
+      Layer.provideMerge(runtimeWorkspaceDiffLayer),
       Layer.provideMerge(Layer.succeed(CheckpointStore, checkpointStore)),
       Layer.provideMerge(
         Layer.succeed(ProjectionSnapshotQuery, {
@@ -208,6 +214,7 @@ describe("CheckpointDiffQueryLive", () => {
     };
 
     const layer = CheckpointDiffQueryLive.pipe(
+      Layer.provideMerge(runtimeWorkspaceDiffLayer),
       Layer.provideMerge(Layer.succeed(CheckpointStore, checkpointStore)),
       Layer.provideMerge(
         Layer.succeed(ProjectionSnapshotQuery, {
@@ -273,6 +280,7 @@ describe("CheckpointDiffQueryLive", () => {
     };
 
     const layer = CheckpointDiffQueryLive.pipe(
+      Layer.provideMerge(runtimeWorkspaceDiffLayer),
       Layer.provideMerge(Layer.succeed(CheckpointStore, checkpointStore)),
       Layer.provideMerge(
         Layer.succeed(ProjectionSnapshotQuery, {
@@ -336,6 +344,7 @@ describe("CheckpointDiffQueryLive", () => {
     };
 
     const layer = CheckpointDiffQueryLive.pipe(
+      Layer.provideMerge(runtimeWorkspaceDiffLayer),
       Layer.provideMerge(Layer.succeed(CheckpointStore, checkpointStore)),
       Layer.provideMerge(
         Layer.succeed(ProjectionSnapshotQuery, {
@@ -400,6 +409,7 @@ describe("CheckpointDiffQueryLive", () => {
     };
 
     const layer = CheckpointDiffQueryLive.pipe(
+      Layer.provideMerge(runtimeWorkspaceDiffLayer),
       Layer.provideMerge(Layer.succeed(CheckpointStore, checkpointStore)),
       Layer.provideMerge(
         Layer.succeed(ProjectionSnapshotQuery, {
@@ -469,6 +479,7 @@ describe("CheckpointDiffQueryLive", () => {
     };
 
     const layer = CheckpointDiffQueryLive.pipe(
+      Layer.provideMerge(runtimeWorkspaceDiffLayer),
       Layer.provideMerge(Layer.succeed(CheckpointStore, checkpointStore)),
       Layer.provideMerge(
         Layer.succeed(ProjectionSnapshotQuery, {
@@ -534,6 +545,7 @@ describe("CheckpointDiffQueryLive", () => {
     };
 
     const layer = CheckpointDiffQueryLive.pipe(
+      Layer.provideMerge(runtimeWorkspaceDiffLayer),
       Layer.provideMerge(Layer.succeed(CheckpointStore, checkpointStore)),
       Layer.provideMerge(
         Layer.succeed(ProjectionSnapshotQuery, {

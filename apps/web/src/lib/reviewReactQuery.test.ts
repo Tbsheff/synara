@@ -8,7 +8,7 @@ import type {
   ReviewPullRequestSurfaceResult,
   ReviewSourceRef,
   ReviewWalkthrough,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 
 import {
   applyReviewPullRequestSurfacePayload,

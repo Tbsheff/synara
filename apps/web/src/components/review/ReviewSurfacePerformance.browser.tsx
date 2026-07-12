@@ -1,6 +1,6 @@
 import "../../index.css";
 
-import type { ReviewBoardLanesResult, ReviewPullRequestSummary } from "@t3tools/contracts";
+import type { ReviewBoardLanesResult, ReviewPullRequestSummary } from "@synara/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { page } from "vitest/browser";
 import { afterEach, describe, expect, it, vi } from "vitest";

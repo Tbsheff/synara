@@ -12,8 +12,8 @@ import type {
   GitStackedAction,
   ModelSelection,
   ProviderStartOptions,
-} from "@t3tools/contracts";
-import { resolveAutoFeatureBranchName, sanitizeFeatureBranchName } from "@t3tools/shared/git";
+} from "@synara/contracts";
+import { resolveAutoFeatureBranchName, sanitizeFeatureBranchName } from "@synara/shared/git";
 
 import {
   GitCheckoutDirtyWorktreeError,

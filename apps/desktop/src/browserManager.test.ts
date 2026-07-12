@@ -1,4 +1,4 @@
-import type { ThreadBrowserState, ThreadId } from "@t3tools/contracts";
+import type { ThreadBrowserState, ThreadId } from "@synara/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // DesktopBrowserManager imports electron at module load. With no window attached

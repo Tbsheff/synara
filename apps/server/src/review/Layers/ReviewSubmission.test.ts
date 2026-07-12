@@ -2,11 +2,7 @@ import { it } from "@effect/vitest";
 import { Effect, Layer } from "effect";
 import { expect } from "vitest";
 
-import type {
-  ReviewInlineComment,
-  ReviewSubmitInput,
-  ReviewSubmitResult,
-} from "@t3tools/contracts";
+import type { ReviewInlineComment, ReviewSubmitInput, ReviewSubmitResult } from "@synara/contracts";
 
 import { GitHubCliError } from "../../git/Errors.ts";
 import { GitCore } from "../../git/Services/GitCore.ts";

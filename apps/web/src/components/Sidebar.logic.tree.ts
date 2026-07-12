@@ -3,7 +3,7 @@
 // Layer: Sidebar logic (pure).
 // Exports: tree/entry types, buildProjectThreadTree, visibility helpers, groupSidebarThreadsByProjectId, deriveSidebarProjectData.
 
-import type { ProjectId, ThreadId } from "@t3tools/contracts";
+import type { ProjectId, ThreadId } from "@synara/contracts";
 import type { SidebarThreadSortOrder } from "../appSettings";
 import type { Project, SidebarThreadSummary, Thread } from "../types";
 import { sortThreadsForSidebar, type SidebarThreadSortInput } from "./Sidebar.logic.sorting";

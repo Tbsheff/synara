@@ -7,7 +7,7 @@ import {
   type RuntimeContentStreamKind,
   type RuntimeItemStatus,
   type TurnId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Option, Schema } from "effect";
 
 import {

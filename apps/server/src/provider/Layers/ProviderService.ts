@@ -29,7 +29,7 @@ import {
   ProviderStopSessionInput,
   type ProviderRuntimeEvent,
   type ProviderSession,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Effect, Equal, Exit, Layer, Option, PubSub, Stream } from "effect";
 
 import { ProviderAdapterRegistry } from "../Services/ProviderAdapterRegistry.ts";

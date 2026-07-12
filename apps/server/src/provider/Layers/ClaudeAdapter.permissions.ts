@@ -9,7 +9,7 @@ import {
   type ProviderUserInputAnswers,
   type RuntimeMode,
   type UserInputQuestion,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Deferred, Effect, Random, Ref } from "effect";
 
 import type { ClaudeEmitters } from "./ClaudeAdapter.emitters.ts";

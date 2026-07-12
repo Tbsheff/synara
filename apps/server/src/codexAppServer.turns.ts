@@ -12,7 +12,7 @@ import {
   type ProviderStartReviewInput,
   type ProviderTurnStartResult,
   type ThreadId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 
 import { readObject, readString, toCodexReviewTarget } from "./codexAppServer.parsers.ts";
 import {

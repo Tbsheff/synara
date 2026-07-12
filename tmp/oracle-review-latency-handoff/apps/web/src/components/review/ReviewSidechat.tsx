@@ -4,7 +4,7 @@ import {
   type ProviderSkillReference,
   type ProviderKind,
   type ThreadId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { useQuery } from "@tanstack/react-query";
 import {
   memo,

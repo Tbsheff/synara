@@ -3,7 +3,7 @@
  * Cloudflare Runtime Bridge Worker over authenticated HTTP/WS.
  *
  * The bridge client owns the wire: it attaches the bearer token, encodes/decodes
- * the `@t3tools/contracts` bridge shapes, and exposes one method per bridge route
+ * the `@synara/contracts` bridge shapes, and exposes one method per bridge route
  * (create / get / exec / read-write files / expose port / network policy / renew
  * activity / delete) plus an interactive terminal transport. The Cloudflare
  * `ExecutionRuntimeProviderAdapter` is built entirely on this client, so the
@@ -27,7 +27,7 @@ import type {
   BridgeRenewActivityResult,
   BridgeRoute,
   ExecutionInstanceId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { ServiceMap } from "effect";
 import type { Effect } from "effect";
 

@@ -4,7 +4,7 @@
 // Exports: readPersistedState, persistState, debouncedPersistState, and the project-UI persistence memos.
 
 import { Debouncer } from "@tanstack/react-pacer";
-import { normalizeWorkspaceRootForComparison } from "@t3tools/shared/threadWorkspace";
+import { normalizeWorkspaceRootForComparison } from "@synara/shared/threadWorkspace";
 import { type Project } from "../types";
 import { type AppState } from "../store";
 

@@ -9,8 +9,8 @@
 
 import { realpathSync } from "node:fs";
 
-import type { GitStackedAction } from "@t3tools/contracts";
-import { sanitizeFeatureBranchName } from "@t3tools/shared/git";
+import type { GitStackedAction } from "@synara/contracts";
+import { sanitizeFeatureBranchName } from "@synara/shared/git";
 
 import { GitManagerError } from "../Errors.ts";
 import type {

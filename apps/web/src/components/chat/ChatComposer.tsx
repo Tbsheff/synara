@@ -1,6 +1,6 @@
 import type { ComponentProps, ReactNode, Ref, RefObject } from "react";
 
-import type { ProviderMentionReference } from "@t3tools/contracts";
+import type { ProviderMentionReference } from "@synara/contracts";
 
 import type { ContextWindowSelectionStatus } from "../../lib/contextWindow";
 
@@ -384,6 +384,7 @@ export function ChatComposer({
                     questionIndex={activePendingQuestionIndex}
                     onToggleOption={onToggleActivePendingUserInputOption}
                     onAdvance={onAdvanceActivePendingUserInput}
+                    onPrevious={onPreviousActivePendingUserInputQuestion}
                     onCancel={onCancelActivePendingUserInput}
                   />
                 </div>

@@ -4,7 +4,7 @@
 // Exports: SidebarSubagentLabel
 
 import { useMemo } from "react";
-import type { ThreadId } from "@t3tools/contracts";
+import type { ThreadId } from "@synara/contracts";
 import { cn } from "~/lib/utils";
 import { useStore } from "../store";
 import { createThreadSelector } from "../storeSelectors";

@@ -1,4 +1,4 @@
-import type { ModelSelection, ReviewSourceRef, ReviewTargetKey } from "@t3tools/contracts";
+import type { ModelSelection, ReviewSourceRef, ReviewTargetKey } from "@synara/contracts";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState } from "react";
 

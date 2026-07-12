@@ -15,22 +15,22 @@ import {
   type OrchestrationShellStreamEvent,
   type OrchestrationSessionStatus,
   type TurnId,
-} from "@t3tools/contracts";
-import { resolveThreadBranchRegressionGuard } from "@t3tools/shared/git";
+} from "@synara/contracts";
+import { resolveThreadBranchRegressionGuard } from "@synara/shared/git";
 import {
   addPinnedMessage,
   removePinnedMessage,
   setPinnedMessageDone,
   setPinnedMessageLabel,
-} from "@t3tools/shared/pinnedMessages";
+} from "@synara/shared/pinnedMessages";
 import {
   addThreadMarker,
   removeThreadMarker,
   setThreadMarkerDone,
   setThreadMarkerLabel,
-} from "@t3tools/shared/threadMarkers";
-import { normalizeModelSlug } from "@t3tools/shared/model";
-import { normalizeWorkspaceRootForComparison } from "@t3tools/shared/threadWorkspace";
+} from "@synara/shared/threadMarkers";
+import { normalizeModelSlug } from "@synara/shared/model";
+import { normalizeWorkspaceRootForComparison } from "@synara/shared/threadWorkspace";
 import { create } from "zustand";
 import {
   type ChatAttachment,
@@ -82,6 +82,7 @@ export interface AppState {
   turnDiffIdsByThreadId?: Record<ThreadId, TurnId[]>;
   turnDiffSummaryByThreadId?: Record<ThreadId, Record<TurnId, Thread["turnDiffSummaries"][number]>>;
   deletedThreadIdsById?: Record<ThreadId, true>;
+  deletedProjectIdsById?: Record<Project["id"], true>;
 }
 
 type ReadModelProject = OrchestrationReadModel["projects"][number];
@@ -175,6 +176,7 @@ const initialState: AppState = {
   turnDiffIdsByThreadId: {},
   turnDiffSummaryByThreadId: {},
   deletedThreadIdsById: {},
+  deletedProjectIdsById: {},
 };
 const persistedExpandedProjectCwds = new Set<string>();
 const persistedProjectOrderCwds: string[] = [];
@@ -2435,6 +2437,20 @@ function removeProjectState(state: AppState, projectId: Project["id"]): AppState
       };
 }
 
+export function removeDeletedProjectFromClientState(
+  state: AppState,
+  projectId: Project["id"],
+): AppState {
+  const nextState = removeProjectState(state, projectId);
+  return {
+    ...nextState,
+    deletedProjectIdsById: {
+      ...(state.deletedProjectIdsById ?? {}),
+      [projectId]: true,
+    },
+  };
+}
+
 function commitThreadProjection(
   state: AppState,
   threadId: ThreadId,
@@ -3066,16 +3082,7 @@ function applyOrchestrationEvent(
     }
 
     case "project.deleted": {
-      const existingIndex = state.projects.findIndex(
-        (project) => project.id === event.payload.projectId,
-      );
-      if (existingIndex < 0) {
-        return state;
-      }
-      return {
-        ...state,
-        projects: state.projects.filter((project) => project.id !== event.payload.projectId),
-      };
+      return removeDeletedProjectFromClientState(state, event.payload.projectId);
     }
 
     case "thread.deleted":
@@ -3964,10 +3971,15 @@ export function syncServerShellSnapshot(
   rememberProjectUiState(state.projects);
   rememberProjectLocalNames(state.projects);
   const deletedThreadIdsById = state.deletedThreadIdsById ?? {};
+  const deletedProjectIdsById = state.deletedProjectIdsById ?? {};
   const snapshotThreads = snapshot.threads.filter(
-    (thread) => deletedThreadIdsById[thread.id] !== true,
+    (thread) =>
+      deletedThreadIdsById[thread.id] !== true && deletedProjectIdsById[thread.projectId] !== true,
   );
-  const projects = mapProjectsFromShellSnapshot(snapshot.projects, state.projects);
+  const projects = mapProjectsFromShellSnapshot(
+    snapshot.projects.filter((project) => deletedProjectIdsById[project.id] !== true),
+    state.projects,
+  );
   const nextThreadIds = new Set(snapshotThreads.map((thread) => thread.id));
 
   let normalizedState: AppState = {
@@ -4098,13 +4110,21 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
   rememberProjectUiState(state.projects);
   rememberProjectLocalNames(state.projects);
   const deletedThreadIdsById = state.deletedThreadIdsById ?? {};
+  const deletedProjectIdsById = state.deletedProjectIdsById ?? {};
   const projects = mapProjectsFromReadModel(
-    readModel.projects.filter((project) => project.deletedAt === null),
+    readModel.projects.filter(
+      (project) => project.deletedAt === null && deletedProjectIdsById[project.id] !== true,
+    ),
     state.projects,
   );
   const existingThreadById = new Map(state.threads.map((thread) => [thread.id, thread] as const));
   const nextThreads = readModel.threads
-    .filter((thread) => thread.deletedAt === null && deletedThreadIdsById[thread.id] !== true)
+    .filter(
+      (thread) =>
+        thread.deletedAt === null &&
+        deletedThreadIdsById[thread.id] !== true &&
+        deletedProjectIdsById[thread.projectId] !== true,
+    )
     .map((thread) => {
       const existing = existingThreadById.get(thread.id);
       return normalizeThreadFromReadModel(thread, existing);
@@ -4380,6 +4400,7 @@ interface AppStore extends AppState {
   applyOrchestrationEvents: (events: ReadonlyArray<OrchestrationEvent>) => void;
   applyOrchestrationEventsHotPath: (events: ReadonlyArray<OrchestrationEvent>) => void;
   removeDeletedThreadFromClientState: (threadId: ThreadId) => void;
+  removeDeletedProjectFromClientState: (projectId: Project["id"]) => void;
   markThreadVisited: (threadId: ThreadId, visitedAt?: string) => void;
   markThreadUnread: (threadId: ThreadId) => void;
   toggleProject: (projectId: Project["id"]) => void;
@@ -4410,6 +4431,8 @@ export const useStore = create<AppStore>((set) => ({
     ),
   removeDeletedThreadFromClientState: (threadId) =>
     set((state) => removeDeletedThreadFromClientState(state, threadId)),
+  removeDeletedProjectFromClientState: (projectId) =>
+    set((state) => removeDeletedProjectFromClientState(state, projectId)),
   markThreadVisited: (threadId, visitedAt) =>
     set((state) => markThreadVisited(state, threadId, visitedAt)),
   markThreadUnread: (threadId) => set((state) => markThreadUnread(state, threadId)),

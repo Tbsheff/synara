@@ -10,8 +10,8 @@ import type {
   BrowserTabState,
   ThreadBrowserState,
   ThreadId,
-} from "@t3tools/contracts";
-import { isBrowserCopyLinkChord } from "@t3tools/shared/browserShortcuts";
+} from "@synara/contracts";
+import { isBrowserCopyLinkChord } from "@synara/shared/browserShortcuts";
 
 import {
   ABOUT_BLANK_URL,

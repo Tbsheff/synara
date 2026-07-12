@@ -1,4 +1,4 @@
-import { RuntimePlan } from "@t3tools/contracts";
+import { RuntimePlan } from "@synara/contracts";
 import { assert, it } from "@effect/vitest";
 import { Effect, Layer, Schema } from "effect";
 

@@ -7,9 +7,9 @@ import type {
   OrchestrationCommand,
   OrchestrationEvent,
   OrchestrationReadModel,
-} from "@t3tools/contracts";
-import { TurnId } from "@t3tools/contracts";
-import { resolveTailUserMessageEditTarget } from "@t3tools/shared/conversationEdit";
+} from "@synara/contracts";
+import { TurnId } from "@synara/contracts";
+import { resolveTailUserMessageEditTarget } from "@synara/shared/conversationEdit";
 import { Effect } from "effect";
 
 import { OrchestrationCommandInvariantError } from "./Errors.ts";

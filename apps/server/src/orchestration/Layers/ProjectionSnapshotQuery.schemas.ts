@@ -30,7 +30,7 @@ import {
   ThreadId,
   TurnDispatchMode,
   TurnId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Schema, Struct } from "effect";
 
 import { ProjectionCheckpoint } from "../../persistence/Services/ProjectionCheckpoints.ts";

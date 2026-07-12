@@ -11,7 +11,7 @@ import type {
   BrowserTabState,
   ThreadBrowserState,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 
 import {
   ABOUT_BLANK_URL,

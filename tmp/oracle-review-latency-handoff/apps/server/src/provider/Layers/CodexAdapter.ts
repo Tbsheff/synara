@@ -16,7 +16,7 @@ import {
   type ProviderRuntimeEvent,
   type ServerVoiceTranscriptionResult,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Effect, FileSystem, Layer, Queue, ServiceMap, Stream } from "effect";
 
 import {

@@ -129,19 +129,21 @@ const makeCheckpointStore = Effect.gen(function* () {
   const captureCheckpointOnce: CheckpointStoreShape["captureCheckpoint"] = (input) =>
     Effect.gen(function* () {
       const operation = "CheckpointStore.captureCheckpoint";
-      const capturedCleanHead = yield* captureCleanHeadCheckpoint(input.cwd, input.checkpointRef);
-      if (capturedCleanHead) {
-        return;
-      }
 
       // Checked inside the single-flight owner (see captureCheckpoint) so the
       // existence probe and the capture cannot interleave with another capture
-      // for the same (cwd, checkpointRef).
+      // for the same (cwd, checkpointRef). Keep this ahead of all worktree
+      // inspection so skipIfExists avoids every capture-related probe and write.
       if (input.skipIfExists) {
         const existingCommit = yield* resolveCheckpointCommit(input.cwd, input.checkpointRef);
         if (existingCommit !== null) {
           return;
         }
+      }
+
+      const capturedCleanHead = yield* captureCleanHeadCheckpoint(input.cwd, input.checkpointRef);
+      if (capturedCleanHead) {
+        return;
       }
 
       yield* Effect.acquireUseRelease(

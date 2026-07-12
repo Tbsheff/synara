@@ -2,7 +2,7 @@
 // Layer: dependency-parameterized Effect helpers; built once per session-runtime via makeOpenCodeEventHandler(deps).
 // Exports: OpenCodeEventHandlerDeps, OpenCodeEventHandler, makeOpenCodeEventHandler.
 
-import { type ProviderRuntimeEvent, type ThreadId, type TurnId } from "@t3tools/contracts";
+import { type ProviderRuntimeEvent, type ThreadId, type TurnId } from "@synara/contracts";
 import { Effect } from "effect";
 import type { Part } from "@opencode-ai/sdk/v2";
 

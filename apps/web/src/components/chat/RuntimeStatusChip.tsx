@@ -4,8 +4,8 @@
 // routes, leases, snapshots, actions). Hidden for local/worktree threads.
 // Layer: Chat shell header control
 
-import type { ExecutionInstanceId, ThreadId } from "@t3tools/contracts";
-import type { OrchestrationThreadRuntime } from "@t3tools/contracts";
+import type { ExecutionInstanceId, ThreadId } from "@synara/contracts";
+import type { OrchestrationThreadRuntime } from "@synara/contracts";
 import { useState } from "react";
 import { FiServer } from "react-icons/fi";
 import { RuntimePanel } from "../RuntimePanel";

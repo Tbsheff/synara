@@ -13,7 +13,7 @@
  *
  * @module CursorAcpSupport.helpers
  */
-import { type CursorModelOptions, type ProviderModelDescriptor } from "@t3tools/contracts";
+import { type CursorModelOptions, type ProviderModelDescriptor } from "@synara/contracts";
 import type * as EffectAcpSchema from "effect-acp/schema";
 
 import type {

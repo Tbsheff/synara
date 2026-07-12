@@ -50,7 +50,10 @@ import {
   UPDATE_INSTALL_CHANNEL,
 } from "./main.constants";
 import { DESKTOP_WS_URL_CHANNEL } from "./desktopWsBridge";
-import { STORAGE_MIGRATION_IPC_CHANNELS } from "./desktopStorageMigration";
+import {
+  saveSynaraStorageSnapshot,
+  STORAGE_MIGRATION_IPC_CHANNELS,
+} from "./desktopStorageMigration";
 
 type HandleFn = (event: unknown, ...args: unknown[]) => unknown;
 type OnFn = (event: unknown, ...args: unknown[]) => void;
@@ -114,7 +117,6 @@ describe("registerMainIpc", () => {
       UPDATE_INSTALL_CHANNEL,
       NOTIFICATIONS_IS_SUPPORTED_CHANNEL,
       NOTIFICATIONS_SHOW_CHANNEL,
-      STORAGE_MIGRATION_IPC_CHANNELS.save,
       STORAGE_MIGRATION_IPC_CHANNELS.acknowledge,
     ]) {
       expect(handlers.has(channel)).toBe(true);
@@ -136,7 +138,7 @@ describe("registerMainIpc", () => {
     expect(event.returnValue).toBe("resolved:ws://127.0.0.1:1234/?token=abc");
   });
 
-  it("saves, synchronously reads, and acknowledges the renderer storage handoff", async () => {
+  it("synchronously reads and acknowledges the storage handoff", async () => {
     const directory = FS.mkdtempSync(Path.join(OS.tmpdir(), "synara-main-ipc-"));
     const storageSnapshotPath = Path.join(directory, "snapshot.json");
     try {
@@ -148,9 +150,7 @@ describe("registerMainIpc", () => {
         entries: { "synara:theme": "dark" },
       };
 
-      await expect(handlers.get(STORAGE_MIGRATION_IPC_CHANNELS.save)?.({}, snapshot)).resolves.toBe(
-        true,
-      );
+      await expect(saveSynaraStorageSnapshot(storageSnapshotPath, snapshot)).resolves.toBe(true);
       const event = { returnValue: null as unknown };
       listeners.get(STORAGE_MIGRATION_IPC_CHANNELS.read)?.(event);
       expect(event.returnValue).toEqual(snapshot);

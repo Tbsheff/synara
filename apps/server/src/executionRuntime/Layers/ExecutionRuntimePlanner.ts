@@ -10,7 +10,7 @@
  */
 import { Effect, Layer } from "effect";
 
-import type { RuntimePlan, RuntimeRole } from "@t3tools/contracts";
+import type { RuntimePlan, RuntimeRole } from "@synara/contracts";
 
 import { RuntimePlanRejectedError } from "../Errors.ts";
 import {

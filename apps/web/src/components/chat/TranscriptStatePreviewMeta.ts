@@ -1,4 +1,4 @@
-import { EventId, type OrchestrationThreadActivity } from "@t3tools/contracts";
+import { EventId, type OrchestrationThreadActivity } from "@synara/contracts";
 
 import type { WorkLogEntry } from "../../session-logic";
 import type { TranscriptScenarioState } from "./transcriptStateFixtures";

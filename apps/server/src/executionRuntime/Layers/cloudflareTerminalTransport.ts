@@ -19,7 +19,7 @@
 import {
   BridgeTerminalFrame,
   type BridgeTerminalFrame as BridgeTerminalFrameType,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Deferred, Effect, Exit, Schema, Scope, Stream } from "effect";
 
 import {

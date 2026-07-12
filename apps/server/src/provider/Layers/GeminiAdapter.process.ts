@@ -6,8 +6,8 @@ import { spawn } from "node:child_process";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
-import { MODEL_OPTIONS_BY_PROVIDER, type ThreadId } from "@t3tools/contracts";
-import { prepareWindowsSafeProcess } from "@t3tools/shared/windowsProcess";
+import { MODEL_OPTIONS_BY_PROVIDER, type ThreadId } from "@synara/contracts";
+import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
 import { Effect } from "effect";
 
 import { ProviderAdapterProcessError } from "../Errors.ts";

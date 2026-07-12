@@ -30,7 +30,7 @@ import {
   type BridgeNetworkRule,
   type BridgeRenewActivityResult,
   type BridgeRoute,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Schema } from "effect";
 
 import type {

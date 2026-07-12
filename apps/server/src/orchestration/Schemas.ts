@@ -44,7 +44,7 @@ import {
   ThreadRuntimeLeaseRenewedPayload as ContractsThreadRuntimeLeaseRenewedPayloadSchema,
   ThreadRuntimeDestroyedPayload as ContractsThreadRuntimeDestroyedPayloadSchema,
   ThreadRuntimeFailedPayload as ContractsThreadRuntimeFailedPayloadSchema,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 
 // Server-internal alias surface, backed by contract schemas as the source of truth.
 export const ProjectCreatedPayload = ContractsProjectCreatedPayloadSchema;

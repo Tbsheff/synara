@@ -4,7 +4,7 @@ import {
   RuntimeProcessSummary,
   RuntimeRouteSummary,
   RuntimeSnapshotSummary,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Effect, Layer, Schema, Struct } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";

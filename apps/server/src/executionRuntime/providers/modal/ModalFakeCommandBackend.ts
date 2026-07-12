@@ -21,7 +21,7 @@
 import nodePath from "node:path";
 import { tmpdir } from "node:os";
 
-import { ExecutionInstanceId } from "@t3tools/contracts";
+import { ExecutionInstanceId } from "@synara/contracts";
 import { Deferred, Effect, Exit, FileSystem, Scope, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 

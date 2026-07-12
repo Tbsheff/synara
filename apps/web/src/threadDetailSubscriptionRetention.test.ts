@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ThreadId, type OrchestrationSessionStatus } from "@t3tools/contracts";
+import { ThreadId, type OrchestrationSessionStatus } from "@synara/contracts";
 import { useStore } from "./store";
 import type { SidebarThreadSummary, ThreadSession } from "./types";
 import {

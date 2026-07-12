@@ -8,7 +8,7 @@ import type {
   ProviderKind,
   ProviderRuntimeEvent,
   ProviderSession,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import {
   ApprovalRequestId,
   CommandId,
@@ -19,7 +19,7 @@ import {
   RuntimeItemId,
   ThreadId,
   TurnId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Effect, Exit, Layer, ManagedRuntime, PubSub, Scope, Stream } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -4155,6 +4155,56 @@ describe("ProviderRuntimeIngestion", () => {
 
     expect(rawOutput.output).toBe("first line\nsecond line\n");
     expect(providerItemRawOutput.output).toBe("first line\nsecond line\n");
+  });
+
+  it("caps buffered command output and marks the completed item as truncated", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-command-output-large"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-command-output-large"),
+      itemId: asItemId("item-command-output-large"),
+      payload: { streamKind: "command_output", delta: "x".repeat(30_000) },
+    });
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-command-completed-large"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-command-output-large"),
+      itemId: asItemId("item-command-output-large"),
+      payload: {
+        itemType: "command_execution",
+        status: "completed",
+        title: "Ran noisy command",
+        data: { rawInput: { command: "noisy" } },
+      },
+    });
+
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.activities.some((activity) => activity.id === "evt-command-completed-large"),
+    );
+    const providerItem = thread.providerItems.find(
+      (item) => item.id === "item-command-output-large",
+    );
+    const data =
+      providerItem?.data && typeof providerItem.data === "object"
+        ? (providerItem.data as Record<string, unknown>)
+        : {};
+    const rawOutput =
+      data.rawOutput && typeof data.rawOutput === "object"
+        ? (data.rawOutput as Record<string, unknown>)
+        : {};
+
+    expect(rawOutput.truncated).toBe(true);
+    expect(String(rawOutput.output)).toContain("[truncated]");
+    expect(String(rawOutput.output).length).toBeLessThanOrEqual(24_000);
   });
 
   it("keeps buffered command output when completed raw streams are empty", async () => {

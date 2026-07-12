@@ -3,7 +3,7 @@
 // Layer: Settings UI components
 // Exports: GeneralSettings
 
-import { PROVIDER_DISPLAY_NAMES, type ProviderKind } from "@t3tools/contracts";
+import { PROVIDER_DISPLAY_NAMES, type ProviderKind } from "@synara/contracts";
 import { type AppSettings } from "../../appSettings";
 import { ProviderOptionLabel } from "../ProviderIcon";
 import { SelectItem } from "../ui/select";

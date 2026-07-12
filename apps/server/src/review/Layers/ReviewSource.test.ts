@@ -6,7 +6,7 @@ import type {
   ReviewPullRequestSummary,
   ReviewUpdatedPayload,
   ReviewWalkthrough,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Effect, Layer, Option, Stream } from "effect";
 import { expect } from "vitest";
 

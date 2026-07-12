@@ -1,6 +1,6 @@
 // Purpose: Import-mode panel for the sidebar search palette. Owns the provider
 // selection + session-id entry flow so the palette container only toggles modes.
-import { type ProviderKind } from "@t3tools/contracts";
+import { type ProviderKind } from "@synara/contracts";
 import { useEffect, useState } from "react";
 import { LuArrowLeft } from "react-icons/lu";
 import { Button } from "./ui/button";

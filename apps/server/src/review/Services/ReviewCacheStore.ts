@@ -4,7 +4,7 @@ import type {
   ReviewListPullRequestsResult,
   ReviewPullRequestOverview,
   ReviewWalkthrough,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { ServiceMap } from "effect";
 import type { Effect, Option } from "effect";
 

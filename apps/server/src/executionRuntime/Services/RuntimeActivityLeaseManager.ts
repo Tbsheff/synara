@@ -15,7 +15,7 @@ import type {
   ExecutionInstanceId,
   RuntimeActivityLeaseId,
   RuntimeActivityLeaseSummary,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 
 export type RuntimeActivityLeaseReason = RuntimeActivityLeaseSummary["reason"];
 

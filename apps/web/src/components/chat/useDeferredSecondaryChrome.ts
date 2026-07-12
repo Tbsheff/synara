@@ -4,7 +4,7 @@
 // Exports: useDeferredSecondaryChrome.
 import { useEffect, useState } from "react";
 
-import type { ThreadId } from "@t3tools/contracts";
+import type { ThreadId } from "@synara/contracts";
 
 export function useDeferredSecondaryChrome(options: {
   readonly secondaryChromeThreadId: ThreadId;

@@ -19,7 +19,7 @@ import {
   ThreadId,
   type ExecutionInstanceId,
   type ModelSelection,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Effect, Layer, ManagedRuntime } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 import { afterEach, describe, expect, it } from "vitest";

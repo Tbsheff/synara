@@ -1,4 +1,4 @@
-import type { ReviewCommentSide, ReviewInlineComment } from "@t3tools/contracts";
+import type { ReviewCommentSide, ReviewInlineComment } from "@synara/contracts";
 
 interface FileLineSets {
   readonly rightLines: ReadonlySet<number>;

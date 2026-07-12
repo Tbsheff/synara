@@ -2,7 +2,7 @@
 // Layer: dependency-parameterized Effect helpers; built once per session-runtime via makeOpenCodeSnapshotHelpers(deps, handleSubscribedEvent).
 // Exports: OpenCodeSnapshotHelpers, makeOpenCodeSnapshotHelpers.
 
-import { type TurnId } from "@t3tools/contracts";
+import { type TurnId } from "@synara/contracts";
 import { Cause, Effect, Exit, Ref, Scope, Stream } from "effect";
 
 import {

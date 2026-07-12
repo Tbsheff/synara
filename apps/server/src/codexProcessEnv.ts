@@ -51,7 +51,10 @@ export function resolveCodexBrowserUsePipePath(
   } = {},
 ): string {
   const env = input.env ?? process.env;
-  const configured = env.SYNARA_BROWSER_USE_PIPE_PATH?.trim();
+  const configured =
+    env.SYNARA_BROWSER_USE_PIPE_PATH?.trim() ||
+    env.DPCODE_BROWSER_USE_PIPE_PATH?.trim() ||
+    env.T3CODE_BROWSER_USE_PIPE_PATH?.trim();
   if (configured) {
     return configured;
   }

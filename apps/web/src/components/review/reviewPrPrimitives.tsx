@@ -1,4 +1,4 @@
-import type { ReviewCheckState, ReviewReviewerState } from "@t3tools/contracts";
+import type { ReviewCheckState, ReviewReviewerState } from "@synara/contracts";
 
 import { CircleAlertIcon, CircleCheckIcon, LoaderCircleIcon, XIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";

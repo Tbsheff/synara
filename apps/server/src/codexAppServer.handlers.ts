@@ -14,7 +14,7 @@ import {
   TurnId,
   type ProviderApprovalDecision,
   type ProviderEvent,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { randomUUID } from "node:crypto";
 
 import {

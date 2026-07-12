@@ -1,4 +1,4 @@
-import { ExecutionInstanceId, ThreadId, type OrchestrationThreadRuntime } from "@t3tools/contracts";
+import { ExecutionInstanceId, ThreadId, type OrchestrationThreadRuntime } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import { resolveThreadRowMetaChips } from "./Sidebar.threadRowMeta";

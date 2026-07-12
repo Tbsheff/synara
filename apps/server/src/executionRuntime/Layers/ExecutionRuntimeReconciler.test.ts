@@ -8,7 +8,7 @@ import {
   ProjectId,
   ThreadId,
   type ModelSelection,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Effect, Layer, ManagedRuntime } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
 

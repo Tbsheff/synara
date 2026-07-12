@@ -1,4 +1,4 @@
-import type { ReviewCommit } from "@t3tools/contracts";
+import type { ReviewCommit } from "@synara/contracts";
 
 import { GitCommitIcon } from "~/lib/icons";
 import { EmptyState, formatRelativeReviewTime } from "./reviewPrimitives";

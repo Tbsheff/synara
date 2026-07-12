@@ -10,11 +10,7 @@
  *
  * @module RuntimeProviderDescriptor
  */
-import type {
-  ExecutionRuntimeProvider,
-  ExecutionTargetKind,
-  RuntimeRole,
-} from "@t3tools/contracts";
+import type { ExecutionRuntimeProvider, ExecutionTargetKind, RuntimeRole } from "@synara/contracts";
 
 import type { FakeRuntimeFlavor } from "./FakeRuntimeFlavor.ts";
 

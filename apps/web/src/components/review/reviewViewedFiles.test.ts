@@ -1,4 +1,4 @@
-import type { ReviewTargetKey } from "@t3tools/contracts";
+import type { ReviewTargetKey } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import { reviewViewedStorageKey, toggleViewedPath } from "./reviewViewedFiles";

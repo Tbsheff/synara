@@ -5,7 +5,7 @@ import type {
   BridgeLogLine,
   BridgeRenewActivityResult,
   BridgeRoute,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import type { BridgeEnv } from "./cloudflareRuntime.ts";

@@ -1,4 +1,4 @@
-import type { ReviewChangedFile, ReviewWalkthroughChapter } from "@t3tools/contracts";
+import type { ReviewChangedFile, ReviewWalkthroughChapter } from "@synara/contracts";
 import type { ReactElement } from "react";
 import { useMemo } from "react";
 

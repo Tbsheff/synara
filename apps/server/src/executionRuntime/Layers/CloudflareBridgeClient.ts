@@ -3,7 +3,7 @@
  *
  * Implements every `CloudflareBridgeClient` method on top of
  * `CloudflareBridgeConnection`: it builds the path, decodes the typed response
- * against the `@t3tools/contracts` bridge schema, and maps a non-2xx status to a
+ * against the `@synara/contracts` bridge schema, and maps a non-2xx status to a
  * `CloudflareBridgeError`. It holds no transport concern (no URLs, no token, no
  * sockets) — that all lives in the connection — so the same logic is exercised
  * against the real bridge and the in-process fake.
@@ -17,7 +17,7 @@ import {
   BridgeRenewActivityResult,
   BridgeRoute,
   type ExecutionInstanceId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Effect, Layer, Schema } from "effect";
 
 import { CloudflareBridgeError } from "../Errors.ts";

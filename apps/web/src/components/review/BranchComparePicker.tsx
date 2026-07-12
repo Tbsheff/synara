@@ -1,4 +1,4 @@
-import type { GitBranch, ReviewSourceRef } from "@t3tools/contracts";
+import type { GitBranch, ReviewSourceRef } from "@synara/contracts";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 

@@ -12,7 +12,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 import { Effect } from "effect";
-import { ApprovalRequestId, ThreadId, type ProviderEvent } from "@t3tools/contracts";
+import { ApprovalRequestId, ThreadId, type ProviderEvent } from "@synara/contracts";
 
 import {
   buildCodexProcessEnv,

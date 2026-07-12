@@ -7,7 +7,7 @@
 import { randomUUID } from "node:crypto";
 
 import { Effect, type Path } from "effect";
-import { resolveWorktreeHandoffIntent } from "@t3tools/shared/worktreeHandoff";
+import { resolveWorktreeHandoffIntent } from "@synara/shared/worktreeHandoff";
 
 import { GitManagerError } from "../Errors.ts";
 import type { GitCoreShape } from "../Services/GitCore.ts";

@@ -4,7 +4,7 @@ import {
   type ProviderRuntimeEvent,
   ThreadId,
   TurnId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Duration } from "effect";
 
 // FILE: ProviderRuntimeIngestion.config.ts

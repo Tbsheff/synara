@@ -4,7 +4,7 @@
 // Exports: hydratePersistedComposerImageAttachment, hydrateImagesFromPersisted,
 //   hydrateQueuedTurnsFromPersisted, toHydratedThreadDraft
 
-import type { ProviderKind, ModelSelection, ThreadId } from "@t3tools/contracts";
+import type { ProviderKind, ModelSelection, ThreadId } from "@synara/contracts";
 import { normalizeAssistantSelections, normalizeTerminalContextsForThread } from "./normalize";
 import { normalizeProviderKind } from "./modelSelection";
 import type {

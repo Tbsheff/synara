@@ -3,8 +3,8 @@
 // Layer: Pure helpers; no store/state dependencies. Slices and store.ts both consume these.
 // Exports: arraysShallowEqual, recordsShallowEqual, deepEqualJson, normalizeModelSelection.
 
-import type { ProviderKind } from "@t3tools/contracts";
-import { normalizeModelSlug } from "@t3tools/shared/model";
+import type { ProviderKind } from "@synara/contracts";
+import { normalizeModelSlug } from "@synara/shared/model";
 
 // Reuse unchanged branches from the read model so per-thread selectors stay stable during streaming.
 export function arraysShallowEqual<T>(

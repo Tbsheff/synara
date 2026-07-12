@@ -9,7 +9,7 @@
 import os from "node:os";
 import path from "node:path";
 
-import type { GeminiThinkingBudget, GeminiThinkingLevel } from "@t3tools/contracts";
+import type { GeminiThinkingBudget, GeminiThinkingLevel } from "@synara/contracts";
 
 export const PROVIDER = "gemini" as const;
 export const GEMINI_ACP_REQUEST_TIMEOUT_MS = 60_000;

@@ -130,17 +130,17 @@ jobs:
         run: bun run typecheck
 
       - name: Test contracts package
-        run: bun run --filter @t3tools/contracts test
+        run: bun run --filter @synara/contracts test
 
       - name: Test effect-acp package
         run: bun run --filter effect-acp test
 
       - name: Test shared package
-        run: bun run --filter @t3tools/shared test
+        run: bun run --filter @synara/shared test
 
       - name: Test server package
         run: |
-          bun run --filter t3 test -- \
+          bun run --filter @synara/cli test -- \
             src/provider/Layers/ClaudeAdapter.test.ts \
             src/orchestration/Layers/ProviderCommandReactor.test.ts \
             src/orchestration/Layers/ProjectionPipeline.test.ts \
@@ -149,16 +149,16 @@ jobs:
             src/review/validateInlineComments.test.ts
 
       - name: Test desktop package
-        run: bun run --filter @t3tools/desktop test
+        run: bun run --filter @synara/desktop test
 
       - name: Test web package
-        run: bun run --filter @t3tools/web test
+        run: bun run --filter @synara/web test
 
       - name: Test Cloudflare runtime bridge package
         run: bun run --filter @t3tools/cloudflare-runtime-bridge test
 
       - name: Test release scripts package
-        run: bun run --filter @t3tools/scripts test
+        run: bun run --filter @synara/scripts test
 
   build:
     name: Build ${{ matrix.label }}

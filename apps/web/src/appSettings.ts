@@ -33,6 +33,12 @@ import {
 import { ensureNativeApi } from "./nativeApi";
 import { providerDiscoveryQueryKeys } from "./lib/providerDiscoveryReactQuery";
 import { serverQueryKeys, serverSettingsQueryOptions } from "./lib/serverReactQuery";
+import { resolveDefaultRemoteProvider, type RuntimePlanDefaults } from "./lib/runtimePresentation";
+import {
+  appSettingsPatchToSandboxesPatch,
+  SANDBOX_APP_SETTINGS_KEYS,
+  sandboxSettingsToAppSettings,
+} from "./sandboxSettings";
 import {
   DEFAULT_UI_DENSITY,
   UI_DENSITY_MODES,
@@ -73,6 +79,9 @@ export const TERMINAL_FONT_FAMILY_SUGGESTIONS: ReadonlyArray<string> = [
 export const TimestampFormat = Schema.Literals(["locale", "12-hour", "24-hour"]);
 export type TimestampFormat = typeof TimestampFormat.Type;
 export const DEFAULT_TIMESTAMP_FORMAT: TimestampFormat = "locale";
+export const SidebarSide = Schema.Literals(["left", "right"]);
+export type SidebarSide = typeof SidebarSide.Type;
+export const DEFAULT_SIDEBAR_SIDE: SidebarSide = "left";
 export const SidebarProjectSortOrder = Schema.Literals(["updated_at", "created_at", "manual"]);
 export type SidebarProjectSortOrder = typeof SidebarProjectSortOrder.Type;
 export const DEFAULT_SIDEBAR_PROJECT_SORT_ORDER: SidebarProjectSortOrder = "manual";
@@ -83,6 +92,9 @@ export const DEFAULT_SIDEBAR_THREAD_SORT_ORDER: SidebarThreadSortOrder = "update
 export const UiDensity = Schema.Literals(UI_DENSITY_MODES);
 export type UiDensity = typeof UiDensity.Type;
 export { DEFAULT_UI_DENSITY };
+export const ReviewWalkthroughDiffStyle = Schema.Literals(["auto", "unified", "split"]);
+export type ReviewWalkthroughDiffStyle = typeof ReviewWalkthroughDiffStyle.Type;
+export const DEFAULT_REVIEW_WALKTHROUGH_DIFF_STYLE: ReviewWalkthroughDiffStyle = "auto";
 
 export function getDefaultNativeFontSmoothing(platform = globalThis.navigator?.platform ?? "") {
   return /mac|iphone|ipad|ipod/i.test(platform);
@@ -131,6 +143,10 @@ const withDefaults =
       Schema.withDecodingDefault(() => fallback()),
     );
 
+const SandboxStringSetting = Schema.String.check(Schema.isMaxLength(4096)).pipe(
+  withDefaults(() => ""),
+);
+
 export const AppSettingsSchema = Schema.Struct({
   claudeBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   uiDensity: UiDensity.pipe(withDefaults(() => DEFAULT_UI_DENSITY)),
@@ -162,6 +178,9 @@ export const AppSettingsSchema = Schema.Struct({
   confirmThreadArchive: Schema.Boolean.pipe(withDefaults(() => false)),
   confirmTerminalTabClose: Schema.Boolean.pipe(withDefaults(() => true)),
   diffWordWrap: Schema.Boolean.pipe(withDefaults(() => false)),
+  reviewWalkthroughDiffStyle: ReviewWalkthroughDiffStyle.pipe(
+    withDefaults(() => DEFAULT_REVIEW_WALKTHROUGH_DIFF_STYLE),
+  ),
   // Local-only UI preferences for hiding sidebar surfaces a user doesn't want.
   // `showChatsSection` controls the standalone "Chats" list in the sidebar footer
   // (rootless chats not tied to a project). `showStudioSection` and
@@ -186,6 +205,7 @@ export const AppSettingsSchema = Schema.Struct({
   enableNativeFontSmoothing: Schema.Boolean.pipe(withDefaults(getDefaultNativeFontSmoothing)),
   enableTaskCompletionToasts: Schema.Boolean.pipe(withDefaults(() => true)),
   enableSystemTaskCompletionNotifications: Schema.Boolean.pipe(withDefaults(() => true)),
+  sidebarSide: SidebarSide.pipe(withDefaults(() => DEFAULT_SIDEBAR_SIDE)),
   sidebarProjectSortOrder: SidebarProjectSortOrder.pipe(
     withDefaults(() => DEFAULT_SIDEBAR_PROJECT_SORT_ORDER),
   ),
@@ -219,8 +239,44 @@ export const AppSettingsSchema = Schema.Struct({
       slug: Schema.String,
     }),
   ).pipe(withDefaults(() => [])),
+  sandboxDefaultRemoteProvider: SandboxStringSetting,
+  sandboxPostCloneCommand: SandboxStringSetting,
+  sandboxRuntimeCpu: SandboxStringSetting,
+  sandboxRuntimeMemoryMb: SandboxStringSetting,
+  sandboxRuntimeTimeoutSeconds: SandboxStringSetting,
+  sandboxRuntimePorts: SandboxStringSetting,
+  sandboxRuntimePersistent: SandboxStringSetting,
+  sandboxRuntimeSyncMcpPlugins: SandboxStringSetting,
+  sandboxRuntimeMcpAllowlist: SandboxStringSetting,
+  sandboxDaytonaApiKey: SandboxStringSetting,
+  sandboxDaytonaApiUrl: SandboxStringSetting,
+  sandboxDaytonaOrganizationId: SandboxStringSetting,
+  sandboxDaytonaTarget: SandboxStringSetting,
+  sandboxDaytonaSnapshot: SandboxStringSetting,
+  sandboxVercelToken: SandboxStringSetting,
+  sandboxVercelTeamId: SandboxStringSetting,
+  sandboxVercelProjectId: SandboxStringSetting,
+  sandboxVercelRuntime: SandboxStringSetting,
+  sandboxModalTokenId: SandboxStringSetting,
+  sandboxModalTokenSecret: SandboxStringSetting,
+  sandboxModalEnvironment: SandboxStringSetting,
+  sandboxCloudflareBridgeUrl: SandboxStringSetting,
+  sandboxCloudflareBridgeToken: SandboxStringSetting,
 });
 export type AppSettings = typeof AppSettingsSchema.Type;
+
+export function runtimePlanDefaultsFromSettings(settings: AppSettings): RuntimePlanDefaults {
+  const provider = resolveDefaultRemoteProvider(settings.sandboxDefaultRemoteProvider);
+  return {
+    provider,
+    snapshotId: provider === "daytona" ? settings.sandboxDaytonaSnapshot : "",
+    cpu: settings.sandboxRuntimeCpu,
+    memoryMb: settings.sandboxRuntimeMemoryMb,
+    timeoutSeconds: settings.sandboxRuntimeTimeoutSeconds,
+    ports: settings.sandboxRuntimePorts,
+    persistent: settings.sandboxRuntimePersistent,
+  };
+}
 
 type Mutable<T> = { -readonly [Key in keyof T]: T[Key] };
 type MutableServerSettingsPatch = Mutable<ServerSettingsPatch>;
@@ -438,6 +494,7 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
 
 function serverSettingsToAppSettings(settings: ServerSettings): Partial<AppSettings> {
   return {
+    ...sandboxSettingsToAppSettings(settings),
     claudeBinaryPath: settings.providers.claudeAgent.binaryPath,
     codexBinaryPath: settings.providers.codex.binaryPath,
     codexHomePath: settings.providers.codex.homePath,
@@ -625,6 +682,10 @@ function appSettingsPatchToServerSettingsPatch(patch: Partial<AppSettings>): Ser
   if (Object.keys(providers).length > 0) {
     serverPatch.providers = providers;
   }
+  const sandboxes = appSettingsPatchToSandboxesPatch(patch);
+  if (sandboxes) {
+    serverPatch.sandboxes = sandboxes;
+  }
   return serverPatch;
 }
 
@@ -662,6 +723,12 @@ function buildInitialServerSettingsMigrationPatch(settings: AppSettings): Server
   ] as const) {
     if (normalizedSettings[key] !== defaults[key]) {
       patch[key] = normalizedSettings[key] as never;
+    }
+  }
+
+  for (const key of SANDBOX_APP_SETTINGS_KEYS) {
+    if (normalizedSettings[key] !== defaults[key]) {
+      patch[key] = normalizedSettings[key];
     }
   }
 
@@ -1135,5 +1202,6 @@ export function useAppSettings() {
     updateSettings,
     resetSettings,
     defaults,
+    settingsReady: !serverSettingsQuery.isPending,
   } as const;
 }

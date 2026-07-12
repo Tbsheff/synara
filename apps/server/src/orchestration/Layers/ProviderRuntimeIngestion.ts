@@ -8,15 +8,15 @@ import {
   type OrchestrationThread,
   type OrchestrationThreadActivity,
   type ProviderRuntimeEvent,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Cause, Effect, Layer, Option, Stream } from "effect";
-import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
+import { makeDrainableWorker } from "@synara/shared/DrainableWorker";
 import {
   buildSubagentIdentityDirectory,
   collectSubagentProviderThreadIds,
   extractSubagentIdentityHints,
   resolveSubagentIdentityFromDirectory,
-} from "@t3tools/shared/subagents";
+} from "@synara/shared/subagents";
 
 import {
   generatedImagePathFromRuntimeEvent,
@@ -87,6 +87,41 @@ const deliveryModeKey = (threadId: ThreadId, turnId: TurnId | string) => `${thre
 const toolOutputBufferKey = (threadId: ThreadId, itemId: string) => `${threadId}:${itemId}`;
 
 const MAX_PENDING_GENERATED_IMAGES_PER_TURN = 32;
+const BUFFERED_TOOL_OUTPUT_BY_KEY_CAPACITY = 2_048;
+const MAX_BUFFERED_TOOL_OUTPUT_CHARS = 24_000;
+const BUFFERED_TEXT_TRUNCATION_MARKER = "... [truncated]";
+
+type BufferedToolOutput = {
+  readonly text: string;
+  readonly truncated: boolean;
+};
+
+export function appendCappedBufferedText(existing: string, delta: string, limit: number): string {
+  const normalizedLimit = Math.max(0, Math.floor(limit));
+  if (normalizedLimit === 0) return "";
+  const next = `${existing}${delta}`;
+  if (next.length <= normalizedLimit) return next;
+  if (normalizedLimit <= BUFFERED_TEXT_TRUNCATION_MARKER.length) {
+    return BUFFERED_TEXT_TRUNCATION_MARKER.slice(0, normalizedLimit);
+  }
+  return `${next.slice(
+    0,
+    normalizedLimit - BUFFERED_TEXT_TRUNCATION_MARKER.length,
+  )}${BUFFERED_TEXT_TRUNCATION_MARKER}`;
+}
+
+export function setCappedBufferedToolOutput(
+  buffers: Map<string, BufferedToolOutput>,
+  key: string,
+  value: BufferedToolOutput,
+  capacity = BUFFERED_TOOL_OUTPUT_BY_KEY_CAPACITY,
+): void {
+  if (!buffers.has(key) && buffers.size >= capacity) {
+    const oldestKey = buffers.keys().next().value;
+    if (oldestKey !== undefined) buffers.delete(oldestKey);
+  }
+  buffers.set(key, value);
+}
 
 export function collectPersistedGeneratedImagePaths(
   records: ReadonlyArray<ProjectionGeneratedImageActivityRecord>,
@@ -135,19 +170,24 @@ const isToolOutputDelta = (
 
 const mergeBufferedToolOutput = (
   data: unknown,
-  bufferedOutput: string,
+  bufferedOutput: BufferedToolOutput,
 ): Record<string, unknown> => {
   const dataRecord = asObject(data) ?? {};
-  const rawOutputRecord = asObject(dataRecord.rawOutput);
-  const rawOutput =
-    rawOutputRecord === undefined
-      ? { output: bufferedOutput }
-      : {
-          ...rawOutputRecord,
-          ...(typeof rawOutputRecord.output === "string" && rawOutputRecord.output.length > 0
-            ? {}
-            : { output: bufferedOutput }),
-        };
+  const rawOutputRecord =
+    asObject(dataRecord.rawOutput) ??
+    (typeof dataRecord.rawOutput === "string" && dataRecord.rawOutput.trim().length > 0
+      ? { output: dataRecord.rawOutput }
+      : {});
+  const hasStructuredOutput = [
+    rawOutputRecord.output,
+    rawOutputRecord.stdout,
+    rawOutputRecord.stderr,
+  ].some((value) => typeof value === "string" && value.trim().length > 0);
+  const rawOutput = {
+    ...rawOutputRecord,
+    ...(hasStructuredOutput ? {} : { output: bufferedOutput.text }),
+    ...(bufferedOutput.truncated ? { truncated: true } : {}),
+  };
   return {
     ...dataRecord,
     rawOutput,
@@ -156,7 +196,7 @@ const mergeBufferedToolOutput = (
 
 const eventWithBufferedToolOutput = (
   event: ProviderRuntimeEvent,
-  toolOutputBuffersByItem: Map<string, string>,
+  toolOutputBuffersByItem: Map<string, BufferedToolOutput>,
 ): ProviderRuntimeEvent => {
   if (event.type !== "item.completed" || event.itemId === undefined) {
     return event;
@@ -164,7 +204,7 @@ const eventWithBufferedToolOutput = (
   const bufferedOutput = toolOutputBuffersByItem.get(
     toolOutputBufferKey(event.threadId, event.itemId),
   );
-  if (bufferedOutput === undefined || bufferedOutput.length === 0) {
+  if (bufferedOutput === undefined || bufferedOutput.text.length === 0) {
     return event;
   }
   toolOutputBuffersByItem.delete(toolOutputBufferKey(event.threadId, event.itemId));
@@ -230,7 +270,7 @@ const make = Effect.gen(function* () {
     string,
     { readonly checkpointRef: CheckpointRef; readonly checkpointTurnCount: number }
   >();
-  const toolOutputBuffersByItem = new Map<string, string>();
+  const toolOutputBuffersByItem = new Map<string, BufferedToolOutput>();
   const pendingGeneratedImagesByTurn = new Map<string, ReadonlyArray<string>>();
   const latestActivityUpdateFingerprintByKey = new Map<string, string>();
 
@@ -801,10 +841,18 @@ const make = Effect.gen(function* () {
         const itemId = event.itemId;
         if (itemId !== undefined) {
           const key = toolOutputBufferKey(thread.id, itemId);
-          toolOutputBuffersByItem.set(
-            key,
-            `${toolOutputBuffersByItem.get(key) ?? ""}${event.payload.delta}`,
-          );
+          const existing = toolOutputBuffersByItem.get(key);
+          const existingText = existing?.text ?? "";
+          setCappedBufferedToolOutput(toolOutputBuffersByItem, key, {
+            text: appendCappedBufferedText(
+              existingText,
+              event.payload.delta,
+              MAX_BUFFERED_TOOL_OUTPUT_CHARS,
+            ),
+            truncated:
+              existing?.truncated === true ||
+              existingText.length + event.payload.delta.length > MAX_BUFFERED_TOOL_OUTPUT_CHARS,
+          });
         }
       }
 

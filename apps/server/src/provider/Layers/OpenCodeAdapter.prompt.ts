@@ -2,7 +2,7 @@
 // Layer: dependency-parameterized Effect helpers; built once per session-runtime via makeOpenCodePrompt(deps).
 // Exports: OpenCodePromptDeps, OpenCodePromptHelpers, makeOpenCodePrompt.
 
-import { type TurnId } from "@t3tools/contracts";
+import { type TurnId } from "@synara/contracts";
 import { Deferred, Effect, Ref } from "effect";
 import type { OpencodeClient } from "@opencode-ai/sdk/v2";
 

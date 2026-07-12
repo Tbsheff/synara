@@ -2,7 +2,7 @@ import {
   isToolLifecycleItemType,
   type OrchestrationThreadActivity,
   type ProviderRuntimeEvent,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 
 import {
   ACTIVITY_DATA_TRUNCATION_MARKER,

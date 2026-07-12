@@ -6,7 +6,7 @@ import {
   type GrokModelOptions,
   type ProviderInteractionMode,
   type RuntimeMode,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Effect } from "effect";
 
 import { applyGrokAcpModelSelection } from "../acp/GrokAcpSupport.ts";

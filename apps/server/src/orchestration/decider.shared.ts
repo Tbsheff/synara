@@ -8,12 +8,12 @@ import type {
   OrchestrationCommand,
   OrchestrationEvent,
   OrchestrationReadModel,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import {
   deriveAssociatedWorktreeMetadata,
   deriveAssociatedWorktreeMetadataPatch,
-} from "@t3tools/shared/threadWorkspace";
-import { collectTailTurnIds } from "@t3tools/shared/conversationEdit";
+} from "@synara/shared/threadWorkspace";
+import { collectTailTurnIds } from "@synara/shared/conversationEdit";
 import type { Effect } from "effect";
 
 import type { OrchestrationCommandInvariantError } from "./Errors.ts";

@@ -1,4 +1,4 @@
-import type { ReviewTargetKey } from "@t3tools/contracts";
+import type { ReviewTargetKey } from "@synara/contracts";
 import { page } from "vitest/browser";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";

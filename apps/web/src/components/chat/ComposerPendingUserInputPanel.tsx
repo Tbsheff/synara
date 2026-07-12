@@ -151,6 +151,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
   const showNavigation = questionCount > 1;
   const canGoBack = progress.questionIndex > 0;
   const canGoForward = !progress.isLastQuestion && progress.canAdvance;
+  const statusId = `pending-user-input-status-${prompt.requestId}`;
 
   return (
     <div className={cn(COMPOSER_INPUT_SURFACE_CLASS_NAME, "overflow-hidden px-3.5 py-3")}>
@@ -188,7 +189,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
         <p className="mt-1 text-[11px] text-muted-foreground/55">Select one or more.</p>
       ) : null}
       {activeQuestion.options.length > 0 ? (
-        <div className="mt-2.5 space-y-0.5">
+        <div className="mt-2.5 space-y-0.5" role="group" aria-describedby={statusId}>
           {activeQuestion.options.map((option, index) => {
             const isSelected = progress.selectedOptionLabels.includes(option.label);
             const shortcutKey = index < 9 ? index + 1 : null;
@@ -225,6 +226,11 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
           </button>
         </div>
       )}
+      <span id={statusId} className="sr-only" aria-live="polite">
+        {progress.selectedOptionLabels.length === 0
+          ? "No options selected."
+          : `${progress.selectedOptionLabels.length} option${progress.selectedOptionLabels.length === 1 ? "" : "s"} selected.`}
+      </span>
     </div>
   );
 });

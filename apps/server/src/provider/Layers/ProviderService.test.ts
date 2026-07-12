@@ -1111,6 +1111,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         ...existing,
         resumeCursor: updatedResumeCursor,
       }));
+      yield* routing.claude.waitForRuntimeSubscribers();
       routing.claude.emit({
         type: "turn.tasks.updated",
         eventId: asEventId("runtime-task-resume-refresh"),

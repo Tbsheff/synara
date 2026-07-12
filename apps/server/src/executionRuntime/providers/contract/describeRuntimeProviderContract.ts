@@ -25,7 +25,7 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import nodePath from "node:path";
 
-import type { ExecutionInstanceId, RuntimeRole } from "@t3tools/contracts";
+import type { ExecutionInstanceId, RuntimeRole } from "@synara/contracts";
 import { Deferred, Effect, Stream, type ManagedRuntime } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
 

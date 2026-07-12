@@ -2,7 +2,7 @@
 // Layer: GitHubCliLive (apps/server/src/git/Layers/GitHubCli.ts) — each helper takes the layer's `execute`.
 // Exports: enrichConversationAvatars, fetchPullRequestReviewThreads.
 
-import { parsePullRequestUrl } from "@t3tools/shared/git";
+import { parsePullRequestUrl } from "@synara/shared/git";
 import { Effect, Schema } from "effect";
 
 import { GitHubCliError } from "../Errors.ts";

@@ -29,7 +29,7 @@ import {
   type RuntimePlan,
   type RuntimeRouteSummary,
   type RuntimeSnapshotSummary,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Deferred, Effect, Exit, Layer, Ref, Scope, Stream } from "effect";
 
 import {

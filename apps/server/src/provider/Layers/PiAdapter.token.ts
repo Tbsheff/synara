@@ -3,7 +3,7 @@
 // Exports: normalizeTokenUsage.
 
 import type { AgentSession as PiAgentSession } from "@earendil-works/pi-coding-agent";
-import type { ThreadTokenUsageSnapshot } from "@t3tools/contracts";
+import type { ThreadTokenUsageSnapshot } from "@synara/contracts";
 
 export function normalizeTokenUsage(
   stats: ReturnType<PiAgentSession["getSessionStats"]>,

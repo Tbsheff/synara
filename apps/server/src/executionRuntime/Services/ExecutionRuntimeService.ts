@@ -25,7 +25,7 @@ import type {
   RuntimePlan,
   RuntimeRole,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { ServiceMap } from "effect";
 import type { Effect } from "effect";
 

@@ -7,6 +7,8 @@ import {
   repairBrowserProfileFromBridgeManifest,
   resolveDesktopAppDataBase,
   resolveDesktopUserDataPath,
+  resolveLegacyDesktopUserDataPaths,
+  seedDesktopUserDataProfileFromLegacy,
 } from "./desktopUserDataProfile";
 
 const tempDirs = new Set<string>();
@@ -43,6 +45,63 @@ describe("desktopUserDataProfile", () => {
         homeDir: "/home/tester",
       }),
     ).toBe("/tmp/xdg");
+  });
+
+  it("discovers predecessor profiles and seeds renderer and browser session state", () => {
+    const appDataBase = makeTempDir();
+    const sourcePath = Path.join(appDataBase, "t3code");
+    const targetPath = Path.join(appDataBase, "synara");
+    FS.mkdirSync(Path.join(sourcePath, "Local Storage", "leveldb"), { recursive: true });
+    FS.mkdirSync(Path.join(sourcePath, "Partitions", "t3code-browser"), { recursive: true });
+    FS.writeFileSync(Path.join(sourcePath, "Local Storage", "leveldb", "state"), "renderer");
+    FS.writeFileSync(Path.join(sourcePath, "Cookies"), "renderer-cookie");
+    FS.writeFileSync(
+      Path.join(sourcePath, "Partitions", "t3code-browser", "Cookies"),
+      "browser-cookie",
+    );
+
+    const legacyPaths = resolveLegacyDesktopUserDataPaths({
+      appDataBase,
+      isDevelopment: false,
+    });
+    expect(legacyPaths).toContain(sourcePath);
+    expect(seedDesktopUserDataProfileFromLegacy({ targetPath, legacyPaths })).toMatchObject({
+      status: "seeded",
+      sourcePath,
+      targetPath,
+    });
+    expect(FS.readFileSync(Path.join(targetPath, "Cookies"), "utf8")).toBe("renderer-cookie");
+    expect(repairBrowserProfileFromBridgeManifest(targetPath)).toMatchObject({
+      status: "repaired",
+      sourcePath,
+      copiedEntries: ["Cookies"],
+    });
+    expect(
+      FS.readFileSync(Path.join(targetPath, "Partitions", "synara-browser", "Cookies"), "utf8"),
+    ).toBe("browser-cookie");
+  });
+
+  it("combines complementary recoverable state from every legacy profile", () => {
+    const appDataBase = makeTempDir();
+    const sparsePath = Path.join(appDataBase, "dpcode");
+    const completePath = Path.join(appDataBase, "t3code");
+    const targetPath = Path.join(appDataBase, "synara");
+    FS.mkdirSync(sparsePath, { recursive: true });
+    FS.writeFileSync(Path.join(sparsePath, "Preferences"), "sparse");
+    FS.mkdirSync(Path.join(completePath, "Local Storage"), { recursive: true });
+    FS.writeFileSync(Path.join(completePath, "Preferences"), "complete");
+    FS.writeFileSync(Path.join(completePath, "Cookies"), "cookie");
+    FS.writeFileSync(Path.join(completePath, "Local Storage", "state"), "state");
+
+    const result = seedDesktopUserDataProfileFromLegacy({
+      targetPath,
+      legacyPaths: resolveLegacyDesktopUserDataPaths({ appDataBase, isDevelopment: false }),
+    });
+
+    expect(result).toMatchObject({ status: "seeded", sourcePath: sparsePath });
+    expect(FS.readFileSync(Path.join(targetPath, "Preferences"), "utf8")).toBe("sparse");
+    expect(FS.readFileSync(Path.join(targetPath, "Cookies"), "utf8")).toBe("cookie");
+    expect(FS.readFileSync(Path.join(targetPath, "Local Storage", "state"), "utf8")).toBe("state");
   });
 
   it("repairs missing browser data from the profile recorded by the bridge", () => {

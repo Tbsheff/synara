@@ -2,7 +2,7 @@
 // Layer: deps-parameterized factory; deps carry the session-bound emitters/loggers, handler takes (ctx, event).
 // Exports: CursorNotificationHandlerDeps, makeCursorNotificationHandler.
 
-import { type EventId, type ProviderRuntimeEvent, type ThreadId } from "@t3tools/contracts";
+import { type EventId, type ProviderRuntimeEvent, type ThreadId } from "@synara/contracts";
 import { Effect } from "effect";
 
 import { readAcpFailedToolDetail } from "../acp/AcpAdapterSupport.ts";

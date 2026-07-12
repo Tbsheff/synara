@@ -13,7 +13,7 @@
  */
 import { Effect, Layer } from "effect";
 
-import type { ServerSettingsPatch } from "@t3tools/contracts";
+import type { ServerSettingsPatch } from "@synara/contracts";
 
 import { ServerSecretStore } from "../../auth/Services/ServerSecretStore.ts";
 import { SANDBOX_CREDENTIAL_MAPPING, sandboxSecretName } from "../sandboxCredentialMapping.ts";

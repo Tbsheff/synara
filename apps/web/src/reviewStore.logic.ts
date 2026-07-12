@@ -9,10 +9,10 @@ import type {
   ReviewFinding,
   ReviewLocalComment,
   ReviewTargetKey,
-} from "@t3tools/contracts";
-import { ReviewSourceRef } from "@t3tools/contracts";
+} from "@synara/contracts";
+import { ReviewSourceRef } from "@synara/contracts";
 import { Schema } from "effect";
-import { serializeReviewTargetKey } from "@t3tools/shared/reviewTargetKey";
+import { serializeReviewTargetKey } from "@synara/shared/reviewTargetKey";
 import { sanitizeStringKeyedRecord } from "./persistedRecord";
 
 export type ReviewSourceByScope = Record<string, ReviewSourceRef>;

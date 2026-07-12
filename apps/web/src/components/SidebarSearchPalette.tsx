@@ -7,12 +7,14 @@
 import {
   CheckIcon,
   DeviceLaptopIcon,
+  GitPullRequestIcon,
   MoonIcon,
   NewThreadIcon,
   SearchIcon,
   SettingsIcon,
   SunIcon,
 } from "~/lib/icons";
+import { parsePullRequestReference } from "~/pullRequestReference";
 import { type FilesystemBrowseResult, type ProviderKind } from "@synara/contracts";
 import { isGenericChatThreadTitle } from "@synara/shared/chatThreads";
 import { BsChat } from "react-icons/bs";
@@ -86,8 +88,8 @@ interface SidebarSearchPaletteProps {
   homeDir: string | null;
   initialBrowseQuery?: string | null;
   onOpenSettings: () => void;
-  onOpenUsageSettings: () => void;
   onOpenProject: (projectId: string) => void;
+  onOpenPullRequestReference: (reference: string) => void;
   onOpenThread: (threadId: string) => void;
   importProviders: readonly ImportProviderKind[];
   onImportThread: (provider: ImportProviderKind, externalId: string) => Promise<void>;
@@ -100,10 +102,7 @@ export type ImportProviderKind = Extract<
 
 function actionHandler(
   actionId: string,
-  props: Pick<
-    SidebarSearchPaletteProps,
-    "onCreateChat" | "onCreateThread" | "onOpenSettings" | "onOpenUsageSettings"
-  >,
+  props: Pick<SidebarSearchPaletteProps, "onCreateChat" | "onCreateThread" | "onOpenSettings">,
 ): (() => void) | null {
   switch (actionId) {
     case "new-chat":
@@ -113,7 +112,7 @@ function actionHandler(
     case "settings":
       return props.onOpenSettings;
     case "usage-settings":
-      return props.onOpenUsageSettings;
+      return props.onOpenSettings;
     default:
       return null;
   }
@@ -471,7 +470,9 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
     () => (isBrowsing ? [] : matchSidebarSearchThreads(props.threads, query)),
     [isBrowsing, props.threads, query],
   );
+  const parsedPullRequestReference = isBrowsing ? null : parsePullRequestReference(trimmedQuery);
   const hasSearchResults =
+    parsedPullRequestReference !== null ||
     matchedActions.length > 0 ||
     themeCommandItems.length > 0 ||
     matchedCurrentThemes.length > 0 ||
@@ -953,6 +954,31 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                           </CommandItem>
                         ),
                       )}
+                    </CommandGroup>
+                  ) : null}
+
+                  {!isBrowsing && parsedPullRequestReference !== null ? (
+                    <CommandGroup>
+                      <CommandGroupLabel className="py-1.5 pl-3">Review</CommandGroupLabel>
+                      <CommandItem
+                        value={`review-pr:${parsedPullRequestReference}`}
+                        className="cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5"
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={() => {
+                          props.onOpenChange(false);
+                          props.onOpenPullRequestReference(parsedPullRequestReference);
+                        }}
+                      >
+                        <PaletteIcon icon={GitPullRequestIcon} />
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate text-[length:var(--app-font-size-ui,12px)] text-foreground">
+                            Open pull request
+                          </div>
+                          <div className="truncate text-[length:var(--app-font-size-ui-meta,10px)] text-muted-foreground/79">
+                            {parsedPullRequestReference}
+                          </div>
+                        </div>
+                      </CommandItem>
                     </CommandGroup>
                   ) : null}
 

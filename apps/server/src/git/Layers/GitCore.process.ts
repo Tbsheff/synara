@@ -14,7 +14,7 @@ import {
   Stream,
 } from "effect";
 
-import { decodeJsonResult } from "@t3tools/shared/schemaJson";
+import { decodeJsonResult } from "@synara/shared/schemaJson";
 import { GitCommandError } from "../Errors.ts";
 import type { ExecuteGitInput, ExecuteGitProgress } from "../Services/GitCore.ts";
 import type { TraceTailState } from "./GitCore.types.ts";

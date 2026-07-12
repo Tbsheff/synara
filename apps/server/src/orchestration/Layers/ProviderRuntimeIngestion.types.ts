@@ -2,7 +2,7 @@ import type {
   OrchestrationEvent,
   OrchestrationThreadActivity,
   ProviderRuntimeEvent,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 
 // FILE: ProviderRuntimeIngestion.types.ts
 // Purpose: Shared types for provider runtime ingestion projection.

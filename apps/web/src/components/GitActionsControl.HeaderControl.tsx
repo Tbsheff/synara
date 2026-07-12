@@ -3,7 +3,7 @@
 // Layer: Header action control (presentational)
 // Exports: GitActionsHeaderControl.
 
-import type { GitStatusResult } from "@t3tools/contracts";
+import type { GitStatusResult } from "@synara/contracts";
 import { ChevronDownIcon } from "~/lib/icons";
 import { Button } from "~/components/ui/button";
 import {

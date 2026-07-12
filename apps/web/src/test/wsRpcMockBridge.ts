@@ -3,7 +3,7 @@ import {
   ORCHESTRATION_WS_METHODS,
   WS_CHANNELS,
   WS_METHODS,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 
 // Browser tests mock the WebSocket via msw's `ws.link`, but the production
 // transport speaks the Effect (effect-smol) raw RPC protocol over `layerJson`.

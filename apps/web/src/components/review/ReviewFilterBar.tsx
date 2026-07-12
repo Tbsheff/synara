@@ -1,4 +1,4 @@
-import type { ReviewListSort, ReviewPullRequestSummary } from "@t3tools/contracts";
+import type { ReviewListSort, ReviewPullRequestSummary } from "@synara/contracts";
 import { useMemo, useState } from "react";
 
 import { AdjustmentsIcon, CheckIcon, ChevronDownIcon, SearchIcon, XIcon } from "~/lib/icons";

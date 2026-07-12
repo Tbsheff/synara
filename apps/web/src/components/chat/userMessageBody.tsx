@@ -4,7 +4,7 @@
 // Exports: UserMessageBody, renderUserMessageInlineText, hasOnlyInlineSkillChips
 
 import { memo, type CSSProperties, type ReactNode } from "react";
-import type { ProviderMentionReference } from "@t3tools/contracts";
+import type { ProviderMentionReference } from "@synara/contracts";
 import { MentionChipIcon } from "./MentionChipIcon";
 import { TerminalContextInlineChip } from "./TerminalContextInlineChip";
 import { type ParsedTerminalContextEntry } from "~/lib/terminalContext";

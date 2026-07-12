@@ -14,7 +14,7 @@ import {
   type ToolLifecycleItemType,
   TurnId,
   type UserInputQuestion,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import type { Part, QuestionRequest, Todo } from "@opencode-ai/sdk/v2";
 
 import { openCodeQuestionId } from "../opencodeRuntime.ts";

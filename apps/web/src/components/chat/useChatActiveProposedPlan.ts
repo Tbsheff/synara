@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { type TurnId } from "@t3tools/contracts";
+import { type TurnId } from "@synara/contracts";
 import { findLatestProposedPlan } from "../../session-logic.plan";
 import { type ProposedPlan } from "../../types";
 

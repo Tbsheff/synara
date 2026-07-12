@@ -4,7 +4,7 @@
 // Exports: SidebarSearchPaletteController
 
 import { useMemo } from "react";
-import type { ProjectId } from "@t3tools/contracts";
+import type { ProjectId } from "@synara/contracts";
 import { useQueries } from "@tanstack/react-query";
 import { useStore } from "../store";
 import { createAllThreadsSelector, createSidebarDisplayThreadsSelector } from "../storeSelectors";

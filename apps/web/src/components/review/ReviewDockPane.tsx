@@ -3,7 +3,7 @@
 // Layer: Chat right-dock UI
 // Depends on: reviewStore (selected source per scope), useReviewCwd, ReviewEntryPanel, ReviewPrView, ReviewSurface.
 
-import type { ReviewSourceRef, ThreadId } from "@t3tools/contracts";
+import type { ReviewSourceRef, ThreadId } from "@synara/contracts";
 import { Suspense, lazy } from "react";
 
 import { selectReviewSource, useReviewStore } from "~/reviewStore";

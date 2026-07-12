@@ -14,7 +14,7 @@ import type {
   ExecutionInstanceId,
   ExecutionRuntimeProvider,
   OrchestrationThreadRuntime,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 
 /** Instance statuses for which the sandbox is reachable for a workspace diff. */
 export const REMOTE_DIFFABLE_INSTANCE_STATUSES: ReadonlySet<string> = new Set([

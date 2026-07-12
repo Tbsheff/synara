@@ -9,8 +9,8 @@
  *
  * @module CursorAcpSupport.parsing
  */
-import { type CursorModelOptions, type ProviderModelDescriptor } from "@t3tools/contracts";
-import { formatModelDisplayName } from "@t3tools/shared/model";
+import { type CursorModelOptions, type ProviderModelDescriptor } from "@synara/contracts";
+import { formatModelDisplayName } from "@synara/shared/model";
 
 import type { CursorAcpSelectOption } from "./CursorAcpSupport.types.ts";
 

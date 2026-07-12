@@ -9,7 +9,7 @@
  *
  * @module executionRuntime/Layers/CodexMcpPluginSource
  */
-import { DEFAULT_SERVER_SETTINGS } from "@t3tools/contracts";
+import { DEFAULT_SERVER_SETTINGS } from "@synara/contracts";
 import { Effect, Layer } from "effect";
 
 import { ServerSettingsService } from "../../serverSettings.ts";

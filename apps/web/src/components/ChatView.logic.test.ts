@@ -1,4 +1,4 @@
-import { MessageId, ThreadId, TurnId, type ModelSlug } from "@t3tools/contracts";
+import { MessageId, ThreadId, TurnId, type ModelSlug } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import {

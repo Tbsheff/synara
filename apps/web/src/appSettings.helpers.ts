@@ -9,13 +9,13 @@
 //   getGitTextGenerationModelOptions, resolveAppModelSelection,
 //   getCustomModelOptionsByProvider.
 
-import { ProviderKind } from "@t3tools/contracts";
+import { ProviderKind } from "@synara/contracts";
 import {
   getDefaultModel,
   getModelOptions,
   normalizeModelSlug,
   resolveSelectableModel,
-} from "@t3tools/shared/model";
+} from "@synara/shared/model";
 import { formatProviderModelOptionName, type ProviderModelOption } from "./providerModelOptions";
 import type { AppSettings } from "./appSettings";
 

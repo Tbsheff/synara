@@ -23,7 +23,7 @@ import type {
   ProviderInteractionMode,
   ThreadId,
   TurnId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 
 import type { JsonRpcLineTransport } from "./provider/process/JsonRpcLineTransport.ts";
 

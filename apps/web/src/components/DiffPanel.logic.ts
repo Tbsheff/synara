@@ -13,7 +13,7 @@ import {
   type ModelSelection,
   type ThreadId,
   type TurnId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 
 import type { DraftThreadState } from "../composerDraftStore";
 import type { RepoDiffScope } from "../repoDiffScopeStore";

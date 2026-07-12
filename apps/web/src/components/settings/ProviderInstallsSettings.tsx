@@ -6,7 +6,7 @@ import {
   PROVIDER_DISPLAY_NAMES,
   type ProviderKind,
   type ServerProviderStatus,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { type ReactNode, type Dispatch, type RefObject, type SetStateAction } from "react";
 import { type AppSettings } from "../../appSettings";
 import { ChevronDownIcon, DownloadIcon, ExternalLinkIcon, Loader2Icon } from "../../lib/icons";

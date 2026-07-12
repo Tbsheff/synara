@@ -1,4 +1,4 @@
-import type { ReviewChangedFile } from "@t3tools/contracts";
+import type { ReviewChangedFile } from "@synara/contracts";
 import { useMemo, useState } from "react";
 
 import { SearchIcon } from "~/lib/icons";

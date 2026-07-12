@@ -5,7 +5,7 @@
  * Exports: all open/close/split/new/active/resize/metadata/activity/preset reducers.
  */
 
-import { type TerminalActivityState, type TerminalCliKind } from "@t3tools/shared/terminalThreads";
+import { type TerminalActivityState, type TerminalCliKind } from "@synara/shared/terminalThreads";
 import {
   DEFAULT_THREAD_TERMINAL_ID,
   MAX_TERMINALS_PER_GROUP,

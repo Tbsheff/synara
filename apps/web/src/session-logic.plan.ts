@@ -6,7 +6,7 @@ import type {
   OrchestrationProposedPlanId,
   ThreadId,
   TurnId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 
 import type { ProposedPlan, Thread } from "./types";
 

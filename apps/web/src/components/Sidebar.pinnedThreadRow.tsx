@@ -5,8 +5,8 @@
 
 import type { ReactNode } from "react";
 import { TerminalIcon } from "~/lib/icons";
-import type { ThreadId } from "@t3tools/contracts";
-import { isGenericChatThreadTitle } from "@t3tools/shared/chatThreads";
+import type { ThreadId } from "@synara/contracts";
+import { isGenericChatThreadTitle } from "@synara/shared/chatThreads";
 import { cn } from "~/lib/utils";
 import type { SidebarThreadSummary } from "../types";
 import { resolveThreadHandoffBadgeLabel } from "../lib/threadHandoff";

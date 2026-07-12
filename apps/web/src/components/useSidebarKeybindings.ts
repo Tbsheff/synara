@@ -4,7 +4,7 @@
 
 import { useEffect } from "react";
 import type { Dispatch, RefObject, SetStateAction } from "react";
-import type { ResolvedKeybindingsConfig, ThreadId } from "@t3tools/contracts";
+import type { ResolvedKeybindingsConfig, ThreadId } from "@synara/contracts";
 import {
   resolveShortcutCommand,
   shouldShowThreadJumpHints,

@@ -1,4 +1,4 @@
-import type { ReviewTargetKey } from "@t3tools/contracts";
+import type { ReviewTargetKey } from "@synara/contracts";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { reviewTargetKeyString } from "~/reviewStore.logic";

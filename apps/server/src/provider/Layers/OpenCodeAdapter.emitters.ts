@@ -2,7 +2,7 @@
 // Layer: dependency-parameterized Effect helpers; built once per session-runtime via makeOpenCodeEmitters(deps).
 // Exports: OpenCodeEmitters, makeOpenCodeEmitters.
 
-import { type TurnId } from "@t3tools/contracts";
+import { type TurnId } from "@synara/contracts";
 import { Effect, Exit, Ref, Scope } from "effect";
 import type { Part } from "@opencode-ai/sdk/v2";
 

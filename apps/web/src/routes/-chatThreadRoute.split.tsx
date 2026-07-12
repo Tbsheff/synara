@@ -3,7 +3,7 @@
 // Layer: Route container component
 // Exports: SplitChatSurface
 
-import { type ThreadId as ThreadIdType, type TurnId } from "@t3tools/contracts";
+import { type ThreadId as ThreadIdType, type TurnId } from "@synara/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import { startTransition, type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 

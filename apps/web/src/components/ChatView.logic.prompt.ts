@@ -10,8 +10,8 @@ import {
   type ProviderKind,
   type ProviderMentionReference,
   type ProviderPluginDescriptor,
-} from "@t3tools/contracts";
-import { applyClaudePromptEffortPrefix, getModelCapabilities } from "@t3tools/shared/model";
+} from "@synara/contracts";
+import { applyClaudePromptEffortPrefix, getModelCapabilities } from "@synara/shared/model";
 import { formatAssistantSelectionQueuePreview } from "../lib/assistantSelections";
 import { createComposerMentionTokenRegex } from "~/lib/composerMentions";
 import { type ComposerImageAttachment } from "../composerDraftStore";

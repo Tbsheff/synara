@@ -11,7 +11,7 @@ import type {
   ReviewAgentResult,
   ReviewSourceRef,
   ReviewTargetKey,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 

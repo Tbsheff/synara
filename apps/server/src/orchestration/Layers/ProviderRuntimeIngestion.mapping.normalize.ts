@@ -3,7 +3,7 @@ import {
   type ProviderRuntimeEvent,
   type RuntimeMode,
   TurnId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 
 import type { ActivityPayload } from "./ProviderRuntimeIngestion.types.ts";
 

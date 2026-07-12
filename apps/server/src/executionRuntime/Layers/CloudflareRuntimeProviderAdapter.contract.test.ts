@@ -17,7 +17,7 @@
  * @module CloudflareRuntimeProviderAdapter.contract.test
  */
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { type ExecutionInstanceId, RuntimePlan, type RuntimeRole } from "@t3tools/contracts";
+import { type ExecutionInstanceId, RuntimePlan, type RuntimeRole } from "@synara/contracts";
 import { Effect, Layer, ManagedRuntime, Schema } from "effect";
 import type { ChildProcessSpawner } from "effect/unstable/process";
 import { FetchHttpClient } from "effect/unstable/http";

@@ -3,7 +3,7 @@ import type {
   OrchestrationShellSnapshot,
   OrchestrationThread,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 
 export function createShellSnapshotFromFixtureSnapshot(
   snapshot: OrchestrationReadModel,

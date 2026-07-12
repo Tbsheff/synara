@@ -2,7 +2,7 @@
 // Layer: pure functions — no Effect, no session-context mutation.
 // Exports: normalizeCodexTokenUsage, toTurnStatus, toThreadState.
 
-import { type ThreadTokenUsageSnapshot } from "@t3tools/contracts";
+import { type ThreadTokenUsageSnapshot } from "@synara/contracts";
 
 import { asNumber, asObject } from "./CodexAdapter.errors.ts";
 
