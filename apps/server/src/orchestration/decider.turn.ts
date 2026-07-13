@@ -298,6 +298,7 @@ export const decideTurnCommand = Effect.fn("decideTurnCommand")(function* ({
         payload: {
           threadId: command.threadId,
           turnCount: command.turnCount,
+          scope: command.scope ?? "thread",
           createdAt: command.createdAt,
         },
       };
@@ -656,6 +657,9 @@ export const decideTurnCommand = Effect.fn("decideTurnCommand")(function* ({
           threadId: command.threadId,
           turnId: command.turnId,
           checkpointTurnCount: command.checkpointTurnCount,
+          ...(command.preserveLatestTurn === undefined
+            ? {}
+            : { preserveLatestTurn: command.preserveLatestTurn }),
           checkpointRef: command.checkpointRef,
           status: command.status,
           files: command.files,

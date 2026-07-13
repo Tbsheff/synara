@@ -108,6 +108,7 @@ describe("CheckpointDiffQueryLive", () => {
           return true;
         }),
       restoreCheckpoint: () => Effect.succeed(true),
+      reverseCheckpointDiff: () => Effect.succeed(true),
       diffCheckpoints: ({ fromCheckpointRef, toCheckpointRef, cwd, ignoreWhitespace }) =>
         Effect.sync(() => {
           diffCheckpointsCalls.push({ fromCheckpointRef, toCheckpointRef, cwd, ignoreWhitespace });
@@ -205,6 +206,7 @@ describe("CheckpointDiffQueryLive", () => {
       copyCheckpointRef: () => Effect.succeed(true),
       hasCheckpointRef: () => Effect.die("unused"),
       restoreCheckpoint: () => Effect.succeed(true),
+      reverseCheckpointDiff: () => Effect.succeed(true),
       diffCheckpoints: ({ fromCheckpointRef, toCheckpointRef, cwd, ignoreWhitespace }) =>
         Effect.sync(() => {
           diffCheckpointsCalls.push({ fromCheckpointRef, toCheckpointRef, cwd, ignoreWhitespace });
@@ -275,6 +277,7 @@ describe("CheckpointDiffQueryLive", () => {
       copyCheckpointRef: () => Effect.succeed(true),
       hasCheckpointRef: () => Effect.succeed(true),
       restoreCheckpoint: () => Effect.succeed(true),
+      reverseCheckpointDiff: () => Effect.succeed(true),
       diffCheckpoints: () => Effect.succeed(""),
       deleteCheckpointRefs: () => Effect.void,
     };
@@ -339,6 +342,7 @@ describe("CheckpointDiffQueryLive", () => {
       copyCheckpointRef: () => Effect.succeed(true),
       hasCheckpointRef: () => Effect.succeed(true),
       restoreCheckpoint: () => Effect.succeed(true),
+      reverseCheckpointDiff: () => Effect.succeed(true),
       diffCheckpoints: () => Effect.succeed("diff patch"),
       deleteCheckpointRefs: () => Effect.void,
     };
@@ -404,6 +408,7 @@ describe("CheckpointDiffQueryLive", () => {
       copyCheckpointRef: () => Effect.succeed(true),
       hasCheckpointRef: () => Effect.succeed(true),
       restoreCheckpoint: () => Effect.succeed(true),
+      reverseCheckpointDiff: () => Effect.succeed(true),
       diffCheckpoints: () => Effect.succeed("diff patch"),
       deleteCheckpointRefs: () => Effect.void,
     };
@@ -470,6 +475,7 @@ describe("CheckpointDiffQueryLive", () => {
       copyCheckpointRef: () => Effect.succeed(true),
       hasCheckpointRef: () => Effect.succeed(true),
       restoreCheckpoint: () => Effect.succeed(true),
+      reverseCheckpointDiff: () => Effect.succeed(true),
       diffCheckpoints: ({ cwd }) =>
         Effect.sync(() => {
           diffCheckpointsCalls.push({ cwd });
@@ -540,6 +546,7 @@ describe("CheckpointDiffQueryLive", () => {
       copyCheckpointRef: () => Effect.succeed(true),
       hasCheckpointRef: () => Effect.succeed(true),
       restoreCheckpoint: () => Effect.succeed(true),
+      reverseCheckpointDiff: () => Effect.succeed(true),
       diffCheckpoints: () => Effect.succeed("diff patch"),
       deleteCheckpointRefs: () => Effect.void,
     };

@@ -1133,7 +1133,9 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           const nextRow = yield* withRefreshedThreadShellSummary({
             thread: {
               ...existingRow.value,
-              latestTurnId: event.payload.turnId,
+              latestTurnId: event.payload.preserveLatestTurn
+                ? existingRow.value.latestTurnId
+                : event.payload.turnId,
               updatedAt: event.occurredAt,
             },
             projectionThreadMessageRepository,

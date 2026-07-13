@@ -163,6 +163,14 @@ export function makeModelSelection(
           ? { options: options as Extract<ModelSelection, { provider: "grok" }>["options"] }
           : {}),
       };
+    case "droid":
+      return {
+        provider,
+        model,
+        ...(options
+          ? { options: options as Extract<ModelSelection, { provider: "droid" }>["options"] }
+          : {}),
+      };
     case "kilo":
       return {
         provider,

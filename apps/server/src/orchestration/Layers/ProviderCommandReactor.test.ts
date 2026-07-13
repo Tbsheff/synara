@@ -2,7 +2,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import type { ModelSelection, ProviderRuntimeEvent, ProviderSession } from "@synara/contracts";
+import type {
+  ModelSelection,
+  ProviderForkThreadResult,
+  ProviderRuntimeEvent,
+  ProviderSession,
+} from "@synara/contracts";
 import {
   ApprovalRequestId,
   CommandId,
@@ -114,6 +119,7 @@ describe("ProviderCommandReactor", () => {
     readonly sessionModelSwitch?: "unsupported" | "in-session" | "restart-session";
     readonly checkpointStore?: Partial<CheckpointStoreShape>;
     readonly studioOutputReactor?: Partial<StudioOutputReactorShape>;
+    readonly forkThreadResult?: ProviderForkThreadResult | null;
   }) {
     const now = new Date().toISOString();
     const baseDir = input?.baseDir ?? fs.mkdtempSync(path.join(os.tmpdir(), "synara-reactor-"));
@@ -209,17 +215,33 @@ describe("ProviderCommandReactor", () => {
         turnId: asTurnId("turn-steer-1"),
       }),
     );
-    const startReview = vi.fn<ProviderServiceShape["startReview"]>((_: unknown) =>
+    const startReview = vi.fn<ProviderServiceShape["startReview"]>((reviewInput) =>
       Effect.succeed({
-        threadId: ThreadId.makeUnsafe("thread-1"),
+        threadId: reviewInput.threadId,
         turnId: asTurnId("turn-review-1"),
       }),
     );
     const injectThreadItems = vi.fn<NonNullable<ProviderServiceShape["injectThreadItems"]>>(
       () => Effect.void,
     );
-    const forkThread = vi.fn<NonNullable<ProviderServiceShape["forkThread"]>>(() =>
-      Effect.succeed(null),
+    const forkThread = vi.fn<NonNullable<ProviderServiceShape["forkThread"]>>((forkInput) =>
+      Effect.sync(() => {
+        const result = input?.forkThreadResult ?? null;
+        const forkModelSelection = forkInput.modelSelection ?? modelSelection;
+        if (result && !runtimeSessions.some((session) => session.threadId === forkInput.threadId)) {
+          runtimeSessions.push({
+            provider: forkModelSelection.provider,
+            status: "ready",
+            runtimeMode: forkInput.runtimeMode,
+            ...(forkModelSelection.model !== undefined ? { model: forkModelSelection.model } : {}),
+            threadId: forkInput.threadId,
+            ...(result.resumeCursor !== undefined ? { resumeCursor: result.resumeCursor } : {}),
+            createdAt: now,
+            updatedAt: now,
+          });
+        }
+        return result;
+      }),
     );
     const interruptTurn = vi.fn((_: unknown) => Effect.void);
     const respondToRequest = vi.fn<ProviderServiceShape["respondToRequest"]>(() => Effect.void);

@@ -62,10 +62,16 @@ export const providerDiscoveryQueryKeys = {
     threadId: string | null,
   ) => ["provider-discovery", "skills", provider, cwd, agentDir, threadId] as const,
   skillsCatalog: (cwd: string | null) => ["provider-discovery", "skills-catalog", cwd] as const,
-  plugins: (provider: ProviderKind, cwd: string | null) =>
-    ["provider-discovery", "plugins", provider, cwd] as const,
-  plugin: (provider: ProviderKind, marketplacePath: string, pluginName: string) =>
-    ["provider-discovery", "plugin", provider, marketplacePath, pluginName] as const,
+  plugins: (provider: ProviderKind, cwd: string | null, threadId: string | null) =>
+    ["provider-discovery", "plugins", provider, cwd, threadId] as const,
+  plugin: (
+    provider: ProviderKind,
+    marketplacePath: string,
+    pluginName: string,
+    cwd: string | null,
+    threadId: string | null,
+  ) =>
+    ["provider-discovery", "plugin", provider, marketplacePath, pluginName, cwd, threadId] as const,
   models: (
     provider: ProviderKind,
     binaryPath: string | null,
@@ -249,7 +255,7 @@ export function providerPluginsQueryOptions(input: {
   enabled?: boolean;
 }) {
   return queryOptions({
-    queryKey: providerDiscoveryQueryKeys.plugins(input.provider, input.cwd),
+    queryKey: providerDiscoveryQueryKeys.plugins(input.provider, input.cwd, input.threadId ?? null),
     queryFn: async () => {
       const api = ensureNativeApi();
       return api.provider.listPlugins({
@@ -268,6 +274,8 @@ export function providerReadPluginQueryOptions(input: {
   provider: ProviderKind;
   marketplacePath: string;
   pluginName: string;
+  cwd?: string | null;
+  threadId?: string | null;
   enabled?: boolean;
 }) {
   return queryOptions({
@@ -275,6 +283,8 @@ export function providerReadPluginQueryOptions(input: {
       input.provider,
       input.marketplacePath,
       input.pluginName,
+      input.cwd ?? null,
+      input.threadId ?? null,
     ),
     queryFn: async (): Promise<ProviderReadPluginResult> => {
       const api = ensureNativeApi();
@@ -282,6 +292,8 @@ export function providerReadPluginQueryOptions(input: {
         provider: input.provider,
         marketplacePath: input.marketplacePath,
         pluginName: input.pluginName,
+        ...(input.cwd ? { cwd: input.cwd } : {}),
+        ...(input.threadId ? { threadId: input.threadId } : {}),
       });
     },
     enabled: input.enabled ?? true,

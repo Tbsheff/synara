@@ -192,6 +192,11 @@ function buildReviewModelOptionsByProvider(
       [],
       selectedModelSelection.provider === "grok" ? selectedModelSelection.model : null,
     ),
+    droid: getAppModelOptions(
+      "droid",
+      [],
+      selectedModelSelection.provider === "droid" ? selectedModelSelection.model : null,
+    ),
     kilo: getAppModelOptions(
       "kilo",
       [],

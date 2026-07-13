@@ -16,6 +16,7 @@ const PROVIDER_SELECT_OPTIONS = [
   "cursor",
   "gemini",
   "grok",
+  "droid",
   "opencode",
   "kilo",
   "pi",

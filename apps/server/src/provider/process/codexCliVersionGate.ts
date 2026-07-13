@@ -40,6 +40,9 @@ export function assertSupportedCodexCliVersion(input: {
     timeout: CODEX_VERSION_CHECK_TIMEOUT_MS,
     maxBuffer: 1024 * 1024,
     ...(prepared.windowsHide ? { windowsHide: prepared.windowsHide } : {}),
+    ...(prepared.windowsVerbatimArguments
+      ? { windowsVerbatimArguments: prepared.windowsVerbatimArguments }
+      : {}),
   });
 
   if (result.error) {

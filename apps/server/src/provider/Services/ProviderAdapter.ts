@@ -46,6 +46,7 @@ import type { Stream } from "effect";
 import type { JsonRpcLineTransport } from "../process/JsonRpcLineTransport.ts";
 
 export type ProviderSessionModelSwitchMode = "in-session" | "restart-session" | "unsupported";
+export type ProviderConversationRollbackMode = "native" | "restart-session";
 
 /**
  * The agent-process spawn the provider adapter would have run locally, handed to
@@ -93,6 +94,8 @@ export interface ProviderAdapterCapabilities {
    * Declares whether changing the model on an existing session is supported.
    */
   readonly sessionModelSwitch: ProviderSessionModelSwitchMode;
+  /** Restart-session adapters cannot rewind provider history and must rebuild context locally. */
+  readonly conversationRollback?: ProviderConversationRollbackMode;
   readonly supportsSkillMentions?: boolean;
   readonly supportsSkillDiscovery?: boolean;
   readonly supportsNativeSlashCommandDiscovery?: boolean;

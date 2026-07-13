@@ -28,6 +28,7 @@ export type CustomModelSettingsKey =
   | "customCursorModels"
   | "customGeminiModels"
   | "customGrokModels"
+  | "customDroidModels"
   | "customKiloModels"
   | "customOpenCodeModels"
   | "customPiModels";
@@ -53,6 +54,7 @@ const BUILT_IN_MODEL_SLUGS_BY_PROVIDER: Record<ProviderKind, ReadonlySet<string>
   cursor: new Set(getModelOptions("cursor").map((option) => option.slug)),
   gemini: new Set(getModelOptions("gemini").map((option) => option.slug)),
   grok: new Set(getModelOptions("grok").map((option) => option.slug)),
+  droid: new Set(getModelOptions("droid").map((option) => option.slug)),
   kilo: new Set(getModelOptions("kilo").map((option) => option.slug)),
   opencode: new Set(getModelOptions("opencode").map((option) => option.slug)),
   pi: new Set(getModelOptions("pi").map((option) => option.slug)),
@@ -103,6 +105,15 @@ const PROVIDER_CUSTOM_MODEL_CONFIG: Record<ProviderKind, ProviderCustomModelConf
     description: "Save additional Grok model slugs for the picker and `/model` command.",
     placeholder: "your-grok-model-slug",
     example: "grok-build-0.1",
+  },
+  droid: {
+    provider: "droid",
+    settingsKey: "customDroidModels",
+    defaultSettingsKey: "customDroidModels",
+    title: "Droid",
+    description: "Save additional Droid model slugs for the picker and `/model` command.",
+    placeholder: "your-droid-model-slug",
+    example: "claude-sonnet-4-5",
   },
   kilo: {
     provider: "kilo",
@@ -209,6 +220,7 @@ export function getCustomModelsByProvider(
     cursor: getCustomModelsForProvider(settings, "cursor"),
     gemini: getCustomModelsForProvider(settings, "gemini"),
     grok: getCustomModelsForProvider(settings, "grok"),
+    droid: getCustomModelsForProvider(settings, "droid"),
     kilo: getCustomModelsForProvider(settings, "kilo"),
     opencode: getCustomModelsForProvider(settings, "opencode"),
     pi: getCustomModelsForProvider(settings, "pi"),
@@ -359,6 +371,7 @@ export function getCustomModelOptionsByProvider(
     cursor: getAppModelOptions("cursor", customModelsByProvider.cursor),
     gemini: getAppModelOptions("gemini", customModelsByProvider.gemini),
     grok: getAppModelOptions("grok", customModelsByProvider.grok),
+    droid: getAppModelOptions("droid", customModelsByProvider.droid),
     kilo: getAppModelOptions("kilo", customModelsByProvider.kilo),
     opencode: getAppModelOptions("opencode", customModelsByProvider.opencode),
     pi: getAppModelOptions("pi", customModelsByProvider.pi),

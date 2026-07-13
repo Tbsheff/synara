@@ -368,6 +368,7 @@ export function ProviderInstallsSection(props: {
                     cursor: false,
                     gemini: false,
                     grok: false,
+                    droid: false,
                     kilo: false,
                     opencode: false,
                     pi: false,

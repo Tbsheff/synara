@@ -62,6 +62,7 @@ function serverSettings(overrides: Partial<ServerSettings["providers"]> = {}): S
       cursor: { ...provider, binaryPath: "cursor-agent", apiEndpoint: "" },
       gemini: { ...provider, binaryPath: "gemini" },
       grok: { ...provider, binaryPath: "grok" },
+      droid: { ...provider, binaryPath: "droid" },
       kilo: { ...provider, binaryPath: "kilo", serverUrl: "", serverPassword: "" },
       opencode: {
         ...provider,

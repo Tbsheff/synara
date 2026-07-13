@@ -24,6 +24,7 @@ export function useComposerModelHintByProvider({
       cursor: resolveHint("cursor"),
       gemini: resolveHint("gemini"),
       grok: resolveHint("grok"),
+      droid: resolveHint("droid"),
       kilo: resolveHint("kilo"),
       opencode: resolveHint("opencode"),
       pi: resolveHint("pi"),

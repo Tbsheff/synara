@@ -282,6 +282,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         cwd: input.cwd,
         env,
         shell: prepared.shell,
+        ...(prepared.windowsVerbatimArguments
+          ? { windowsVerbatimArguments: prepared.windowsVerbatimArguments }
+          : {}),
       }),
     );
   }
