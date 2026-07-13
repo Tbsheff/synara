@@ -272,4 +272,4 @@ export interface ExecutionRuntimeServiceShape {
 export class ExecutionRuntimeService extends ServiceMap.Service<
   ExecutionRuntimeService,
   ExecutionRuntimeServiceShape
->()("t3/executionRuntime/Services/ExecutionRuntimeService") {}
+>()("synara/executionRuntime/Services/ExecutionRuntimeService") {}

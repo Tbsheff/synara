@@ -56,4 +56,4 @@ export interface CloudflareBridgeConnectionShape {
 export class CloudflareBridgeConnection extends ServiceMap.Service<
   CloudflareBridgeConnection,
   CloudflareBridgeConnectionShape
->()("t3/executionRuntime/Services/CloudflareBridgeConnection") {}
+>()("synara/executionRuntime/Services/CloudflareBridgeConnection") {}

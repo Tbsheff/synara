@@ -100,7 +100,7 @@ export interface ModalRuntimeProviderAdapterShape {
 export class ModalRuntimeProviderAdapter extends ServiceMap.Service<
   ModalRuntimeProviderAdapter,
   ModalRuntimeProviderAdapterShape
->()("t3/executionRuntime/providers/modal/ModalRuntimeProviderAdapter") {}
+>()("synara/executionRuntime/providers/modal/ModalRuntimeProviderAdapter") {}
 
 const makeModalRuntimeProviderAdapter = Effect.gen(function* () {
   const transport = yield* ModalCommandTransport;

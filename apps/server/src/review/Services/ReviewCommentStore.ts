@@ -33,4 +33,4 @@ export interface ReviewCommentStoreShape {
 export class ReviewCommentStore extends ServiceMap.Service<
   ReviewCommentStore,
   ReviewCommentStoreShape
->()("t3/review/Services/ReviewCommentStore") {}
+>()("synara/review/Services/ReviewCommentStore") {}

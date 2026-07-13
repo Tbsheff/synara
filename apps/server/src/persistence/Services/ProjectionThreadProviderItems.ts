@@ -48,5 +48,5 @@ export class ProjectionThreadProviderItemRepository extends ServiceMap.Service<
   ProjectionThreadProviderItemRepository,
   ProjectionThreadProviderItemRepositoryShape
 >()(
-  "t3/persistence/Services/ProjectionThreadProviderItems/ProjectionThreadProviderItemRepository",
+  "synara/persistence/Services/ProjectionThreadProviderItems/ProjectionThreadProviderItemRepository",
 ) {}

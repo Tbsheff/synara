@@ -124,4 +124,4 @@ export interface ModalCommandTransportShape {
 export class ModalCommandTransport extends ServiceMap.Service<
   ModalCommandTransport,
   ModalCommandTransportShape
->()("t3/executionRuntime/providers/modal/ModalCommandTransport") {}
+>()("synara/executionRuntime/providers/modal/ModalCommandTransport") {}

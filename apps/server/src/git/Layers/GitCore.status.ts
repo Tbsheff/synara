@@ -66,7 +66,7 @@ export const makeGitStatus = (deps: GitStatusDeps): GitStatus => {
         }
 
         const tempIndexDir = yield* fileSystem.makeTempDirectoryScoped({
-          prefix: `t3code-git-status-index-${process.pid}-`,
+          prefix: `synara-git-status-index-${process.pid}-`,
         });
         const tempIndexPath = nodePath.join(tempIndexDir, "index");
         yield* Effect.tryPromise(() =>

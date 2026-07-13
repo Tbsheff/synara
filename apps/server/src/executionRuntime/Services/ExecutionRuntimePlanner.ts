@@ -41,4 +41,4 @@ export interface ExecutionRuntimePlannerShape {
 export class ExecutionRuntimePlanner extends ServiceMap.Service<
   ExecutionRuntimePlanner,
   ExecutionRuntimePlannerShape
->()("t3/executionRuntime/Services/ExecutionRuntimePlanner") {}
+>()("synara/executionRuntime/Services/ExecutionRuntimePlanner") {}

@@ -108,5 +108,5 @@ export interface ReviewCacheStoreShape {
 }
 
 export class ReviewCacheStore extends ServiceMap.Service<ReviewCacheStore, ReviewCacheStoreShape>()(
-  "t3/review/Services/ReviewCacheStore",
+  "synara/review/Services/ReviewCacheStore",
 ) {}

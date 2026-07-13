@@ -44,7 +44,7 @@ export interface ReviewRemoteSourceShape {
 export class ReviewRemoteSource extends ServiceMap.Service<
   ReviewRemoteSource,
   ReviewRemoteSourceShape
->()("t3/review/Services/ReviewRemoteSource") {}
+>()("synara/review/Services/ReviewRemoteSource") {}
 
 export type ReviewSyncStopReason =
   | "watermark"
@@ -81,7 +81,7 @@ export interface ReviewSyncShape {
 }
 
 export class ReviewSync extends ServiceMap.Service<ReviewSync, ReviewSyncShape>()(
-  "t3/review/Services/ReviewSync",
+  "synara/review/Services/ReviewSync",
 ) {}
 
 /** Stop scheduling syncs while remaining points sit below this and the window has not reset. */

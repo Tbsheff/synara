@@ -49,4 +49,4 @@ export interface RuntimeProviderRegistryShape {
 export class RuntimeProviderRegistry extends ServiceMap.Service<
   RuntimeProviderRegistry,
   RuntimeProviderRegistryShape
->()("t3/executionRuntime/Services/RuntimeProviderRegistry") {}
+>()("synara/executionRuntime/Services/RuntimeProviderRegistry") {}

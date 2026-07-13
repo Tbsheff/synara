@@ -17,4 +17,4 @@ import type { CloudflareRuntimeProviderAdapterShape } from "../Layers/Cloudflare
 export class CloudflareRuntimeProviderAdapter extends ServiceMap.Service<
   CloudflareRuntimeProviderAdapter,
   CloudflareRuntimeProviderAdapterShape
->()("t3/executionRuntime/Services/CloudflareRuntimeProviderAdapter") {}
+>()("synara/executionRuntime/Services/CloudflareRuntimeProviderAdapter") {}

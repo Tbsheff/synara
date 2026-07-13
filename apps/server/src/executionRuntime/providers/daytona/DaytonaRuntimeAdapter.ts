@@ -171,7 +171,7 @@ export interface DaytonaRuntimeAdapterShape {
 export class DaytonaRuntimeAdapter extends ServiceMap.Service<
   DaytonaRuntimeAdapter,
   DaytonaRuntimeAdapterShape
->()("t3/executionRuntime/providers/daytona/DaytonaRuntimeAdapter") {}
+>()("synara/executionRuntime/providers/daytona/DaytonaRuntimeAdapter") {}
 
 const toExecInput = (spawn: RuntimeProcessSpawnInput): DaytonaExecInput => ({
   command: spawn.command,

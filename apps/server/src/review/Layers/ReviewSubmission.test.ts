@@ -17,10 +17,10 @@ import { createGitHubCliWithFakeGh } from "../../git/testing/fakeGitHubCli.ts";
 import { ReviewSubmission } from "../Services/ReviewSubmission.ts";
 import { ReviewSubmissionLive } from "./ReviewSubmission.ts";
 
-const PR_URL = "https://github.com/pingdotgg/codething-mvp/pull/101";
+const PR_URL = "https://github.com/Tbsheff/synara/pull/101";
 const PR_NUMBER = 101;
-const PR_OWNER = "pingdotgg";
-const PR_REPO = "codething-mvp";
+const PR_OWNER = "Tbsheff";
+const PR_REPO = "synara";
 const LIVE_HEAD_SHA = "abc1230000000000000000000000000000000000";
 
 // Added line 3 (RIGHT) and removed line 2 (LEFT) are the only valid anchors.

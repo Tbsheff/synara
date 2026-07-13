@@ -69,7 +69,7 @@ The handoff was written against a stale mental model. Fix these before trusting 
 | Manager cleanly "receives a process" | `CodexAppServerManager extends EventEmitter` with **Promise** methods, holding an optional `ServiceMap` (`codexAppServerManager.ts:681,691`). It is *not* an Effect Service. Real difficulty = bridging imperative async ↔ Effect-native Stream transport. |
 | `processRunner.ts` as the process base | One-shot Promise runner for git/version checks (`processRunner.ts:128`), buffers full stdout — **not** a streaming transport. Do not build on it. |
 | New runtime events extend the runtime event system | `ProviderRuntimeEvent` is a 47-member **agent-activity** union keyed on `threadId` with no process/instance id (`providerRuntime.ts:969-1021,255-267`). Extending it forces every exhaustive switch to handle infra events and conflates two state machines. Infra lifecycle gets its **own** contract type. |
-| (unstated) | `ServiceMap.Service` is the only tag convention (`Effect.Service` used 0× vs 72×). New code: `class X extends ServiceMap.Service<X, Shape>()("t3/…")` + `Layer.effect`. |
+| (unstated) | `ServiceMap.Service` is the only tag convention (`Effect.Service` used 0× vs 72×). New code: `class X extends ServiceMap.Service<X, Shape>()("synara/…")` + `Layer.effect`. |
 | (unstated) | Adding a thread field or an event type is a wide, fixed multi-file checklist (Appendices A/B). Miss one site → events silently no-op. This is the argument for keeping runtime state off `projection_threads` (see Phase 2). |
 
 * * *

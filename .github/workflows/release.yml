@@ -155,7 +155,7 @@ jobs:
         run: bun run --filter @synara/web test
 
       - name: Test Cloudflare runtime bridge package
-        run: bun run --filter @t3tools/cloudflare-runtime-bridge test
+        run: bun run --filter @synara/cloudflare-runtime-bridge test
 
       - name: Test release scripts package
         run: bun run --filter @synara/scripts test

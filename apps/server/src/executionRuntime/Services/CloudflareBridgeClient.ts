@@ -109,4 +109,4 @@ export interface CloudflareBridgeClientShape {
 export class CloudflareBridgeClient extends ServiceMap.Service<
   CloudflareBridgeClient,
   CloudflareBridgeClientShape
->()("t3/executionRuntime/Services/CloudflareBridgeClient") {}
+>()("synara/executionRuntime/Services/CloudflareBridgeClient") {}

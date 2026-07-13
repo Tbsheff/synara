@@ -159,4 +159,4 @@ export interface ProjectionThreadRuntimeRepositoryShape {
 export class ProjectionThreadRuntimeRepository extends ServiceMap.Service<
   ProjectionThreadRuntimeRepository,
   ProjectionThreadRuntimeRepositoryShape
->()("t3/persistence/Services/ProjectionThreadRuntime/ProjectionThreadRuntimeRepository") {}
+>()("synara/persistence/Services/ProjectionThreadRuntime/ProjectionThreadRuntimeRepository") {}

@@ -1,5 +1,5 @@
 {
-  "name": "@t3tools/cloudflare-runtime-bridge",
+  "name": "@synara/cloudflare-runtime-bridge",
   "version": "0.1.0",
   "private": true,
   "type": "module",

@@ -35,4 +35,4 @@ export interface SandboxSecretWriterShape {
 export class SandboxSecretWriter extends ServiceMap.Service<
   SandboxSecretWriter,
   SandboxSecretWriterShape
->()("t3/executionRuntime/Services/SandboxSecretWriter") {}
+>()("synara/executionRuntime/Services/SandboxSecretWriter") {}

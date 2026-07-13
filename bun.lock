@@ -13,7 +13,7 @@
       },
     },
     "apps/cloudflare-runtime-bridge": {
-      "name": "@t3tools/cloudflare-runtime-bridge",
+      "name": "@synara/cloudflare-runtime-bridge",
       "version": "0.1.0",
       "devDependencies": {
         "@synara/contracts": "workspace:*",
@@ -1084,6 +1084,8 @@
 
     "@synara/cli": ["@synara/cli@workspace:apps/server"],
 
+    "@synara/cloudflare-runtime-bridge": ["@synara/cloudflare-runtime-bridge@workspace:apps/cloudflare-runtime-bridge"],
+
     "@synara/contracts": ["@synara/contracts@workspace:packages/contracts"],
 
     "@synara/desktop": ["@synara/desktop@workspace:apps/desktop"],
@@ -1097,8 +1099,6 @@
     "@synara/web": ["@synara/web@workspace:apps/web"],
 
     "@szmarczak/http-timer": ["@szmarczak/http-timer@4.0.6", "", { "dependencies": { "defer-to-connect": "^2.0.0" } }, "sha512-4BAffykYOgO+5nzBWYwE3W90sBgLJoUPRWWcL8wlyiM8IB8ipJz3UMJ9KXQd1RKQXpKp8Tutn80HZtWsu2u76w=="],
-
-    "@t3tools/cloudflare-runtime-bridge": ["@t3tools/cloudflare-runtime-bridge@workspace:apps/cloudflare-runtime-bridge"],
 
     "@tabler/icons": ["@tabler/icons@3.44.0", "", {}, "sha512-Wn0AOZG9sg0L+bjfMqq4eNhC6pQjIrk94LvvWYNYkY8KH8wC3YILRzQlrnVJc4FUeMxH/AK97QsYCX35H3LndA=="],
 

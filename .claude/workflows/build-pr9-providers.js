@@ -12,7 +12,7 @@ const PLAN = ".plans/18-execution-runtime.md";
 const MAX_REVIEW_ROUNDS = (args && args.maxReviewRounds) || 3;
 
 const HOUSE = [
-  'Effect-first: `class X extends ServiceMap.Service<X, Shape>()("t3/...")` + `Layer.effect`; never `Effect.Service`.',
+  'Effect-first: `class X extends ServiceMap.Service<X, Shape>()("synara/...")` + `Layer.effect`; never `Effect.Service`.',
   "Do NOT git-merge a provider branch (it re-imports conflicting serverLayers.ts/Errors.ts + duplicate contract harnesses). Bring only that provider's unique files via `git checkout <branch> -- <path>`, then hand-write registration/errors/contracts entries.",
   "Conform each bespoke provider adapter to the common ExecutionRuntimeProviderAdapterShape (the increment-1 seam) via a thin facade, mirroring apps/server/src/executionRuntime/Layers/FakeRuntimeProviderFacade.ts.",
   "Behavior-preserving: the fake + local/worktree paths stay identical; ProviderCommandReactor stays provider-agnostic (no provider ids).",

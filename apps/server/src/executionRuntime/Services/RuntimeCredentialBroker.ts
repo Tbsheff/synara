@@ -48,4 +48,4 @@ export interface RuntimeCredentialBrokerShape {
 export class RuntimeCredentialBroker extends ServiceMap.Service<
   RuntimeCredentialBroker,
   RuntimeCredentialBrokerShape
->()("t3/executionRuntime/Services/RuntimeCredentialBroker") {}
+>()("synara/executionRuntime/Services/RuntimeCredentialBroker") {}

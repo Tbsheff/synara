@@ -375,7 +375,7 @@ export const makeGitManager = Effect.gen(function* () {
         ...buildGitTextGenerationCallInput(textGenerationParams ?? {}),
       });
 
-      const bodyFile = path.join(tempDir, `t3code-pr-body-${process.pid}-${randomUUID()}.md`);
+      const bodyFile = path.join(tempDir, `synara-pr-body-${process.pid}-${randomUUID()}.md`);
       yield* fileSystem
         .writeFileString(bodyFile, generated.body)
         .pipe(

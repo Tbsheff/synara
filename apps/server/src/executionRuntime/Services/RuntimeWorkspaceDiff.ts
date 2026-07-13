@@ -46,4 +46,4 @@ export interface RuntimeWorkspaceDiffShape {
 export class RuntimeWorkspaceDiff extends ServiceMap.Service<
   RuntimeWorkspaceDiff,
   RuntimeWorkspaceDiffShape
->()("t3/executionRuntime/Services/RuntimeWorkspaceDiff") {}
+>()("synara/executionRuntime/Services/RuntimeWorkspaceDiff") {}

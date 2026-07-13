@@ -60,4 +60,4 @@ export interface RuntimeProviderCredentialsShape {
 export class RuntimeProviderCredentials extends ServiceMap.Service<
   RuntimeProviderCredentials,
   RuntimeProviderCredentialsShape
->()("t3/executionRuntime/Services/RuntimeProviderCredentials") {}
+>()("synara/executionRuntime/Services/RuntimeProviderCredentials") {}

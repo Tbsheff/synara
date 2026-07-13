@@ -90,5 +90,5 @@ export interface ReviewSourceShape {
 }
 
 export class ReviewSource extends ServiceMap.Service<ReviewSource, ReviewSourceShape>()(
-  "t3/review/Services/ReviewSource",
+  "synara/review/Services/ReviewSource",
 ) {}

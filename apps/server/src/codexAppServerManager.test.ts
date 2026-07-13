@@ -406,7 +406,7 @@ describe("isJsonObjectLine", () => {
 
 describe("buildCodexProcessEnv", () => {
   it("hydrates the active custom provider env_key from the effective CODEX_HOME", () => {
-    const tempDir = mkdtempSync(path.join(os.tmpdir(), "t3-codex-env-"));
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "synara-codex-env-"));
     const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-runtime-home-"));
     try {
       writeFileSync(
@@ -488,15 +488,15 @@ describe("buildCodexProcessEnv", () => {
   it("resolves the browser-use pipe path from desktop env aliases", () => {
     expect(
       resolveCodexBrowserUsePipePath({
-        env: { T3CODE_BROWSER_USE_PIPE_PATH: "/tmp/codex-browser-use/t3.sock" },
+        env: { T3CODE_BROWSER_USE_PIPE_PATH: "/tmp/codex-browser-use/legacy.sock" },
         platform: "darwin",
       }),
-    ).toBe("/tmp/codex-browser-use/t3.sock");
+    ).toBe("/tmp/codex-browser-use/legacy.sock");
   });
 
   it("disables the local dpcode-browser plugin in Synara's Codex home overlay", () => {
-    const tempDir = mkdtempSync(path.join(os.tmpdir(), "t3-codex-env-"));
-    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "t3-runtime-home-"));
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "synara-codex-env-"));
+    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-runtime-home-"));
     try {
       writeFileSync(
         path.join(tempDir, "config.toml"),
@@ -531,8 +531,8 @@ describe("buildCodexProcessEnv", () => {
   });
 
   it("repairs stale real files in Synara's Codex home overlay", () => {
-    const tempDir = mkdtempSync(path.join(os.tmpdir(), "t3-codex-env-"));
-    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "t3-runtime-home-"));
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "synara-codex-env-"));
+    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-runtime-home-"));
     try {
       const sourceMemoryPath = path.join(tempDir, "memories_1.sqlite");
       writeFileSync(path.join(tempDir, "config.toml"), 'model = "gpt-5.5"', "utf8");
@@ -559,8 +559,8 @@ describe("buildCodexProcessEnv", () => {
   });
 
   it("repairs stale auth.json files in Synara's Codex home overlay", () => {
-    const tempDir = mkdtempSync(path.join(os.tmpdir(), "t3-codex-env-"));
-    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "t3-runtime-home-"));
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "synara-codex-env-"));
+    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-runtime-home-"));
     try {
       const sourceAuthPath = path.join(tempDir, "auth.json");
       writeFileSync(path.join(tempDir, "config.toml"), 'model = "gpt-5.5"', "utf8");
@@ -588,8 +588,8 @@ describe("buildCodexProcessEnv", () => {
   });
 
   it("preserves real generated image directories in Synara's Codex home overlay", () => {
-    const tempDir = mkdtempSync(path.join(os.tmpdir(), "t3-codex-env-"));
-    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "t3-runtime-home-"));
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "synara-codex-env-"));
+    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-runtime-home-"));
     try {
       writeFileSync(path.join(tempDir, "config.toml"), 'model = "gpt-5.5"', "utf8");
       const sourceGeneratedImagesDir = path.join(tempDir, "generated_images");

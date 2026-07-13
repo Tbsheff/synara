@@ -52,4 +52,4 @@ export interface RuntimeGitWorkspaceShape {
 export class RuntimeGitWorkspace extends ServiceMap.Service<
   RuntimeGitWorkspace,
   RuntimeGitWorkspaceShape
->()("t3/executionRuntime/Services/RuntimeGitWorkspace") {}
+>()("synara/executionRuntime/Services/RuntimeGitWorkspace") {}

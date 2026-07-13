@@ -266,6 +266,7 @@ describe("ProviderCommandReactor", () => {
       hasCheckpointRef,
       restoreCheckpoint,
       diffCheckpoints: () => Effect.succeed(""),
+      reverseCheckpointDiff: () => Effect.succeed(true),
       deleteCheckpointRefs: () => Effect.void,
       ...input?.checkpointStore,
     };

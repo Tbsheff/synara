@@ -76,6 +76,46 @@ function containsForbiddenIdentity(value: string): boolean {
   return forbiddenPatterns.some((pattern) => pattern.test(value));
 }
 
+const oldDesktopNames = [retiredSecondName, retiredFirstName] as const;
+const oldStorageNames = [...oldDesktopNames, retiredPredecessorName] as const;
+const approvedLegacyTokensByPath = new Map<string, readonly string[]>([
+  ["apps/desktop/src/desktopUserDataProfile.test.ts", oldDesktopNames],
+  ["apps/desktop/src/desktopUserDataProfile.ts", oldDesktopNames],
+  ["apps/desktop/src/main.constants.ts", [retiredShortName]],
+  ["apps/server/src/codexAppServerManager.test.ts", oldDesktopNames],
+  ["apps/server/src/codexProcessEnv.ts", oldDesktopNames],
+  ["apps/server/src/executionRuntime/codexAuthBootstrap.test.ts", [retiredSecondName]],
+  ["apps/server/src/homeMigration.test.ts", [...oldDesktopNames, retiredShortName]],
+  ["apps/server/src/homeMigration.ts", [...oldDesktopNames, retiredShortName]],
+  ["apps/server/src/orchestration/Layers/ProviderCommandReactor.helpers.ts", oldDesktopNames],
+  ["apps/server/src/orchestration/Layers/ProviderCommandReactor.ts", oldDesktopNames],
+  ["apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.config.ts", [retiredFirstName]],
+  ["apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.test.ts", [retiredShortName]],
+  ["apps/server/src/provider/Layers/GrokAdapter.logging.ts", [retiredSecondName]],
+  ["apps/server/src/provider/Layers/GrokAdapter.types.ts", [retiredSecondName]],
+  ["apps/server/src/provider/Layers/ProviderService.helpers.ts", [retiredSecondName]],
+  ["apps/server/src/terminal/Layers/Manager.helpers.ts", [retiredFirstName]],
+  ["apps/web/src/components/BrowserPanel.overlay.ts", oldDesktopNames],
+  ["apps/web/src/components/ChatView.browser.tsx", [retiredFirstName]],
+  ["apps/web/src/components/Sidebar.browser.tsx", [retiredFirstName]],
+  ["apps/web/src/store.ts", oldStorageNames],
+  ["apps/web/src/storePersistence/hydration.ts", oldStorageNames],
+]);
+
+function isApprovedCompatibilityReference(path: string, line: string): boolean {
+  const approvedTokens = approvedLegacyTokensByPath.get(path);
+  if (!approvedTokens) return false;
+  const remainder = approvedTokens.reduce((value, token) => {
+    const tokenPattern = [...token]
+      .map((character) => escapeRegExp(character))
+      .join("[\\s._/@:-]*");
+    const boundedPattern =
+      token === retiredShortName ? `(?<![A-Za-z0-9])${tokenPattern}(?![A-Za-z0-9])` : tokenPattern;
+    return value.replace(new RegExp(boundedPattern, "gi"), "");
+  }, line);
+  return !containsForbiddenIdentity(remainder);
+}
+
 export function findBrandIdentityViolations(
   files: readonly BrandIdentityFile[],
 ): BrandIdentityViolation[] {
@@ -85,7 +125,9 @@ export function findBrandIdentityViolations(
       violations.push({ path: file.path, line: null, text: file.path });
     }
     for (const [index, line] of file.contents.split(/\r?\n/).entries()) {
-      if (!containsForbiddenIdentity(line)) continue;
+      if (!containsForbiddenIdentity(line) || isApprovedCompatibilityReference(file.path, line)) {
+        continue;
+      }
       violations.push({ path: file.path, line: index + 1, text: line.trim() });
     }
   }

@@ -9,6 +9,7 @@ const characters = (...codes: number[]): string => String.fromCharCode(...codes)
 const shortName = characters(116, 51);
 const firstName = `${shortName}${characters(99, 111, 100, 101)}`;
 const secondName = characters(100, 112, 99, 111, 100, 101);
+const predecessorName = characters(99, 111, 100, 101, 116, 104, 105, 110, 103);
 
 describe("brand identity guard", () => {
   it("detects retired names in paths and text", () => {
@@ -25,6 +26,44 @@ describe("brand identity guard", () => {
         { path: "source.ts", contents: "const value = new Uint32Array(); // Synara" },
       ]),
     ).toEqual([]);
+  });
+
+  it("allows retired names only in explicit compatibility surfaces", () => {
+    expect(
+      findBrandIdentityViolations([
+        {
+          path: "apps/server/src/homeMigration.ts",
+          contents: `const legacy = "${secondName}";\nconst unrelated = "${predecessorName}";`,
+        },
+      ]),
+    ).toEqual([
+      {
+        path: "apps/server/src/homeMigration.ts",
+        line: 2,
+        text: `const unrelated = "${predecessorName}";`,
+      },
+    ]);
+    expect(
+      findBrandIdentityViolations([
+        { path: "apps/server/src/newFeature.ts", contents: `const name = "${secondName}";` },
+      ]),
+    ).toHaveLength(1);
+    expect(
+      findBrandIdentityViolations([
+        {
+          path: "apps/server/src/homeMigration.ts",
+          contents: `const legacy = "${secondName}", unrelated = "${predecessorName}";`,
+        },
+      ]),
+    ).toHaveLength(1);
+    expect(
+      findBrandIdentityViolations([
+        {
+          path: "apps/desktop/src/main.constants.ts",
+          contents: `const unrelated = "${firstName}";`,
+        },
+      ]),
+    ).toHaveLength(1);
   });
 
   it("rejects retired identity in legal notices", () => {

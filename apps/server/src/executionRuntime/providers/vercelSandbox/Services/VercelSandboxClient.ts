@@ -148,4 +148,4 @@ export interface VercelSandboxClientShape {
 export class VercelSandboxClient extends ServiceMap.Service<
   VercelSandboxClient,
   VercelSandboxClientShape
->()("t3/executionRuntime/providers/vercelSandbox/VercelSandboxClient") {}
+>()("synara/executionRuntime/providers/vercelSandbox/VercelSandboxClient") {}

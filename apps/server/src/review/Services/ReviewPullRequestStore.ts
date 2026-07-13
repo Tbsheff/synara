@@ -108,4 +108,4 @@ export interface ReviewPullRequestStoreShape {
 export class ReviewPullRequestStore extends ServiceMap.Service<
   ReviewPullRequestStore,
   ReviewPullRequestStoreShape
->()("t3/review/Services/ReviewPullRequestStore") {}
+>()("synara/review/Services/ReviewPullRequestStore") {}
