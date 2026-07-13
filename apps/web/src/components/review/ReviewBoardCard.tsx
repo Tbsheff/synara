@@ -2,7 +2,7 @@
  * states: default · hover · focus · active · disabled · loading · error · success
  * contrast: pass (46–50)
  */
-import type { ReviewPullRequestSummary } from "@t3tools/contracts";
+import type { ReviewPullRequestSummary } from "@synara/contracts";
 import { useNavigate } from "@tanstack/react-router";
 
 import { ExternalLinkIcon } from "~/lib/icons";

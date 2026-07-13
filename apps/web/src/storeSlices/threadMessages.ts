@@ -6,7 +6,7 @@
 //   mergeReadModelMessagesWithLiveHotPath, shouldRetainLiveAssistantMessageForHotPath,
 //   hasLiveAssistantIntro, shouldPreserveRunningTurn, buildMessageSlice, MAX_THREAD_MESSAGES.
 
-import { MessageId, type OrchestrationReadModel } from "@t3tools/contracts";
+import { MessageId, type OrchestrationReadModel } from "@synara/contracts";
 import { arraysShallowEqual } from "./equality";
 import { toAttachmentPreviewUrl } from "../lib/wsHttpUrl";
 import { type ChatAttachment, type ChatMessage, type Thread } from "../types";

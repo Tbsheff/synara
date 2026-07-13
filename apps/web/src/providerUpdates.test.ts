@@ -8,7 +8,7 @@ import {
   type ProviderKind,
   type ServerProviderStatus,
   type ServerSettings,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -50,6 +50,7 @@ function serverSettings(overrides: Partial<ServerSettings["providers"]> = {}): S
   };
 
   return {
+    ...DEFAULT_SERVER_SETTINGS,
     enableAssistantStreaming: false,
     enableProviderUpdateChecks: true,
     defaultThreadEnvMode: "local",
@@ -61,6 +62,7 @@ function serverSettings(overrides: Partial<ServerSettings["providers"]> = {}): S
       cursor: { ...provider, binaryPath: "cursor-agent", apiEndpoint: "" },
       gemini: { ...provider, binaryPath: "gemini" },
       grok: { ...provider, binaryPath: "grok" },
+      droid: { ...provider, binaryPath: "droid" },
       kilo: { ...provider, binaryPath: "kilo", serverUrl: "", serverPassword: "" },
       opencode: {
         ...provider,
@@ -73,7 +75,6 @@ function serverSettings(overrides: Partial<ServerSettings["providers"]> = {}): S
       ...overrides,
     },
     skills: { disabled: [] },
-    sandboxes: DEFAULT_SERVER_SETTINGS.sandboxes,
   };
 }
 

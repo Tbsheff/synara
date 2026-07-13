@@ -14,7 +14,7 @@ import {
   ProviderItemId,
   ThreadId,
   TurnId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 
 import {
   codexGeneratedImageArtifact,

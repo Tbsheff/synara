@@ -3,7 +3,7 @@
 // Exports: ClaudeMessageHandlers, makeClaudeMessageHandlers.
 
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
-import { RuntimeTaskId, TurnId } from "@t3tools/contracts";
+import { RuntimeTaskId, TurnId } from "@synara/contracts";
 import type { Effect as EffectType } from "effect";
 import { Effect, Random } from "effect";
 

@@ -5,7 +5,7 @@ import type {
   ReviewSourceRef,
   ReviewTimelineEvent,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 

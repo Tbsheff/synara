@@ -2,7 +2,7 @@
 // Layer: dependency-parameterized Effect helpers; built once per session-runtime via makeOpenCodePrompt(deps).
 // Exports: OpenCodePromptDeps, OpenCodePromptHelpers, makeOpenCodePrompt.
 
-import { type TurnId } from "@t3tools/contracts";
+import { type TurnId } from "@synara/contracts";
 import { Deferred, Effect, Ref } from "effect";
 import type { OpencodeClient } from "@opencode-ai/sdk/v2";
 
@@ -102,7 +102,7 @@ export function makeOpenCodePrompt(deps: OpenCodePromptDeps): OpenCodePromptHelp
             "OpenCode did not produce any activity for this prompt. The session may be stuck; try sending again or restart OpenCode.";
           yield* turn.completeOpenCodeTurn(context, {
             turnId: input.turnId,
-            raw: { source: "dpcode.opencode.prompt.watchdog" },
+            raw: { source: "synara.opencode.prompt.watchdog" },
             errorMessage: message,
           });
           updateProviderSession(
@@ -117,7 +117,7 @@ export function makeOpenCodePrompt(deps: OpenCodePromptDeps): OpenCodePromptHelp
             ...buildEventBase({
               threadId: context.session.threadId,
               turnId: input.turnId,
-              raw: { source: "dpcode.opencode.prompt.watchdog" },
+              raw: { source: "synara.opencode.prompt.watchdog" },
             }),
             type: "runtime.error",
             payload: {
@@ -169,7 +169,7 @@ export function makeOpenCodePrompt(deps: OpenCodePromptDeps): OpenCodePromptHelp
               turnId: input.turnId,
               assistantEntry,
               raw: {
-                source: "dpcode.opencode.prompt.response",
+                source: "synara.opencode.prompt.response",
                 message: assistantEntry,
               },
             });

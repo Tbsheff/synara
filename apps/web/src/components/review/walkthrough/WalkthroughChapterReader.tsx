@@ -1,6 +1,6 @@
 import type { DiffLineAnnotation } from "@pierre/diffs";
 import type { FileDiffMetadata } from "@pierre/diffs/react";
-import type { ReviewWalkthroughChapter } from "@t3tools/contracts";
+import type { ReviewWalkthroughChapter } from "@synara/contracts";
 import type { ReactElement, ReactNode } from "react";
 import { useMemo, useState } from "react";
 

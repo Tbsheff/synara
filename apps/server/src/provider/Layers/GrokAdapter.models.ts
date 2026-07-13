@@ -2,7 +2,7 @@
 // Layer: pure parsers/mappers plus a self-contained fetch Effect — no session context.
 // Exports: model name/slug helpers, descriptor parsers, mergeGrokModelDescriptors, fetchXaiLanguageModels.
 
-import { type ProviderListModelsResult } from "@t3tools/contracts";
+import { type ProviderListModelsResult } from "@synara/contracts";
 import { Effect, Option, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 

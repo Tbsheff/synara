@@ -15,7 +15,7 @@ import {
   ProviderSkillReference,
   ProviderStartOptions,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import * as Schema from "effect/Schema";
 import { DeepMutable } from "effect/Types";
 import { getLocalStorageItem } from "../hooks/useLocalStorage";

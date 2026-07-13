@@ -3,7 +3,7 @@
 // Layer: Settings UI components
 // Exports: ArchivedThreadsSettings
 
-import { type ThreadId } from "@t3tools/contracts";
+import { type ThreadId } from "@synara/contracts";
 import { type Project, type Thread } from "../../types";
 import { ArchiveIcon } from "../../lib/icons";
 import { cn } from "../../lib/utils";

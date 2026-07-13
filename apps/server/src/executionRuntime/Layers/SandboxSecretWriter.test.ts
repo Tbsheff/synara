@@ -12,7 +12,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Effect, Layer } from "effect";
 import { describe, expect, it } from "vitest";
 
-import type { ServerSettingsPatch } from "@t3tools/contracts";
+import type { ServerSettingsPatch } from "@synara/contracts";
 
 import { ServerConfig } from "../../config.ts";
 import { ServerSecretStore } from "../../auth/Services/ServerSecretStore.ts";

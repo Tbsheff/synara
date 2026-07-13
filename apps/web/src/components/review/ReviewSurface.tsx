@@ -1,4 +1,4 @@
-import type { ReviewChangesetResult, ReviewSourceRef } from "@t3tools/contracts";
+import type { ReviewChangesetResult, ReviewSourceRef } from "@synara/contracts";
 import { useQuery } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { reviewLoadChangesetQueryOptions } from "~/lib/reviewReactQuery";

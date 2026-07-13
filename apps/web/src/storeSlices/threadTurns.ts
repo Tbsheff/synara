@@ -5,7 +5,7 @@
 // Exports: buildLatestTurn, reconcileLatestTurnFromSession, checkpointStatusToLatestTurnState,
 //   applyTurnDiffSummaryToThread, applyThreadMessageSentEvent, retain*/rollback* revert helpers.
 
-import { type OrchestrationEvent, type OrchestrationReadModel } from "@t3tools/contracts";
+import { type OrchestrationEvent, type OrchestrationReadModel } from "@synara/contracts";
 import { type ChatMessage, type Thread } from "../types";
 import { arraysShallowEqual } from "./equality";
 import { normalizeTurnDiffFiles } from "./threadNormalization";

@@ -5,8 +5,8 @@
 // execute-parameterized pagination/avatar helpers in GitHubCli.commands.ts.
 
 import { Effect, Layer, Schema } from "effect";
-import { parsePullRequestUrl } from "@t3tools/shared/git";
-import type { GitPullRequestCheck, GitPullRequestComment } from "@t3tools/contracts";
+import { parsePullRequestUrl } from "@synara/shared/git";
+import type { GitPullRequestCheck, GitPullRequestComment } from "@synara/contracts";
 
 import { runProcess } from "../../processRunner";
 import {

@@ -13,6 +13,7 @@ export const ProviderKind = Schema.Literals([
   "cursor",
   "gemini",
   "grok",
+  "droid",
   "kilo",
   "opencode",
   "pi",

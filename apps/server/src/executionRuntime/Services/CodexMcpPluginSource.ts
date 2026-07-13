@@ -28,4 +28,4 @@ export interface CodexMcpPluginSourceShape {
 export class CodexMcpPluginSource extends ServiceMap.Service<
   CodexMcpPluginSource,
   CodexMcpPluginSourceShape
->()("t3/executionRuntime/CodexMcpPluginSource") {}
+>()("synara/executionRuntime/CodexMcpPluginSource") {}

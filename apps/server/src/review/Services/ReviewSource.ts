@@ -25,7 +25,7 @@ import {
   ReviewGenerateWalkthroughInput,
   ReviewWalkthroughResult,
   ReviewViewerResult,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { ServiceMap } from "effect";
 import type { Effect } from "effect";
 
@@ -90,5 +90,5 @@ export interface ReviewSourceShape {
 }
 
 export class ReviewSource extends ServiceMap.Service<ReviewSource, ReviewSourceShape>()(
-  "t3/review/Services/ReviewSource",
+  "synara/review/Services/ReviewSource",
 ) {}

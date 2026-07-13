@@ -7,7 +7,7 @@ import {
   type OrchestrationThreadActivity,
   type ProviderKind,
   type TurnId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 
 import { compareActivitiesByOrder } from "./session-logic.shared";
 import type { ChatMessage, SessionPhase, Thread, ThreadSession, TurnDiffSummary } from "./types";
@@ -64,6 +64,7 @@ export const PROVIDER_OPTIONS: Array<{
   { value: "cursor", label: "Cursor", available: true },
   { value: "gemini", label: "Gemini", available: true },
   { value: "grok", label: "Grok", available: true },
+  { value: "droid", label: "Droid", available: true },
   { value: "kilo", label: "Kilo", available: true },
   { value: "opencode", label: "OpenCode", available: true },
   { value: "pi", label: "Pi", available: true },
@@ -249,38 +250,27 @@ export function deriveActiveTaskListState(
   const allTaskListActivities = ordered.filter(
     (activity) => activity.kind === "turn.tasks.updated",
   );
-  const settledTurnIds = new Set<TurnId>();
 
-  // A prior-turn task list only stays visible while that originating turn is still unresolved.
-  for (const activity of ordered) {
-    if (!activity.turnId) {
-      continue;
-    }
-    if (activity.kind === "turn.completed" || activity.kind === "turn.aborted") {
-      settledTurnIds.add(activity.turnId);
-    }
+  const currentTurnTaskActivity = latestTurnId
+    ? allTaskListActivities.findLast((activity) => activity.turnId === latestTurnId)
+    : undefined;
+  if (currentTurnTaskActivity) {
+    // The latest update owns the complete task-list state. In particular, an
+    // empty update is an explicit clear and must not reveal an older update.
+    return toActiveTaskListState(currentTurnTaskActivity);
   }
 
-  const currentTurnTaskList = latestTurnId
-    ? (allTaskListActivities
-        .filter((activity) => activity.turnId === latestTurnId)
-        .map(toActiveTaskListState)
-        .findLast((taskList) => taskList !== null) ?? null)
-    : null;
-  if (currentTurnTaskList) {
-    return currentTurnTaskList;
-  }
-
-  // Keep the most recent unfinished prior task list visible so implementation turns
-  // that have started but not emitted their own task update can still show progress.
-  const latestPriorTaskList =
-    allTaskListActivities.map(toActiveTaskListState).findLast((taskList) => taskList !== null) ??
-    null;
+  // Task lists describe work state beyond the lifetime of one provider turn. Keep the
+  // latest unfinished list visible after completion, abort, reload, and follow-up turns
+  // until the provider completes every task or sends an explicit empty snapshot.
+  const latestPriorTaskActivity = allTaskListActivities.at(-1);
+  if (!latestPriorTaskActivity) return null;
+  const latestPriorTaskList = toActiveTaskListState(latestPriorTaskActivity);
   if (!latestPriorTaskList) {
     return null;
   }
 
-  if (latestPriorTaskList.turnId && settledTurnIds.has(latestPriorTaskList.turnId)) {
+  if (latestPriorTaskList.tasks.length === 0) {
     return null;
   }
 

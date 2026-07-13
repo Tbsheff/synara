@@ -5,8 +5,8 @@
 //   withDerivedThreadStateSignals, resolveThreadSidebarMetadata,
 //   resolveThreadSummaryAfterUserInputResponseRequested, resolveThreadSummaryAfterApprovalResponseRequested.
 
-import { EventId, type OrchestrationEvent } from "@t3tools/contracts";
-import { deriveThreadSummaryMetadata } from "@t3tools/shared/threadSummary";
+import { EventId, type OrchestrationEvent } from "@synara/contracts";
+import { deriveThreadSummaryMetadata } from "@synara/shared/threadSummary";
 import { deepEqualJson } from "./equality";
 import { hasLiveTurnTailWork } from "../session-logic";
 import { type SidebarThreadSummary, type Thread } from "../types";

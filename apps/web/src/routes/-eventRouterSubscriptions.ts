@@ -3,7 +3,7 @@
 // Layer: Web route sync helper
 // Exports: resolveThreadSubscriptionTargets
 
-import type { ThreadId } from "@t3tools/contracts";
+import type { ThreadId } from "@synara/contracts";
 
 export function resolveThreadSubscriptionTargets(input: {
   readonly visibleThreadIds: readonly ThreadId[];

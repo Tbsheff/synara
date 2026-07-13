@@ -4,7 +4,7 @@ import type {
   ReviewTargetKey,
   ReviewTimelineEvent,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 

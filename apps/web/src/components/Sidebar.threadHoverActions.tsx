@@ -4,7 +4,7 @@
 // Exports: SidebarThreadArchiveAction, SidebarThreadHoverActions
 
 import { HiOutlineArchiveBox } from "react-icons/hi2";
-import type { ThreadId } from "@t3tools/contracts";
+import type { ThreadId } from "@synara/contracts";
 import { cn } from "~/lib/utils";
 import { SidebarIconButton } from "./SidebarIconButton";
 import { SidebarRowHoverActions } from "./SidebarRowHoverActions";

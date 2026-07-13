@@ -9,7 +9,7 @@
  *
  * @module DaytonaRuntimeProviderFacade.test
  */
-import { ExecutionInstanceId } from "@t3tools/contracts";
+import { ExecutionInstanceId } from "@synara/contracts";
 import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 

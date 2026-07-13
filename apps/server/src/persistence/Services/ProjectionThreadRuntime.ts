@@ -25,7 +25,7 @@ import {
   RuntimeSnapshotSummary,
   ThreadId,
   TrimmedNonEmptyString,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Option, Schema, ServiceMap } from "effect";
 import type { Effect } from "effect";
 
@@ -159,4 +159,4 @@ export interface ProjectionThreadRuntimeRepositoryShape {
 export class ProjectionThreadRuntimeRepository extends ServiceMap.Service<
   ProjectionThreadRuntimeRepository,
   ProjectionThreadRuntimeRepositoryShape
->()("t3/persistence/Services/ProjectionThreadRuntime/ProjectionThreadRuntimeRepository") {}
+>()("synara/persistence/Services/ProjectionThreadRuntime/ProjectionThreadRuntimeRepository") {}

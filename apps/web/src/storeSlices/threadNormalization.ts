@@ -10,8 +10,8 @@ import {
   type OrchestrationShellSnapshot,
   type ProviderKind,
   ThreadId,
-} from "@t3tools/contracts";
-import { resolveThreadBranchRegressionGuard } from "@t3tools/shared/git";
+} from "@synara/contracts";
+import { resolveThreadBranchRegressionGuard } from "@synara/shared/git";
 import {
   type Project,
   type Thread,

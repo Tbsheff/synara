@@ -3,7 +3,7 @@
 // Layer: Chat transcript shell
 // Depends on: MessagesTimeline and ChatView's list-owned scroll contract.
 
-import { type MessageId, type ThreadId, type ThreadMarker, type TurnId } from "@t3tools/contracts";
+import { type MessageId, type ThreadId, type ThreadMarker, type TurnId } from "@synara/contracts";
 import { type LegendListRef } from "@legendapp/list/react";
 import {
   memo,
@@ -79,6 +79,7 @@ interface ChatTranscriptPaneProps {
   onOpenThread: (threadId: ThreadId) => void;
   onOpenAutomation?: ComponentProps<typeof MessagesTimeline>["onOpenAutomation"];
   onRevertUserMessage: (messageId: MessageId) => void;
+  onUndoTurnFiles?: ComponentProps<typeof MessagesTimeline>["onUndoTurnFiles"];
   onEditUserMessage?: (messageId: MessageId, text: string) => boolean | Promise<boolean>;
   onScrollToBottom: () => void;
   shouldTailReflow?: ComponentProps<typeof MessagesTimeline>["shouldTailReflow"];
@@ -140,6 +141,7 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
   onOpenThread,
   onOpenAutomation,
   onRevertUserMessage,
+  onUndoTurnFiles,
   onEditUserMessage,
   onScrollToBottom,
   shouldTailReflow,
@@ -257,6 +259,7 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
             {...(onOpenAutomation ? { onOpenAutomation } : {})}
             revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
             onRevertUserMessage={onRevertUserMessage}
+            {...(onUndoTurnFiles ? { onUndoTurnFiles } : {})}
             {...(onEditUserMessage ? { onEditUserMessage } : {})}
             isRevertingCheckpoint={isRevertingCheckpoint}
             onImageExpand={onExpandTimelineImage}

@@ -1,6 +1,6 @@
 // Purpose: Public entry for orchestration contracts. Owns the WebSocket method/
 //   channel maps and re-exports the cohesive sub-modules (core read-model shapes,
-//   commands, events/RPC) so consumers keep a single `@t3tools/contracts` surface.
+//   commands, events/RPC) so consumers keep a single `@synara/contracts` surface.
 // Layer: contracts (schema-only)
 // Exports: ORCHESTRATION_WS_METHODS, ORCHESTRATION_WS_CHANNELS, the providerKind
 //   re-exports, and everything from orchestration.core / .commands / .events.

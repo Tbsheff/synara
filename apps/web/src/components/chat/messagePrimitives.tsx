@@ -3,7 +3,7 @@
 // Layer: Web chat presentation primitives
 // Exports: AssistantMarkdownBody, UserMessageBubbleFrame
 
-import type { ThreadMarker } from "@t3tools/contracts";
+import type { ThreadMarker } from "@synara/contracts";
 import type { CSSProperties, ReactNode } from "react";
 
 import { cn } from "~/lib/utils";

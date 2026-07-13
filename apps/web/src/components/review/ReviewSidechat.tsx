@@ -4,7 +4,7 @@ import {
   type ProviderSkillReference,
   type ProviderKind,
   type ThreadId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   memo,
@@ -191,6 +191,11 @@ function buildReviewModelOptionsByProvider(
       "grok",
       [],
       selectedModelSelection.provider === "grok" ? selectedModelSelection.model : null,
+    ),
+    droid: getAppModelOptions(
+      "droid",
+      [],
+      selectedModelSelection.provider === "droid" ? selectedModelSelection.model : null,
     ),
     kilo: getAppModelOptions(
       "kilo",

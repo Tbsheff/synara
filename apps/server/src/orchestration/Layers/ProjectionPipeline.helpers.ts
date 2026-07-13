@@ -1,4 +1,4 @@
-import { ApprovalRequestId, type OrchestrationEvent } from "@t3tools/contracts";
+import { ApprovalRequestId, type OrchestrationEvent } from "@synara/contracts";
 
 import type { ProjectionThreadActivity } from "../../persistence/Services/ProjectionThreadActivities.ts";
 import type { ProjectionThreadMessage } from "../../persistence/Services/ProjectionThreadMessages.ts";

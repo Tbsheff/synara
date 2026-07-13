@@ -139,7 +139,7 @@ In-flight de-dup (F7): a `Map<cacheKey, Effect>` (or `Effect` request-cache / `S
 
 **Register in `apps/server/src/persistence/Migrations.ts`** (3 edits): import `Migration0039`, append `[39, "ReviewCache", Migration0039]` to `migrationEntries`. Nothing else — `Migrator.fromRecord` runs IDs greater than the latest recorded.
 
-**Create `apps/server/src/review/Services/ReviewCacheStore.ts`** — `ServiceMap.Service<ReviewCacheStore, ReviewCacheStoreShape>()("t3/review/Services/ReviewCacheStore")`. Schema structs for each row + a DB-row schema using `Schema.fromJsonString(...)` for `payload_json`. Shape:
+**Create `apps/server/src/review/Services/ReviewCacheStore.ts`** — `ServiceMap.Service<ReviewCacheStore, ReviewCacheStoreShape>()("synara/review/Services/ReviewCacheStore")`. Schema structs for each row + a DB-row schema using `Schema.fromJsonString(...)` for `payload_json`. Shape:
 
 ```ts
 // sketch — Services/ReviewCacheStore.ts

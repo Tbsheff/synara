@@ -4,7 +4,7 @@
 
 import "../../index.css";
 
-import { ApprovalRequestId, MessageId } from "@t3tools/contracts";
+import { ApprovalRequestId, MessageId } from "@synara/contracts";
 import { type LegendListRef } from "@legendapp/list/react";
 import { page } from "vitest/browser";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -198,6 +198,7 @@ function TranscriptVisualFixture() {
               questionIndex={0}
               onToggleOption={() => null}
               onAdvance={() => undefined}
+              onPrevious={() => undefined}
               onCancel={() => undefined}
             />
           </div>

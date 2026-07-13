@@ -3,7 +3,7 @@
 // Layer: Web state store (pure helpers)
 // Exports: createEmptyThreadDraft, buildTransferredComposerDraft, commitDraft
 
-import type { ThreadId } from "@t3tools/contracts";
+import type { ThreadId } from "@synara/contracts";
 import { normalizeAssistantSelections, normalizeTerminalContextsForThread } from "./normalize";
 import { shouldRemoveDraft } from "./cleanup";
 import type {

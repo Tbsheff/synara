@@ -3,7 +3,7 @@
 // Layer: Web chat presentation component
 // Exports: SimpleWorkEntryRow, isFileChangeWorkEntry, prefersCompactWorkEntryRow
 
-import { ThreadId, type TurnId } from "@t3tools/contracts";
+import { ThreadId, type TurnId } from "@synara/contracts";
 import { memo } from "react";
 import { GitHubIcon, HammerIcon, McpIcon, TerminalIcon, WebSearchIcon } from "~/lib/icons";
 import { DiffStatLabel } from "./DiffStatLabel";

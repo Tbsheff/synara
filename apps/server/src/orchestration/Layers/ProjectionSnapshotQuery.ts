@@ -12,7 +12,7 @@ import type {
   OrchestrationThreadRuntime,
   OrchestrationThreadShell,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Effect, Layer, Option } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 

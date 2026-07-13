@@ -4,7 +4,7 @@
 import { Schema } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
-import { STUDIO_OUTPUTS_ACTIVITY_KIND } from "@t3tools/contracts";
+import { STUDIO_OUTPUTS_ACTIVITY_KIND } from "@synara/contracts";
 
 import {
   FullThreadDiffContextLookupInput,

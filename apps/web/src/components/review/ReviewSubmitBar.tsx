@@ -3,7 +3,7 @@ import type {
   ReviewSubmitEvent,
   ReviewSubmitResult,
   ReviewTargetKey,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useRef, useState } from "react";
 

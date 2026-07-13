@@ -4,7 +4,7 @@
 // Exports: useGitActionProgressToast
 
 import { useCallback, useEffect, useRef } from "react";
-import type { GitActionProgressEvent, ThreadId } from "@t3tools/contracts";
+import type { GitActionProgressEvent, ThreadId } from "@synara/contracts";
 import { toastManager } from "~/components/ui/toast";
 import { readNativeApi } from "~/nativeApi";
 import {

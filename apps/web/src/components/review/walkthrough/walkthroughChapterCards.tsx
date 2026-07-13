@@ -1,4 +1,4 @@
-import type { ReviewFinding } from "@t3tools/contracts";
+import type { ReviewFinding } from "@synara/contracts";
 import type { ReactElement } from "react";
 
 import { cn } from "~/lib/utils";

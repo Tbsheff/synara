@@ -2,7 +2,7 @@ import type {
   ReviewComplexityLevel,
   ReviewFocusAreaSeverity,
   ReviewWalkthroughFocusArea,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import type { ReactElement, ReactNode } from "react";
 
 import { ChartBarIcon, CheckIcon } from "~/lib/icons";

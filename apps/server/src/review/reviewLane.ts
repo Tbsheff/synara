@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-import type { ReviewPullRequestSummary } from "@t3tools/contracts";
+import type { ReviewPullRequestSummary } from "@synara/contracts";
 
 /** Board lane for a PR. Mirrors the client's `deriveReviewColumn`. */
 export function deriveReviewLane(summary: ReviewPullRequestSummary): string {

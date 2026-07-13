@@ -4,7 +4,7 @@
 // Exports: formatErrorMessage, getSafeExternalUrl, getSafeTheme, isSaveFileInput, normalizeCommitHash.
 
 import type { FileFilter } from "electron";
-import type { DesktopTheme } from "@t3tools/contracts";
+import type { DesktopTheme } from "@synara/contracts";
 
 import { COMMIT_HASH_DISPLAY_LENGTH, COMMIT_HASH_PATTERN } from "./main.constants";
 

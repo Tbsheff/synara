@@ -1,4 +1,4 @@
-import type { ReviewPullRequestSummary } from "@t3tools/contracts";
+import type { ReviewPullRequestSummary } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 import { Effect, Layer, Option } from "effect";
 

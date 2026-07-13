@@ -1,4 +1,4 @@
-import { normalizeGitPatchPath, parseGitDiffHeaderPath } from "@t3tools/shared/gitDiffPaths";
+import { normalizeGitPatchPath, parseGitDiffHeaderPath } from "@synara/shared/gitDiffPaths";
 
 export interface ParsedDiffFile {
   path: string;

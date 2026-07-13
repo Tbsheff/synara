@@ -10,8 +10,8 @@ import {
   type RuntimeItemStatus,
   type ToolLifecycleItemType,
   type TurnId,
-} from "@t3tools/contracts";
-import { summarizeToolRawOutput } from "@t3tools/shared/toolOutputSummary";
+} from "@synara/contracts";
+import { summarizeToolRawOutput } from "@synara/shared/toolOutputSummary";
 
 import {
   deriveReadableToolTitle,

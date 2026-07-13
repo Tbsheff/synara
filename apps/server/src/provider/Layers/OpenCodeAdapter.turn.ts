@@ -2,7 +2,7 @@
 // Layer: dependency-parameterized Effect helpers; built once per session-runtime via makeOpenCodeTurn(deps).
 // Exports: OpenCodeTurnDeps, OpenCodeTurnHelpers, makeOpenCodeTurn.
 
-import { type TurnId } from "@t3tools/contracts";
+import { type TurnId } from "@synara/contracts";
 import { Effect, Ref } from "effect";
 import type { AssistantMessage, OpencodeClient } from "@opencode-ai/sdk/v2";
 
@@ -122,7 +122,7 @@ export function makeOpenCodeTurn(deps: OpenCodeTurnDeps): OpenCodeTurnHelpers {
         yield* completeOpenCodeTurn(context, {
           turnId,
           raw: {
-            source: "dpcode.opencode.idle-after-tool-calls",
+            source: "synara.opencode.idle-after-tool-calls",
             event: raw,
           },
           errorMessage: message,
@@ -140,7 +140,7 @@ export function makeOpenCodeTurn(deps: OpenCodeTurnDeps): OpenCodeTurnHelpers {
             threadId: context.session.threadId,
             turnId,
             raw: {
-              source: "dpcode.opencode.idle-after-tool-calls",
+              source: "synara.opencode.idle-after-tool-calls",
               event: raw,
             },
           }),
@@ -249,7 +249,7 @@ export function makeOpenCodeTurn(deps: OpenCodeTurnDeps): OpenCodeTurnHelpers {
       turnId: input.turnId,
       assistantEntry,
       raw: {
-        source: "dpcode.opencode.prompt.recovery",
+        source: "synara.opencode.prompt.recovery",
         message: assistantEntry,
       },
     });

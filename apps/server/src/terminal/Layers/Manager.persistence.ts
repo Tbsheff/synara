@@ -9,7 +9,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import { DEFAULT_TERMINAL_ID } from "@t3tools/contracts";
+import { DEFAULT_TERMINAL_ID } from "@synara/contracts";
 
 import { createLogger } from "../../logger";
 import { capHistoryByLimits } from "../terminalHistory";

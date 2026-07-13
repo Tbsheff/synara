@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { prepareWindowsSafeProcess } from "@t3tools/shared/windowsProcess";
+import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
 
 import {
   formatCodexCliUpgradeMessage,
@@ -40,6 +40,9 @@ export function assertSupportedCodexCliVersion(input: {
     timeout: CODEX_VERSION_CHECK_TIMEOUT_MS,
     maxBuffer: 1024 * 1024,
     ...(prepared.windowsHide ? { windowsHide: prepared.windowsHide } : {}),
+    ...(prepared.windowsVerbatimArguments
+      ? { windowsVerbatimArguments: prepared.windowsVerbatimArguments }
+      : {}),
   });
 
   if (result.error) {

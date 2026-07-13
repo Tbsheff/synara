@@ -21,7 +21,7 @@ import type {
   RuntimeInstanceSummary,
   RuntimePlan,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 
 import type {
   InMemoryTransportController,

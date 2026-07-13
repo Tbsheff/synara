@@ -1,86 +1,283 @@
-import { execFileSync } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-
+// FILE: CheckpointStore.test.ts
+// Purpose: Verifies filesystem checkpoint store behavior around expensive Git capture work.
+// Layer: Checkpointing tests.
+// Exports: Vitest coverage for CheckpointStoreLive.
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { CheckpointRef } from "@t3tools/contracts";
-import { Effect, Layer, ManagedRuntime } from "effect";
-import { afterEach, describe, expect, it } from "vitest";
+import { Effect, Fiber, Layer, ManagedRuntime, Option } from "effect";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ServerConfig } from "../../config.ts";
-import { GitCoreLive } from "../../git/Layers/GitCore.ts";
-import { CheckpointStore } from "../Services/CheckpointStore.ts";
 import { CheckpointStoreLive } from "./CheckpointStore.ts";
+import { CheckpointStore } from "../Services/CheckpointStore.ts";
+import { GitCore, type GitCoreShape } from "../../git/Services/GitCore.ts";
+import { GitCommandError } from "../../git/Errors.ts";
+import { CheckpointRef } from "@synara/contracts";
 
-function runGit(cwd: string, args: ReadonlyArray<string>): string {
-  return execFileSync("git", args, {
-    cwd,
-    stdio: ["ignore", "pipe", "pipe"],
-    encoding: "utf8",
-  }).trim();
+async function waitFor(predicate: () => boolean, timeoutMs = 1_000): Promise<void> {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error("Timed out waiting for condition");
 }
 
-function createGitRepository(): string {
-  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "t3-checkpoint-store-"));
-  runGit(cwd, ["init", "--initial-branch=main"]);
-  runGit(cwd, ["config", "user.email", "test@example.com"]);
-  runGit(cwd, ["config", "user.name", "Test User"]);
-  fs.writeFileSync(path.join(cwd, "README.md"), "v1\n", "utf8");
-  runGit(cwd, ["add", "."]);
-  runGit(cwd, ["commit", "-m", "Initial"]);
-  return cwd;
-}
-
-function createRuntime() {
-  const layer = CheckpointStoreLive.pipe(
-    Layer.provide(GitCoreLive),
-    Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-checkpoint-store-test-" })),
-    Layer.provide(NodeServices.layer),
-  );
-  return ManagedRuntime.make(layer);
-}
-
-describe("CheckpointStore", () => {
+describe("CheckpointStoreLive", () => {
   let runtime: ManagedRuntime.ManagedRuntime<CheckpointStore, unknown> | null = null;
-  const tempDirs: string[] = [];
 
   afterEach(async () => {
     if (runtime) {
       await runtime.dispose();
     }
     runtime = null;
-    while (tempDirs.length > 0) {
-      const dir = tempDirs.pop();
-      if (dir) {
-        fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("deduplicates concurrent captures for the same checkpoint ref", async () => {
+    let releaseAdd: (() => void) | undefined;
+    const addGate = new Promise<void>((resolve) => {
+      releaseAdd = resolve;
+    });
+    const execute = vi.fn<GitCoreShape["execute"]>((input) => {
+      const args = input.args.join(" ");
+      if (args === "status --porcelain=v1 -z --untracked-files=all -- .") {
+        return Effect.succeed({ code: 0, stdout: "?? dirty.txt\0", stderr: "" });
       }
-    }
+      if (args === "rev-parse --verify HEAD") {
+        return Effect.succeed({ code: 1, stdout: "", stderr: "" });
+      }
+      if (args === "add -A -- .") {
+        return Effect.promise(() => addGate).pipe(Effect.as({ code: 0, stdout: "", stderr: "" }));
+      }
+      if (args === "write-tree") {
+        return Effect.succeed({ code: 0, stdout: "tree-oid\n", stderr: "" });
+      }
+      if (args.startsWith("commit-tree ")) {
+        return Effect.succeed({ code: 0, stdout: "commit-oid\n", stderr: "" });
+      }
+      if (args.startsWith("update-ref ")) {
+        return Effect.succeed({ code: 0, stdout: "", stderr: "" });
+      }
+      throw new Error(`Unexpected git args: ${args}`);
+    });
+    const layer = CheckpointStoreLive.pipe(
+      Layer.provide(Layer.succeed(GitCore, { execute } as unknown as GitCoreShape)),
+      Layer.provide(NodeServices.layer),
+    );
+    runtime = ManagedRuntime.make(layer);
+
+    await runtime.runPromise(
+      Effect.gen(function* () {
+        const store = yield* CheckpointStore;
+        const input = {
+          cwd: "/repo",
+          checkpointRef: CheckpointRef.makeUnsafe("refs/synara-checkpoints/thread/message"),
+        };
+
+        const first = yield* store.captureCheckpoint(input).pipe(Effect.forkChild);
+        yield* Effect.promise(() =>
+          waitFor(() => execute.mock.calls.some(([call]) => call.args.join(" ") === "add -A -- .")),
+        );
+        const second = yield* store.captureCheckpoint(input).pipe(Effect.forkChild);
+        yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 25)));
+
+        expect(
+          execute.mock.calls.filter(([call]) => call.args.join(" ") === "add -A -- ."),
+        ).toHaveLength(1);
+
+        releaseAdd?.();
+        yield* Fiber.join(first);
+        yield* Fiber.join(second);
+      }),
+    );
   });
 
-  it("aliases clean checkpoint captures to HEAD", async () => {
-    const cwd = createGitRepository();
-    tempDirs.push(cwd);
-    runtime = createRuntime();
-    const checkpointStore = await runtime.runPromise(Effect.service(CheckpointStore));
-    const checkpointRef = CheckpointRef.makeUnsafe("refs/t3/checkpoints/test-clean/turn/0");
+  it("clears in-flight capture state when the owner is interrupted", async () => {
+    let addCalls = 0;
+    const execute = vi.fn<GitCoreShape["execute"]>((input) => {
+      const args = input.args.join(" ");
+      if (args === "status --porcelain=v1 -z --untracked-files=all -- .") {
+        return Effect.succeed({ code: 0, stdout: "?? dirty.txt\0", stderr: "" });
+      }
+      if (args === "rev-parse --verify HEAD") {
+        return Effect.succeed({ code: 1, stdout: "", stderr: "" });
+      }
+      if (args === "add -A -- .") {
+        addCalls += 1;
+        if (addCalls === 1) {
+          return Effect.never;
+        }
+        return Effect.succeed({ code: 0, stdout: "", stderr: "" });
+      }
+      if (args === "write-tree") {
+        return Effect.succeed({ code: 0, stdout: "tree-oid\n", stderr: "" });
+      }
+      if (args.startsWith("commit-tree ")) {
+        return Effect.succeed({ code: 0, stdout: "commit-oid\n", stderr: "" });
+      }
+      if (args.startsWith("update-ref ")) {
+        return Effect.succeed({ code: 0, stdout: "", stderr: "" });
+      }
+      throw new Error(`Unexpected git args: ${args}`);
+    });
+    const layer = CheckpointStoreLive.pipe(
+      Layer.provide(Layer.succeed(GitCore, { execute } as unknown as GitCoreShape)),
+      Layer.provide(NodeServices.layer),
+    );
+    runtime = ManagedRuntime.make(layer);
 
-    await runtime.runPromise(checkpointStore.captureCheckpoint({ cwd, checkpointRef }));
+    await runtime.runPromise(
+      Effect.gen(function* () {
+        const store = yield* CheckpointStore;
+        const input = {
+          cwd: "/repo",
+          checkpointRef: CheckpointRef.makeUnsafe("refs/synara-checkpoints/thread/message"),
+        };
 
-    expect(runGit(cwd, ["rev-parse", checkpointRef])).toBe(runGit(cwd, ["rev-parse", "HEAD"]));
+        const first = yield* store.captureCheckpoint(input).pipe(Effect.forkChild);
+        yield* Effect.promise(() => waitFor(() => addCalls === 1));
+        const waiter = yield* store.captureCheckpoint(input).pipe(
+          Effect.map(() => "completed" as const),
+          Effect.catch((error) => Effect.succeed(error._tag)),
+          Effect.forkChild,
+        );
+        yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 25)));
+
+        yield* Fiber.interrupt(first);
+        // The owner's interruption must surface to waiters as a typed store
+        // error, not replay as the waiter's own fiber being interrupted.
+        const waiterResult = yield* Fiber.join(waiter);
+        expect(waiterResult).toBe("CheckpointInvariantError");
+
+        const thirdResult = yield* store
+          .captureCheckpoint(input)
+          .pipe(Effect.timeoutOption("100 millis"));
+        expect(Option.isSome(thirdResult)).toBe(true);
+        expect(addCalls).toBe(2);
+      }),
+    );
   });
 
-  it("keeps the full snapshot path for dirty worktrees", async () => {
-    const cwd = createGitRepository();
-    tempDirs.push(cwd);
-    runtime = createRuntime();
-    const checkpointStore = await runtime.runPromise(Effect.service(CheckpointStore));
-    const checkpointRef = CheckpointRef.makeUnsafe("refs/t3/checkpoints/test-dirty/turn/0");
-    fs.writeFileSync(path.join(cwd, "untracked.txt"), "captured\n", "utf8");
+  it("skips the capture when skipIfExists is set and the ref already exists", async () => {
+    const existingRef = "refs/synara-checkpoints/thread/existing";
+    const missingRef = "refs/synara-checkpoints/thread/missing";
+    const execute = vi.fn<GitCoreShape["execute"]>((input) => {
+      const args = input.args.join(" ");
+      if (args === `rev-parse --verify --quiet ${existingRef}^{commit}`) {
+        return Effect.succeed({ code: 0, stdout: "existing-commit\n", stderr: "" });
+      }
+      if (args === `rev-parse --verify --quiet ${missingRef}^{commit}`) {
+        return Effect.succeed({ code: 1, stdout: "", stderr: "" });
+      }
+      if (args === "status --porcelain=v1 -z --untracked-files=all -- .") {
+        return Effect.succeed({ code: 0, stdout: "?? dirty.txt\0", stderr: "" });
+      }
+      if (args === "rev-parse --verify HEAD") {
+        return Effect.succeed({ code: 1, stdout: "", stderr: "" });
+      }
+      if (args === "add -A -- .") {
+        return Effect.succeed({ code: 0, stdout: "", stderr: "" });
+      }
+      if (args === "write-tree") {
+        return Effect.succeed({ code: 0, stdout: "tree-oid\n", stderr: "" });
+      }
+      if (args.startsWith("commit-tree ")) {
+        return Effect.succeed({ code: 0, stdout: "commit-oid\n", stderr: "" });
+      }
+      if (args.startsWith("update-ref ")) {
+        return Effect.succeed({ code: 0, stdout: "", stderr: "" });
+      }
+      throw new Error(`Unexpected git args: ${args}`);
+    });
+    const layer = CheckpointStoreLive.pipe(
+      Layer.provide(Layer.succeed(GitCore, { execute } as unknown as GitCoreShape)),
+      Layer.provide(NodeServices.layer),
+    );
+    runtime = ManagedRuntime.make(layer);
 
-    await runtime.runPromise(checkpointStore.captureCheckpoint({ cwd, checkpointRef }));
+    await runtime.runPromise(
+      Effect.gen(function* () {
+        const store = yield* CheckpointStore;
+        const captureArgs = (args: string) =>
+          execute.mock.calls.filter(([call]) => call.args.join(" ") === args);
 
-    expect(runGit(cwd, ["rev-parse", checkpointRef])).not.toBe(runGit(cwd, ["rev-parse", "HEAD"]));
-    expect(runGit(cwd, ["show", `${checkpointRef}:untracked.txt`])).toBe("captured");
+        yield* store.captureCheckpoint({
+          cwd: "/repo",
+          checkpointRef: CheckpointRef.makeUnsafe(existingRef),
+          skipIfExists: true,
+        });
+        expect(captureArgs("add -A -- .")).toHaveLength(0);
+
+        yield* store.captureCheckpoint({
+          cwd: "/repo",
+          checkpointRef: CheckpointRef.makeUnsafe(missingRef),
+          skipIfExists: true,
+        });
+        expect(captureArgs("add -A -- .")).toHaveLength(1);
+        expect(captureArgs(`update-ref ${missingRef} commit-oid`)).toHaveLength(1);
+      }),
+    );
+  });
+
+  it("restores the worktree patch when resetting the index fails during file undo", async () => {
+    const fromRef = CheckpointRef.makeUnsafe("refs/synara-checkpoints/thread/turn/start");
+    const toRef = CheckpointRef.makeUnsafe("refs/synara-checkpoints/thread/turn/end");
+    const commands: string[] = [];
+    const execute = vi.fn<GitCoreShape["execute"]>((input) => {
+      const args = input.args.join(" ");
+      commands.push(args);
+      if (args === `rev-parse --verify --quiet ${fromRef}^{commit}`) {
+        return Effect.succeed({ code: 0, stdout: "from-oid\n", stderr: "" });
+      }
+      if (args === `rev-parse --verify --quiet ${toRef}^{commit}`) {
+        return Effect.succeed({ code: 0, stdout: "to-oid\n", stderr: "" });
+      }
+      if (args.startsWith("diff --patch --binary --full-index")) {
+        return Effect.succeed({ code: 0, stdout: "turn patch", stderr: "" });
+      }
+      if (args === "diff --name-only --no-renames -z from-oid to-oid") {
+        return Effect.succeed({ code: 0, stdout: "src/file.ts\0", stderr: "" });
+      }
+      if (input.args[0] === "apply" && input.args[1] === "--reverse") {
+        return Effect.succeed({ code: 0, stdout: "", stderr: "" });
+      }
+      if (args === "reset --quiet from-oid -- src/file.ts") {
+        return Effect.fail(
+          new GitCommandError({
+            operation: input.operation,
+            command: args,
+            cwd: input.cwd,
+            detail: "reset failed",
+          }),
+        );
+      }
+      if (input.args[0] === "apply" && input.args[1] === "--whitespace=nowarn") {
+        return Effect.succeed({ code: 0, stdout: "", stderr: "" });
+      }
+      throw new Error(`Unexpected git args: ${args}`);
+    });
+    const layer = CheckpointStoreLive.pipe(
+      Layer.provide(Layer.succeed(GitCore, { execute } as unknown as GitCoreShape)),
+      Layer.provide(NodeServices.layer),
+    );
+    runtime = ManagedRuntime.make(layer);
+
+    const result = await runtime.runPromise(
+      Effect.gen(function* () {
+        const store = yield* CheckpointStore;
+        return yield* store
+          .reverseCheckpointDiff({
+            cwd: "/repo",
+            fromCheckpointRef: fromRef,
+            toCheckpointRef: toRef,
+          })
+          .pipe(
+            Effect.map(() => "success" as const),
+            Effect.catch((error) => Effect.succeed(error._tag)),
+          );
+      }),
+    );
+
+    expect(result).toBe("GitCommandError");
+    expect(commands.filter((command) => command.startsWith("apply "))).toHaveLength(2);
+    expect(commands.at(-1)).toMatch(/^apply --whitespace=nowarn -- /);
   });
 });

@@ -8,7 +8,7 @@
  *
  * @module descriptors
  */
-import type { ExecutionRuntimeProvider } from "@t3tools/contracts";
+import type { ExecutionRuntimeProvider } from "@synara/contracts";
 
 import type { RuntimeProviderDescriptor } from "../Services/RuntimeProviderDescriptor.ts";
 

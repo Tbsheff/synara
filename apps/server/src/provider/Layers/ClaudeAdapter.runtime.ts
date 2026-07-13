@@ -19,7 +19,7 @@ import {
   type ProviderSession,
   type ThreadTokenUsageSnapshot,
   type TurnId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import type { Effect, Fiber, Queue } from "effect";
 
 import type {

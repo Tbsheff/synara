@@ -394,6 +394,9 @@ const ThreadUserInputResponseRequestedPayload = Schema.Struct({
 export const ThreadCheckpointRevertRequestedPayload = Schema.Struct({
   threadId: ThreadId,
   turnCount: NonNegativeInt,
+  scope: Schema.optional(Schema.Literals(["thread", "files"])).pipe(
+    Schema.withDecodingDefault(() => "thread" as const),
+  ),
   createdAt: IsoDateTime,
 });
 
@@ -478,6 +481,7 @@ export const ThreadTurnDiffCompletedPayload = Schema.Struct({
   threadId: ThreadId,
   turnId: TurnId,
   checkpointTurnCount: NonNegativeInt,
+  preserveLatestTurn: Schema.optional(Schema.Boolean),
   checkpointRef: CheckpointRef,
   status: OrchestrationCheckpointStatus,
   files: Schema.Array(OrchestrationCheckpointFile),

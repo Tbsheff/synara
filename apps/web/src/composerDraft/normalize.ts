@@ -5,7 +5,7 @@
 //   normalizeAssistantSelection, normalizeAssistantSelections,
 //   normalizeTerminalContextForThread, normalizeTerminalContextsForThread
 
-import type { ThreadId } from "@t3tools/contracts";
+import type { ThreadId } from "@synara/contracts";
 import { normalizeAssistantSelectionAttachment } from "../lib/assistantSelections";
 import { type TerminalContextDraft, normalizeTerminalContextText } from "../lib/terminalContext";
 import type {

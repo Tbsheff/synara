@@ -8,7 +8,7 @@ import {
   type ProviderUserInputAnswers,
   ProviderApprovalDecision,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Schema } from "effect";
 
 import { isNonFatalCodexErrorMessage } from "../../codexErrorClassification.ts";

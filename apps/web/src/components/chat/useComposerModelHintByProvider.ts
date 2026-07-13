@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { type ModelSelection, type ProviderKind } from "@t3tools/contracts";
+import { type ModelSelection, type ProviderKind } from "@synara/contracts";
 
 interface UseComposerModelHintByProviderParams {
   threadModelSelection: ModelSelection | null | undefined;
@@ -24,6 +24,7 @@ export function useComposerModelHintByProvider({
       cursor: resolveHint("cursor"),
       gemini: resolveHint("gemini"),
       grok: resolveHint("grok"),
+      droid: resolveHint("droid"),
       kilo: resolveHint("kilo"),
       opencode: resolveHint("opencode"),
       pi: resolveHint("pi"),

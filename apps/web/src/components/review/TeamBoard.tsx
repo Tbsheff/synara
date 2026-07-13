@@ -2,7 +2,7 @@ import type {
   ReviewProjectCard,
   ReviewProjectColumn,
   ReviewProjectSummary,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import {
   DndContext,
   DragOverlay,

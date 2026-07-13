@@ -25,7 +25,7 @@ import { ServiceMap } from "effect";
 import type { Effect } from "effect";
 import type { ChildProcessSpawner } from "effect/unstable/process";
 
-import type { ExecutionInstanceId } from "@t3tools/contracts";
+import type { ExecutionInstanceId } from "@synara/contracts";
 
 import type {
   InMemoryTransportController,
@@ -124,4 +124,4 @@ export interface ModalCommandTransportShape {
 export class ModalCommandTransport extends ServiceMap.Service<
   ModalCommandTransport,
   ModalCommandTransportShape
->()("t3/executionRuntime/providers/modal/ModalCommandTransport") {}
+>()("synara/executionRuntime/providers/modal/ModalCommandTransport") {}

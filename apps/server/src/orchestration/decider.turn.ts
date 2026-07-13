@@ -7,9 +7,9 @@ import type {
   OrchestrationCommand,
   OrchestrationEvent,
   OrchestrationReadModel,
-} from "@t3tools/contracts";
-import { TurnId } from "@t3tools/contracts";
-import { resolveTailUserMessageEditTarget } from "@t3tools/shared/conversationEdit";
+} from "@synara/contracts";
+import { TurnId } from "@synara/contracts";
+import { resolveTailUserMessageEditTarget } from "@synara/shared/conversationEdit";
 import { Effect } from "effect";
 
 import { OrchestrationCommandInvariantError } from "./Errors.ts";
@@ -298,6 +298,7 @@ export const decideTurnCommand = Effect.fn("decideTurnCommand")(function* ({
         payload: {
           threadId: command.threadId,
           turnCount: command.turnCount,
+          scope: command.scope ?? "thread",
           createdAt: command.createdAt,
         },
       };
@@ -656,6 +657,9 @@ export const decideTurnCommand = Effect.fn("decideTurnCommand")(function* ({
           threadId: command.threadId,
           turnId: command.turnId,
           checkpointTurnCount: command.checkpointTurnCount,
+          ...(command.preserveLatestTurn === undefined
+            ? {}
+            : { preserveLatestTurn: command.preserveLatestTurn }),
           checkpointRef: command.checkpointRef,
           status: command.status,
           files: command.files,

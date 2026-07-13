@@ -9,7 +9,7 @@ import {
   type ThreadId,
   type ThreadTokenUsageSnapshot,
   type TurnId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Effect, Random } from "effect";
 
 import { ProviderAdapterValidationError } from "../Errors.ts";

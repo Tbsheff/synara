@@ -9,11 +9,10 @@ import {
   type ProviderKind,
   type ProviderModelDescriptor,
   type ThreadId,
-} from "@t3tools/contracts";
-import { applyClaudePromptEffortPrefix } from "@t3tools/shared/model";
-import { memo, useCallback, useState, type ReactNode } from "react";
-import { IoFlash } from "react-icons/io5";
-import { ChevronDownIcon } from "~/lib/icons";
+} from "@synara/contracts";
+import { applyClaudePromptEffortPrefix } from "@synara/shared/model";
+import { memo, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { ChevronDownIcon, FastModeIcon, SettingsIcon } from "~/lib/icons";
 import { Button } from "../ui/button";
 import {
   Menu,
@@ -71,66 +70,82 @@ function findAgentLabel(
   return agent?.displayName ?? value;
 }
 
+// Mirrors the trigger label assembly so callers (e.g. the composer footer
+// width planner) can measure the summary without rendering the picker.
 export function resolveTraitsTriggerSummary(options: {
   provider: ProviderKind;
   model: string | null | undefined;
   prompt: string;
   modelOptions: ProviderOptions | null | undefined;
   runtimeModel?: ProviderModelDescriptor | undefined;
-  runtimeAgents?: ReadonlyArray<ProviderAgentDescriptor> | null | undefined;
+  runtimeAgents: ReadonlyArray<ProviderAgentDescriptor> | null | undefined;
 }): {
   contextWindowLabel: string | null;
   primaryLabel: string | null;
   showsFastBadge: boolean;
   summaryText: string;
 } {
-  const selection = getComposerTraitSelection(
+  const {
+    caps,
+    effort,
+    effortLevels,
+    thinkingEnabled,
+    fastModeEnabled,
+    fastModeDescriptor,
+    contextWindow,
+    contextWindowOptions,
+    defaultContextWindow,
+    ultrathinkPromptControlled,
+  } = getComposerTraitSelection(
     options.provider,
     options.model,
     options.prompt,
     options.modelOptions,
     options.runtimeModel,
   );
-  const supportsFastModeControl =
-    selection.fastModeDescriptor !== null || selection.caps.supportsFastMode;
+  const supportsFastModeControl = fastModeDescriptor !== null || caps.supportsFastMode;
+  // Providers whose only trait control is the fast toggle surface it as the
+  // primary label ("Fast"/"Default") instead of the appended badge.
   const isFastOnlyControl =
     supportsFastModeControl &&
-    selection.effortLevels.length === 0 &&
-    selection.thinkingEnabled === null &&
-    selection.contextWindowOptions.length <= 1;
-  const effortLabel = selection.effort
-    ? (selection.effortLevels.find((level) => level.value === selection.effort)?.label ??
-      selection.effort)
+    effortLevels.length === 0 &&
+    thinkingEnabled === null &&
+    contextWindowOptions.length <= 1;
+  const effortLabel = effort
+    ? (effortLevels.find((level) => level.value === effort)?.label ?? effort)
     : null;
-  const primaryLabel = selection.ultrathinkPromptControlled
+  const primaryLabel = ultrathinkPromptControlled
     ? "Ultrathink"
     : effortLabel
       ? effortLabel
-      : selection.thinkingEnabled !== null
-        ? `Thinking ${selection.thinkingEnabled ? "On" : "Off"}`
+      : thinkingEnabled !== null
+        ? `Thinking ${thinkingEnabled ? "On" : "Off"}`
         : isFastOnlyControl
-          ? selection.fastModeEnabled
+          ? fastModeEnabled
             ? "Fast"
             : "Default"
           : null;
+  // Only departures from the default context window earn a label.
   const contextWindowLabel =
-    selection.contextWindowOptions.length > 1 &&
-    selection.contextWindow !== selection.defaultContextWindow
-      ? (selection.contextWindowOptions.find((option) => option.value === selection.contextWindow)
-          ?.label ?? null)
+    contextWindowOptions.length > 1 && contextWindow !== defaultContextWindow
+      ? (contextWindowOptions.find((option) => option.value === contextWindow)?.label ?? null)
       : null;
   const agentOptions = getAgentOptions(options.provider, options.runtimeAgents);
   const selectedAgent = getSelectedAgentValue(options.provider, options.modelOptions);
-  const resolvedPrimaryLabel = primaryLabel ?? findAgentLabel(agentOptions, selectedAgent);
-  const showsFastBadge = supportsFastModeControl && selection.fastModeEnabled && !isFastOnlyControl;
+  const agentLabel = findAgentLabel(agentOptions, selectedAgent);
+  // Agent name stands in as the primary label for agent-driven providers
+  // (kilo/opencode) that expose no effort/thinking controls.
+  const resolvedPrimaryLabel = primaryLabel ?? agentLabel;
+  const showsFastBadge = supportsFastModeControl && fastModeEnabled && !isFastOnlyControl;
+  const summaryText = [resolvedPrimaryLabel, showsFastBadge ? "Fast" : null, contextWindowLabel]
+    .filter((value): value is string => Boolean(value))
+    .join(" · ");
 
   return {
     contextWindowLabel,
     primaryLabel: resolvedPrimaryLabel,
     showsFastBadge,
-    summaryText: [resolvedPrimaryLabel, showsFastBadge ? "Fast" : null, contextWindowLabel]
-      .filter((value): value is string => Boolean(value))
-      .join(" · "),
+    summaryText,
   };
 }
 
@@ -237,6 +252,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
     contextWindowOptions,
     contextWindow,
     defaultContextWindow,
+    contextWindowDescriptor,
     ultrathinkPromptControlled,
     primarySelectDescriptor,
     fastModeDescriptor,
@@ -251,8 +267,10 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
   const defaultAgent = defaultAgentForProvider(provider);
   const selectedAgent = getSelectedAgentValue(provider, modelOptions);
   const hasAgentControls = agentOptions.length > 0 && defaultAgent !== null;
+  const hasPriorContextWindowSection = thinkingEnabled !== null;
+  const hasPriorEffortSection = thinkingEnabled !== null || contextWindowOptions.length > 1;
   const hasPriorFastModeSection =
-    effortLevels.length > 0 || thinkingEnabled !== null || contextWindowOptions.length > 1;
+    thinkingEnabled !== null || effortLevels.length > 0 || contextWindowOptions.length > 1;
 
   // Single home for committing a trait change: merge the patch into the provider
   // options, persist it as sticky, and close the menu. Every section funnels here.
@@ -316,28 +334,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
 
   return (
     <>
-      {effortLevels.length > 0 ? (
-        <TraitRadioSection
-          label={provider === "kilo" || provider === "opencode" ? "Variant" : "Effort"}
-          note={
-            ultrathinkPromptControlled ? (
-              <div className="px-2 pb-1.5 text-muted-foreground/80 text-xs">
-                Remove Ultrathink from the prompt to change effort.
-              </div>
-            ) : undefined
-          }
-          value={effort ?? ""}
-          disabled={ultrathinkPromptControlled}
-          options={effortLevels.map((option) => ({
-            value: option.value,
-            label: option.label,
-            isDefault: option.value === defaultEffort,
-            description: option.description ?? null,
-          }))}
-          onValueChange={handleEffortChange}
-          onSelectionComplete={onSelectionComplete}
-        />
-      ) : thinkingEnabled !== null ? (
+      {thinkingEnabled !== null ? (
         <TraitRadioSection
           label="Thinking"
           value={thinkingEnabled ? "on" : "off"}
@@ -349,33 +346,60 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
           onSelectionComplete={onSelectionComplete}
         />
       ) : null}
-      {includeFastMode && supportsFastModeControl ? (
-        <>
-          {hasPriorFastModeSection ? <MenuDivider /> : null}
-          <TraitRadioSection
-            label="Fast Mode"
-            value={fastModeEnabled ? "on" : "off"}
-            options={[
-              { value: "off", label: "Default" },
-              { value: "on", label: "Fast" },
-            ]}
-            onValueChange={(value) => commitTrait({ fastMode: value === "on" })}
-            onSelectionComplete={onSelectionComplete}
-          />
-        </>
-      ) : null}
       {contextWindowOptions.length > 1 ? (
         <>
-          <MenuDivider />
+          {hasPriorContextWindowSection ? <MenuDivider /> : null}
           <TraitRadioSection
-            label="Context Window"
+            label={contextWindowDescriptor?.label ?? "Context"}
             value={contextWindow ?? defaultContextWindow ?? ""}
             options={contextWindowOptions.map((option) => ({
               value: option.value,
               label: option.label,
               isDefault: option.value === defaultContextWindow,
             }))}
-            onValueChange={(value) => commitTrait({ contextWindow: value })}
+            onValueChange={(value) =>
+              commitTrait({ [contextWindowDescriptor?.id ?? "contextWindow"]: value })
+            }
+            onSelectionComplete={onSelectionComplete}
+          />
+        </>
+      ) : null}
+      {effortLevels.length > 0 ? (
+        <>
+          {hasPriorEffortSection ? <MenuDivider /> : null}
+          <TraitRadioSection
+            label={provider === "kilo" || provider === "opencode" ? "Variant" : "Effort"}
+            note={
+              ultrathinkPromptControlled ? (
+                <div className="px-2 pb-1.5 text-muted-foreground/80 text-xs">
+                  Remove Ultrathink from the prompt to change effort.
+                </div>
+              ) : undefined
+            }
+            value={effort ?? ""}
+            disabled={ultrathinkPromptControlled}
+            options={effortLevels.map((option) => ({
+              value: option.value,
+              label: option.label,
+              isDefault: option.value === defaultEffort,
+              description: option.description ?? null,
+            }))}
+            onValueChange={handleEffortChange}
+            onSelectionComplete={onSelectionComplete}
+          />
+        </>
+      ) : null}
+      {includeFastMode && supportsFastModeControl ? (
+        <>
+          {hasPriorFastModeSection ? <MenuDivider /> : null}
+          <TraitRadioSection
+            label="Speed"
+            value={fastModeEnabled ? "on" : "off"}
+            options={[
+              { value: "off", label: "Default" },
+              { value: "on", label: "Fast" },
+            ]}
+            onValueChange={(value) => commitTrait({ fastMode: value === "on" })}
             onSelectionComplete={onSelectionComplete}
           />
         </>
@@ -416,13 +440,20 @@ export const TraitsPicker = memo(function TraitsPicker({
   modelOptions,
   open,
   onOpenChange,
+  onSelectionCommitted,
   shortcutLabel,
+  hideLabel = false,
 }: TraitsMenuContentProps & {
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
+  onSelectionCommitted?: () => void;
   shortcutLabel?: string | null;
+  // Icon-only trigger (gear + chevron) for narrow composers; the effort/context
+  // summary moves to title/sr-only.
+  hideLabel?: boolean;
 }) {
   const [uncontrolledMenuOpen, setUncontrolledMenuOpen] = useState(false);
+  const selectionCommitTimerRef = useRef<number | null>(null);
   const isMenuOpen = open ?? uncontrolledMenuOpen;
   const setMenuOpen = useCallback(
     (nextOpen: boolean) => {
@@ -433,58 +464,54 @@ export const TraitsPicker = memo(function TraitsPicker({
     },
     [onOpenChange, open],
   );
-  const {
-    caps,
-    effort,
-    effortLevels,
-    thinkingEnabled,
-    fastModeEnabled,
-    contextWindowOptions,
-    contextWindow,
-    defaultContextWindow,
-    ultrathinkPromptControlled,
-    fastModeDescriptor,
-  } = getComposerTraitSelection(provider, model, prompt, modelOptions, runtimeModel);
+  const scheduleSelectionCommitted = useCallback(() => {
+    if (selectionCommitTimerRef.current !== null) {
+      window.clearTimeout(selectionCommitTimerRef.current);
+    }
+    selectionCommitTimerRef.current = window.setTimeout(() => {
+      selectionCommitTimerRef.current = null;
+      onSelectionCommitted?.();
+    }, 0);
+  }, [onSelectionCommitted]);
+  useEffect(
+    () => () => {
+      if (selectionCommitTimerRef.current !== null) {
+        window.clearTimeout(selectionCommitTimerRef.current);
+      }
+    },
+    [],
+  );
+  const handleSelectionComplete = useCallback(() => {
+    setMenuOpen(false);
+    scheduleSelectionCommitted();
+  }, [scheduleSelectionCommitted, setMenuOpen]);
+  const { caps, effortLevels, thinkingEnabled, contextWindowOptions, fastModeDescriptor } =
+    getComposerTraitSelection(provider, model, prompt, modelOptions, runtimeModel);
   const hasVisibleControls = hasVisibleComposerTraitControls(
     { caps, effortLevels, thinkingEnabled, contextWindowOptions, fastModeDescriptor },
     { includeFastMode },
   );
-  const supportsFastModeControl = fastModeDescriptor !== null || caps.supportsFastMode;
   const agentOptions = getAgentOptions(provider, runtimeAgents);
   const defaultAgent = defaultAgentForProvider(provider);
-  const selectedAgent = getSelectedAgentValue(provider, modelOptions);
   const hasAgentControls = agentOptions.length > 0 && defaultAgent !== null;
 
   if (!hasVisibleControls && !hasAgentControls) {
     return null;
   }
 
-  const effortLabel = effort
-    ? (effortLevels.find((l) => l.value === effort)?.label ?? effort)
-    : null;
-  const contextWindowLabel =
-    contextWindowOptions.length > 1 && contextWindow !== defaultContextWindow
-      ? (contextWindowOptions.find((option) => option.value === contextWindow)?.label ?? null)
-      : null;
-  const isFastOnlyControl =
-    supportsFastModeControl &&
-    effortLevels.length === 0 &&
-    thinkingEnabled === null &&
-    contextWindowOptions.length <= 1;
-  const primaryTriggerLabel = ultrathinkPromptControlled
-    ? "Ultrathink"
-    : effortLabel
-      ? effortLabel
-      : thinkingEnabled !== null
-        ? `Thinking ${thinkingEnabled ? "On" : "Off"}`
-        : isFastOnlyControl
-          ? fastModeEnabled
-            ? "Fast"
-            : "Default"
-          : null;
-  const agentLabel = findAgentLabel(agentOptions, selectedAgent);
-  const visiblePrimaryTriggerLabel = primaryTriggerLabel ?? agentLabel;
-  const showsFastBadge = supportsFastModeControl && fastModeEnabled && !isFastOnlyControl;
+  const {
+    contextWindowLabel,
+    primaryLabel: visiblePrimaryTriggerLabel,
+    showsFastBadge,
+    summaryText: hiddenLabelTitle,
+  } = resolveTraitsTriggerSummary({
+    provider,
+    model,
+    prompt,
+    modelOptions,
+    runtimeModel,
+    runtimeAgents,
+  });
 
   const isCodexStyle = provider === "codex";
 
@@ -492,27 +519,32 @@ export const TraitsPicker = memo(function TraitsPicker({
     <Button
       size="sm"
       variant="chrome"
-      className={
-        isCodexStyle
-          ? `min-w-0 max-w-40 shrink justify-start overflow-hidden whitespace-nowrap px-2 sm:max-w-48 sm:px-3 [&_svg]:mx-0 ${COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME}`
-          : `shrink-0 whitespace-nowrap px-2 sm:px-3 ${COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME}`
-      }
+      className={`min-w-0 shrink-0 justify-start overflow-hidden whitespace-nowrap px-2 sm:px-2.5 [&_svg]:mx-0 ${COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME}`}
+      aria-label="Change effort, context, and speed"
+      {...(hideLabel && hiddenLabelTitle.length > 0 ? { title: hiddenLabelTitle } : {})}
     />
   );
 
-  const triggerContent = isCodexStyle ? (
+  const triggerContent = hideLabel ? (
+    <span className="flex min-w-0 items-center gap-1">
+      <SettingsIcon aria-hidden="true" className="size-3.5 shrink-0 opacity-75" />
+      {hiddenLabelTitle.length > 0 ? <span className="sr-only">{hiddenLabelTitle}</span> : null}
+      <ChevronDownIcon aria-hidden="true" className="size-3 shrink-0 opacity-60" />
+    </span>
+  ) : isCodexStyle ? (
     <span className="flex min-w-0 w-full items-center gap-2 overflow-hidden">
+      <SettingsIcon aria-hidden="true" className="size-3.5 shrink-0 opacity-75" />
       <span className="min-w-0 flex flex-1 items-center gap-1.5 truncate">
         {visiblePrimaryTriggerLabel ? (
           <span className="truncate">{visiblePrimaryTriggerLabel}</span>
-        ) : null}
+        ) : (
+          <span className="truncate">Options</span>
+        )}
         {showsFastBadge ? (
           <>
-            {visiblePrimaryTriggerLabel ? (
-              <span className="shrink-0 text-muted-foreground/70">·</span>
-            ) : null}
+            <span className="shrink-0 text-muted-foreground/45">·</span>
             <span className="inline-flex shrink-0 items-center gap-1">
-              <IoFlash aria-hidden="true" className="size-3 text-[hsl(var(--chart-4))]" />
+              <FastModeIcon aria-hidden="true" className="size-3 text-[hsl(var(--chart-4))]" />
               <span>Fast</span>
             </span>
           </>
@@ -520,7 +552,7 @@ export const TraitsPicker = memo(function TraitsPicker({
         {contextWindowLabel ? (
           <>
             {visiblePrimaryTriggerLabel || showsFastBadge ? (
-              <span className="shrink-0 text-muted-foreground/70">·</span>
+              <span className="shrink-0 text-muted-foreground/45">·</span>
             ) : null}
             <span className="shrink-0">{contextWindowLabel}</span>
           </>
@@ -530,15 +562,14 @@ export const TraitsPicker = memo(function TraitsPicker({
     </span>
   ) : (
     <>
+      <SettingsIcon aria-hidden="true" className="size-3.5 opacity-75" />
       <span className="inline-flex items-center gap-1.5">
-        {visiblePrimaryTriggerLabel ? <span>{visiblePrimaryTriggerLabel}</span> : null}
+        <span>{visiblePrimaryTriggerLabel ?? "Options"}</span>
         {showsFastBadge ? (
           <>
-            {visiblePrimaryTriggerLabel ? (
-              <span className="text-muted-foreground/70">·</span>
-            ) : null}
+            <span className="text-muted-foreground/45">·</span>
             <span className="inline-flex items-center gap-1">
-              <IoFlash aria-hidden="true" className="size-3 text-[hsl(var(--chart-4))]" />
+              <FastModeIcon aria-hidden="true" className="size-3 text-[hsl(var(--chart-4))]" />
               <span>Fast</span>
             </span>
           </>
@@ -546,7 +577,7 @@ export const TraitsPicker = memo(function TraitsPicker({
         {contextWindowLabel ? (
           <>
             {visiblePrimaryTriggerLabel || showsFastBadge ? (
-              <span className="text-muted-foreground/70">·</span>
+              <span className="text-muted-foreground/45">·</span>
             ) : null}
             <span>{contextWindowLabel}</span>
           </>
@@ -571,7 +602,7 @@ export const TraitsPicker = memo(function TraitsPicker({
           {!isMenuOpen ? (
             <TooltipPopup side="top" sideOffset={6} variant="picker">
               <span className="inline-flex items-center gap-2 px-1 py-0.5">
-                <span>Change reasoning</span>
+                <span>Change effort, context, and speed</span>
                 <ShortcutKbd
                   shortcutLabel={shortcutLabel}
                   className="h-4 min-w-4 px-1 text-[length:var(--app-font-size-ui-2xs,9px)] text-muted-foreground"
@@ -594,7 +625,7 @@ export const TraitsPicker = memo(function TraitsPicker({
           onPromptChange={onPromptChange}
           includeFastMode={includeFastMode}
           modelOptions={modelOptions}
-          onSelectionComplete={() => setMenuOpen(false)}
+          onSelectionComplete={handleSelectionComplete}
         />
       </ComposerPickerMenuPopup>
     </Menu>

@@ -6,7 +6,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook } from "@testing-library/react";
-import { MessageId } from "@t3tools/contracts";
+import { MessageId } from "@synara/contracts";
 
 import {
   ATTACHMENT_PREVIEW_HANDOFF_TTL_MS,

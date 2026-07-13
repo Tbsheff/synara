@@ -8,7 +8,7 @@ import {
   type OrchestrationEvent,
   type OrchestrationShellSnapshot,
   type OrchestrationThread,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 
 import { finalizePromotedDraftThreads, markPromotedDraftThreads } from "../composerDraftStore";
 import { useStore } from "../store";

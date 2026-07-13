@@ -10,7 +10,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { Effect } from "effect";
-import { ThreadId } from "@t3tools/contracts";
+import { ThreadId } from "@synara/contracts";
 
 import { CodexAppServerManager } from "./codexAppServerManager";
 import {

@@ -3,7 +3,7 @@
 // Exports: useSidebarDesktopUpdate, SidebarDesktopUpdate.
 
 import { useCallback, useEffect, useState } from "react";
-import { type DesktopUpdateState } from "@t3tools/contracts";
+import { type DesktopUpdateState } from "@synara/contracts";
 import { isElectron } from "../env";
 import { persistAppStateNow } from "../store";
 import { cn } from "~/lib/utils";

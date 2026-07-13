@@ -8,7 +8,7 @@ import {
   type ProjectId,
   type ThreadId as ThreadIdType,
   type TurnId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import {
   Suspense,
   lazy,

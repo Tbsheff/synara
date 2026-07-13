@@ -11,9 +11,9 @@ import {
   getGeminiThinkingConfigKind,
   getGeminiThinkingModelAlias,
   hasEffortLevel,
-} from "@t3tools/shared/model";
+} from "@synara/shared/model";
 
-import type { ProviderSession } from "@t3tools/contracts";
+import type { ProviderSession } from "@synara/contracts";
 
 import {
   GEMINI_2_5_THINKING_BUDGETS,

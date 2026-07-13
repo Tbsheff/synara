@@ -18,7 +18,7 @@ import {
   ProviderStartOptions,
   type ProviderRuntimeEvent,
   type ProviderSession,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Effect, Schema, SchemaIssue } from "effect";
 
 import { ProviderValidationError } from "../Errors.ts";
@@ -192,6 +192,7 @@ export function shouldRefreshResumeCursorForEvent(event: ProviderRuntimeEvent): 
     (event.type === "thread.state.changed" &&
       event.payload.state === "compacted" &&
       event.turnId === undefined) ||
+    event.type === "turn.tasks.updated" ||
     event.type === "turn.completed" ||
     event.type === "turn.aborted"
   );

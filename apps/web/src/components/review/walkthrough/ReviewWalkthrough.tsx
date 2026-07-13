@@ -5,7 +5,7 @@ import type {
   ReviewSourceRef,
   ReviewTargetKey,
   ReviewWalkthroughChapter,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { useQuery } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactElement } from "react";

@@ -6,7 +6,7 @@ import {
   type ClientOrchestrationCommand,
   type ModelSelection,
   type OrchestrationShellSnapshot,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { useStore } from "../store";

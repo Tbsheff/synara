@@ -2,7 +2,7 @@
 // Layer: web UI logic (no React); consumed by BranchToolbarBranchSelector.
 // Exports: handleCheckoutError, toBranchActionErrorMessage.
 // Note: keeps a single module-level recovery toast so retries replace, not stack.
-import type { NativeApi } from "@t3tools/contracts";
+import type { NativeApi } from "@synara/contracts";
 import type { QueryClient } from "@tanstack/react-query";
 
 import { invalidateGitQueries } from "../lib/gitReactQuery";

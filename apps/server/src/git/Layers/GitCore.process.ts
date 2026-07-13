@@ -14,7 +14,7 @@ import {
   Stream,
 } from "effect";
 
-import { decodeJsonResult } from "@t3tools/shared/schemaJson";
+import { decodeJsonResult } from "@synara/shared/schemaJson";
 import { GitCommandError } from "../Errors.ts";
 import type { ExecuteGitInput, ExecuteGitProgress } from "../Services/GitCore.ts";
 import type { TraceTailState } from "./GitCore.types.ts";
@@ -44,7 +44,7 @@ export const createTrace2Monitor = Effect.fn(function* (
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const traceFilePath = yield* fs.makeTempFileScoped({
-    prefix: `t3code-git-trace2-${process.pid}-`,
+    prefix: `synara-git-trace2-${process.pid}-`,
     suffix: ".json",
   });
   const hookStartByChildKey = new Map<string, { hookName: string; startedAtMs: number }>();

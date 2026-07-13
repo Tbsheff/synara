@@ -12,7 +12,7 @@ import type {
   ThreadId,
   TurnId,
   UserInputQuestion,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import type { Deferred } from "effect";
 
 export type ClaudeTextStreamKind = Extract<

@@ -464,6 +464,7 @@ const ThreadCheckpointRevertCommand = Schema.Struct({
   commandId: CommandId,
   threadId: ThreadId,
   turnCount: NonNegativeInt,
+  scope: Schema.optional(Schema.Literals(["thread", "files"])),
   createdAt: IsoDateTime,
 });
 
@@ -668,6 +669,7 @@ const ThreadTurnDiffCompleteCommand = Schema.Struct({
   files: Schema.Array(OrchestrationCheckpointFile),
   assistantMessageId: Schema.optional(MessageId),
   checkpointTurnCount: NonNegativeInt,
+  preserveLatestTurn: Schema.optional(Schema.Boolean),
   createdAt: IsoDateTime,
 });
 

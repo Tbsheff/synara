@@ -1,4 +1,4 @@
-import type { ReviewPullRequestSummary } from "@t3tools/contracts";
+import type { ReviewPullRequestSummary } from "@synara/contracts";
 
 export type ReviewColumnId = "draft" | "needs-review" | "changes-requested" | "approved" | "merged";
 

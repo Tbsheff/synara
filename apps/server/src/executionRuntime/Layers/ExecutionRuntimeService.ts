@@ -30,7 +30,7 @@ import {
   type RuntimePlan,
   type RuntimeRole,
   type ThreadId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Deferred, Duration, Effect, Layer, Option } from "effect";
 import { ChildProcessSpawner } from "effect/unstable/process";
 

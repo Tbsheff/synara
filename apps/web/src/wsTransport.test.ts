@@ -9,7 +9,7 @@ import {
   ORCHESTRATION_WS_METHODS,
   ThreadId,
   WS_CHANNELS,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 
 import { shouldKeepServerLifecycleStream, WsTransport } from "./wsTransport";
 

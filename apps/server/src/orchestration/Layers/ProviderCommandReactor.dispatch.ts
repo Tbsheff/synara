@@ -18,17 +18,17 @@ import {
   ThreadId,
   type RuntimeMode,
   TurnId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Cause, Effect, Fiber } from "effect";
 import {
   buildPromptThreadTitleFallback,
   isGenericChatThreadTitle,
-} from "@t3tools/shared/chatThreads";
+} from "@synara/shared/chatThreads";
 import {
   collectTailTurnIds,
   resolveTailUserMessageEditTarget,
-} from "@t3tools/shared/conversationEdit";
-import { isTemporaryWorktreeBranch } from "@t3tools/shared/git";
+} from "@synara/shared/conversationEdit";
+import { isTemporaryWorktreeBranch } from "@synara/shared/git";
 
 import {
   checkpointRefForThreadMessageStart,

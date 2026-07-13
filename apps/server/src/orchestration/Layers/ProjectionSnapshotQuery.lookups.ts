@@ -2,7 +2,7 @@
 //   project + checkpoint + diff context) that read without a snapshot transaction.
 // Layer: orchestration projection read path. Pure over SnapshotQueries.
 // Exports: makeSnapshotLookups(queries).
-import type { OrchestrationCheckpointSummary, OrchestrationProject } from "@t3tools/contracts";
+import type { OrchestrationCheckpointSummary, OrchestrationProject } from "@synara/contracts";
 import { Effect, Option } from "effect";
 
 import {

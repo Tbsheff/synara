@@ -1,4 +1,4 @@
-import type { ReviewUpdatedPayload } from "@t3tools/contracts";
+import type { ReviewUpdatedPayload } from "@synara/contracts";
 import { ServiceMap } from "effect";
 import type { Effect, Stream } from "effect";
 
@@ -8,5 +8,5 @@ export interface ReviewUpdateBusShape {
 }
 
 export class ReviewUpdateBus extends ServiceMap.Service<ReviewUpdateBus, ReviewUpdateBusShape>()(
-  "t3/review/Services/ReviewUpdateBus",
+  "synara/review/Services/ReviewUpdateBus",
 ) {}

@@ -36,4 +36,4 @@ export interface RuntimeProcessTransportShape {
 export class RuntimeProcessTransport extends ServiceMap.Service<
   RuntimeProcessTransport,
   RuntimeProcessTransportShape
->()("t3/executionRuntime/Services/RuntimeProcessTransport") {}
+>()("synara/executionRuntime/Services/RuntimeProcessTransport") {}

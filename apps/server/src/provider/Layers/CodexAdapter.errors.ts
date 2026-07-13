@@ -2,7 +2,7 @@
 // Layer: pure functions — no Effect, no session-context mutation.
 // Exports: PROVIDER const, message/error mappers (toMessage, toRequestError), and primitive value coercers (asObject/asString/asArray/asNumber).
 
-import { type ThreadId } from "@t3tools/contracts";
+import { type ThreadId } from "@synara/contracts";
 
 import {
   ProviderAdapterRequestError,

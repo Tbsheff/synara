@@ -10,7 +10,7 @@ export const meta = {
 const BRANCH = (args && args.branch) || "feat/exec-runtime-pr9";
 
 const HOUSE = [
-  'Effect-first: `class X extends ServiceMap.Service<X, Shape>()("t3/...")` + `Layer.effect`; never `Effect.Service`.',
+  'Effect-first: `class X extends ServiceMap.Service<X, Shape>()("synara/...")` + `Layer.effect`; never `Effect.Service`.',
   "packages/contracts is schema-only (effect/Schema). No runtime logic.",
   "Secrets (API keys/tokens) go through ServerSecretStore (apps/server/src/auth/Layers/ServerSecretStore.ts) — never store raw tokens in settings.json or log them. Mirror how existing agent-provider secrets are persisted via updateSettings.",
   "Settings override env, env is the fallback: the existing resolvers (resolveDaytonaCredentials/resolveVercelSandboxCredentials/resolveModalCredentials + Cloudflare bridge config) take an injectable `env` map defaulting to process.env — feed them a merged map (settings/secret values over process.env), do not rip out the env path.",

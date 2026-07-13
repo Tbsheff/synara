@@ -24,14 +24,14 @@ import {
   ThreadId,
   type TurnId,
   type UserInputQuestion,
-} from "@t3tools/contracts";
-import { buildClaudeSubagentPrompt } from "@t3tools/shared/agentMentions";
+} from "@synara/contracts";
+import { buildClaudeSubagentPrompt } from "@synara/shared/agentMentions";
 import {
   applyClaudePromptEffortPrefix,
   getModelCapabilities,
   hasEffortLevel,
   trimOrNull,
-} from "@t3tools/shared/model";
+} from "@synara/shared/model";
 import { Cause } from "effect";
 
 import {

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { type MessageId } from "@t3tools/contracts";
+import { type MessageId } from "@synara/contracts";
 import { revokeBlobPreviewUrl, revokeBlobPreviewUrlsAfterPaint } from "../ChatView.logic";
 
 const ATTACHMENT_PREVIEW_HANDOFF_TTL_MS = 5000;

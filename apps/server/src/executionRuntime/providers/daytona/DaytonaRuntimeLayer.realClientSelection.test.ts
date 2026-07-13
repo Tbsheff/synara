@@ -16,8 +16,8 @@ import { Effect, Layer, ManagedRuntime } from "effect";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import type { DeepPartial } from "@t3tools/shared/Struct";
-import type { ServerSettings } from "@t3tools/contracts";
+import type { DeepPartial } from "@synara/shared/Struct";
+import type { ServerSettings } from "@synara/contracts";
 
 import { ServerConfig } from "../../../config.ts";
 import {

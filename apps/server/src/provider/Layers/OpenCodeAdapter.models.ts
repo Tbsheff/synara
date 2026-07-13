@@ -2,7 +2,7 @@
 // Layer: pure functions — no Effect, no session-context state.
 // Exports: trimNonEmptyString, provider/model descriptor builders, flatten/merge helpers, context-limit map builder.
 
-import type { ProviderListAgentsResult, ProviderListModelsResult } from "@t3tools/contracts";
+import type { ProviderListAgentsResult, ProviderListModelsResult } from "@synara/contracts";
 import type { Agent } from "@opencode-ai/sdk/v2";
 
 import type { OpenCodeCliModelDescriptor } from "../opencodeRuntime.ts";

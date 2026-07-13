@@ -16,7 +16,7 @@
 import { ServiceMap } from "effect";
 import type { Effect } from "effect";
 
-import type { ServerSettingsPatch } from "@t3tools/contracts";
+import type { ServerSettingsPatch } from "@synara/contracts";
 
 import type { SecretStoreError } from "../../auth/Services/ServerSecretStore.ts";
 
@@ -35,4 +35,4 @@ export interface SandboxSecretWriterShape {
 export class SandboxSecretWriter extends ServiceMap.Service<
   SandboxSecretWriter,
   SandboxSecretWriterShape
->()("t3/executionRuntime/Services/SandboxSecretWriter") {}
+>()("synara/executionRuntime/Services/SandboxSecretWriter") {}

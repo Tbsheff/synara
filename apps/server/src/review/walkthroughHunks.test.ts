@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { ReviewWalkthroughChapter } from "@t3tools/contracts";
+import type { ReviewWalkthroughChapter } from "@synara/contracts";
 
 import { parseUnifiedDiffHunks } from "./parseUnifiedDiffHunks.ts";
 import { formatHunksSummary, reconcileChapterCoverage } from "./walkthroughHunks.ts";

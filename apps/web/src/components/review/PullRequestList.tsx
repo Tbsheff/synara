@@ -3,7 +3,7 @@ import type {
   ReviewListPullRequestsResult,
   ReviewPullRequestSummary,
   ReviewSourceRef,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useDebouncedValue } from "@tanstack/react-pacer";
 import { useCallback, useMemo, useState } from "react";

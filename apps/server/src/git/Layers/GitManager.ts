@@ -12,8 +12,8 @@ import type {
   GitStackedAction,
   ModelSelection,
   ProviderStartOptions,
-} from "@t3tools/contracts";
-import { resolveAutoFeatureBranchName, sanitizeFeatureBranchName } from "@t3tools/shared/git";
+} from "@synara/contracts";
+import { resolveAutoFeatureBranchName, sanitizeFeatureBranchName } from "@synara/shared/git";
 
 import {
   GitCheckoutDirtyWorktreeError,
@@ -375,7 +375,7 @@ export const makeGitManager = Effect.gen(function* () {
         ...buildGitTextGenerationCallInput(textGenerationParams ?? {}),
       });
 
-      const bodyFile = path.join(tempDir, `t3code-pr-body-${process.pid}-${randomUUID()}.md`);
+      const bodyFile = path.join(tempDir, `synara-pr-body-${process.pid}-${randomUUID()}.md`);
       yield* fileSystem
         .writeFileString(bodyFile, generated.body)
         .pipe(

@@ -8,10 +8,10 @@ import type {
   OrchestrationEvent,
   OrchestrationReadModel,
   ThreadMarker,
-} from "@t3tools/contracts";
-import { PINNED_MESSAGES_MAX_COUNT, THREAD_MARKERS_MAX_COUNT } from "@t3tools/contracts";
+} from "@synara/contracts";
+import { PINNED_MESSAGES_MAX_COUNT, THREAD_MARKERS_MAX_COUNT } from "@synara/contracts";
 import { Effect } from "effect";
-import { doThreadMarkerRangesOverlap } from "@t3tools/shared/threadMarkers";
+import { doThreadMarkerRangesOverlap } from "@synara/shared/threadMarkers";
 
 import { OrchestrationCommandInvariantError } from "./Errors.ts";
 import { hasNativeHandoffMessages } from "./handoff.ts";

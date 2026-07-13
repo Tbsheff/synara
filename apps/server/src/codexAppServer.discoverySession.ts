@@ -9,7 +9,7 @@
 // Exports: CodexDiscoverySessionDeps, resolveContextForDiscovery,
 //   resolveVoiceTranscriptionAuth, getOrCreateDiscoverySession,
 //   scheduleDiscoverySessionIdleStop, stopDiscoverySession.
-import { ThreadId, type ProviderSession } from "@t3tools/contracts";
+import { ThreadId, type ProviderSession } from "@synara/contracts";
 
 import { CODEX_DEFAULT_MODEL, CODEX_DISCOVERY_SESSION_IDLE_MS } from "./codexAppServer.config.ts";
 import { readString } from "./codexAppServer.parsers.ts";

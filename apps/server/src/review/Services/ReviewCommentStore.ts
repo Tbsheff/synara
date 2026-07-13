@@ -6,7 +6,7 @@ import {
   ReviewRemoveCommentInput,
   ReviewRemoveCommentResult,
   ReviewUpdateCommentInput,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { ServiceMap } from "effect";
 import type { Effect } from "effect";
 
@@ -33,4 +33,4 @@ export interface ReviewCommentStoreShape {
 export class ReviewCommentStore extends ServiceMap.Service<
   ReviewCommentStore,
   ReviewCommentStoreShape
->()("t3/review/Services/ReviewCommentStore") {}
+>()("synara/review/Services/ReviewCommentStore") {}

@@ -1,4 +1,4 @@
-import type { BridgeInstance } from "@t3tools/contracts";
+import type { BridgeInstance } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import type { BridgeEnv, DurableObjectNamespace, DurableObjectStub } from "./cloudflareRuntime.ts";

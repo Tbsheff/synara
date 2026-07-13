@@ -21,10 +21,10 @@ import {
   type ProviderTurnStartResult,
   type ServerVoiceTranscriptionInput,
   type ServerVoiceTranscriptionResult,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Deferred, Effect, ServiceMap, Stream } from "effect";
 import type { ChildProcessSpawner } from "effect/unstable/process";
-import { prepareWindowsSafeProcess } from "@t3tools/shared/windowsProcess";
+import { prepareWindowsSafeProcess } from "@synara/shared/windowsProcess";
 
 import { CODEX_DEFAULT_MODEL } from "./codexAppServer.config.ts";
 import {
@@ -282,6 +282,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         cwd: input.cwd,
         env,
         shell: prepared.shell,
+        ...(prepared.windowsVerbatimArguments
+          ? { windowsVerbatimArguments: prepared.windowsVerbatimArguments }
+          : {}),
       }),
     );
   }

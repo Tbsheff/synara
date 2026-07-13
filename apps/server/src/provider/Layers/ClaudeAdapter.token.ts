@@ -3,7 +3,7 @@
 // Exports: asPositiveFiniteNumber, maxClaudeContextWindowFromModelUsage, normalizeClaudeTokenUsage, mergeClaudeTokenUsageSnapshot.
 
 import type { ModelUsage, NonNullableUsage } from "@anthropic-ai/claude-agent-sdk";
-import type { ThreadTokenUsageSnapshot } from "@t3tools/contracts";
+import type { ThreadTokenUsageSnapshot } from "@synara/contracts";
 
 export function asPositiveFiniteNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;

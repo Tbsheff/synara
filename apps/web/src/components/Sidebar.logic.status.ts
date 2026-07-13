@@ -3,7 +3,7 @@
 // Layer: Sidebar logic (pure).
 // Exports: status pill + terminal/PR indicator types and their resolvers.
 
-import type { GitStatusResult } from "@t3tools/contracts";
+import type { GitStatusResult } from "@synara/contracts";
 import type { Thread } from "../types";
 import { GitMergedSimpleIcon, GitPullRequestIcon, type LucideIcon } from "~/lib/icons";
 import {

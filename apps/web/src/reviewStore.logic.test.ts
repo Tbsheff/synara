@@ -1,4 +1,4 @@
-import type { ReviewFinding, ReviewLocalComment, ReviewSourceRef } from "@t3tools/contracts";
+import type { ReviewFinding, ReviewLocalComment, ReviewSourceRef } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import {

@@ -12,7 +12,7 @@
  */
 import { Effect, Layer } from "effect";
 
-import type { ExecutionRuntimeProvider } from "@t3tools/contracts";
+import type { ExecutionRuntimeProvider } from "@synara/contracts";
 
 import { RuntimeProviderUnsupportedError } from "../Errors.ts";
 import type { ExecutionRuntimeProviderAdapterShape } from "../Services/ExecutionRuntimeProviderAdapter.ts";

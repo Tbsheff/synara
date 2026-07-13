@@ -1,5 +1,5 @@
 {
-  "name": "@t3tools/cloudflare-runtime-bridge",
+  "name": "@synara/cloudflare-runtime-bridge",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -8,7 +8,7 @@
     "test": "vitest run"
   },
   "devDependencies": {
-    "@t3tools/contracts": "workspace:*",
+    "@synara/contracts": "workspace:*",
     "effect": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"

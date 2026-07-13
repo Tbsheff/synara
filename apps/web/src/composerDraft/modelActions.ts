@@ -9,9 +9,9 @@ import type {
   ProviderKind,
   ProviderModelOptions,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import * as Equal from "effect/Equal";
-import { getDefaultModel } from "@t3tools/shared/model";
+import { getDefaultModel } from "@synara/shared/model";
 import { buildModelSelection } from "../providerModelOptions";
 import { commitDraft, createEmptyThreadDraft } from "./draftMutations";
 import { COMPOSER_PROVIDER_KINDS, makeModelSelection } from "./modelSelection";

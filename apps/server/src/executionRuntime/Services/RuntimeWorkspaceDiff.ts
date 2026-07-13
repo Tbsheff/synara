@@ -19,7 +19,7 @@
 import { ServiceMap } from "effect";
 import type { Effect } from "effect";
 
-import type { ExecutionInstanceId, ExecutionRuntimeProvider } from "@t3tools/contracts";
+import type { ExecutionInstanceId, ExecutionRuntimeProvider } from "@synara/contracts";
 
 export interface RuntimeWorkspaceDiffInput {
   readonly instanceId: ExecutionInstanceId;
@@ -46,4 +46,4 @@ export interface RuntimeWorkspaceDiffShape {
 export class RuntimeWorkspaceDiff extends ServiceMap.Service<
   RuntimeWorkspaceDiff,
   RuntimeWorkspaceDiffShape
->()("t3/executionRuntime/Services/RuntimeWorkspaceDiff") {}
+>()("synara/executionRuntime/Services/RuntimeWorkspaceDiff") {}

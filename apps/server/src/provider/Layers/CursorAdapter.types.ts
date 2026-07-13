@@ -10,7 +10,7 @@ import {
   type ProviderUserInputAnswers,
   type ThreadId,
   type TurnId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Deferred, Effect, Fiber, Scope, Stream } from "effect";
 import type * as EffectAcpSchema from "effect-acp/schema";
 

@@ -10,7 +10,7 @@ import {
   type ProviderUserInputAnswers,
   type ThreadId,
   type TurnId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Deferred, Fiber, Scope } from "effect";
 
 import { type AcpSessionRuntimeShape } from "../acp/AcpSessionRuntime.ts";

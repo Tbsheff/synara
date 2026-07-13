@@ -18,4 +18,4 @@ import type { VercelSandboxAdapterShape } from "../Layers/VercelSandboxAdapter.t
 export class VercelSandboxAdapter extends ServiceMap.Service<
   VercelSandboxAdapter,
   VercelSandboxAdapterShape
->()("t3/executionRuntime/providers/vercelSandbox/VercelSandboxAdapter") {}
+>()("synara/executionRuntime/providers/vercelSandbox/VercelSandboxAdapter") {}

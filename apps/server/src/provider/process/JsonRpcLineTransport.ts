@@ -48,6 +48,7 @@ export interface CodexProcessTransportInput {
    * the whole tree via `kill`'s force escalation instead.
    */
   readonly shell: boolean;
+  readonly windowsVerbatimArguments?: true;
 }
 
 const encoder = new TextEncoder();
@@ -81,6 +82,7 @@ export const makeCodexProcessTransport = (
           cwd: input.cwd,
           env: input.env,
           shell: input.shell,
+          ...(input.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
           killSignal: "SIGTERM",
           forceKillAfter: "1500 millis",
         }),

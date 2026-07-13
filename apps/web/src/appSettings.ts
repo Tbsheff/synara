@@ -1,76 +1,67 @@
+// FILE: appSettings.ts
+// Purpose: Normalizes persisted UI settings and maps them to server/provider options.
+// Layer: Web settings state
+// Exports: app setting schema, normalization helpers, provider option builders
+
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Option, Schema } from "effect";
 import {
+  type AssistantDeliveryMode,
   DEFAULT_GIT_TEXT_GENERATION_MODEL,
   DEFAULT_SERVER_SETTINGS,
-  type AssistantDeliveryMode,
   TrimmedNonEmptyString,
   ProviderKind,
   type ProviderStartOptions,
   type ServerSettings,
   type ServerSettingsPatch,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
+import {
+  getDefaultModel,
+  getModelOptions,
+  normalizeModelSlug,
+  resolveSelectableModel,
+} from "@synara/shared/model";
 import { useLocalStorage } from "./hooks/useLocalStorage";
 import { EnvMode } from "./components/BranchToolbar.logic";
-import {
-  type AppModelOption,
-  type CustomModelSettingsKey,
-  getAppModelOptions,
-  getCustomModelOptionsByProvider,
-  getCustomModelsByProvider,
-  getCustomModelsForProvider,
-  getDefaultCustomModelsForProvider,
-  getGitTextGenerationModelOptions,
-  MAX_CUSTOM_MODEL_LENGTH,
-  MODEL_PROVIDER_SETTINGS,
-  normalizeCustomModelSlugs,
-  patchCustomModels,
-  type ProviderCustomModelConfig,
-  resolveAppModelSelection,
-  resolveTextGenerationProvider,
-} from "./appSettings.helpers";
+import { formatProviderModelOptionName, type ProviderModelOption } from "./providerModelOptions";
 import {
   DEFAULT_PROVIDER_ORDER,
   normalizeHiddenProviders,
   normalizeProviderOrder,
 } from "./providerOrdering";
 import { ensureNativeApi } from "./nativeApi";
-import { resolveDefaultRemoteProvider, type RuntimePlanDefaults } from "./lib/runtimePresentation";
+import { providerDiscoveryQueryKeys } from "./lib/providerDiscoveryReactQuery";
 import { serverQueryKeys, serverSettingsQueryOptions } from "./lib/serverReactQuery";
+import { resolveDefaultRemoteProvider, type RuntimePlanDefaults } from "./lib/runtimePresentation";
 import {
   appSettingsPatchToSandboxesPatch,
   SANDBOX_APP_SETTINGS_KEYS,
   sandboxSettingsToAppSettings,
 } from "./sandboxSettings";
-import { DEFAULT_UI_DENSITY, UI_DENSITY_MODES } from "./lib/appDensity";
-
-export {
-  type AppModelOption,
-  type CustomModelSettingsKey,
-  getAppModelOptions,
-  getCustomModelOptionsByProvider,
-  getCustomModelsByProvider,
-  getCustomModelsForProvider,
-  getDefaultCustomModelsForProvider,
-  getGitTextGenerationModelOptions,
-  MAX_CUSTOM_MODEL_LENGTH,
-  MODEL_PROVIDER_SETTINGS,
-  normalizeCustomModelSlugs,
-  patchCustomModels,
-  type ProviderCustomModelConfig,
-  resolveAppModelSelection,
-} from "./appSettings.helpers";
+import {
+  DEFAULT_UI_DENSITY,
+  UI_DENSITY_MODES,
+  normalizeUiDensity as normalizeUiDensityValue,
+} from "./lib/appDensity";
 
 const APP_SETTINGS_STORAGE_KEY = "synara:app-settings:v1";
-const SERVER_SETTINGS_MIGRATION_STORAGE_KEY = "t3code:server-settings-migrated:v1";
+const SERVER_SETTINGS_MIGRATION_STORAGE_KEY = "synara:server-settings-migrated:v1";
+const MAX_CUSTOM_MODEL_COUNT = 32;
+export const MAX_CUSTOM_MODEL_LENGTH = 256;
 export const MIN_CHAT_FONT_SIZE_PX = 11;
 export const MAX_CHAT_FONT_SIZE_PX = 18;
 export const DEFAULT_CHAT_FONT_SIZE_PX = 12;
 export const MIN_TERMINAL_FONT_SIZE_PX = 10;
 export const MAX_TERMINAL_FONT_SIZE_PX = 22;
 export const DEFAULT_TERMINAL_FONT_SIZE_PX = 12;
+
+// Terminal font is a free-form font-family value: the user can type any font
+// installed on their machine. An empty value keeps the bundled default stack
+// (defined in index.css). The list below is only autocomplete inspiration shown
+// in the settings input — it does NOT restrict what can be entered.
 export const DEFAULT_TERMINAL_FONT_FAMILY = "";
+
 export const TERMINAL_FONT_FAMILY_SUGGESTIONS: ReadonlyArray<string> = [
   "JetBrains Mono",
   "Fira Code",
@@ -97,6 +88,7 @@ export const DEFAULT_SIDEBAR_PROJECT_SORT_ORDER: SidebarProjectSortOrder = "manu
 export const SidebarThreadSortOrder = Schema.Literals(["updated_at", "created_at"]);
 export type SidebarThreadSortOrder = typeof SidebarThreadSortOrder.Type;
 export const DEFAULT_SIDEBAR_THREAD_SORT_ORDER: SidebarThreadSortOrder = "updated_at";
+
 export const UiDensity = Schema.Literals(UI_DENSITY_MODES);
 export type UiDensity = typeof UiDensity.Type;
 export { DEFAULT_UI_DENSITY };
@@ -107,6 +99,38 @@ export const DEFAULT_REVIEW_WALKTHROUGH_DIFF_STYLE: ReviewWalkthroughDiffStyle =
 export function getDefaultNativeFontSmoothing(platform = globalThis.navigator?.platform ?? "") {
   return /mac|iphone|ipad|ipod/i.test(platform);
 }
+
+type CustomModelSettingsKey =
+  | "customCodexModels"
+  | "customClaudeModels"
+  | "customCursorModels"
+  | "customGeminiModels"
+  | "customGrokModels"
+  | "customDroidModels"
+  | "customKiloModels"
+  | "customOpenCodeModels"
+  | "customPiModels";
+export type ProviderCustomModelConfig = {
+  provider: ProviderKind;
+  settingsKey: CustomModelSettingsKey;
+  defaultSettingsKey: CustomModelSettingsKey;
+  title: string;
+  description: string;
+  placeholder: string;
+  example: string;
+};
+
+const BUILT_IN_MODEL_SLUGS_BY_PROVIDER: Record<ProviderKind, ReadonlySet<string>> = {
+  codex: new Set(getModelOptions("codex").map((option) => option.slug)),
+  claudeAgent: new Set(getModelOptions("claudeAgent").map((option) => option.slug)),
+  cursor: new Set(getModelOptions("cursor").map((option) => option.slug)),
+  gemini: new Set(getModelOptions("gemini").map((option) => option.slug)),
+  grok: new Set(getModelOptions("grok").map((option) => option.slug)),
+  droid: new Set(getModelOptions("droid").map((option) => option.slug)),
+  kilo: new Set(getModelOptions("kilo").map((option) => option.slug)),
+  opencode: new Set(getModelOptions("opencode").map((option) => option.slug)),
+  pi: new Set(getModelOptions("pi").map((option) => option.slug)),
+};
 
 const withDefaults =
   <
@@ -140,6 +164,7 @@ export const AppSettingsSchema = Schema.Struct({
   cursorApiEndpoint: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   geminiBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   grokBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
+  droidBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   kiloBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   kiloServerUrl: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   kiloServerPassword: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
@@ -166,6 +191,12 @@ export const AppSettingsSchema = Schema.Struct({
   showChatsSection: Schema.Boolean.pipe(withDefaults(() => true)),
   showStudioSection: Schema.Boolean.pipe(withDefaults(() => true)),
   showWorkspaceSection: Schema.Boolean.pipe(withDefaults(() => false)),
+  // Local-only UI preferences: which optional sections of the chat Environment panel are
+  // shown. The git block (Changes/Worktree/branch/Commit and Push) is always visible; these
+  // toggle the sections beneath it via the panel header's gear menu.
+  // When false (default), normal chats start with the Environment panel closed. User toggles
+  // also write back here so the last explicit open/close survives reloads.
+  environmentPanelDefaultOpen: Schema.Boolean.pipe(withDefaults(() => false)),
   showEnvironmentUsage: Schema.Boolean.pipe(withDefaults(() => true)),
   showEnvironmentRepository: Schema.Boolean.pipe(withDefaults(() => true)),
   showEnvironmentPullRequest: Schema.Boolean.pipe(withDefaults(() => true)),
@@ -193,6 +224,7 @@ export const AppSettingsSchema = Schema.Struct({
   customCursorModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customGeminiModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customGrokModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
+  customDroidModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customKiloModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customOpenCodeModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customPiModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
@@ -214,13 +246,8 @@ export const AppSettingsSchema = Schema.Struct({
       slug: Schema.String,
     }),
   ).pipe(withDefaults(() => [])),
-  // Remote sandbox/runtime-provider config. Non-secret fields mirror
-  // ServerSettings.sandboxes; secret fields are write-only locally (the server
-  // routes them through ServerSecretStore and never echoes them back).
   sandboxDefaultRemoteProvider: SandboxStringSetting,
   sandboxPostCloneCommand: SandboxStringSetting,
-  // Workspace-level remote-runtime defaults (moved out of the composer). Stored
-  // as strings; parsed into the RuntimePlan at thread-create time.
   sandboxRuntimeCpu: SandboxStringSetting,
   sandboxRuntimeMemoryMb: SandboxStringSetting,
   sandboxRuntimeTimeoutSeconds: SandboxStringSetting,
@@ -245,18 +272,6 @@ export const AppSettingsSchema = Schema.Struct({
 });
 export type AppSettings = typeof AppSettingsSchema.Type;
 
-export function resolveAssistantDeliveryMode(
-  settings: Pick<AppSettings, "enableAssistantStreaming">,
-): AssistantDeliveryMode {
-  return settings.enableAssistantStreaming ? "streaming" : "buffered";
-}
-
-/**
- * Resolve the workspace-level remote-runtime defaults a new remote thread should
- * provision with. The snapshot is provider-specific (only Daytona configures one
- * today); the rest are the flat runtime-default settings the Sandboxes section
- * owns. Consumed at `thread.create` via {@link buildRuntimePlanFromDefaults}.
- */
 export function runtimePlanDefaultsFromSettings(settings: AppSettings): RuntimePlanDefaults {
   const provider = resolveDefaultRemoteProvider(settings.sandboxDefaultRemoteProvider);
   return {
@@ -274,8 +289,128 @@ type Mutable<T> = { -readonly [Key in keyof T]: T[Key] };
 type MutableServerSettingsPatch = Mutable<ServerSettingsPatch>;
 type MutableServerSettingsProvidersPatch = Mutable<NonNullable<ServerSettingsPatch["providers"]>>;
 
+export interface AppModelOption extends ProviderModelOption {
+  provider: ProviderKind;
+  isCustom: boolean;
+}
+
 const DEFAULT_APP_SETTINGS = AppSettingsSchema.makeUnsafe({});
 let serverSettingsMigrationInFlight = false;
+
+const PROVIDER_CUSTOM_MODEL_CONFIG: Record<ProviderKind, ProviderCustomModelConfig> = {
+  codex: {
+    provider: "codex",
+    settingsKey: "customCodexModels",
+    defaultSettingsKey: "customCodexModels",
+    title: "Codex",
+    description: "Save additional Codex model slugs for the picker and `/model` command.",
+    placeholder: "your-codex-model-slug",
+    example: "gpt-6.7-codex-ultra-preview",
+  },
+  claudeAgent: {
+    provider: "claudeAgent",
+    settingsKey: "customClaudeModels",
+    defaultSettingsKey: "customClaudeModels",
+    title: "Claude",
+    description: "Save additional Claude model slugs for the picker and `/model` command.",
+    placeholder: "your-claude-model-slug",
+    example: "claude-custom-model",
+  },
+  cursor: {
+    provider: "cursor",
+    settingsKey: "customCursorModels",
+    defaultSettingsKey: "customCursorModels",
+    title: "Cursor",
+    description: "Save additional Cursor model slugs for the picker and provider runtime.",
+    placeholder: "cursor-model-slug",
+    example: "composer-2",
+  },
+  gemini: {
+    provider: "gemini",
+    settingsKey: "customGeminiModels",
+    defaultSettingsKey: "customGeminiModels",
+    title: "Gemini",
+    description: "Save additional Gemini model slugs for the picker and `/model` command.",
+    placeholder: "your-gemini-model-slug",
+    example: "gemini-3.5-pro-preview",
+  },
+  grok: {
+    provider: "grok",
+    settingsKey: "customGrokModels",
+    defaultSettingsKey: "customGrokModels",
+    title: "Grok",
+    description: "Save additional Grok model slugs for the picker and `/model` command.",
+    placeholder: "your-grok-model-slug",
+    example: "grok-build-0.1",
+  },
+  droid: {
+    provider: "droid",
+    settingsKey: "customDroidModels",
+    defaultSettingsKey: "customDroidModels",
+    title: "Droid",
+    description: "Save additional Droid model slugs for the picker and `/model` command.",
+    placeholder: "your-droid-model-slug",
+    example: "claude-opus-4-8",
+  },
+  kilo: {
+    provider: "kilo",
+    settingsKey: "customKiloModels",
+    defaultSettingsKey: "customKiloModels",
+    title: "Kilo",
+    description: "Save additional Kilo model slugs for the picker and provider runtime.",
+    placeholder: "provider/model",
+    example: "kilo/kilo-auto/free",
+  },
+  opencode: {
+    provider: "opencode",
+    settingsKey: "customOpenCodeModels",
+    defaultSettingsKey: "customOpenCodeModels",
+    title: "OpenCode",
+    description: "Save additional OpenCode model slugs for the picker and provider runtime.",
+    placeholder: "provider/model",
+    example: "openai/gpt-5",
+  },
+  pi: {
+    provider: "pi",
+    settingsKey: "customPiModels",
+    defaultSettingsKey: "customPiModels",
+    title: "Pi",
+    description: "Save additional Pi model slugs for the picker and provider runtime.",
+    placeholder: "provider/model",
+    example: "anthropic/claude-sonnet-4-5",
+  },
+};
+
+export const MODEL_PROVIDER_SETTINGS = Object.values(PROVIDER_CUSTOM_MODEL_CONFIG);
+
+export function normalizeCustomModelSlugs(
+  models: Iterable<string | null | undefined>,
+  provider: ProviderKind = "codex",
+): string[] {
+  const normalizedModels: string[] = [];
+  const seen = new Set<string>();
+  const builtInModelSlugs = BUILT_IN_MODEL_SLUGS_BY_PROVIDER[provider];
+
+  for (const candidate of models) {
+    const normalized = normalizeModelSlug(candidate, provider);
+    if (
+      !normalized ||
+      normalized.length > MAX_CUSTOM_MODEL_LENGTH ||
+      builtInModelSlugs.has(normalized) ||
+      seen.has(normalized)
+    ) {
+      continue;
+    }
+
+    seen.add(normalized);
+    normalizedModels.push(normalized);
+    if (normalizedModels.length >= MAX_CUSTOM_MODEL_COUNT) {
+      break;
+    }
+  }
+
+  return normalizedModels;
+}
 
 export function normalizeChatFontSizePx(value: number | null | undefined): number {
   if (typeof value !== "number" || !Number.isFinite(value)) {
@@ -297,9 +432,20 @@ export function normalizeTerminalFontSizePx(value: number | null | undefined): n
 }
 
 export function normalizeTerminalFontFamily(value: string | null | undefined): string {
+  // Free-form font-family text. Only strip characters that can't legitimately
+  // appear in a CSS font-family value so the typed name can't break out of the
+  // custom property (`;`, `{}`, angle brackets, newlines) or smuggle in other
+  // declarations. Whitespace is intentionally preserved here so multi-word names
+  // ("Fira Code") remain typable in a controlled input; the CSS resolver trims.
   return (value ?? "").replace(/[;{}<>\n\r]/g, "").slice(0, 256);
 }
 
+// Build the CSS font-family stack written to `--terminal-font-family`, or null
+// when the bundled default (defined in index.css) should stay in effect.
+//
+// Accepts either a single family name (`Fira Code`) or a full comma-separated
+// stack (`"Fira Code", Menlo, monospace`). Single names are quoted when needed,
+// and a `monospace` fallback is appended so an uninstalled font degrades.
 export function resolveTerminalFontFamilyStack(value: string | null | undefined): string | null {
   const normalized = normalizeTerminalFontFamily(value).replace(/\s+/g, " ").trim();
   if (!normalized) {
@@ -338,12 +484,14 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
     cursorBinaryPath: normalizeProviderBinaryPathOverride("cursor", settings.cursorBinaryPath),
     geminiBinaryPath: normalizeProviderBinaryPathOverride("gemini", settings.geminiBinaryPath),
     grokBinaryPath: normalizeProviderBinaryPathOverride("grok", settings.grokBinaryPath),
+    droidBinaryPath: normalizeProviderBinaryPathOverride("droid", settings.droidBinaryPath),
     kiloBinaryPath: normalizeProviderBinaryPathOverride("kilo", settings.kiloBinaryPath),
     openCodeBinaryPath: normalizeProviderBinaryPathOverride(
       "opencode",
       settings.openCodeBinaryPath,
     ),
     piBinaryPath: normalizeProviderBinaryPathOverride("pi", settings.piBinaryPath),
+    uiDensity: normalizeUiDensityValue(settings.uiDensity),
     chatFontSizePx: normalizeChatFontSizePx(settings.chatFontSizePx),
     terminalFontSizePx: normalizeTerminalFontSizePx(settings.terminalFontSizePx),
     terminalFontFamily: normalizeTerminalFontFamily(settings.terminalFontFamily),
@@ -352,6 +500,7 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
     customCursorModels: normalizeCustomModelSlugs(settings.customCursorModels, "cursor"),
     customGeminiModels: normalizeCustomModelSlugs(settings.customGeminiModels, "gemini"),
     customGrokModels: normalizeCustomModelSlugs(settings.customGrokModels, "grok"),
+    customDroidModels: normalizeCustomModelSlugs(settings.customDroidModels, "droid"),
     customKiloModels: normalizeCustomModelSlugs(settings.customKiloModels, "kilo"),
     customOpenCodeModels: normalizeCustomModelSlugs(settings.customOpenCodeModels, "opencode"),
     customPiModels: normalizeCustomModelSlugs(settings.customPiModels, "pi"),
@@ -363,6 +512,7 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
 
 function serverSettingsToAppSettings(settings: ServerSettings): Partial<AppSettings> {
   return {
+    ...sandboxSettingsToAppSettings(settings),
     claudeBinaryPath: settings.providers.claudeAgent.binaryPath,
     codexBinaryPath: settings.providers.codex.binaryPath,
     codexHomePath: settings.providers.codex.homePath,
@@ -373,6 +523,7 @@ function serverSettingsToAppSettings(settings: ServerSettings): Partial<AppSetti
     enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
     geminiBinaryPath: settings.providers.gemini.binaryPath,
     grokBinaryPath: settings.providers.grok.binaryPath,
+    droidBinaryPath: settings.providers.droid.binaryPath,
     kiloBinaryPath: settings.providers.kilo.binaryPath,
     kiloServerPassword: settings.providers.kilo.serverPassword,
     kiloServerUrl: settings.providers.kilo.serverUrl,
@@ -387,17 +538,41 @@ function serverSettingsToAppSettings(settings: ServerSettings): Partial<AppSetti
     customCursorModels: settings.providers.cursor.customModels,
     customGeminiModels: settings.providers.gemini.customModels,
     customGrokModels: settings.providers.grok.customModels,
+    customDroidModels: settings.providers.droid.customModels,
     customKiloModels: settings.providers.kilo.customModels,
     customOpenCodeModels: settings.providers.opencode.customModels,
     customPiModels: settings.providers.pi.customModels,
     textGenerationProvider: settings.textGenerationModelSelection.provider,
     textGenerationModel: settings.textGenerationModelSelection.model,
-    ...sandboxSettingsToAppSettings(settings),
   };
+}
+
+function resolveTextGenerationProvider(input: {
+  readonly provider?: ProviderKind | null;
+  readonly model?: string | null;
+}): ProviderKind {
+  if (input.provider) {
+    return input.provider;
+  }
+  const model = input.model;
+  return model?.includes("/") ? "opencode" : "codex";
 }
 
 function hasOwn<Key extends keyof AppSettings>(patch: Partial<AppSettings>, key: Key): boolean {
   return Object.prototype.hasOwnProperty.call(patch, key);
+}
+
+function touchesProviderDiscoverySettings(patch: Partial<AppSettings>): boolean {
+  return (
+    hasOwn(patch, "kiloBinaryPath") ||
+    hasOwn(patch, "kiloServerPassword") ||
+    hasOwn(patch, "kiloServerUrl") ||
+    hasOwn(patch, "openCodeBinaryPath") ||
+    hasOwn(patch, "openCodeExperimentalWebSockets") ||
+    hasOwn(patch, "openCodeServerPassword") ||
+    hasOwn(patch, "openCodeServerUrl") ||
+    hasOwn(patch, "piAgentDir")
+  );
 }
 
 function appSettingsPatchToServerSettingsPatch(patch: Partial<AppSettings>): ServerSettingsPatch {
@@ -474,6 +649,14 @@ function appSettingsPatchToServerSettingsPatch(patch: Partial<AppSettings>): Ser
       ...(hasOwn(patch, "customGrokModels") ? { customModels: patch.customGrokModels ?? [] } : {}),
     };
   }
+  if (hasOwn(patch, "droidBinaryPath") || hasOwn(patch, "customDroidModels")) {
+    providers.droid = {
+      ...(hasOwn(patch, "droidBinaryPath") ? { binaryPath: patch.droidBinaryPath ?? "" } : {}),
+      ...(hasOwn(patch, "customDroidModels")
+        ? { customModels: patch.customDroidModels ?? [] }
+        : {}),
+    };
+  }
   if (
     hasOwn(patch, "kiloBinaryPath") ||
     hasOwn(patch, "kiloServerUrl") ||
@@ -491,21 +674,21 @@ function appSettingsPatchToServerSettingsPatch(patch: Partial<AppSettings>): Ser
   }
   if (
     hasOwn(patch, "openCodeBinaryPath") ||
+    hasOwn(patch, "openCodeExperimentalWebSockets") ||
     hasOwn(patch, "openCodeServerUrl") ||
     hasOwn(patch, "openCodeServerPassword") ||
-    hasOwn(patch, "openCodeExperimentalWebSockets") ||
     hasOwn(patch, "customOpenCodeModels")
   ) {
     providers.opencode = {
       ...(hasOwn(patch, "openCodeBinaryPath")
         ? { binaryPath: patch.openCodeBinaryPath ?? "" }
         : {}),
+      ...(hasOwn(patch, "openCodeExperimentalWebSockets")
+        ? { experimentalWebSockets: Boolean(patch.openCodeExperimentalWebSockets) }
+        : {}),
       ...(hasOwn(patch, "openCodeServerUrl") ? { serverUrl: patch.openCodeServerUrl ?? "" } : {}),
       ...(hasOwn(patch, "openCodeServerPassword")
         ? { serverPassword: patch.openCodeServerPassword ?? "" }
-        : {}),
-      ...(hasOwn(patch, "openCodeExperimentalWebSockets")
-        ? { experimentalWebSockets: patch.openCodeExperimentalWebSockets === true }
         : {}),
       ...(hasOwn(patch, "customOpenCodeModels")
         ? { customModels: patch.customOpenCodeModels ?? [] }
@@ -527,7 +710,6 @@ function appSettingsPatchToServerSettingsPatch(patch: Partial<AppSettings>): Ser
   if (Object.keys(providers).length > 0) {
     serverPatch.providers = providers;
   }
-
   const sandboxes = appSettingsPatchToSandboxesPatch(patch);
   if (sandboxes) {
     serverPatch.sandboxes = sandboxes;
@@ -541,6 +723,7 @@ function isServerSettingsPatchEmpty(patch: ServerSettingsPatch): boolean {
 
 function buildInitialServerSettingsMigrationPatch(settings: AppSettings): ServerSettingsPatch {
   const patch: Partial<Mutable<AppSettings>> = {};
+  const normalizedSettings = normalizeAppSettings(settings);
   const defaults = DEFAULT_APP_SETTINGS;
 
   for (const key of [
@@ -554,6 +737,7 @@ function buildInitialServerSettingsMigrationPatch(settings: AppSettings): Server
     "enableProviderUpdateChecks",
     "geminiBinaryPath",
     "grokBinaryPath",
+    "droidBinaryPath",
     "kiloBinaryPath",
     "kiloServerPassword",
     "kiloServerUrl",
@@ -565,10 +749,15 @@ function buildInitialServerSettingsMigrationPatch(settings: AppSettings): Server
     "piBinaryPath",
     "textGenerationModel",
     "textGenerationProvider",
-    ...SANDBOX_APP_SETTINGS_KEYS,
-  ] as const satisfies ReadonlyArray<keyof AppSettings>) {
-    if (settings[key] !== defaults[key]) {
-      patch[key] = settings[key] as never;
+  ] as const) {
+    if (normalizedSettings[key] !== defaults[key]) {
+      patch[key] = normalizedSettings[key] as never;
+    }
+  }
+
+  for (const key of SANDBOX_APP_SETTINGS_KEYS) {
+    if (normalizedSettings[key] !== defaults[key]) {
+      patch[key] = normalizedSettings[key];
     }
   }
 
@@ -578,12 +767,13 @@ function buildInitialServerSettingsMigrationPatch(settings: AppSettings): Server
     "customCursorModels",
     "customGeminiModels",
     "customGrokModels",
+    "customDroidModels",
     "customKiloModels",
     "customOpenCodeModels",
     "customPiModels",
   ] as const) {
-    if (settings[key].length > 0) {
-      patch[key] = settings[key] as never;
+    if (normalizedSettings[key].length > 0) {
+      patch[key] = normalizedSettings[key] as never;
     }
   }
 
@@ -592,6 +782,190 @@ function buildInitialServerSettingsMigrationPatch(settings: AppSettings): Server
 
 export function normalizeStoredAppSettings(settings: AppSettings): AppSettings {
   return normalizeAppSettings(settings);
+}
+
+export function getCustomModelsForProvider(
+  settings: Pick<AppSettings, CustomModelSettingsKey>,
+  provider: ProviderKind,
+): readonly string[] {
+  return settings[PROVIDER_CUSTOM_MODEL_CONFIG[provider].settingsKey];
+}
+
+export function getDefaultCustomModelsForProvider(
+  defaults: Pick<AppSettings, CustomModelSettingsKey>,
+  provider: ProviderKind,
+): readonly string[] {
+  return defaults[PROVIDER_CUSTOM_MODEL_CONFIG[provider].defaultSettingsKey];
+}
+
+export function patchCustomModels(
+  provider: ProviderKind,
+  models: string[],
+): Partial<Pick<AppSettings, CustomModelSettingsKey>> {
+  return {
+    [PROVIDER_CUSTOM_MODEL_CONFIG[provider].settingsKey]: models,
+  };
+}
+
+export function getCustomModelsByProvider(
+  settings: Pick<AppSettings, CustomModelSettingsKey>,
+): Record<ProviderKind, readonly string[]> {
+  return {
+    codex: getCustomModelsForProvider(settings, "codex"),
+    claudeAgent: getCustomModelsForProvider(settings, "claudeAgent"),
+    cursor: getCustomModelsForProvider(settings, "cursor"),
+    gemini: getCustomModelsForProvider(settings, "gemini"),
+    grok: getCustomModelsForProvider(settings, "grok"),
+    droid: getCustomModelsForProvider(settings, "droid"),
+    kilo: getCustomModelsForProvider(settings, "kilo"),
+    opencode: getCustomModelsForProvider(settings, "opencode"),
+    pi: getCustomModelsForProvider(settings, "pi"),
+  };
+}
+
+export function getAppModelOptions(
+  provider: ProviderKind,
+  customModels: readonly string[],
+  selectedModel?: string | null,
+): AppModelOption[] {
+  const options: AppModelOption[] = getModelOptions(provider).map(({ slug, name }) => ({
+    provider,
+    slug,
+    name,
+    isCustom: false,
+  }));
+  const seen = new Set(options.map((option) => option.slug));
+  const trimmedSelectedModel = selectedModel?.trim().toLowerCase();
+
+  for (const slug of normalizeCustomModelSlugs(customModels, provider)) {
+    if (seen.has(slug)) {
+      continue;
+    }
+
+    seen.add(slug);
+    options.push({
+      provider,
+      slug,
+      name: formatProviderModelOptionName({ provider, slug }),
+      isCustom: true,
+    });
+  }
+
+  const normalizedSelectedModel = normalizeModelSlug(selectedModel, provider);
+  const selectedModelMatchesExistingName =
+    typeof trimmedSelectedModel === "string" &&
+    options.some((option) => option.name.toLowerCase() === trimmedSelectedModel);
+  if (
+    normalizedSelectedModel &&
+    !seen.has(normalizedSelectedModel) &&
+    !selectedModelMatchesExistingName
+  ) {
+    options.push({
+      provider,
+      slug: normalizedSelectedModel,
+      name: formatProviderModelOptionName({ provider, slug: normalizedSelectedModel }),
+      isCustom: true,
+    });
+  }
+
+  return options;
+}
+
+type GitTextGenerationDiscoveredProvider = "codex" | "kilo" | "opencode";
+
+export function mapCatalogModelOptionsToAppModelOptions(
+  provider: GitTextGenerationDiscoveredProvider,
+  options: ReadonlyArray<ProviderModelOption & { isCustom?: boolean }>,
+): AppModelOption[] {
+  return options.map((option) => ({
+    ...option,
+    provider,
+    isCustom: option.isCustom ?? false,
+  }));
+}
+
+export function getGitTextGenerationModelOptions(
+  settings: Pick<
+    AppSettings,
+    | "customCodexModels"
+    | "customKiloModels"
+    | "customOpenCodeModels"
+    | "textGenerationModel"
+    | "textGenerationProvider"
+  >,
+  discoveredOptionsByProvider?: Partial<
+    Record<
+      GitTextGenerationDiscoveredProvider,
+      ReadonlyArray<ProviderModelOption & { isCustom?: boolean }>
+    >
+  >,
+): AppModelOption[] {
+  const options = [
+    ...(discoveredOptionsByProvider?.codex
+      ? mapCatalogModelOptionsToAppModelOptions("codex", discoveredOptionsByProvider.codex)
+      : getAppModelOptions("codex", settings.customCodexModels)),
+    ...(discoveredOptionsByProvider?.kilo
+      ? mapCatalogModelOptionsToAppModelOptions("kilo", discoveredOptionsByProvider.kilo)
+      : getAppModelOptions("kilo", settings.customKiloModels)),
+    ...(discoveredOptionsByProvider?.opencode
+      ? mapCatalogModelOptionsToAppModelOptions("opencode", discoveredOptionsByProvider.opencode)
+      : getAppModelOptions("opencode", settings.customOpenCodeModels)),
+  ];
+  const deduped: AppModelOption[] = [];
+  const seen = new Set<string>();
+
+  for (const option of options) {
+    const key = `${option.provider}:${option.slug}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    deduped.push(option);
+  }
+
+  const selectedModel = settings.textGenerationModel?.trim();
+  const selectedProvider =
+    settings.textGenerationProvider ??
+    resolveTextGenerationProvider(selectedModel !== undefined ? { model: selectedModel } : {});
+  if (selectedModel && !seen.has(`${selectedProvider}:${selectedModel}`)) {
+    deduped.push({
+      provider: selectedProvider,
+      slug: selectedModel,
+      name: formatProviderModelOptionName({ provider: selectedProvider, slug: selectedModel }),
+      isCustom: true,
+    });
+  }
+
+  return deduped;
+}
+
+export function resolveAppModelSelection(
+  provider: ProviderKind,
+  customModels: Record<ProviderKind, readonly string[]>,
+  selectedModel: string | null | undefined,
+): string {
+  const customModelsForProvider = customModels[provider];
+  const options = getAppModelOptions(provider, customModelsForProvider, selectedModel);
+  return (
+    resolveSelectableModel(provider, selectedModel, options) ?? getDefaultModel(provider) ?? ""
+  );
+}
+
+export function getCustomModelOptionsByProvider(
+  settings: Pick<AppSettings, CustomModelSettingsKey>,
+): Record<ProviderKind, ReadonlyArray<ProviderModelOption>> {
+  const customModelsByProvider = getCustomModelsByProvider(settings);
+  return {
+    codex: getAppModelOptions("codex", customModelsByProvider.codex),
+    claudeAgent: getAppModelOptions("claudeAgent", customModelsByProvider.claudeAgent),
+    cursor: getAppModelOptions("cursor", customModelsByProvider.cursor),
+    gemini: getAppModelOptions("gemini", customModelsByProvider.gemini),
+    grok: getAppModelOptions("grok", customModelsByProvider.grok),
+    droid: getAppModelOptions("droid", customModelsByProvider.droid),
+    kilo: getAppModelOptions("kilo", customModelsByProvider.kilo),
+    opencode: getAppModelOptions("opencode", customModelsByProvider.opencode),
+    pi: getAppModelOptions("pi", customModelsByProvider.pi),
+  };
 }
 
 export function getProviderStartOptions(
@@ -604,6 +978,7 @@ export function getProviderStartOptions(
     | "cursorBinaryPath"
     | "geminiBinaryPath"
     | "grokBinaryPath"
+    | "droidBinaryPath"
     | "kiloBinaryPath"
     | "kiloServerPassword"
     | "kiloServerUrl"
@@ -615,21 +990,27 @@ export function getProviderStartOptions(
     | "piBinaryPath"
   >,
 ): ProviderStartOptions | undefined {
-  const codexBinaryPath = normalizeProviderBinaryPathOverride("codex", settings.codexBinaryPath);
   const claudeBinaryPath = normalizeProviderBinaryPathOverride(
     "claudeAgent",
     settings.claudeBinaryPath,
   );
+  const codexBinaryPath = normalizeProviderBinaryPathOverride("codex", settings.codexBinaryPath);
   const cursorBinaryPath = normalizeProviderBinaryPathOverride("cursor", settings.cursorBinaryPath);
   const geminiBinaryPath = normalizeProviderBinaryPathOverride("gemini", settings.geminiBinaryPath);
   const grokBinaryPath = normalizeProviderBinaryPathOverride("grok", settings.grokBinaryPath);
+  const droidBinaryPath = normalizeProviderBinaryPathOverride("droid", settings.droidBinaryPath);
   const kiloBinaryPath = normalizeProviderBinaryPathOverride("kilo", settings.kiloBinaryPath);
   const openCodeBinaryPath = normalizeProviderBinaryPathOverride(
     "opencode",
     settings.openCodeBinaryPath,
   );
   const piBinaryPath = normalizeProviderBinaryPathOverride("pi", settings.piBinaryPath);
-
+  const hasOpenCodeStartOptions = Boolean(
+    openCodeBinaryPath ||
+    settings.openCodeExperimentalWebSockets ||
+    settings.openCodeServerUrl ||
+    settings.openCodeServerPassword,
+  );
   const providerOptions: ProviderStartOptions = {
     ...(codexBinaryPath || settings.codexHomePath
       ? {
@@ -668,6 +1049,13 @@ export function getProviderStartOptions(
           },
         }
       : {}),
+    ...(droidBinaryPath
+      ? {
+          droid: {
+            binaryPath: droidBinaryPath,
+          },
+        }
+      : {}),
     ...(kiloBinaryPath || settings.kiloServerUrl || settings.kiloServerPassword
       ? {
           kilo: {
@@ -677,18 +1065,15 @@ export function getProviderStartOptions(
           },
         }
       : {}),
-    ...(openCodeBinaryPath ||
-    settings.openCodeServerUrl ||
-    settings.openCodeServerPassword ||
-    settings.openCodeExperimentalWebSockets
+    ...(hasOpenCodeStartOptions
       ? {
           opencode: {
             ...(openCodeBinaryPath ? { binaryPath: openCodeBinaryPath } : {}),
+            ...(settings.openCodeExperimentalWebSockets ? { experimentalWebSockets: true } : {}),
             ...(settings.openCodeServerUrl ? { serverUrl: settings.openCodeServerUrl } : {}),
             ...(settings.openCodeServerPassword
               ? { serverPassword: settings.openCodeServerPassword }
               : {}),
-            ...(settings.openCodeExperimentalWebSockets ? { experimentalWebSockets: true } : {}),
           },
         }
       : {}),
@@ -705,6 +1090,16 @@ export function getProviderStartOptions(
   return Object.keys(providerOptions).length > 0 ? providerOptions : undefined;
 }
 
+/**
+ * Single source of truth for mapping the streaming preference onto the orchestration
+ * delivery mode used when dispatching turns (composer, chat, and kanban share this).
+ */
+export function resolveAssistantDeliveryMode(
+  settings: Pick<AppSettings, "enableAssistantStreaming">,
+): AssistantDeliveryMode {
+  return settings.enableAssistantStreaming ? "streaming" : "buffered";
+}
+
 export function getCustomBinaryPathForProvider(
   settings: Pick<
     AppSettings,
@@ -713,6 +1108,7 @@ export function getCustomBinaryPathForProvider(
     | "cursorBinaryPath"
     | "geminiBinaryPath"
     | "grokBinaryPath"
+    | "droidBinaryPath"
     | "kiloBinaryPath"
     | "openCodeBinaryPath"
     | "piBinaryPath"
@@ -721,21 +1117,23 @@ export function getCustomBinaryPathForProvider(
 ): string {
   switch (provider) {
     case "codex":
-      return settings.codexBinaryPath;
+      return normalizeProviderBinaryPathOverride(provider, settings.codexBinaryPath);
     case "claudeAgent":
-      return settings.claudeBinaryPath;
+      return normalizeProviderBinaryPathOverride(provider, settings.claudeBinaryPath);
     case "cursor":
-      return settings.cursorBinaryPath;
+      return normalizeProviderBinaryPathOverride(provider, settings.cursorBinaryPath);
     case "gemini":
-      return settings.geminiBinaryPath;
+      return normalizeProviderBinaryPathOverride(provider, settings.geminiBinaryPath);
     case "grok":
-      return settings.grokBinaryPath;
+      return normalizeProviderBinaryPathOverride(provider, settings.grokBinaryPath);
+    case "droid":
+      return normalizeProviderBinaryPathOverride(provider, settings.droidBinaryPath);
     case "kilo":
-      return settings.kiloBinaryPath;
+      return normalizeProviderBinaryPathOverride(provider, settings.kiloBinaryPath);
     case "opencode":
-      return settings.openCodeBinaryPath;
+      return normalizeProviderBinaryPathOverride(provider, settings.openCodeBinaryPath);
     case "pi":
-      return settings.piBinaryPath;
+      return normalizeProviderBinaryPathOverride(provider, settings.piBinaryPath);
   }
 }
 
@@ -798,9 +1196,7 @@ export function useAppSettings() {
         globalThis.localStorage?.setItem(SERVER_SETTINGS_MIGRATION_STORAGE_KEY, "1");
       })
       .catch(() => {
-        void queryClient.invalidateQueries({
-          queryKey: serverQueryKeys.settings(),
-        });
+        void queryClient.invalidateQueries({ queryKey: serverQueryKeys.settings() });
       })
       .finally(() => {
         serverSettingsMigrationInFlight = false;
@@ -810,6 +1206,9 @@ export function useAppSettings() {
   const updateSettings = useCallback(
     (patch: Partial<AppSettings>) => {
       setSettings((prev) => normalizeAppSettings({ ...prev, ...patch }));
+      if (touchesProviderDiscoverySettings(patch)) {
+        void queryClient.invalidateQueries({ queryKey: providerDiscoveryQueryKeys.all });
+      }
 
       const serverPatch = appSettingsPatchToServerSettingsPatch(patch);
       if (isServerSettingsPatchEmpty(serverPatch)) {
@@ -822,9 +1221,7 @@ export function useAppSettings() {
           queryClient.setQueryData(serverQueryKeys.settings(), nextSettings);
         })
         .catch(() => {
-          void queryClient.invalidateQueries({
-            queryKey: serverQueryKeys.settings(),
-          });
+          void queryClient.invalidateQueries({ queryKey: serverQueryKeys.settings() });
         });
     },
     [queryClient, setSettings],
@@ -832,6 +1229,7 @@ export function useAppSettings() {
 
   const resetSettings = useCallback(() => {
     setSettings(DEFAULT_APP_SETTINGS);
+    void queryClient.invalidateQueries({ queryKey: providerDiscoveryQueryKeys.all });
     const serverPatch = appSettingsPatchToServerSettingsPatch(defaults);
     void ensureNativeApi()
       .server.updateSettings(serverPatch)
@@ -839,9 +1237,7 @@ export function useAppSettings() {
         queryClient.setQueryData(serverQueryKeys.settings(), nextSettings);
       })
       .catch(() => {
-        void queryClient.invalidateQueries({
-          queryKey: serverQueryKeys.settings(),
-        });
+        void queryClient.invalidateQueries({ queryKey: serverQueryKeys.settings() });
       });
   }, [defaults, queryClient, setSettings]);
 

@@ -8,7 +8,7 @@ import {
   type OrchestrationProviderItem,
   type RuntimeItemStatus,
   type TurnId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 
 import type { PendingApproval, PendingUserInput } from "./session-logic.pending";
 import type { WorkLogEntry } from "./session-logic.workLog";

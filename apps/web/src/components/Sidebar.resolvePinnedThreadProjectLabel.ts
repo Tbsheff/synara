@@ -2,7 +2,7 @@
 // Layer: web pure helper. Pinned rows show the project name, not the raw folder basename.
 // Exports: resolvePinnedThreadProjectLabel.
 
-import type { ProjectId } from "@t3tools/contracts";
+import type { ProjectId } from "@synara/contracts";
 import type { Project } from "../types";
 
 export function resolvePinnedThreadProjectLabel(

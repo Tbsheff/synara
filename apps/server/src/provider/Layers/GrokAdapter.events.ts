@@ -2,7 +2,7 @@
 // Layer: deps-parameterized factory; deps carry the session-bound emitters/loggers, handler takes (ctx, event).
 // Exports: makeGrokNotificationHandler.
 
-import { type EventId, type ProviderRuntimeEvent } from "@t3tools/contracts";
+import { type EventId, type ProviderRuntimeEvent } from "@synara/contracts";
 import { Effect } from "effect";
 
 import { readAcpFailedToolDetail } from "../acp/AcpAdapterSupport.ts";
@@ -22,7 +22,7 @@ import {
   scopeGrokToolCallStateForTurn,
 } from "./GrokAdapter.session.ts";
 import { type GrokSessionContext, PROVIDER } from "./GrokAdapter.types.ts";
-import type { TurnId } from "@t3tools/contracts";
+import type { TurnId } from "@synara/contracts";
 
 export interface GrokNotificationHandlerDeps {
   readonly offerRuntimeEvent: (event: ProviderRuntimeEvent) => Effect.Effect<void>;

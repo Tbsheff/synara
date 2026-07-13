@@ -6,7 +6,7 @@ import {
   extractSubagentIdentityHints,
   decodeSubagentReceiverAgents,
   decodeSubagentReceiverThreadIds,
-} from "@t3tools/shared/subagents";
+} from "@synara/shared/subagents";
 
 import { asRecord, asTrimmedString, extractWorkLogItemType } from "./session-logic.shared";
 import type { WorkLogSubagent, WorkLogSubagentAction } from "./session-logic.workLog";

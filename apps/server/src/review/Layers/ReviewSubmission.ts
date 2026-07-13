@@ -3,9 +3,9 @@ import type {
   ReviewRemoteThread,
   ReviewSubmitEvent,
   ReviewSubmitResult,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Effect, Layer } from "effect";
-import { parsePullRequestUrl } from "@t3tools/shared/git";
+import { parsePullRequestUrl } from "@synara/shared/git";
 
 import { GitCore } from "../../git/Services/GitCore.ts";
 import {

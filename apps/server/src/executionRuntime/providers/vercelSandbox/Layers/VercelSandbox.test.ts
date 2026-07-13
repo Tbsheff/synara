@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import nodePath from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { type RuntimePlan } from "@t3tools/contracts";
+import { type RuntimePlan } from "@synara/contracts";
 import { Effect, Layer, ManagedRuntime, Stream } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
 

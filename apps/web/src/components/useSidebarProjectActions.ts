@@ -5,9 +5,9 @@
 import { useCallback, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import type { useNavigate } from "@tanstack/react-router";
-import { type OrchestrationShellSnapshot, ProjectId } from "@t3tools/contracts";
+import { type OrchestrationShellSnapshot, ProjectId } from "@synara/contracts";
 import { isNonEmpty as isNonEmptyString } from "effect/String";
-import { getDefaultModel } from "@t3tools/shared/model";
+import { getDefaultModel } from "@synara/shared/model";
 import { readNativeApi } from "../nativeApi";
 import { newCommandId, newProjectId } from "../lib/utils";
 import {

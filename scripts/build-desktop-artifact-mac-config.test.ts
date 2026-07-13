@@ -2,17 +2,17 @@ import { assert, describe, it } from "@effect/vitest";
 
 import {
   createDesktopPlatformBuildConfig,
-  MAC_BRIDGE_REQUIREMENTS_PATH,
   MAC_ENTITLEMENTS_PATH,
   MAC_INHERITED_ENTITLEMENTS_PATH,
   MICROPHONE_USAGE_DESCRIPTION,
   NODE_PTY_ASAR_UNPACK_GLOBS,
   validateDesktopNativeBuildHost,
+  WINDOWS_INSTALLER_GUID,
 } from "./lib/desktop-platform-build-config.ts";
 import { BRAND_ASSET_PATHS } from "./lib/brand-assets.ts";
 
 describe("createDesktopPlatformBuildConfig", () => {
-  it("skips signing for unsigned macOS builds", () => {
+  it("adds explicit microphone entitlements to macOS builds", () => {
     const config = createDesktopPlatformBuildConfig({
       platform: "mac",
       target: "dmg",
@@ -23,29 +23,10 @@ describe("createDesktopPlatformBuildConfig", () => {
     assert.deepStrictEqual(mac.target, ["dmg", "zip"]);
     assert.equal(mac.icon, "icon.icns");
     assert.deepStrictEqual(config.asarUnpack, ["node_modules/node-pty/**"]);
-    assert.equal(mac.identity, null);
-    assert.equal(mac.hardenedRuntime, undefined);
-    assert.equal(mac.notarize, undefined);
-    assert.equal(mac.entitlements, undefined);
-    assert.equal(mac.entitlementsInherit, undefined);
-    assert.equal(extendInfo.NSMicrophoneUsageDescription, MICROPHONE_USAGE_DESCRIPTION);
-  });
-
-  it("enables notarization for signed macOS builds", () => {
-    const config = createDesktopPlatformBuildConfig({
-      platform: "mac",
-      target: "dmg",
-      macSigned: true,
-      macNotarize: true,
-    });
-    const mac = config.mac as Record<string, unknown>;
-
-    assert.equal(mac.identity, undefined);
     assert.equal(mac.hardenedRuntime, true);
     assert.equal(mac.entitlements, MAC_ENTITLEMENTS_PATH);
     assert.equal(mac.entitlementsInherit, MAC_INHERITED_ENTITLEMENTS_PATH);
-    assert.equal(mac.requirements, MAC_BRIDGE_REQUIREMENTS_PATH);
-    assert.equal(mac.notarize, true);
+    assert.equal(extendInfo.NSMicrophoneUsageDescription, MICROPHONE_USAGE_DESCRIPTION);
   });
 
   it("leaves non-macOS platform configs unchanged", () => {
@@ -56,7 +37,7 @@ describe("createDesktopPlatformBuildConfig", () => {
     const win = createDesktopPlatformBuildConfig({
       platform: "win",
       target: "nsis",
-      windowsAzureSignOptions: { publisherName: "T3 Tools" },
+      windowsAzureSignOptions: { publisherName: "Synara" },
     });
 
     assert.equal(linux.mac, undefined);
@@ -75,10 +56,26 @@ describe("createDesktopPlatformBuildConfig", () => {
 
     assert.equal(win.mac, undefined);
     assert.deepStrictEqual(win.asarUnpack, ["node_modules/node-pty/**"]);
+    assert.equal(WINDOWS_INSTALLER_GUID, "368107a8-afe6-5db5-ab3b-d4f331684868");
+    assert.deepStrictEqual(win.nsis, {
+      guid: WINDOWS_INSTALLER_GUID,
+    });
     assert.deepStrictEqual(win.win, {
       target: ["nsis"],
       icon: "icon.ico",
-      azureSignOptions: { publisherName: "T3 Tools" },
+      azureSignOptions: { publisherName: "Synara" },
+    });
+  });
+
+  it("keeps Windows signing optional", () => {
+    const config = createDesktopPlatformBuildConfig({
+      platform: "win",
+      target: "nsis",
+    });
+
+    assert.deepStrictEqual(config.win, {
+      target: ["nsis"],
+      icon: "icon.ico",
     });
   });
 

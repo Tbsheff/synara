@@ -10,7 +10,7 @@ import {
   RuntimeRequestId,
   type ThreadTokenUsageSnapshot,
   type TurnId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Effect } from "effect";
 
 import { ProviderAdapterRequestError } from "../Errors.ts";

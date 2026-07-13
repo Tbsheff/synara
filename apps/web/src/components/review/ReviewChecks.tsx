@@ -1,4 +1,4 @@
-import type { ReviewCheck } from "@t3tools/contracts";
+import type { ReviewCheck } from "@synara/contracts";
 
 import { CircleCheckIcon } from "~/lib/icons";
 import { CheckRow } from "./ReviewPrSidebarChecksPanel";

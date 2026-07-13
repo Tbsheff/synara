@@ -2,7 +2,7 @@
 // Purpose: Deep-link to a resolved pull request changeset under the shared chat shell.
 // Layer: Route screen
 
-import type { ReviewSourceRef } from "@t3tools/contracts";
+import type { ReviewSourceRef } from "@synara/contracts";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { Suspense, lazy, useMemo } from "react";
 

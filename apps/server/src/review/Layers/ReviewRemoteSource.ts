@@ -1,4 +1,4 @@
-import type { ReviewPullRequestSummary } from "@t3tools/contracts";
+import type { ReviewPullRequestSummary } from "@synara/contracts";
 import { Effect, Layer } from "effect";
 
 import { GitHubCli } from "../../git/Services/GitHubCli.ts";

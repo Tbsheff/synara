@@ -1,12 +1,4 @@
-import {
-  CheckpointRef,
-  ExecutionInstanceId,
-  type OrchestrationThread,
-  ProjectId,
-  type ProjectKind,
-  ThreadId,
-  TurnId,
-} from "@t3tools/contracts";
+import { CheckpointRef, ProjectId, ThreadId, TurnId, type ProjectKind } from "@synara/contracts";
 import { Effect, Layer, Option } from "effect";
 import { describe, expect, it } from "vitest";
 
@@ -15,48 +7,11 @@ import {
   type ProjectionFullThreadDiffContext,
   type ProjectionThreadCheckpointContext,
 } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
+import { RuntimeWorkspaceDiff } from "../../executionRuntime/Services/RuntimeWorkspaceDiff.ts";
 import { checkpointRefForThreadTurn, checkpointRefForThreadTurnStart } from "../Utils.ts";
 import { CheckpointDiffQueryLive } from "./CheckpointDiffQuery.ts";
 import { CheckpointStore, type CheckpointStoreShape } from "../Services/CheckpointStore.ts";
 import { CheckpointDiffQuery } from "../Services/CheckpointDiffQuery.ts";
-import { RuntimeWorkspaceDiff } from "../../executionRuntime/Services/RuntimeWorkspaceDiff.ts";
-
-// These tests cover local/worktree threads, which never reach the sandbox diff
-// seam. A fake that dies on call would also satisfy the type; returning an empty
-// result keeps the type honest without asserting it is never called.
-const RuntimeWorkspaceDiffFakeLive = Layer.succeed(RuntimeWorkspaceDiff, {
-  read: () => Effect.succeed({ diff: "", changedPaths: [], degraded: false }),
-});
-
-// A remote thread detail carrying only the fields resolveDiffableRemoteInstance
-// reads; the rest of OrchestrationThread is irrelevant to the diff routing.
-function makeRemoteThreadDetail(instanceStatus: string): OrchestrationThread {
-  return {
-    runtime: {
-      targetKind: "remote-runtime",
-      instance: {
-        id: ExecutionInstanceId.makeUnsafe("inst-remote-1"),
-        provider: "daytona",
-        status: instanceStatus,
-        rootPath: "/root/synara",
-      },
-    },
-  } as unknown as OrchestrationThread;
-}
-
-function makeRecordingWorkspaceDiff(diff: string): {
-  readonly layer: Layer.Layer<RuntimeWorkspaceDiff>;
-  readonly reads: Array<string>;
-} {
-  const reads: Array<string> = [];
-  const layer = Layer.succeed(RuntimeWorkspaceDiff, {
-    read: (input) => {
-      reads.push(String(input.instanceId));
-      return Effect.succeed({ diff, changedPaths: [], degraded: false });
-    },
-  });
-  return { layer, reads };
-}
 
 function makeThreadCheckpointContext(input: {
   readonly projectId: ProjectId;
@@ -114,6 +69,10 @@ function makeFullThreadDiffContext(input: {
   };
 }
 
+const runtimeWorkspaceDiffLayer = Layer.succeed(RuntimeWorkspaceDiff, {
+  read: () => Effect.succeed({ diff: "", changedPaths: [], degraded: false }),
+});
+
 describe("CheckpointDiffQueryLive", () => {
   it("prefers exact turn-start checkpoints for single-turn diffs", async () => {
     const projectId = ProjectId.makeUnsafe("project-1");
@@ -149,6 +108,7 @@ describe("CheckpointDiffQueryLive", () => {
           return true;
         }),
       restoreCheckpoint: () => Effect.succeed(true),
+      reverseCheckpointDiff: () => Effect.succeed(true),
       diffCheckpoints: ({ fromCheckpointRef, toCheckpointRef, cwd, ignoreWhitespace }) =>
         Effect.sync(() => {
           diffCheckpointsCalls.push({ fromCheckpointRef, toCheckpointRef, cwd, ignoreWhitespace });
@@ -158,8 +118,8 @@ describe("CheckpointDiffQueryLive", () => {
     };
 
     const layer = CheckpointDiffQueryLive.pipe(
+      Layer.provideMerge(runtimeWorkspaceDiffLayer),
       Layer.provideMerge(Layer.succeed(CheckpointStore, checkpointStore)),
-      Layer.provideMerge(RuntimeWorkspaceDiffFakeLive),
       Layer.provideMerge(
         Layer.succeed(ProjectionSnapshotQuery, {
           getSnapshot: () => Effect.die("unused"),
@@ -175,7 +135,7 @@ describe("CheckpointDiffQueryLive", () => {
           getFullThreadDiffContext: () => Effect.die("unused"),
           getThreadShellById: () => Effect.die("unused"),
           findSyntheticSubagentParentThread: () => Effect.die("unused"),
-          getThreadDetailById: () => Effect.succeed(Option.none()),
+          getThreadDetailById: () => Effect.die("unused"),
           getThreadDetailForExportById: () => Effect.die("unused"),
           getThreadDetailSnapshotById: () => Effect.die("unused"),
         }),
@@ -216,118 +176,6 @@ describe("CheckpointDiffQueryLive", () => {
     });
   });
 
-  it("routes a diffable remote thread's turn diff to the sandbox", async () => {
-    const threadId = ThreadId.makeUnsafe("thread-remote-diffable");
-    const { layer: workspaceDiffLayer, reads } = makeRecordingWorkspaceDiff("sandbox diff");
-
-    const checkpointStore: CheckpointStoreShape = {
-      isGitRepository: () => Effect.succeed(true),
-      captureCheckpoint: () => Effect.void,
-      copyCheckpointRef: () => Effect.succeed(true),
-      hasCheckpointRef: () => Effect.die("host path must not run for a diffable remote thread"),
-      restoreCheckpoint: () => Effect.succeed(true),
-      diffCheckpoints: () => Effect.die("host path must not run for a diffable remote thread"),
-      deleteCheckpointRefs: () => Effect.void,
-    };
-
-    const layer = CheckpointDiffQueryLive.pipe(
-      Layer.provideMerge(Layer.succeed(CheckpointStore, checkpointStore)),
-      Layer.provideMerge(workspaceDiffLayer),
-      Layer.provideMerge(
-        Layer.succeed(ProjectionSnapshotQuery, {
-          getSnapshot: () => Effect.die("unused"),
-          getCommandReadModel: () => Effect.die("unused"),
-          getCounts: () => Effect.die("unused"),
-          getSnapshotSequence: () => Effect.die("unused"),
-          getShellSnapshot: () => Effect.die("unused"),
-          getActiveProjectByWorkspaceRoot: () => Effect.die("unused"),
-          getProjectShellById: () => Effect.die("unused"),
-          getFirstActiveThreadIdByProjectId: () => Effect.die("unused"),
-          getThreadCheckpointContext: () =>
-            Effect.die("remote diff must short-circuit the host context"),
-          listGeneratedImageActivitiesByTurn: () => Effect.die("unused"),
-          getFullThreadDiffContext: () => Effect.die("unused"),
-          getThreadShellById: () => Effect.die("unused"),
-          findSyntheticSubagentParentThread: () => Effect.die("unused"),
-          getThreadDetailById: () => Effect.succeed(Option.some(makeRemoteThreadDetail("running"))),
-          getThreadDetailForExportById: () => Effect.die("unused"),
-          getThreadDetailSnapshotById: () => Effect.die("unused"),
-        }),
-      ),
-    );
-
-    const result = await Effect.runPromise(
-      Effect.gen(function* () {
-        const query = yield* CheckpointDiffQuery;
-        return yield* query.getTurnDiff({ threadId, fromTurnCount: 0, toTurnCount: 1 });
-      }).pipe(Effect.provide(layer)),
-    );
-
-    expect(reads).toEqual(["inst-remote-1"]);
-    expect(result).toEqual({ threadId, fromTurnCount: 0, toTurnCount: 1, diff: "sandbox diff" });
-  });
-
-  it("keeps a remote thread on the host path when its instance is not diffable", async () => {
-    const projectId = ProjectId.makeUnsafe("project-remote-stopped");
-    const threadId = ThreadId.makeUnsafe("thread-remote-stopped");
-    const toCheckpointRef = checkpointRefForThreadTurn(threadId, 1);
-    const { layer: workspaceDiffLayer, reads } = makeRecordingWorkspaceDiff("sandbox diff");
-
-    const threadCheckpointContext = makeThreadCheckpointContext({
-      projectId,
-      threadId,
-      workspaceRoot: "/tmp/workspace",
-      worktreePath: null,
-      checkpointTurnCount: 1,
-      checkpointRef: toCheckpointRef,
-    });
-
-    const checkpointStore: CheckpointStoreShape = {
-      isGitRepository: () => Effect.succeed(true),
-      captureCheckpoint: () => Effect.void,
-      copyCheckpointRef: () => Effect.succeed(true),
-      hasCheckpointRef: () => Effect.succeed(true),
-      restoreCheckpoint: () => Effect.succeed(true),
-      diffCheckpoints: () => Effect.succeed("host diff"),
-      deleteCheckpointRefs: () => Effect.void,
-    };
-
-    const layer = CheckpointDiffQueryLive.pipe(
-      Layer.provideMerge(Layer.succeed(CheckpointStore, checkpointStore)),
-      Layer.provideMerge(workspaceDiffLayer),
-      Layer.provideMerge(
-        Layer.succeed(ProjectionSnapshotQuery, {
-          getSnapshot: () => Effect.die("unused"),
-          getCommandReadModel: () => Effect.die("unused"),
-          getCounts: () => Effect.die("unused"),
-          getSnapshotSequence: () => Effect.die("unused"),
-          getShellSnapshot: () => Effect.die("unused"),
-          getActiveProjectByWorkspaceRoot: () => Effect.die("unused"),
-          getProjectShellById: () => Effect.die("unused"),
-          getFirstActiveThreadIdByProjectId: () => Effect.die("unused"),
-          getThreadCheckpointContext: () => Effect.succeed(Option.some(threadCheckpointContext)),
-          getFullThreadDiffContext: () => Effect.die("unused"),
-          getThreadShellById: () => Effect.die("unused"),
-          findSyntheticSubagentParentThread: () => Effect.die("unused"),
-          listGeneratedImageActivitiesByTurn: () => Effect.die("unused"),
-          getThreadDetailById: () => Effect.succeed(Option.some(makeRemoteThreadDetail("stopped"))),
-          getThreadDetailForExportById: () => Effect.die("unused"),
-          getThreadDetailSnapshotById: () => Effect.die("unused"),
-        }),
-      ),
-    );
-
-    const result = await Effect.runPromise(
-      Effect.gen(function* () {
-        const query = yield* CheckpointDiffQuery;
-        return yield* query.getTurnDiff({ threadId, fromTurnCount: 0, toTurnCount: 1 });
-      }).pipe(Effect.provide(layer)),
-    );
-
-    expect(reads).toEqual([]);
-    expect(result.diff).toBe("host diff");
-  });
-
   it("uses the narrow full-thread diff context without loading checkpoint summaries", async () => {
     const projectId = ProjectId.makeUnsafe("project-full-diff");
     const threadId = ThreadId.makeUnsafe("thread-full-diff");
@@ -358,6 +206,7 @@ describe("CheckpointDiffQueryLive", () => {
       copyCheckpointRef: () => Effect.succeed(true),
       hasCheckpointRef: () => Effect.die("unused"),
       restoreCheckpoint: () => Effect.succeed(true),
+      reverseCheckpointDiff: () => Effect.succeed(true),
       diffCheckpoints: ({ fromCheckpointRef, toCheckpointRef, cwd, ignoreWhitespace }) =>
         Effect.sync(() => {
           diffCheckpointsCalls.push({ fromCheckpointRef, toCheckpointRef, cwd, ignoreWhitespace });
@@ -367,8 +216,8 @@ describe("CheckpointDiffQueryLive", () => {
     };
 
     const layer = CheckpointDiffQueryLive.pipe(
+      Layer.provideMerge(runtimeWorkspaceDiffLayer),
       Layer.provideMerge(Layer.succeed(CheckpointStore, checkpointStore)),
-      Layer.provideMerge(RuntimeWorkspaceDiffFakeLive),
       Layer.provideMerge(
         Layer.succeed(ProjectionSnapshotQuery, {
           getSnapshot: () => Effect.die("unused"),
@@ -384,7 +233,7 @@ describe("CheckpointDiffQueryLive", () => {
           getFullThreadDiffContext: () => Effect.succeed(Option.some(fullThreadDiffContext)),
           getThreadShellById: () => Effect.die("unused"),
           findSyntheticSubagentParentThread: () => Effect.die("unused"),
-          getThreadDetailById: () => Effect.succeed(Option.none()),
+          getThreadDetailById: () => Effect.die("unused"),
           getThreadDetailForExportById: () => Effect.die("unused"),
           getThreadDetailSnapshotById: () => Effect.die("unused"),
         }),
@@ -428,13 +277,14 @@ describe("CheckpointDiffQueryLive", () => {
       copyCheckpointRef: () => Effect.succeed(true),
       hasCheckpointRef: () => Effect.succeed(true),
       restoreCheckpoint: () => Effect.succeed(true),
+      reverseCheckpointDiff: () => Effect.succeed(true),
       diffCheckpoints: () => Effect.succeed(""),
       deleteCheckpointRefs: () => Effect.void,
     };
 
     const layer = CheckpointDiffQueryLive.pipe(
+      Layer.provideMerge(runtimeWorkspaceDiffLayer),
       Layer.provideMerge(Layer.succeed(CheckpointStore, checkpointStore)),
-      Layer.provideMerge(RuntimeWorkspaceDiffFakeLive),
       Layer.provideMerge(
         Layer.succeed(ProjectionSnapshotQuery, {
           getSnapshot: () => Effect.die("unused"),
@@ -450,7 +300,7 @@ describe("CheckpointDiffQueryLive", () => {
           getFullThreadDiffContext: () => Effect.die("unused"),
           getThreadShellById: () => Effect.die("unused"),
           findSyntheticSubagentParentThread: () => Effect.die("unused"),
-          getThreadDetailById: () => Effect.succeed(Option.none()),
+          getThreadDetailById: () => Effect.die("unused"),
           getThreadDetailForExportById: () => Effect.die("unused"),
           getThreadDetailSnapshotById: () => Effect.die("unused"),
         }),
@@ -492,13 +342,14 @@ describe("CheckpointDiffQueryLive", () => {
       copyCheckpointRef: () => Effect.succeed(true),
       hasCheckpointRef: () => Effect.succeed(true),
       restoreCheckpoint: () => Effect.succeed(true),
+      reverseCheckpointDiff: () => Effect.succeed(true),
       diffCheckpoints: () => Effect.succeed("diff patch"),
       deleteCheckpointRefs: () => Effect.void,
     };
 
     const layer = CheckpointDiffQueryLive.pipe(
+      Layer.provideMerge(runtimeWorkspaceDiffLayer),
       Layer.provideMerge(Layer.succeed(CheckpointStore, checkpointStore)),
-      Layer.provideMerge(RuntimeWorkspaceDiffFakeLive),
       Layer.provideMerge(
         Layer.succeed(ProjectionSnapshotQuery, {
           getSnapshot: () => Effect.die("unused"),
@@ -514,7 +365,7 @@ describe("CheckpointDiffQueryLive", () => {
           getFullThreadDiffContext: () => Effect.die("unused"),
           getThreadShellById: () => Effect.die("unused"),
           findSyntheticSubagentParentThread: () => Effect.die("unused"),
-          getThreadDetailById: () => Effect.succeed(Option.none()),
+          getThreadDetailById: () => Effect.die("unused"),
           getThreadDetailForExportById: () => Effect.die("unused"),
           getThreadDetailSnapshotById: () => Effect.die("unused"),
         }),
@@ -557,13 +408,14 @@ describe("CheckpointDiffQueryLive", () => {
       copyCheckpointRef: () => Effect.succeed(true),
       hasCheckpointRef: () => Effect.succeed(true),
       restoreCheckpoint: () => Effect.succeed(true),
+      reverseCheckpointDiff: () => Effect.succeed(true),
       diffCheckpoints: () => Effect.succeed("diff patch"),
       deleteCheckpointRefs: () => Effect.void,
     };
 
     const layer = CheckpointDiffQueryLive.pipe(
+      Layer.provideMerge(runtimeWorkspaceDiffLayer),
       Layer.provideMerge(Layer.succeed(CheckpointStore, checkpointStore)),
-      Layer.provideMerge(RuntimeWorkspaceDiffFakeLive),
       Layer.provideMerge(
         Layer.succeed(ProjectionSnapshotQuery, {
           getSnapshot: () => Effect.die("unused"),
@@ -623,6 +475,7 @@ describe("CheckpointDiffQueryLive", () => {
       copyCheckpointRef: () => Effect.succeed(true),
       hasCheckpointRef: () => Effect.succeed(true),
       restoreCheckpoint: () => Effect.succeed(true),
+      reverseCheckpointDiff: () => Effect.succeed(true),
       diffCheckpoints: ({ cwd }) =>
         Effect.sync(() => {
           diffCheckpointsCalls.push({ cwd });
@@ -632,8 +485,8 @@ describe("CheckpointDiffQueryLive", () => {
     };
 
     const layer = CheckpointDiffQueryLive.pipe(
+      Layer.provideMerge(runtimeWorkspaceDiffLayer),
       Layer.provideMerge(Layer.succeed(CheckpointStore, checkpointStore)),
-      Layer.provideMerge(RuntimeWorkspaceDiffFakeLive),
       Layer.provideMerge(
         Layer.succeed(ProjectionSnapshotQuery, {
           getSnapshot: () => Effect.die("unused"),
@@ -693,13 +546,14 @@ describe("CheckpointDiffQueryLive", () => {
       copyCheckpointRef: () => Effect.succeed(true),
       hasCheckpointRef: () => Effect.succeed(true),
       restoreCheckpoint: () => Effect.succeed(true),
+      reverseCheckpointDiff: () => Effect.succeed(true),
       diffCheckpoints: () => Effect.succeed("diff patch"),
       deleteCheckpointRefs: () => Effect.void,
     };
 
     const layer = CheckpointDiffQueryLive.pipe(
+      Layer.provideMerge(runtimeWorkspaceDiffLayer),
       Layer.provideMerge(Layer.succeed(CheckpointStore, checkpointStore)),
-      Layer.provideMerge(RuntimeWorkspaceDiffFakeLive),
       Layer.provideMerge(
         Layer.succeed(ProjectionSnapshotQuery, {
           getSnapshot: () => Effect.die("unused"),
@@ -715,7 +569,7 @@ describe("CheckpointDiffQueryLive", () => {
           getFullThreadDiffContext: () => Effect.die("unused"),
           getThreadShellById: () => Effect.die("unused"),
           findSyntheticSubagentParentThread: () => Effect.die("unused"),
-          getThreadDetailById: () => Effect.succeed(Option.none()),
+          getThreadDetailById: () => Effect.die("unused"),
           getThreadDetailForExportById: () => Effect.die("unused"),
           getThreadDetailSnapshotById: () => Effect.die("unused"),
         }),

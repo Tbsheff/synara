@@ -3,7 +3,7 @@ import type {
   ReviewCheckState,
   ReviewPullRequestDetail,
   ReviewPullRequestHeaderDetail,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import type { ReactElement } from "react";
 
 import { ArrowUpRightIcon, CircleCheckIcon } from "~/lib/icons";

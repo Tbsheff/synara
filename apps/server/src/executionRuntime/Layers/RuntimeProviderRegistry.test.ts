@@ -12,7 +12,7 @@
  * @module RuntimeProviderRegistry.test
  */
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import type { ExecutionRuntimeProvider } from "@t3tools/contracts";
+import type { ExecutionRuntimeProvider } from "@synara/contracts";
 import { Effect, Layer, ManagedRuntime } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 import { describe, expect, it } from "vitest";

@@ -6,7 +6,7 @@ import {
   isToolLifecycleItemType,
   type OrchestrationThreadActivity,
   type ToolLifecycleItemType,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 
 import type { PendingApproval } from "./session-logic.pending";
 

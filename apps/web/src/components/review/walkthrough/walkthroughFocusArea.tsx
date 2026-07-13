@@ -1,4 +1,4 @@
-import type { ReviewFocusAreaSeverity, ReviewFocusAreaType } from "@t3tools/contracts";
+import type { ReviewFocusAreaSeverity, ReviewFocusAreaType } from "@synara/contracts";
 import type { ReactNode } from "react";
 
 import {

@@ -13,7 +13,7 @@ import { type ChildProcessWithoutNullStreams, spawnSync } from "node:child_proce
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
-import { type CanonicalItemType, type CanonicalRequestType, TurnId } from "@t3tools/contracts";
+import { type CanonicalItemType, type CanonicalRequestType, TurnId } from "@synara/contracts";
 
 import { asArray, asNumber, asRecord, asString, trimToUndefined } from "../geminiValue.ts";
 import {

@@ -2,8 +2,8 @@
 // normalization + merge of static/dynamic provider model options).
 // Layer: pure web logic (no React).
 // Exports: normalizeDynamicModelSlug, mergeDynamicModelOptions.
-import { type ProviderKind } from "@t3tools/contracts";
-import { normalizeModelSlug } from "@t3tools/shared/model";
+import { type ProviderKind } from "@synara/contracts";
+import { normalizeModelSlug } from "@synara/shared/model";
 import { formatProviderModelOptionName, type ProviderModelOption } from "../providerModelOptions";
 
 export function normalizeDynamicModelSlug(provider: ProviderKind, slug: string): string {

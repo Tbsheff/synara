@@ -6,7 +6,7 @@
  *
  * @module GeminiAdapter.token
  */
-import type { ThreadTokenUsageSnapshot } from "@t3tools/contracts";
+import type { ThreadTokenUsageSnapshot } from "@synara/contracts";
 
 import { asNumber, asRecord } from "../geminiValue.ts";
 

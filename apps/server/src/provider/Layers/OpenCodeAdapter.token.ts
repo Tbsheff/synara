@@ -2,7 +2,7 @@
 // Layer: pure functions — no Effect, no session-context state.
 // Exports: numeric coercers, readOpenCodeTokens, normalizeOpenCodeTokenUsage, buildOpenCodeTokenUsageKey.
 
-import type { ThreadTokenUsageSnapshot } from "@t3tools/contracts";
+import type { ThreadTokenUsageSnapshot } from "@synara/contracts";
 
 import type { NormalizedOpenCodeTokens, OpenCodeAssistantTokens } from "./OpenCodeAdapter.types.ts";
 

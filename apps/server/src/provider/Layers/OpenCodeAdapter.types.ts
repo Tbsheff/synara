@@ -2,7 +2,7 @@
 // Layer: types only — no values, no Effect, no SDK runtime bindings.
 // Exports: provider/config/inventory/model/token/message-snapshot type aliases.
 
-import type { ProviderKind, ProviderListModelsResult } from "@t3tools/contracts";
+import type { ProviderKind, ProviderListModelsResult } from "@synara/contracts";
 import type { AssistantMessage, Part } from "@opencode-ai/sdk/v2";
 
 import type { OpenCodeCompatibleCliSpec } from "../opencodeRuntime.ts";

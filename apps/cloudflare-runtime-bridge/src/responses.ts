@@ -8,7 +8,7 @@
  *
  * @module responses
  */
-import type { BridgeErrorBody } from "@t3tools/contracts";
+import type { BridgeErrorBody } from "@synara/contracts";
 
 import type { WorkerWebSocket } from "./cloudflareRuntime.ts";
 

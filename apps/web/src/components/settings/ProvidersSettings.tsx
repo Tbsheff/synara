@@ -6,7 +6,7 @@ import {
   PROVIDER_DISPLAY_NAMES,
   type ProviderKind,
   type ServerProviderStatus,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { type Dispatch, type RefObject, type SetStateAction, useMemo } from "react";
 import {
   closestCenter,

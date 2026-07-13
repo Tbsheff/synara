@@ -12,11 +12,11 @@ import {
 import os from "node:os";
 import path from "node:path";
 import { Effect } from "effect";
-import { ApprovalRequestId, ThreadId, type ProviderEvent } from "@t3tools/contracts";
+import { ApprovalRequestId, ThreadId, type ProviderEvent } from "@synara/contracts";
 
 import {
   buildCodexProcessEnv,
-  disableDpCodeBrowserPluginInCodexConfig,
+  disableCodexConfigSections,
   resolveCodexBrowserUsePipePath,
 } from "./codexProcessEnv";
 import {
@@ -406,7 +406,8 @@ describe("isJsonObjectLine", () => {
 
 describe("buildCodexProcessEnv", () => {
   it("hydrates the active custom provider env_key from the effective CODEX_HOME", () => {
-    const tempDir = mkdtempSync(path.join(os.tmpdir(), "t3-codex-env-"));
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "synara-codex-env-"));
+    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-runtime-home-"));
     try {
       writeFileSync(
         path.join(tempDir, "config.toml"),
@@ -429,7 +430,7 @@ describe("buildCodexProcessEnv", () => {
         env: {
           SHELL: "/bin/zsh",
           PATH: "/usr/bin",
-          DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN: "0",
+          SYNARA_HOME: runtimeHome,
         },
         homePath: tempDir,
         platform: "darwin",
@@ -441,11 +442,12 @@ describe("buildCodexProcessEnv", () => {
         "SSH_AUTH_SOCK",
         "MY_COMPANY_PROXY_KEY",
       ]);
-      expect(env.CODEX_HOME).toBe(tempDir);
+      expect(env.CODEX_HOME).toBe(path.join(runtimeHome, "codex-home-overlay"));
       expect(env.MY_COMPANY_PROXY_KEY).toBe("proxy-secret");
       expect(env.PATH).toBe("/opt/homebrew/bin:/usr/bin");
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
+      rmSync(runtimeHome, { recursive: true, force: true });
     }
   });
 
@@ -486,15 +488,15 @@ describe("buildCodexProcessEnv", () => {
   it("resolves the browser-use pipe path from desktop env aliases", () => {
     expect(
       resolveCodexBrowserUsePipePath({
-        env: { T3CODE_BROWSER_USE_PIPE_PATH: "/tmp/codex-browser-use/t3.sock" },
+        env: { T3CODE_BROWSER_USE_PIPE_PATH: "/tmp/codex-browser-use/legacy.sock" },
         platform: "darwin",
       }),
-    ).toBe("/tmp/codex-browser-use/t3.sock");
+    ).toBe("/tmp/codex-browser-use/legacy.sock");
   });
 
   it("disables the local dpcode-browser plugin in Synara's Codex home overlay", () => {
-    const tempDir = mkdtempSync(path.join(os.tmpdir(), "t3-codex-env-"));
-    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "t3-runtime-home-"));
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "synara-codex-env-"));
+    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-runtime-home-"));
     try {
       writeFileSync(
         path.join(tempDir, "config.toml"),
@@ -529,8 +531,8 @@ describe("buildCodexProcessEnv", () => {
   });
 
   it("repairs stale real files in Synara's Codex home overlay", () => {
-    const tempDir = mkdtempSync(path.join(os.tmpdir(), "t3-codex-env-"));
-    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "t3-runtime-home-"));
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "synara-codex-env-"));
+    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-runtime-home-"));
     try {
       const sourceMemoryPath = path.join(tempDir, "memories_1.sqlite");
       writeFileSync(path.join(tempDir, "config.toml"), 'model = "gpt-5.5"', "utf8");
@@ -557,8 +559,8 @@ describe("buildCodexProcessEnv", () => {
   });
 
   it("repairs stale auth.json files in Synara's Codex home overlay", () => {
-    const tempDir = mkdtempSync(path.join(os.tmpdir(), "t3-codex-env-"));
-    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "t3-runtime-home-"));
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "synara-codex-env-"));
+    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-runtime-home-"));
     try {
       const sourceAuthPath = path.join(tempDir, "auth.json");
       writeFileSync(path.join(tempDir, "config.toml"), 'model = "gpt-5.5"', "utf8");
@@ -586,8 +588,8 @@ describe("buildCodexProcessEnv", () => {
   });
 
   it("preserves real generated image directories in Synara's Codex home overlay", () => {
-    const tempDir = mkdtempSync(path.join(os.tmpdir(), "t3-codex-env-"));
-    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "t3-runtime-home-"));
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "synara-codex-env-"));
+    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-runtime-home-"));
     try {
       writeFileSync(path.join(tempDir, "config.toml"), 'model = "gpt-5.5"', "utf8");
       const sourceGeneratedImagesDir = path.join(tempDir, "generated_images");
@@ -615,9 +617,10 @@ describe("buildCodexProcessEnv", () => {
     }
   });
 
-  it("adds a disabled dpcode-browser plugin section when Codex config does not contain one", () => {
-    expect(disableDpCodeBrowserPluginInCodexConfig('model = "gpt-5.5"')).toContain(
-      '[plugins."dpcode-browser@local"]\nenabled = false',
+  it("adds a disabled conflicting browser plugin section when Codex config does not contain one", () => {
+    const section = '[plugins."legacy-browser@local"]';
+    expect(disableCodexConfigSections('model = "gpt-5.5"', [section], true)).toContain(
+      `${section}\nenabled = false`,
     );
   });
 });
@@ -1328,7 +1331,28 @@ describe("CodexAppServerManager discovery", () => {
     expect(sendRequest.mock.calls.map((call) => call[1])).toEqual(["model/list", "account/read"]);
   });
 
-  it("normalizes model/list fast mode metadata from runtime discovery", async () => {
+  it.each([
+    {
+      responseShape: "camelCase",
+      item: {
+        id: "gpt-5.6-sol",
+        name: "GPT-5.6 Sol",
+        supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+        defaultReasoningEffort: "low",
+        additionalSpeedTiers: ["fast"],
+      },
+    },
+    {
+      responseShape: "legacy snake_case",
+      item: {
+        id: "gpt-5.6-sol",
+        name: "GPT-5.6 Sol",
+        supported_reasoning_efforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+        default_reasoning_effort: "low",
+        additional_speed_tiers: ["fast"],
+      },
+    },
+  ])("normalizes $responseShape model/list reasoning efforts", async ({ item }) => {
     const manager = new CodexAppServerManager();
     const context = {
       session: {
@@ -1365,15 +1389,7 @@ describe("CodexAppServerManager discovery", () => {
       )
       .mockResolvedValue({
         result: {
-          items: [
-            {
-              id: "gpt-5.5",
-              name: "GPT-5.5",
-              supported_reasoning_efforts: ["low", "medium", "high", "xhigh"],
-              default_reasoning_effort: "medium",
-              additionalSpeedTiers: ["fast"],
-            },
-          ],
+          items: [item],
         },
       });
 
@@ -1386,15 +1402,17 @@ describe("CodexAppServerManager discovery", () => {
     });
     expect(result.models).toEqual([
       {
-        slug: "gpt-5.5",
-        name: "GPT-5.5",
+        slug: "gpt-5.6-sol",
+        name: "GPT-5.6 Sol",
         supportedReasoningEfforts: [
           { value: "low" },
           { value: "medium" },
           { value: "high" },
           { value: "xhigh" },
+          { value: "max" },
+          { value: "ultra" },
         ],
-        defaultReasoningEffort: "medium",
+        defaultReasoningEffort: "low",
         supportsFastMode: true,
       },
     ]);

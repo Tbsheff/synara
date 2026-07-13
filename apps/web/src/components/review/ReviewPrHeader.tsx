@@ -1,4 +1,4 @@
-import type { ReviewPullRequestDetail, ReviewPullRequestHeaderDetail } from "@t3tools/contracts";
+import type { ReviewPullRequestDetail, ReviewPullRequestHeaderDetail } from "@synara/contracts";
 import type { ReactNode } from "react";
 import { useEffect, useRef, useState } from "react";
 

@@ -2,7 +2,7 @@ import type {
   ReviewPullRequestDetail,
   ReviewPullRequestHeaderDetail,
   ReviewTimelineEvent,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 

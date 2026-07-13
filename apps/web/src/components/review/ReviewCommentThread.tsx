@@ -3,7 +3,7 @@ import type {
   ReviewLocalComment,
   ReviewRemoteThread,
   ReviewViewerResult,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { useState } from "react";
 
 import {

@@ -1,4 +1,4 @@
-import type { OrchestrationThreadRuntime } from "@t3tools/contracts";
+import type { OrchestrationThreadRuntime } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 import {
   buildRuntimePlanFromDefaults,

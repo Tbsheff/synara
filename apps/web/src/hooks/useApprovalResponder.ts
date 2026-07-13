@@ -2,7 +2,7 @@ import {
   type ApprovalRequestId,
   type ProviderApprovalDecision,
   type ThreadId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { useCallback, useState } from "react";
 
 import { newCommandId } from "~/lib/utils";

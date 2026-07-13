@@ -11,7 +11,7 @@ const BRANCH = (args && args.branch) || "feat/exec-runtime-pr9";
 const PLAN = ".plans/18-execution-runtime.md";
 
 const HOUSE = [
-  'Effect-first: `class X extends ServiceMap.Service<X, Shape>()("t3/...")` + `Layer.effect`; never `Effect.Service`.',
+  'Effect-first: `class X extends ServiceMap.Service<X, Shape>()("synara/...")` + `Layer.effect`; never `Effect.Service`.',
   "Work on branch " +
     BRANCH +
     " (sequential — avoid parallel edits to root package.json/bun.lock/serverLayers).",

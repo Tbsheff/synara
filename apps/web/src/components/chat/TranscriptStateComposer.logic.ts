@@ -1,4 +1,4 @@
-import type { ProviderApprovalDecision } from "@t3tools/contracts";
+import type { ProviderApprovalDecision } from "@synara/contracts";
 
 import { deriveTranscriptComposerState } from "../../session-logic";
 import { LAB_PENDING_APPROVAL, LAB_PENDING_USER_INPUTS } from "./TranscriptStateComposer.fixtures";

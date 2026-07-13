@@ -1,4 +1,4 @@
-import type { ReviewHunkRef, ReviewWalkthroughChapter } from "@t3tools/contracts";
+import type { ReviewHunkRef, ReviewWalkthroughChapter } from "@synara/contracts";
 
 import type { ParsedFileDiff } from "./parseUnifiedDiffHunks.ts";
 

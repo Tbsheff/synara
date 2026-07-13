@@ -1,4 +1,4 @@
-import type { ReviewPullRequestSummary, ReviewSourceRef } from "@t3tools/contracts";
+import type { ReviewPullRequestSummary, ReviewSourceRef } from "@synara/contracts";
 
 import { GitPullRequestIcon } from "~/lib/icons";
 import { ReviewCardShell, ReviewPullRequestMeta } from "./reviewPrimitives";

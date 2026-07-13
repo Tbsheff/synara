@@ -1,4 +1,4 @@
-import type { ReviewFindingSeverity, ReviewPullRequestSummary } from "@t3tools/contracts";
+import type { ReviewFindingSeverity, ReviewPullRequestSummary } from "@synara/contracts";
 import { mergeProps } from "@base-ui/react/merge-props";
 import { useRender } from "@base-ui/react/use-render";
 import type { KeyboardEvent, PointerEvent, ReactNode } from "react";

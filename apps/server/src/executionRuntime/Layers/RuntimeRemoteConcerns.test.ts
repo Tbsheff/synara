@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import nodePath from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { ExecutionInstanceId } from "@t3tools/contracts";
+import { ExecutionInstanceId } from "@synara/contracts";
 import { Effect, Layer, ManagedRuntime } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
 

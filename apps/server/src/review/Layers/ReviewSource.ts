@@ -23,7 +23,7 @@ import {
   type ReviewTargetKey,
   type ReviewTimelineEvent,
   type ReviewWalkthrough,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Clock, Effect, Fiber, Layer, Option } from "effect";
 
 import type { GitHubCliError } from "../../git/Errors.ts";

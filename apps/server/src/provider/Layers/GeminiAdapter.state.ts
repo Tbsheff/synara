@@ -2,7 +2,7 @@
 // Layer: pure functions over GeminiSessionContext/GeminiTurnState — no Effect, no I/O.
 // Exports: updateGeminiSession, currentGeminiTurnId, upsertGeminiTurnItem.
 
-import type { CanonicalItemType, ProviderSession, TurnId } from "@t3tools/contracts";
+import type { CanonicalItemType, ProviderSession, TurnId } from "@synara/contracts";
 
 import type {
   GeminiRecordedItem,

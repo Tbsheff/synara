@@ -141,4 +141,4 @@ export interface DaytonaSandboxClientShape {
 export class DaytonaSandboxClient extends ServiceMap.Service<
   DaytonaSandboxClient,
   DaytonaSandboxClientShape
->()("t3/executionRuntime/providers/daytona/DaytonaSandboxClient") {}
+>()("synara/executionRuntime/providers/daytona/DaytonaSandboxClient") {}

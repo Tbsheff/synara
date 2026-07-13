@@ -6,7 +6,7 @@
 //   RECENT_SESSION_ENSURE_REUSE_WINDOW_MS, DEFAULT_RUNTIME_MODE,
 //   HANDOFF_CONTEXT_WRAPPER_OVERHEAD, SIDECHAT_BOUNDARY_INSTRUCTION.
 
-import type { RuntimeMode } from "@t3tools/contracts";
+import type { RuntimeMode } from "@synara/contracts";
 import { Duration } from "effect";
 
 export const HANDLED_TURN_START_KEY_MAX = 10_000;

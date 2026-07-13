@@ -9,7 +9,9 @@ import {
   type CursorModelOptions,
   type GeminiThinkingBudget,
   type GeminiThinkingLevel,
+  DROID_REASONING_EFFORT_OPTIONS,
   GROK_REASONING_EFFORT_OPTIONS,
+  type DroidReasoningEffort,
   type GrokReasoningEffort,
   type ModelSlug,
   OrchestrationProposedPlanId,
@@ -26,7 +28,7 @@ import {
   ProviderStartOptions,
   RuntimeMode,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import * as Schema from "effect/Schema";
 import * as Equal from "effect/Equal";
 import { DeepMutable } from "effect/Types";
@@ -35,7 +37,7 @@ import {
   normalizeModelSlug,
   resolveSelectableModel,
   resolveModelSlugForProvider,
-} from "@t3tools/shared/model";
+} from "@synara/shared/model";
 import { useMemo } from "react";
 import { getLocalStorageItem } from "./hooks/useLocalStorage";
 import { resolveAppModelSelection } from "./appSettings";
@@ -65,6 +67,7 @@ import {
 } from "./lib/composerPastedText";
 import { normalizeAssistantSelectionAttachment } from "./lib/assistantSelections";
 import { cloneComposerImageAttachment } from "./lib/composerSend";
+import { classifyProviderReasoningEffortSupport } from "./lib/codexReasoningEffort";
 import { buildModelSelection } from "./providerModelOptions";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
@@ -81,12 +84,14 @@ const COMPOSER_PROVIDER_KINDS = [
   "cursor",
   "gemini",
   "grok",
+  "droid",
   "kilo",
   "opencode",
   "pi",
 ] as const satisfies readonly ProviderKind[];
 const isProviderKind = Schema.is(ProviderKind);
 const GROK_REASONING_EFFORT_SET = new Set<string>(GROK_REASONING_EFFORT_OPTIONS);
+const DROID_REASONING_EFFORT_SET = new Set<string>(DROID_REASONING_EFFORT_OPTIONS);
 
 const COMPOSER_PERSIST_DEBOUNCE_MS = 300;
 const TERMINAL_DRAFT_THREAD_MAPPING_SUFFIX = "::terminal";
@@ -543,6 +548,7 @@ export interface ComposerDraftStoreState {
     threadId: ThreadId,
     modelSelection: ModelSelection | null | undefined,
   ) => void;
+  setModelSelectionAndSticky: (threadId: ThreadId, modelSelection: ModelSelection) => void;
   setModelOptions: (
     threadId: ThreadId,
     modelOptions: ProviderModelOptions | null | undefined,
@@ -1195,6 +1201,10 @@ function isGrokReasoningEffort(value: unknown): value is GrokReasoningEffort {
   return typeof value === "string" && GROK_REASONING_EFFORT_SET.has(value);
 }
 
+function isDroidReasoningEffort(value: unknown): value is DroidReasoningEffort {
+  return typeof value === "string" && DROID_REASONING_EFFORT_SET.has(value);
+}
+
 function makeModelSelection(
   provider: ProviderKind,
   model: string,
@@ -1241,6 +1251,14 @@ function makeModelSelection(
         model,
         ...(options
           ? { options: options as Extract<ModelSelection, { provider: "grok" }>["options"] }
+          : {}),
+      };
+    case "droid":
+      return {
+        provider,
+        model,
+        ...(options
+          ? { options: options as Extract<ModelSelection, { provider: "droid" }>["options"] }
           : {}),
       };
     case "kilo":
@@ -1296,6 +1314,10 @@ function normalizeProviderModelOptions(
     candidate?.grok && typeof candidate.grok === "object"
       ? (candidate.grok as Record<string, unknown>)
       : null;
+  const droidCandidate =
+    candidate?.droid && typeof candidate.droid === "object"
+      ? (candidate.droid as Record<string, unknown>)
+      : null;
   const openCodeCandidate =
     candidate?.opencode && typeof candidate.opencode === "object"
       ? (candidate.opencode as Record<string, unknown>)
@@ -1310,18 +1332,8 @@ function normalizeProviderModelOptions(
       : null;
 
   const codexReasoningEffort: CodexReasoningEffort | undefined =
-    codexCandidate?.reasoningEffort === "low" ||
-    codexCandidate?.reasoningEffort === "medium" ||
-    codexCandidate?.reasoningEffort === "high" ||
-    codexCandidate?.reasoningEffort === "xhigh"
-      ? codexCandidate.reasoningEffort
-      : provider === "codex" &&
-          (legacy?.effort === "low" ||
-            legacy?.effort === "medium" ||
-            legacy?.effort === "high" ||
-            legacy?.effort === "xhigh")
-        ? legacy.effort
-        : undefined;
+    trimStringOrUndefined(codexCandidate?.reasoningEffort) ??
+    (provider === "codex" ? trimStringOrUndefined(legacy?.effort) : undefined);
   const codexFastMode =
     codexCandidate?.fastMode === true
       ? true
@@ -1361,20 +1373,21 @@ function normalizeProviderModelOptions(
       : claudeCandidate?.fastMode === false
         ? false
         : undefined;
-  const claudeContextWindow =
-    typeof claudeCandidate?.contextWindow === "string" && claudeCandidate.contextWindow.length > 0
-      ? claudeCandidate.contextWindow
-      : undefined;
+  const claudeAutoCompactWindow =
+    trimStringOrUndefined(claudeCandidate?.autoCompactWindow) ??
+    trimStringOrUndefined(claudeCandidate?.contextWindow);
   const claude =
     claudeThinking !== undefined ||
     claudeEffort !== undefined ||
     claudeFastMode !== undefined ||
-    claudeContextWindow !== undefined
+    claudeAutoCompactWindow !== undefined
       ? {
           ...(claudeThinking !== undefined ? { thinking: claudeThinking } : {}),
           ...(claudeEffort !== undefined ? { effort: claudeEffort } : {}),
           ...(claudeFastMode !== undefined ? { fastMode: claudeFastMode } : {}),
-          ...(claudeContextWindow !== undefined ? { contextWindow: claudeContextWindow } : {}),
+          ...(claudeAutoCompactWindow !== undefined
+            ? { autoCompactWindow: claudeAutoCompactWindow }
+            : {}),
         }
       : undefined;
 
@@ -1437,6 +1450,13 @@ function normalizeProviderModelOptions(
     : undefined;
   const grok =
     grokReasoningEffort !== undefined ? { reasoningEffort: grokReasoningEffort } : undefined;
+  const droidReasoningEffort: DroidReasoningEffort | undefined = isDroidReasoningEffort(
+    droidCandidate?.reasoningEffort,
+  )
+    ? droidCandidate.reasoningEffort
+    : undefined;
+  const droid =
+    droidReasoningEffort !== undefined ? { reasoningEffort: droidReasoningEffort } : undefined;
   const openCodeVariant = trimStringOrUndefined(openCodeCandidate?.variant);
   const openCodeAgent = trimStringOrUndefined(openCodeCandidate?.agent);
   const opencode =
@@ -1465,7 +1485,7 @@ function normalizeProviderModelOptions(
       ? piCandidate.thinkingLevel
       : undefined;
   const pi = piThinkingLevel !== undefined ? { thinkingLevel: piThinkingLevel } : undefined;
-  if (!codex && !claude && !cursor && !gemini && !grok && !kilo && !opencode && !pi) {
+  if (!codex && !claude && !cursor && !gemini && !grok && !droid && !kilo && !opencode && !pi) {
     return null;
   }
   return {
@@ -1474,6 +1494,7 @@ function normalizeProviderModelOptions(
     ...(cursor ? { cursor } : {}),
     ...(gemini ? { gemini } : {}),
     ...(grok ? { grok } : {}),
+    ...(droid ? { droid } : {}),
     ...(kilo ? { kilo } : {}),
     ...(opencode ? { opencode } : {}),
     ...(pi ? { pi } : {}),
@@ -1498,7 +1519,7 @@ function normalizeModelSelection(
   if (typeof rawModel !== "string") {
     return null;
   }
-  const inferredClaudeContextWindow =
+  const inferredClaudeAutoCompactWindow =
     provider === "claudeAgent" && /\[1m\]$/iu.test(rawModel) ? "1m" : undefined;
   const model = normalizeModelSlug(rawModel, provider);
   if (!model) {
@@ -1513,27 +1534,72 @@ function normalizeModelSelection(
     provider === "codex"
       ? modelOptions?.codex
       : provider === "claudeAgent"
-        ? inferredClaudeContextWindow !== undefined
+        ? inferredClaudeAutoCompactWindow !== undefined
           ? {
               ...modelOptions?.claudeAgent,
-              contextWindow:
-                modelOptions?.claudeAgent?.contextWindow ?? inferredClaudeContextWindow,
+              autoCompactWindow:
+                modelOptions?.claudeAgent?.autoCompactWindow ?? inferredClaudeAutoCompactWindow,
             }
           : modelOptions?.claudeAgent
         : provider === "gemini"
           ? modelOptions?.gemini
           : provider === "grok"
             ? modelOptions?.grok
-            : provider === "kilo"
-              ? modelOptions?.kilo
-              : provider === "cursor"
-                ? modelOptions?.cursor
-                : provider === "opencode"
-                  ? modelOptions?.opencode
-                  : provider === "pi"
-                    ? modelOptions?.pi
-                    : undefined;
+            : provider === "droid"
+              ? modelOptions?.droid
+              : provider === "kilo"
+                ? modelOptions?.kilo
+                : provider === "cursor"
+                  ? modelOptions?.cursor
+                  : provider === "opencode"
+                    ? modelOptions?.opencode
+                    : provider === "pi"
+                      ? modelOptions?.pi
+                      : undefined;
   return makeModelSelection(provider, model, options);
+}
+
+function reconcileProviderScopedModelSelection(
+  requested: ModelSelection,
+  current: ModelSelection | null | undefined,
+): ModelSelection {
+  if (requested.options !== undefined || current?.provider !== requested.provider) {
+    return requested;
+  }
+  if (current.model === requested.model) {
+    return makeModelSelection(requested.provider, requested.model, current.options);
+  }
+  if (
+    current.provider !== "codex" &&
+    current.provider !== "cursor" &&
+    current.provider !== "claudeAgent"
+  ) {
+    return requested;
+  }
+  let preservedOptions = current.options;
+  const effort =
+    current.provider === "claudeAgent"
+      ? current.options?.effort
+      : current.provider === "codex" || current.provider === "cursor"
+        ? current.options?.reasoningEffort
+        : undefined;
+  if (
+    effort !== undefined &&
+    classifyProviderReasoningEffortSupport({
+      provider: requested.provider,
+      model: requested.model,
+      effort,
+    }) !== "supported"
+  ) {
+    if (current.provider === "claudeAgent") {
+      const { effort: _effort, ...remainingOptions } = current.options ?? {};
+      preservedOptions = Object.keys(remainingOptions).length > 0 ? remainingOptions : undefined;
+    } else if (current.provider === "codex" || current.provider === "cursor") {
+      const { reasoningEffort: _reasoningEffort, ...remainingOptions } = current.options ?? {};
+      preservedOptions = Object.keys(remainingOptions).length > 0 ? remainingOptions : undefined;
+    }
+  }
+  return makeModelSelection(requested.provider, requested.model, preservedOptions);
 }
 
 // ── Sticky selection sanitization ─────────────────────────────────────
@@ -1542,10 +1608,17 @@ function normalizeModelSelection(
 // beyond the normal 200k compaction point and consume usage limits much faster, so a
 // one-off pick must never silently become every future thread's sticky default.
 function stripNonStickyModelOptions(selection: ModelSelection): ModelSelection {
-  if (selection.provider !== "claudeAgent" || !selection.options?.contextWindow) {
+  if (
+    selection.provider !== "claudeAgent" ||
+    (!selection.options?.contextWindow && !selection.options?.autoCompactWindow)
+  ) {
     return selection;
   }
-  const { contextWindow: _contextWindow, ...rest } = selection.options;
+  const {
+    contextWindow: _contextWindow,
+    autoCompactWindow: _autoCompactWindow,
+    ...rest
+  } = selection.options;
   return makeModelSelection(
     selection.provider,
     selection.model,
@@ -1557,7 +1630,10 @@ function sanitizeStickyModelSelectionMap(
   map: Partial<Record<ProviderKind, ModelSelection>>,
 ): Partial<Record<ProviderKind, ModelSelection>> {
   const claude = map.claudeAgent;
-  if (claude?.provider !== "claudeAgent" || !claude.options?.contextWindow) {
+  if (
+    claude?.provider !== "claudeAgent" ||
+    (!claude.options?.contextWindow && !claude.options?.autoCompactWindow)
+  ) {
     return map;
   }
   return { ...map, claudeAgent: stripNonStickyModelOptions(claude) };
@@ -3533,10 +3609,8 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
           for (const [provider, selection] of Object.entries(stickyMap)) {
             if (selection) {
               const current = nextMap[provider as ProviderKind];
-              nextMap[provider as ProviderKind] = {
-                ...selection,
-                model: current?.model ?? selection.model,
-              };
+              nextMap[provider as ProviderKind] =
+                current && current.model !== selection.model ? current : selection;
             }
           }
           if (
@@ -3778,17 +3852,10 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
           const nextMap = { ...base.modelSelectionByProvider };
           if (normalized) {
             const current = nextMap[normalized.provider];
-            if (normalized.options !== undefined) {
-              // Explicit options provided → use them
-              nextMap[normalized.provider] = normalized;
-            } else {
-              // No options in selection → preserve existing options, update provider+model
-              nextMap[normalized.provider] = makeModelSelection(
-                normalized.provider,
-                normalized.model,
-                current?.options,
-              );
-            }
+            nextMap[normalized.provider] = reconcileProviderScopedModelSelection(
+              normalized,
+              current,
+            );
           }
           const nextActiveProvider = normalized?.provider ?? base.activeProvider;
           if (
@@ -3810,6 +3877,12 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
           }
           return { draftsByThreadId: nextDraftsByThreadId };
         });
+      },
+      setModelSelectionAndSticky: (threadId, modelSelection) => {
+        get().setModelSelection(threadId, modelSelection);
+        const correctedSelection =
+          get().draftsByThreadId[threadId]?.modelSelectionByProvider[modelSelection.provider];
+        get().setStickyModelSelection(correctedSelection ?? modelSelection);
       },
       setModelOptions: (threadId, modelOptions) => {
         if (threadId.length === 0) {

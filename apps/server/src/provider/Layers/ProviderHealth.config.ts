@@ -10,7 +10,7 @@
  *
  * @module ProviderHealth.config
  */
-import type { ProviderKind, ServerProviderStatus } from "@t3tools/contracts";
+import type { ProviderKind, ServerProviderStatus } from "@synara/contracts";
 
 import { normalizeCommandPath } from "../providerMaintenance";
 import type { PackageManagedProviderMaintenanceDefinition } from "../providerMaintenance";

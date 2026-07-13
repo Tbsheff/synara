@@ -12,7 +12,7 @@
 import { ServiceMap } from "effect";
 import type { Effect } from "effect";
 
-import type { RuntimeRole } from "@t3tools/contracts";
+import type { RuntimeRole } from "@synara/contracts";
 
 export const RUNTIME_CREDENTIAL_KINDS = [
   "env-var",
@@ -48,4 +48,4 @@ export interface RuntimeCredentialBrokerShape {
 export class RuntimeCredentialBroker extends ServiceMap.Service<
   RuntimeCredentialBroker,
   RuntimeCredentialBrokerShape
->()("t3/executionRuntime/Services/RuntimeCredentialBroker") {}
+>()("synara/executionRuntime/Services/RuntimeCredentialBroker") {}

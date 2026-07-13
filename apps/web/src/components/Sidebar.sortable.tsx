@@ -5,7 +5,7 @@
 
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import type { ProjectId } from "@t3tools/contracts";
+import type { ProjectId } from "@synara/contracts";
 
 export type SortableProjectHandleProps = Pick<
   ReturnType<typeof useSortable>,

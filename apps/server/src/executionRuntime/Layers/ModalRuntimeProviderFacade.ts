@@ -22,7 +22,7 @@
  */
 import { Effect } from "effect";
 
-import type { RuntimePlan } from "@t3tools/contracts";
+import type { RuntimePlan } from "@synara/contracts";
 
 import type { ExecutionRuntimeProviderAdapterShape } from "../Services/ExecutionRuntimeProviderAdapter.ts";
 import type { ModalRuntimeProviderAdapterShape } from "../providers/modal/ModalRuntimeProviderAdapter.ts";

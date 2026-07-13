@@ -3,7 +3,7 @@
 // Layer: Pure proposed-plan transition helpers consumed by store.ts's event projection.
 // Exports: normalizeProposedPlans, sourceProposedPlansEqual, buildProposedPlanSlice.
 
-import { type OrchestrationReadModel } from "@t3tools/contracts";
+import { type OrchestrationReadModel } from "@synara/contracts";
 import { arraysShallowEqual } from "./equality";
 import { type Thread } from "../types";
 

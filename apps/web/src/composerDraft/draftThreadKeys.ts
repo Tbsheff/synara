@@ -3,7 +3,7 @@
 // Layer: Web state store (pure helpers)
 // Exports: projectDraftThreadMappingKey, projectDraftThreadEntryPointFromKey, projectIdFromDraftThreadMappingKey
 
-import type { ProjectId } from "@t3tools/contracts";
+import type { ProjectId } from "@synara/contracts";
 import type { ThreadPrimarySurface } from "../types";
 
 const TERMINAL_DRAFT_THREAD_MAPPING_SUFFIX = "::terminal";

@@ -2,13 +2,13 @@
 // Layer: pure functions/constants — no Effect, no session-context state.
 // Exports: CLAUDE_CONTEXT_WINDOW_MAX_TOKENS, context-window resolvers, getEffectiveClaudeCodeEffort.
 
-import { ClaudeCodeEffort } from "@t3tools/contracts";
+import { ClaudeCodeEffort } from "@synara/contracts";
 import {
   getDefaultContextWindow,
   getModelCapabilities,
   hasContextWindowOption,
   trimOrNull,
-} from "@t3tools/shared/model";
+} from "@synara/shared/model";
 
 export const CLAUDE_CONTEXT_WINDOW_MAX_TOKENS = {
   "200k": 200_000,

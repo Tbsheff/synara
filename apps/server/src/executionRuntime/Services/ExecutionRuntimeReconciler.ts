@@ -40,4 +40,4 @@ export interface ExecutionRuntimeReconcilerShape {
 export class ExecutionRuntimeReconciler extends ServiceMap.Service<
   ExecutionRuntimeReconciler,
   ExecutionRuntimeReconcilerShape
->()("t3/executionRuntime/Services/ExecutionRuntimeReconciler") {}
+>()("synara/executionRuntime/Services/ExecutionRuntimeReconciler") {}

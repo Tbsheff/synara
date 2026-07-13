@@ -23,8 +23,8 @@ import type {
   ExecutionInstanceId,
   RuntimeInstanceSummary,
   RuntimeRouteSummary,
-} from "@t3tools/contracts";
-import { RuntimeRouteId } from "@t3tools/contracts";
+} from "@synara/contracts";
+import { RuntimeRouteId } from "@synara/contracts";
 import { Effect, Layer, ServiceMap } from "effect";
 import type { ChildProcessSpawner } from "effect/unstable/process";
 
@@ -100,7 +100,7 @@ export interface ModalRuntimeProviderAdapterShape {
 export class ModalRuntimeProviderAdapter extends ServiceMap.Service<
   ModalRuntimeProviderAdapter,
   ModalRuntimeProviderAdapterShape
->()("t3/executionRuntime/providers/modal/ModalRuntimeProviderAdapter") {}
+>()("synara/executionRuntime/providers/modal/ModalRuntimeProviderAdapter") {}
 
 const makeModalRuntimeProviderAdapter = Effect.gen(function* () {
   const transport = yield* ModalCommandTransport;

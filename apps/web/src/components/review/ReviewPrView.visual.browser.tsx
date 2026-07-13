@@ -9,8 +9,8 @@ import type {
   ReviewSourceRef,
   ReviewTargetKey,
   ReviewWalkthrough as ReviewWalkthroughData,
-} from "@t3tools/contracts";
-import { serializeReviewTargetKey } from "@t3tools/shared/reviewTargetKey";
+} from "@synara/contracts";
+import { serializeReviewTargetKey } from "@synara/shared/reviewTargetKey";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { page } from "vitest/browser";
 import { afterEach, describe, expect, it, vi } from "vitest";

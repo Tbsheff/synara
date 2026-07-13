@@ -12,9 +12,9 @@ import {
   type ProviderKind,
   type ProviderSkillReference,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Cause, Schema } from "effect";
-import { WORKTREE_BRANCH_PREFIX } from "@t3tools/shared/git";
+import { WORKTREE_BRANCH_PREFIX } from "@synara/shared/git";
 
 import { ProviderAdapterRequestError, type ProviderServiceError } from "../../provider/Errors.ts";
 import type { ProviderIntentEvent } from "./ProviderCommandReactor.types.ts";

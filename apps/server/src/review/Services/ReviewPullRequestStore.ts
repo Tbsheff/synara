@@ -1,4 +1,4 @@
-import type { ReviewPullRequestSummary } from "@t3tools/contracts";
+import type { ReviewPullRequestSummary } from "@synara/contracts";
 import { ServiceMap } from "effect";
 import type { Effect, Option } from "effect";
 
@@ -108,4 +108,4 @@ export interface ReviewPullRequestStoreShape {
 export class ReviewPullRequestStore extends ServiceMap.Service<
   ReviewPullRequestStore,
   ReviewPullRequestStoreShape
->()("t3/review/Services/ReviewPullRequestStore") {}
+>()("synara/review/Services/ReviewPullRequestStore") {}

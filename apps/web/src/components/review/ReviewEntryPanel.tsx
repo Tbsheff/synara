@@ -1,4 +1,4 @@
-import type { ReviewSourceRef } from "@t3tools/contracts";
+import type { ReviewSourceRef } from "@synara/contracts";
 import { useState } from "react";
 
 import { parsePullRequestReference } from "~/pullRequestReference";

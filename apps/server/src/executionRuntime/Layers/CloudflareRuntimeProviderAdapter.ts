@@ -11,7 +11,7 @@
  *
  * @module CloudflareRuntimeProviderAdapterLive
  */
-import { ExecutionInstanceId, type RuntimeInstanceSummary } from "@t3tools/contracts";
+import { ExecutionInstanceId, type RuntimeInstanceSummary } from "@synara/contracts";
 import { Effect, Layer } from "effect";
 
 import type { JsonRpcLineTransport } from "../../provider/process/JsonRpcLineTransport.ts";

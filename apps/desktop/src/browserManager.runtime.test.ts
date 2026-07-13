@@ -1,4 +1,4 @@
-import type { BrowserPanelBounds, ThreadId } from "@t3tools/contracts";
+import type { BrowserPanelBounds, ThreadId } from "@synara/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // This suite drives the electron-bound runtime layer of DesktopBrowserManager with
@@ -22,6 +22,7 @@ interface FakeWebContents {
   goForward: ReturnType<typeof vi.fn>;
   canGoBack: () => boolean;
   canGoForward: () => boolean;
+  setUserAgent: ReturnType<typeof vi.fn>;
   setWindowOpenHandler: ReturnType<typeof vi.fn>;
   openDevTools: ReturnType<typeof vi.fn>;
   capturePage: ReturnType<typeof vi.fn>;
@@ -74,6 +75,7 @@ const hoisted = vi.hoisted(() => {
       goForward: vi.fn(),
       canGoBack: () => false,
       canGoForward: () => false,
+      setUserAgent: vi.fn(),
       setWindowOpenHandler: vi.fn(),
       openDevTools: vi.fn(),
       capturePage: vi.fn(async () => ({ toPNG: () => Buffer.from([1, 2, 3]) })),
@@ -133,10 +135,22 @@ const hoisted = vi.hoisted(() => {
 const { createdViews, addChildView, removeChildView } = hoisted;
 
 vi.mock("electron", () => ({
+  app: {
+    getName: vi.fn(() => "Synara"),
+    getPreferredSystemLanguages: vi.fn(() => ["en-US"]),
+    userAgentFallback:
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Synara/1.0.0 Chrome/138.0.0.0 Electron/37.0.0 Safari/537.36",
+  },
   BrowserWindow: hoisted.FakeBrowserWindow,
   WebContentsView: hoisted.FakeWebContentsView,
   clipboard: { writeImage: vi.fn(), writeText: vi.fn() },
   nativeImage: { createFromBuffer: vi.fn(() => ({ isEmpty: () => false })) },
+  session: {
+    fromPartition: vi.fn(() => ({
+      setUserAgent: vi.fn(),
+      webRequest: { onBeforeSendHeaders: vi.fn() },
+    })),
+  },
   shell: { openExternal: vi.fn() },
   webContents: { fromId: vi.fn() },
 }));

@@ -6,7 +6,7 @@ import type {
   ReviewSourceRef,
   ReviewTargetKey,
   ReviewTimelineEvent,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 
 export interface ReviewSidechatContextPayload {
   readonly cwd: string | null;

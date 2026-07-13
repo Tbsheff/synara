@@ -9,11 +9,11 @@ import {
   type ChatAttachment,
   EventId,
   type OrchestrationThreadActivity,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Effect, Option } from "effect";
 
 import { type ProjectionThread } from "../../persistence/Services/ProjectionThreads.ts";
-import { deriveThreadSummaryState } from "@t3tools/shared/threadSummary";
+import { deriveThreadSummaryState } from "@synara/shared/threadSummary";
 import type { ProjectorDefinition } from "./ProjectionPipeline.types.ts";
 import type { ProjectionProjectorDeps } from "./ProjectionPipeline.projectors.ts";
 import {

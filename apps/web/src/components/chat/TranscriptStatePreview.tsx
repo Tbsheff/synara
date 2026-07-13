@@ -1,5 +1,5 @@
 import { type LegendListRef } from "@legendapp/list/react";
-import { type MessageId, type ThreadId, type TurnId } from "@t3tools/contracts";
+import { type MessageId, type ThreadId, type TurnId } from "@synara/contracts";
 import { useCallback, useMemo, useRef, type ReactElement } from "react";
 
 import { cn } from "~/lib/utils";

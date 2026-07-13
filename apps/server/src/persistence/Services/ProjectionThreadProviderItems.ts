@@ -4,7 +4,7 @@ import {
   RuntimeItemId,
   ThreadId,
   TurnId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Schema, ServiceMap } from "effect";
 import type { Effect } from "effect";
 
@@ -48,5 +48,5 @@ export class ProjectionThreadProviderItemRepository extends ServiceMap.Service<
   ProjectionThreadProviderItemRepository,
   ProjectionThreadProviderItemRepositoryShape
 >()(
-  "t3/persistence/Services/ProjectionThreadProviderItems/ProjectionThreadProviderItemRepository",
+  "synara/persistence/Services/ProjectionThreadProviderItems/ProjectionThreadProviderItemRepository",
 ) {}

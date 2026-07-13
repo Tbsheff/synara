@@ -11,7 +11,7 @@
 // (apiUrl, teamId, runtime, environment, ...) round-trip both directions like the
 // agent-provider settings do.
 
-import type { ServerSettings, ServerSettingsPatch } from "@t3tools/contracts";
+import type { ServerSettings, ServerSettingsPatch } from "@synara/contracts";
 
 /** Remote runtime providers exposed in the Sandboxes settings section. */
 export const SANDBOX_PROVIDER_IDS = ["daytona", "vercel", "modal", "cloudflare"] as const;

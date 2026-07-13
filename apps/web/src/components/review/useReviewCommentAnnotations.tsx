@@ -5,7 +5,7 @@ import type {
   ReviewRemoteThread,
   ReviewTargetKey,
   ReviewViewerResult,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo } from "react";
 

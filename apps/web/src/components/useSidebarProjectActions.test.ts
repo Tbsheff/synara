@@ -7,8 +7,8 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook } from "@testing-library/react";
-import type { OrchestrationShellSnapshot } from "@t3tools/contracts";
-import { ProjectId } from "@t3tools/contracts";
+import type { OrchestrationShellSnapshot } from "@synara/contracts";
+import { ProjectId } from "@synara/contracts";
 
 const dispatchCommand = vi.fn<(command: unknown) => Promise<void>>();
 const getShellSnapshot = vi.fn<() => Promise<OrchestrationShellSnapshot>>();

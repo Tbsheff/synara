@@ -4,8 +4,8 @@
 //   store keeps ownership of projection/commit while this module stays free of store imports.
 // Exports: applyOrchestrationEvent, ApplyThreadUpdate (injected reducer type).
 
-import { EventId, type OrchestrationEvent, type ThreadId } from "@t3tools/contracts";
-import { resolveThreadBranchRegressionGuard } from "@t3tools/shared/git";
+import { EventId, type OrchestrationEvent, type ThreadId } from "@synara/contracts";
+import { resolveThreadBranchRegressionGuard } from "@synara/shared/git";
 import type { AppState } from "../store";
 import { type Thread } from "../types";
 import { arraysShallowEqual, deepEqualJson, normalizeModelSelection } from "./equality";

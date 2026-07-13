@@ -20,14 +20,14 @@ import {
   type PiThinkingLevel,
   ProviderKind,
   type ProviderModelOptions,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import * as Schema from "effect/Schema";
 import {
   getDefaultModel,
   normalizeModelSlug,
   resolveSelectableModel,
   resolveModelSlugForProvider,
-} from "@t3tools/shared/model";
+} from "@synara/shared/model";
 import { resolveAppModelSelection } from "../appSettings";
 import type { ComposerThreadDraftState } from "../composerDraftStore";
 import type { LegacyCodexFields } from "./persistedSchema";
@@ -161,6 +161,14 @@ export function makeModelSelection(
         model,
         ...(options
           ? { options: options as Extract<ModelSelection, { provider: "grok" }>["options"] }
+          : {}),
+      };
+    case "droid":
+      return {
+        provider,
+        model,
+        ...(options
+          ? { options: options as Extract<ModelSelection, { provider: "droid" }>["options"] }
           : {}),
       };
     case "kilo":

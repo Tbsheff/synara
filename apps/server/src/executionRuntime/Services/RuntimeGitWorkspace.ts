@@ -12,7 +12,7 @@ import { ServiceMap } from "effect";
 import type { Effect } from "effect";
 import type { ChildProcessSpawner } from "effect/unstable/process";
 
-import type { ExecutionInstanceId } from "@t3tools/contracts";
+import type { ExecutionInstanceId } from "@synara/contracts";
 
 import type { RuntimeGitFailedError } from "../Errors.ts";
 
@@ -52,4 +52,4 @@ export interface RuntimeGitWorkspaceShape {
 export class RuntimeGitWorkspace extends ServiceMap.Service<
   RuntimeGitWorkspace,
   RuntimeGitWorkspaceShape
->()("t3/executionRuntime/Services/RuntimeGitWorkspace") {}
+>()("synara/executionRuntime/Services/RuntimeGitWorkspace") {}

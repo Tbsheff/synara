@@ -16,7 +16,7 @@ const MAX_REVIEW_ROUNDS = (args && args.maxReviewRounds) || 3;
 const SELECT = (args && args.slices) || "all";
 
 const HOUSE = [
-  'Effect-first: services are `class X extends ServiceMap.Service<X, Shape>()("t3/...")` + `Layer.effect` (Effect.Service is never used in this repo).',
+  'Effect-first: services are `class X extends ServiceMap.Service<X, Shape>()("synara/...")` + `Layer.effect` (Effect.Service is never used in this repo).',
   "packages/contracts is schema-only (effect/Schema). No runtime logic. Pure barrel re-export via index.ts.",
   "Mirror packages/effect-acp/_internal/stdio.ts (makeChildStdio / makeInMemoryStdio) for JSON-RPC-over-process transport; do NOT build on processRunner.ts.",
   "Do NOT extend ProviderRuntimeEvent (agent-activity union); execution-runtime infra events are a separate family.",

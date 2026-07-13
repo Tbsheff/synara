@@ -6,7 +6,7 @@
 //          reserves transcript/composer inset; when the dock is open it overlays only.
 // Layer: Chat header control
 
-import type { OrchestrationThreadRuntime } from "@t3tools/contracts";
+import type { OrchestrationThreadRuntime } from "@synara/contracts";
 import { FiServer } from "react-icons/fi";
 import { WindowIcon } from "~/lib/icons";
 import {

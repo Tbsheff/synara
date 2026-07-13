@@ -25,7 +25,7 @@ import type {
   RuntimePlan,
   RuntimeRole,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { ServiceMap } from "effect";
 import type { Effect } from "effect";
 
@@ -272,4 +272,4 @@ export interface ExecutionRuntimeServiceShape {
 export class ExecutionRuntimeService extends ServiceMap.Service<
   ExecutionRuntimeService,
   ExecutionRuntimeServiceShape
->()("t3/executionRuntime/Services/ExecutionRuntimeService") {}
+>()("synara/executionRuntime/Services/ExecutionRuntimeService") {}

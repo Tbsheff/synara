@@ -25,7 +25,7 @@
 import { ServiceMap } from "effect";
 import type { Effect } from "effect";
 
-import type { ServerSettingsError } from "@t3tools/contracts";
+import type { ServerSettingsError } from "@synara/contracts";
 
 import type { SecretStoreError } from "../../auth/Services/ServerSecretStore.ts";
 
@@ -60,4 +60,4 @@ export interface RuntimeProviderCredentialsShape {
 export class RuntimeProviderCredentials extends ServiceMap.Service<
   RuntimeProviderCredentials,
   RuntimeProviderCredentialsShape
->()("t3/executionRuntime/Services/RuntimeProviderCredentials") {}
+>()("synara/executionRuntime/Services/RuntimeProviderCredentials") {}

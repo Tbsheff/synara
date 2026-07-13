@@ -12,7 +12,7 @@
 import { ServiceMap } from "effect";
 import type { Effect } from "effect";
 
-import type { RuntimePlan, RuntimeRole } from "@t3tools/contracts";
+import type { RuntimePlan, RuntimeRole } from "@synara/contracts";
 
 import type { RuntimePlanRejectedError, RuntimeProviderUnsupportedError } from "../Errors.ts";
 import type { RuntimeProviderDescriptor } from "./RuntimeProviderDescriptor.ts";
@@ -41,4 +41,4 @@ export interface ExecutionRuntimePlannerShape {
 export class ExecutionRuntimePlanner extends ServiceMap.Service<
   ExecutionRuntimePlanner,
   ExecutionRuntimePlannerShape
->()("t3/executionRuntime/Services/ExecutionRuntimePlanner") {}
+>()("synara/executionRuntime/Services/ExecutionRuntimePlanner") {}

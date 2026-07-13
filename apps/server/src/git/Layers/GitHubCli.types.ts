@@ -4,7 +4,7 @@
 //   all Raw*Schema definitions, check-state sets, and PullRequestCoordinates.
 
 import { Schema } from "effect";
-import { PositiveInt, TrimmedNonEmptyString } from "@t3tools/contracts";
+import { PositiveInt, TrimmedNonEmptyString } from "@synara/contracts";
 
 export const DEFAULT_TIMEOUT_MS = 30_000;
 export const DEFAULT_REVIEW_PULL_REQUEST_LIST_LIMIT = 50;

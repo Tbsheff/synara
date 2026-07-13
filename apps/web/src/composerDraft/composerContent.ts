@@ -4,7 +4,7 @@
 // Layer: Web state store (reducers)
 // Exports: the content reducers consumed by the composer-draft store actions
 
-import type { ProviderInteractionMode, RuntimeMode, ThreadId } from "@t3tools/contracts";
+import type { ProviderInteractionMode, RuntimeMode, ThreadId } from "@synara/contracts";
 import * as Equal from "effect/Equal";
 import {
   type TerminalContextDraft,

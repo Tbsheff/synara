@@ -11,8 +11,8 @@
  *
  * @module ProviderHealth.parsing
  */
-import type { ServerProviderAuthStatus, ServerProviderStatusState } from "@t3tools/contracts";
-import { decodeJsonResult } from "@t3tools/shared/schemaJson";
+import type { ServerProviderAuthStatus, ServerProviderStatusState } from "@synara/contracts";
+import { decodeJsonResult } from "@synara/shared/schemaJson";
 import { Option, Result, Schema } from "effect";
 
 export interface CommandResult {

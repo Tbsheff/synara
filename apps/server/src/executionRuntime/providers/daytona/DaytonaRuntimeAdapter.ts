@@ -22,7 +22,7 @@
  *
  * @module daytona/DaytonaRuntimeAdapter
  */
-import { ExecutionInstanceId, type RuntimeInstanceSummary } from "@t3tools/contracts";
+import { ExecutionInstanceId, type RuntimeInstanceSummary } from "@synara/contracts";
 import { Deferred, Effect, Exit, Layer, Scope, ServiceMap, Stream } from "effect";
 
 import {
@@ -171,7 +171,7 @@ export interface DaytonaRuntimeAdapterShape {
 export class DaytonaRuntimeAdapter extends ServiceMap.Service<
   DaytonaRuntimeAdapter,
   DaytonaRuntimeAdapterShape
->()("t3/executionRuntime/providers/daytona/DaytonaRuntimeAdapter") {}
+>()("synara/executionRuntime/providers/daytona/DaytonaRuntimeAdapter") {}
 
 const toExecInput = (spawn: RuntimeProcessSpawnInput): DaytonaExecInput => ({
   command: spawn.command,

@@ -12,7 +12,7 @@
  * @module daytona/DaytonaRuntimeAdapter.contract.test
  */
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { type ExecutionInstanceId, RuntimePlan, type RuntimeRole } from "@t3tools/contracts";
+import { type ExecutionInstanceId, RuntimePlan, type RuntimeRole } from "@synara/contracts";
 import { Effect, Layer, ManagedRuntime, Schema } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 

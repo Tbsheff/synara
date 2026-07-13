@@ -7,7 +7,7 @@ import type { MouseEvent } from "react";
 import { TerminalIcon } from "~/lib/icons";
 import { LuSplit } from "react-icons/lu";
 import { HiOutlineCheckCircle } from "react-icons/hi2";
-import type { ProviderKind } from "@t3tools/contracts";
+import type { ProviderKind } from "@synara/contracts";
 import { cn } from "~/lib/utils";
 import { ProviderIcon } from "./ProviderIcon";
 import { ThreadRunningSpinner } from "./ThreadRunningSpinner";

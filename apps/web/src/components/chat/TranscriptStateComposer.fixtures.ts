@@ -1,4 +1,4 @@
-import { ApprovalRequestId } from "@t3tools/contracts";
+import { ApprovalRequestId } from "@synara/contracts";
 
 import type { PendingApproval, PendingUserInput } from "../../session-logic";
 

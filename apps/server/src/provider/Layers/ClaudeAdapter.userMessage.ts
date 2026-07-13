@@ -3,7 +3,7 @@
 // Exports: buildUserMessageEffect.
 
 import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
-import type { ProviderSendTurnInput } from "@t3tools/contracts";
+import type { ProviderSendTurnInput } from "@synara/contracts";
 import { Effect, type FileSystem } from "effect";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";

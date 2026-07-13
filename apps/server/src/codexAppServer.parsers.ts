@@ -14,8 +14,8 @@ import type {
   ProviderPluginDetail,
   ProviderRequestKind,
   ProviderSkillDescriptor,
-} from "@t3tools/contracts";
-import { TurnId } from "@t3tools/contracts";
+} from "@synara/contracts";
+import { TurnId } from "@synara/contracts";
 
 import { toProviderItemId, toTurnId } from "./codexAppServer.protocol.ts";
 import type {

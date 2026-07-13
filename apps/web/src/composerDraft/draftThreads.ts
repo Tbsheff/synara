@@ -9,7 +9,7 @@ import type {
   ProviderInteractionMode,
   RuntimeMode,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import * as Equal from "effect/Equal";
 import {
   DEFAULT_INTERACTION_MODE,

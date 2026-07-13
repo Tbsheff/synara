@@ -14,4 +14,4 @@ import type { FakeRuntimeProviderAdapterShape } from "../Layers/FakeRuntimeProvi
 export class FakeRuntimeProviderAdapter extends ServiceMap.Service<
   FakeRuntimeProviderAdapter,
   FakeRuntimeProviderAdapterShape
->()("t3/executionRuntime/Services/FakeRuntimeProviderAdapter") {}
+>()("synara/executionRuntime/Services/FakeRuntimeProviderAdapter") {}

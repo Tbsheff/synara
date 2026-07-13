@@ -3,7 +3,7 @@
 // Layer: orchestration (event-sourcing decider). Pure event derivation, no I/O.
 // Exports: decideRuntimeCommand.
 
-import type { OrchestrationCommand, OrchestrationReadModel } from "@t3tools/contracts";
+import type { OrchestrationCommand, OrchestrationReadModel } from "@synara/contracts";
 import { Effect } from "effect";
 
 import { OrchestrationCommandInvariantError } from "./Errors.ts";

@@ -1,4 +1,4 @@
-import type { ReviewUpdatedPayload } from "@t3tools/contracts";
+import type { ReviewUpdatedPayload } from "@synara/contracts";
 import { Effect, Layer, PubSub, Stream } from "effect";
 
 import { ReviewUpdateBus } from "../Services/ReviewUpdateBus.ts";

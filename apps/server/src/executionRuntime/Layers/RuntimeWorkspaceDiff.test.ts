@@ -1,5 +1,5 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { ExecutionInstanceId } from "@t3tools/contracts";
+import { ExecutionInstanceId } from "@synara/contracts";
 import { Effect, Layer } from "effect";
 import { describe, expect, it } from "vitest";
 

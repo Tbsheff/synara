@@ -8,7 +8,7 @@
 //   normalizePullRequestReference, toResolvedPullRequest, shouldPreferSshRemote,
 //   toPullRequestHeadRemoteInfo, inferPullRequestHeadRemoteInfoFromSelector.
 
-import { parseRepositoryNameFromPullRequestUrl, sanitizeBranchFragment } from "@t3tools/shared/git";
+import { parseRepositoryNameFromPullRequestUrl, sanitizeBranchFragment } from "@synara/shared/git";
 
 import type { GitHubPullRequestSummary } from "../Services/GitHubCli.ts";
 import type {
@@ -48,7 +48,7 @@ export function resolvePullRequestWorktreeLocalBranchName(
 
   const sanitizedHeadBranch = sanitizeBranchFragment(pullRequest.headBranch).trim();
   const suffix = sanitizedHeadBranch.length > 0 ? sanitizedHeadBranch : "head";
-  return `t3code/pr-${pullRequest.number}/${suffix}`;
+  return `synara/pr-${pullRequest.number}/${suffix}`;
 }
 
 export function parseGitHubRepositoryNameWithOwnerFromRemoteUrl(url: string | null): string | null {

@@ -15,7 +15,7 @@ import type {
   ExecutionInstanceId,
   RuntimeActivityLeaseId,
   RuntimeActivityLeaseSummary,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 
 export type RuntimeActivityLeaseReason = RuntimeActivityLeaseSummary["reason"];
 
@@ -35,4 +35,4 @@ export interface RuntimeActivityLeaseManagerShape {
 export class RuntimeActivityLeaseManager extends ServiceMap.Service<
   RuntimeActivityLeaseManager,
   RuntimeActivityLeaseManagerShape
->()("t3/executionRuntime/Services/RuntimeActivityLeaseManager") {}
+>()("synara/executionRuntime/Services/RuntimeActivityLeaseManager") {}

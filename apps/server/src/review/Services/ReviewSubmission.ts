@@ -10,7 +10,7 @@ import {
   ReviewThreadCommentMutationResult,
   ReviewSubmitInput,
   ReviewSubmitResult,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { ServiceMap } from "effect";
 import type { Effect } from "effect";
 
@@ -43,5 +43,5 @@ export interface ReviewSubmissionShape {
 }
 
 export class ReviewSubmission extends ServiceMap.Service<ReviewSubmission, ReviewSubmissionShape>()(
-  "t3/review/Services/ReviewSubmission",
+  "synara/review/Services/ReviewSubmission",
 ) {}

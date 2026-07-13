@@ -1,4 +1,4 @@
-import { MessageId, TurnId } from "@t3tools/contracts";
+import { CheckpointRef, MessageId, TurnId } from "@synara/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { formatShortTimestamp } from "../../timestampFormat";
@@ -2540,6 +2540,10 @@ describe("MessagesTimeline", { timeout: 30_000 }, () => {
               assistantMessageId,
               {
                 turnId: TurnId.makeUnsafe("turn-diff-1"),
+                checkpointTurnCount: 1,
+                checkpointTurnCounts: [1],
+                checkpointRef: CheckpointRef.makeUnsafe("refs/synara/checkpoints/thread/turn/1"),
+                status: "ready",
                 completedAt: "2026-03-17T19:12:30.000Z",
                 assistantMessageId,
                 files: [
@@ -2555,6 +2559,7 @@ describe("MessagesTimeline", { timeout: 30_000 }, () => {
         onOpenTurnDiff={() => {}}
         revertTurnCountByUserMessageId={new Map()}
         onRevertUserMessage={() => {}}
+        onUndoTurnFiles={() => {}}
         isRevertingCheckpoint={false}
         onImageExpand={() => {}}
         markdownCwd={undefined}
@@ -2565,6 +2570,7 @@ describe("MessagesTimeline", { timeout: 30_000 }, () => {
     );
 
     expect(markup).toContain("Edited 1 file");
+    expect(markup).toContain("Undo");
     expect(markup).toContain("Review");
     expect(markup).toContain('aria-expanded="true"');
     expect(markup).toContain("font-system-ui truncate font-normal");

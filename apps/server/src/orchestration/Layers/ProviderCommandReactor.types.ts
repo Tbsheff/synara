@@ -3,7 +3,7 @@
 // Layer: orchestration layer support (type-only; no runtime).
 // Exports: ProviderIntentEvent, ProviderQueueDrainEvent.
 
-import type { OrchestrationEvent, ProviderRuntimeEvent } from "@t3tools/contracts";
+import type { OrchestrationEvent, ProviderRuntimeEvent } from "@synara/contracts";
 
 export type ProviderIntentEvent = Extract<
   OrchestrationEvent,

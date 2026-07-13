@@ -1,4 +1,4 @@
-import type { ReviewChangedFile } from "@t3tools/contracts";
+import type { ReviewChangedFile } from "@synara/contracts";
 import { hotkeysCoreFeature, syncDataLoaderFeature } from "@headless-tree/core";
 import { useTree } from "@headless-tree/react";
 import { useVirtualizer } from "@tanstack/react-virtual";

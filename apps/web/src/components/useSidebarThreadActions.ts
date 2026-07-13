@@ -4,7 +4,7 @@
 
 import { useCallback } from "react";
 import type { Dispatch, SetStateAction } from "react";
-import type { ProjectId, ProviderKind, ThreadId } from "@t3tools/contracts";
+import type { ProjectId, ProviderKind, ThreadId } from "@synara/contracts";
 import type { useNavigate } from "@tanstack/react-router";
 import { readNativeApi } from "../nativeApi";
 import { useStore } from "../store";

@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { type MessageId, type TurnId } from "@t3tools/contracts";
+import { type MessageId, type TurnId } from "@synara/contracts";
 import { type useTurnDiffSummaries } from "../../hooks/useTurnDiffSummaries";
 import { type TimelineEntry } from "../../session-logic.timeline";
 import { type ChatMessage, type TurnDiffSummary } from "../../types";

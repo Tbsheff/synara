@@ -14,7 +14,7 @@ import path from "node:path";
 import {
   deriveTerminalProcessIdentity,
   type TerminalCliKind,
-} from "@t3tools/shared/terminalThreads";
+} from "@synara/shared/terminalThreads";
 
 import { runProcess } from "../../processRunner";
 

@@ -8,7 +8,7 @@ import {
   type ThreadId,
   type ThreadTokenUsageSnapshot,
   type TurnId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Effect, Exit, Ref, Scope } from "effect";
 import type { OpencodeClient, Part, PermissionRequest, QuestionRequest } from "@opencode-ai/sdk/v2";
 
