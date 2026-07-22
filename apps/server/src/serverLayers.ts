@@ -1,6 +1,8 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Layer } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
+import { AgentGatewayLive } from "./agentGateway/Layers/AgentGateway";
+import { AgentGatewayOperationRepositoryLive } from "./agentGateway/Layers/AgentGatewayOperationRepository";
 import { AgentGatewayCredentialsWithSecretsLive } from "./agentGateway/Layers/AgentGatewayCredentials";
 
 import { AutomationRunReactorLive } from "./automation/Layers/AutomationRunReactor";
@@ -37,6 +39,7 @@ import { ProviderCommandReactorLive } from "./orchestration/Layers/ProviderComma
 import { ProviderRuntimeIngestionLive } from "./orchestration/Layers/ProviderRuntimeIngestion";
 import { RuntimeReceiptBusLive } from "./orchestration/Layers/RuntimeReceiptBus";
 import { ThreadDeletionReactorLive } from "./orchestration/Layers/ThreadDeletionReactor";
+import { TurnCheckpointCoordinatorLive } from "./orchestration/Layers/TurnCheckpointCoordinator";
 import { OrchestrationLayerLive } from "./orchestration/runtimeLayer";
 
 import { DevServerManagerLive } from "./devServerManager";
@@ -56,23 +59,40 @@ import { ServerRuntimeStartupLive } from "./serverRuntimeStartup";
 import { ServerSettingsLive } from "./serverSettings";
 import { WorkspaceLayerLive } from "./workspace/runtimeLayer";
 import { ProjectFaviconResolverLive } from "./project/Layers/ProjectFaviconResolver";
+import { ExternalMcpRepositoryLive } from "./externalMcp/Layers/ExternalMcpRepository";
+import { ExternalMcpServiceLive } from "./externalMcp/Layers/ExternalMcpService";
+import { ExternalMcpGatewayLive } from "./externalMcp/Layers/ExternalMcpGateway";
 import { ProfileStatsQueryLive } from "./profileStats";
 import { ProfileStatsArchiveLive } from "./profileStatsArchive";
 import { ServerEnvironmentLive } from "./environment/Layers/ServerEnvironment";
 import { AutomationRepositoryLive } from "./persistence/Layers/AutomationRepository";
+import { ProjectPullRequestPinsLive } from "./persistence/Layers/ProjectPullRequestPins";
 import { ProjectionTurnRepositoryLive } from "./persistence/Layers/ProjectionTurns";
+import { OrchestrationEventDeliveryRepositoryLive } from "./persistence/Layers/OrchestrationEventDeliveries";
+import { ProviderRuntimeEventRepositoryLive } from "./persistence/Layers/ProviderRuntimeEvents";
+import { ThreadDiagnosticsQueryLive } from "./diagnostics/Layers/ThreadDiagnosticsQuery";
+import { ManagedAttachmentCleanupLive } from "./managedAttachmentCleanup";
+import { PullRequestServiceLive } from "./pullRequests/Layers/PullRequestService";
+import { ProviderHealthLive } from "./provider/Layers/ProviderHealth";
 
 export { makeServerProviderLayer } from "./provider/runtimeLayer";
 
 export function makeServerApplicationLayers() {
   const agentGatewayCredentialsLayer = AgentGatewayCredentialsWithSecretsLive;
   return {
-    runtimeServicesLayer: makeServerRuntimeServicesLayer(),
+    runtimeServicesLayer: makeServerRuntimeServicesLayer({ agentGatewayCredentialsLayer }),
     providerLayer: makeServerProviderLayer({ agentGatewayCredentialsLayer }),
   } as const;
 }
 
-export function makeServerRuntimeServicesLayer() {
+export function makeServerRuntimeServicesLayer(
+  options: {
+    readonly agentGatewayCredentialsLayer?: typeof AgentGatewayCredentialsWithSecretsLive;
+  } = {},
+) {
+  const agentGatewayCredentialsLayer =
+    options.agentGatewayCredentialsLayer ?? AgentGatewayCredentialsWithSecretsLive;
+  const providerHealthLayer = ProviderHealthLive.pipe(Layer.provideMerge(ServerSettingsLive));
   const checkpointStoreLayer = CheckpointStoreLive.pipe(Layer.provide(GitCoreLive));
 
   // The execution-runtime service resolves/provisions where a thread runs before
@@ -167,6 +187,10 @@ export function makeServerRuntimeServicesLayer() {
     checkpointStoreLayer,
     checkpointDiffQueryLayer,
     RuntimeReceiptBusLive,
+    TurnCheckpointCoordinatorLive,
+  );
+  const managedAttachmentCleanupLayer = ManagedAttachmentCleanupLive.pipe(
+    Layer.provideMerge(runtimeServicesLayer),
   );
   const runtimeIngestionLayer = ProviderRuntimeIngestionLive.pipe(
     Layer.provideMerge(runtimeServicesLayer),
@@ -212,6 +236,7 @@ export function makeServerRuntimeServicesLayer() {
   const providerCommandReactorLayer = ProviderCommandReactorLive.pipe(
     Layer.provideMerge(executionRuntimeServiceLayer),
     Layer.provideMerge(runtimeServicesLayer),
+    Layer.provideMerge(OrchestrationEventDeliveryRepositoryLive),
     Layer.provideMerge(studioOutputReactorLayer),
     Layer.provideMerge(GitCoreLive),
     Layer.provideMerge(TextGenerationLayerLive),
@@ -282,13 +307,56 @@ export function makeServerRuntimeServicesLayer() {
   const automationRunReactorLayer = AutomationRunReactorLive.pipe(
     Layer.provideMerge(automationServiceLayer),
   );
+  const externalMcpServiceLayer = ExternalMcpServiceLive.pipe(
+    Layer.provideMerge(ExternalMcpRepositoryLive),
+    Layer.provideMerge(runtimeServicesLayer),
+  );
+  const externalMcpGatewayLayer = ExternalMcpGatewayLive.pipe(
+    Layer.provideMerge(externalMcpServiceLayer),
+    Layer.provideMerge(ExternalMcpRepositoryLive),
+    Layer.provideMerge(runtimeServicesLayer),
+    Layer.provideMerge(GitCoreLive),
+    Layer.provideMerge(ProjectionTurnRepositoryLive),
+    Layer.provideMerge(AgentGatewayOperationRepositoryLive),
+    Layer.provideMerge(ServerSettingsLive),
+    Layer.provideMerge(providerHealthLayer),
+  );
+  const agentGatewayLayer = AgentGatewayLive.pipe(
+    Layer.provideMerge(agentGatewayCredentialsLayer),
+    Layer.provideMerge(automationServiceLayer),
+    Layer.provideMerge(runtimeServicesLayer),
+    Layer.provideMerge(GitCoreLive),
+    Layer.provideMerge(ProjectionTurnRepositoryLive),
+    Layer.provideMerge(AgentGatewayOperationRepositoryLive),
+    Layer.provideMerge(OrchestrationEventDeliveryRepositoryLive),
+    Layer.provideMerge(ProviderRuntimeEventRepositoryLive),
+    Layer.provideMerge(ThreadDiagnosticsQueryLive),
+    Layer.provideMerge(ServerSettingsLive),
+    Layer.provideMerge(providerHealthLayer),
+  );
+  const pullRequestServiceLayer = PullRequestServiceLive.pipe(
+    Layer.provideMerge(GitLayerLive),
+    Layer.provideMerge(ProjectPullRequestPinsLive),
+    Layer.provideMerge(OrchestrationLayerLive),
+  );
 
   return Layer.mergeAll(
+    agentGatewayCredentialsLayer,
+    agentGatewayLayer,
     automationServiceLayer,
     automationSchedulerLayer,
     automationRunReactorLayer,
+    managedAttachmentCleanupLayer,
     AutomationRepositoryLive,
+    AgentGatewayOperationRepositoryLive,
+    ExternalMcpRepositoryLive,
+    externalMcpServiceLayer,
+    externalMcpGatewayLayer,
+    providerHealthLayer,
+    ProjectPullRequestPinsLive,
+    pullRequestServiceLayer,
     orchestrationReactorLayer,
+    providerCommandReactorLayer,
     threadDeletionReactorLayer,
     executionRuntimeReconcilerLayer,
     runtimeRemoteConcernsLayer,
