@@ -1,8 +1,8 @@
 // FILE: ToolCallDetailsDialog.tsx
-// Purpose: Modal inspector for command and file-change tool calls from transcript rows.
+// Purpose: Inline details content for command and file-change transcript rows.
 // Layer: Chat presentation component
-// Exports: ToolCallDetailsDialog
-// Depends on: WorkLogEntry.toolDetails and shared dialog chrome
+// Exports: ToolCallDetailsContent
+// Depends on: WorkLogEntry.toolDetails
 
 import type { ReactNode } from "react";
 import { PencilIcon, TerminalIcon } from "~/lib/icons";
@@ -34,9 +34,6 @@ interface ToolCallDetailsDialogProps {
 
 export function ToolCallDetailsDialog({ entry, open, onOpenChange }: ToolCallDetailsDialogProps) {
   const details = entry?.toolDetails;
-  // Mirror the transcript row's icon mapping (workEntryIcon): file-change edits use
-  // the central pencil, commands use the terminal — so the dialog header matches
-  // the row the user clicked.
   const Icon = details?.kind === "file-change" ? PencilIcon : TerminalIcon;
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>

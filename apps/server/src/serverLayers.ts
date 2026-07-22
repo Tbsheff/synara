@@ -1,6 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Layer } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
+import { AgentGatewayCredentialsWithSecretsLive } from "./agentGateway/Layers/AgentGatewayCredentials";
 
 import { AutomationRunReactorLive } from "./automation/Layers/AutomationRunReactor";
 import { AutomationSchedulerLive } from "./automation/Layers/AutomationScheduler";
@@ -62,6 +63,14 @@ import { AutomationRepositoryLive } from "./persistence/Layers/AutomationReposit
 import { ProjectionTurnRepositoryLive } from "./persistence/Layers/ProjectionTurns";
 
 export { makeServerProviderLayer } from "./provider/runtimeLayer";
+
+export function makeServerApplicationLayers() {
+  const agentGatewayCredentialsLayer = AgentGatewayCredentialsWithSecretsLive;
+  return {
+    runtimeServicesLayer: makeServerRuntimeServicesLayer(),
+    providerLayer: makeServerProviderLayer({ agentGatewayCredentialsLayer }),
+  } as const;
+}
 
 export function makeServerRuntimeServicesLayer() {
   const checkpointStoreLayer = CheckpointStoreLive.pipe(Layer.provide(GitCoreLive));

@@ -12,7 +12,7 @@ import {
   getProviderOptionDescriptors,
 } from "@synara/shared/model";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useEffect, useMemo, useState } from "react";
+import { useState } from "react";
 
 import { getProviderStartOptions, useAppSettings } from "~/appSettings";
 import {
@@ -27,6 +27,7 @@ import { RouteInsetSurface } from "~/components/RouteInsetSurface";
 import {
   automationApprovalGaps,
   hasBlockingAutomationDraftWarnings,
+  updateAutomationDraftWarningAcknowledgement,
   warningIdsForAcknowledgedRisks,
   type AutomationDraftWarning,
   type AutomationDraftWarningId,
@@ -50,6 +51,7 @@ import {
 } from "~/providerModelOptions";
 import { ensureNativeApi } from "~/nativeApi";
 import { useStore } from "~/store";
+import { createAllThreadsSelector } from "~/storeSelectors";
 import {
   type AutomationFormState,
   AutomationApprovalBanner,
@@ -86,6 +88,8 @@ export const Route = createFileRoute("/_chat/automations/$automationId")({
   component: AutomationDetailView,
 });
 
+const selectAllThreads = createAllThreadsSelector();
+
 function lastFinishedRun(runs: readonly AutomationRun[]): AutomationRun | null {
   return runs.find((run) => run.finishedAt != null || run.startedAt != null) ?? null;
 }
@@ -94,26 +98,29 @@ function startOfDay(date: Date): number {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
 }
 
+const RUN_TIME_FORMATTER = new Intl.DateTimeFormat(undefined, {
+  hour: "2-digit",
+  minute: "2-digit",
+});
+const RUN_DATE_TIME_FORMATTER = new Intl.DateTimeFormat(undefined, {
+  day: "numeric",
+  month: "short",
+  year: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+});
+
 // Reference-style absolute timestamp: "Today at 09:00", "Tomorrow at 12:30", "5 May 2026, 09:05".
 function formatRunTimestamp(value: string | null): string {
   if (!value) return "—";
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
-  const time = new Intl.DateTimeFormat(undefined, {
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(date);
+  const time = RUN_TIME_FORMATTER.format(date);
   const dayDelta = Math.round((startOfDay(date) - startOfDay(new Date())) / 86_400_000);
   if (dayDelta === 0) return `Today at ${time}`;
   if (dayDelta === 1) return `Tomorrow at ${time}`;
   if (dayDelta === -1) return `Yesterday at ${time}`;
-  return new Intl.DateTimeFormat(undefined, {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(date);
+  return RUN_DATE_TIME_FORMATTER.format(date);
 }
 
 // Presentation for the Status pill: maps the shared lifecycle state to a label and dot color.
@@ -169,7 +176,7 @@ function AutomationDetailView() {
   const desktopTopBarWindowControlsGutterClassName =
     useDesktopTopBarWindowControlsGutterClassName();
   const projects = useStore((state) => state.projects);
-  const threads = useStore((state) => state.threads);
+  const threads = useStore(selectAllThreads);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [form, setForm] = useState<AutomationFormState | null>(null);
   const [dialogWarnings, setDialogWarnings] = useState<readonly AutomationDraftWarning[]>([]);
@@ -191,11 +198,8 @@ function AutomationDetailView() {
   } = useAutomations();
 
   const definition = data.definitions.find((candidate) => candidate.id === automationId) ?? null;
-  const runs = useMemo(
-    () => runsByAutomationId.get(automationId) ?? [],
-    [runsByAutomationId, automationId],
-  );
-  const providerOptionsForDispatch = useMemo(() => getProviderStartOptions(settings), [settings]);
+  const runs = runsByAutomationId.get(automationId) ?? [];
+  const providerOptionsForDispatch = getProviderStartOptions(settings);
 
   if (!definition) {
     return (
@@ -314,15 +318,9 @@ function AutomationDetailView() {
   };
 
   const toggleWarning = (id: AutomationDraftWarningId, checked: boolean) => {
-    setAcknowledgedWarningIds((current) => {
-      const next = new Set(current);
-      if (checked) {
-        next.add(id);
-      } else {
-        next.delete(id);
-      }
-      return next;
-    });
+    setAcknowledgedWarningIds((current) =>
+      updateAutomationDraftWarningAcknowledgement(current, id, checked),
+    );
   };
 
   const submitForm = () => {
@@ -996,11 +994,11 @@ function InlineCommitTextInput({
   readonly className?: string;
   readonly placeholder?: string;
 }) {
-  const [draft, setDraft] = useState(value);
-
-  useEffect(() => {
-    setDraft(value);
-  }, [value]);
+  // Draft keyed to the value it was seeded from: an external change derives
+  // straight back to the fresh value with no state-syncing effect.
+  const [draftState, setDraftState] = useState<{ base: string; value: string } | null>(null);
+  const draft = draftState !== null && draftState.base === value ? draftState.value : value;
+  const setDraft = (next: string) => setDraftState({ base: value, value: next });
 
   const commitDraft = () => {
     if (draft !== value) {

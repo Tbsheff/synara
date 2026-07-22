@@ -55,6 +55,7 @@ function makeLayer(input: {
         getShellSnapshot: () => unsupported(),
         getActiveProjectByWorkspaceRoot: () => unsupported(),
         getProjectShellById: () => unsupported(),
+        getSpaceShellById: () => unsupported(),
         getFirstActiveThreadIdByProjectId: () => unsupported(),
         getThreadCheckpointContext: () => unsupported(),
         listGeneratedImageActivitiesByTurn: () => unsupported(),
@@ -95,6 +96,9 @@ describe("ProviderSessionReaperLive", () => {
       steerTurn: () => unsupported(),
       startReview: () => unsupported(),
       interruptTurn: () => unsupported(),
+      stopTask: () => unsupported(),
+      backgroundTask: () => unsupported(),
+      steerSubagent: () => unsupported(),
       respondToRequest: () => unsupported(),
       respondToUserInput: () => unsupported(),
       stopSession,
@@ -102,6 +106,7 @@ describe("ProviderSessionReaperLive", () => {
       getCapabilities: () => unsupported(),
       rollbackConversation: () => unsupported(),
       compactThread: () => unsupported(),
+      closeRuntimeEvents: Effect.void,
       streamEvents: Stream.empty,
     };
 
@@ -154,6 +159,9 @@ describe("ProviderSessionReaperLive", () => {
       steerTurn: () => unsupported(),
       startReview: () => unsupported(),
       interruptTurn: () => unsupported(),
+      stopTask: () => unsupported(),
+      backgroundTask: () => unsupported(),
+      steerSubagent: () => unsupported(),
       respondToRequest: () => unsupported(),
       respondToUserInput: () => unsupported(),
       stopSession,
@@ -161,6 +169,7 @@ describe("ProviderSessionReaperLive", () => {
       getCapabilities: () => unsupported(),
       rollbackConversation: () => unsupported(),
       compactThread: () => unsupported(),
+      closeRuntimeEvents: Effect.void,
       streamEvents: Stream.empty,
     };
 

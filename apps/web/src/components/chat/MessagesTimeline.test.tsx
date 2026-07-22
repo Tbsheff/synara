@@ -1062,7 +1062,7 @@ describe("MessagesTimeline", { timeout: 30_000 }, () => {
     );
 
     expect(markup).toContain("Compacting conversation...");
-    expect(markup).toContain("Working for");
+    expect(markup.match(/Working for/gu)).toHaveLength(1);
     expect(markup).not.toContain("h-px flex-1 bg-border");
   });
 
@@ -1103,7 +1103,7 @@ describe("MessagesTimeline", { timeout: 30_000 }, () => {
       />,
     );
 
-    expect(markup).toContain("Thinking for");
+    expect(markup.match(/Thinking for/gu)).toHaveLength(1);
     expect(markup).not.toContain("Working for");
   });
 

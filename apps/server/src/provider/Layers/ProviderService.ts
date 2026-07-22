@@ -31,6 +31,7 @@ import {
   type ProviderSession,
 } from "@synara/contracts";
 import { Effect, Equal, Exit, Layer, Option, PubSub, Stream } from "effect";
+import { ProviderRuntimeEventRepository } from "../../persistence/Services/ProviderRuntimeEvents.ts";
 
 import { ProviderAdapterRegistry } from "../Services/ProviderAdapterRegistry.ts";
 import { ProviderService, type ProviderServiceShape } from "../Services/ProviderService.ts";
@@ -1183,4 +1184,18 @@ export const ProviderServiceLive = Layer.effect(ProviderService, makeProviderSer
 
 export function makeProviderServiceLive(options?: ProviderServiceLiveOptions) {
   return Layer.effect(ProviderService, makeProviderService(options));
+}
+
+export function makeDurableProviderServiceLive(options?: ProviderServiceLiveOptions) {
+  return Layer.effect(
+    ProviderService,
+    Effect.gen(function* () {
+      const runtimeEvents = yield* ProviderRuntimeEventRepository;
+      return yield* makeProviderService({
+        ...options,
+        persistRuntimeEvent: (event) =>
+          runtimeEvents.append(event).pipe(Effect.asVoid, Effect.orDie),
+      });
+    }),
+  );
 }

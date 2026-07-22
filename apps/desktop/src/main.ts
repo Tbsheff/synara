@@ -129,11 +129,11 @@ import { buildGitHubReleasesPageUrl, resolveGitHubUpdateSource } from "./githubU
 import { isArm64HostRunningIntelBuild, resolveDesktopRuntimeInfo } from "./runtimeArch";
 import { DesktopBrowserManager } from "./browserManager";
 import {
-  BROWSER_IPC_CHANNELS,
   registerBrowserIpcHandlers,
   sendBrowserCopyLink,
   sendBrowserState,
 } from "./browserIpc";
+import { BROWSER_IPC_CHANNELS, DESKTOP_IPC_CHANNELS } from "./ipcChannels";
 import {
   BrowserUsePipeServer,
   SYNARA_BROWSER_USE_PIPE_ENV,
@@ -156,8 +156,9 @@ import {
   acknowledgeSynaraStorageSnapshot,
   readSynaraStorageSnapshot,
   resolveSynaraStorageSnapshotPath,
-  STORAGE_MIGRATION_IPC_CHANNELS,
 } from "./desktopStorageMigration";
+
+const STORAGE_MIGRATION_IPC_CHANNELS = DESKTOP_IPC_CHANNELS.storageMigration;
 
 // Capture the real archive identity before any explicit app.asar lookup. Static
 // snapshotting and the runtime watcher both use this same generation as their

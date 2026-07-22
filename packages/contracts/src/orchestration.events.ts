@@ -26,6 +26,7 @@ import {
   NonNegativeInt,
   PositiveInt,
   ProjectId,
+  SpaceId,
   ProviderItemId,
   RuntimeActivityLeaseId,
   RuntimeProcessId,
@@ -61,6 +62,9 @@ import {
   PinnedMessageLabel,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   ProjectScript,
+  SPACES_MAX_COUNT,
+  SpaceIconName,
+  SpaceName,
   ProviderApprovalDecision,
   ProviderInteractionMode,
   ProviderReviewTarget,
@@ -82,6 +86,10 @@ import {
 import { ClientOrchestrationCommand } from "./orchestration.commands";
 
 export const OrchestrationEventType = Schema.Literals([
+  "space.created",
+  "space.meta-updated",
+  "space.order-updated",
+  "space.deleted",
   "project.created",
   "project.meta-updated",
   "project.deleted",
@@ -135,9 +143,36 @@ export const OrchestrationEventType = Schema.Literals([
 ]);
 export type OrchestrationEventType = typeof OrchestrationEventType.Type;
 
-export const OrchestrationAggregateKind = Schema.Literals(["project", "thread"]);
+export const OrchestrationAggregateKind = Schema.Literals(["space", "project", "thread"]);
 export type OrchestrationAggregateKind = typeof OrchestrationAggregateKind.Type;
 export const OrchestrationActorKind = Schema.Literals(["client", "server", "provider"]);
+
+export const SpaceCreatedPayload = Schema.Struct({
+  spaceId: SpaceId,
+  name: SpaceName,
+  icon: SpaceIconName,
+  sortOrder: NonNegativeInt,
+  createdAt: IsoDateTime,
+  updatedAt: IsoDateTime,
+});
+
+export const SpaceMetaUpdatedPayload = Schema.Struct({
+  spaceId: SpaceId,
+  name: Schema.optional(SpaceName),
+  icon: Schema.optional(SpaceIconName),
+  updatedAt: IsoDateTime,
+});
+
+export const SpaceOrderUpdatedPayload = Schema.Struct({
+  spaceId: SpaceId,
+  orderedSpaceIds: Schema.Array(SpaceId).check(Schema.isMaxLength(SPACES_MAX_COUNT)),
+  updatedAt: IsoDateTime,
+});
+
+export const SpaceDeletedPayload = Schema.Struct({
+  spaceId: SpaceId,
+  deletedAt: IsoDateTime,
+});
 
 export const ProjectCreatedPayload = Schema.Struct({
   projectId: ProjectId,
@@ -147,6 +182,7 @@ export const ProjectCreatedPayload = Schema.Struct({
   defaultModelSelection: Schema.NullOr(ModelSelection),
   scripts: Schema.Array(ProjectScript),
   isPinned: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
+  spaceId: Schema.optional(Schema.NullOr(SpaceId)).pipe(Schema.withDecodingDefault(() => null)),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
@@ -159,6 +195,7 @@ export const ProjectMetaUpdatedPayload = Schema.Struct({
   defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
   scripts: Schema.optional(Schema.Array(ProjectScript)),
   isPinned: Schema.optional(Schema.Boolean),
+  spaceId: Schema.optional(Schema.NullOr(SpaceId)),
   updatedAt: IsoDateTime,
 });
 
@@ -625,7 +662,7 @@ const EventBaseFields = {
   sequence: NonNegativeInt,
   eventId: EventId,
   aggregateKind: OrchestrationAggregateKind,
-  aggregateId: Schema.Union([ProjectId, ThreadId]),
+  aggregateId: Schema.Union([SpaceId, ProjectId, ThreadId]),
   occurredAt: IsoDateTime,
   commandId: Schema.NullOr(CommandId),
   causationEventId: Schema.NullOr(EventId),
@@ -634,6 +671,26 @@ const EventBaseFields = {
 } as const;
 
 export const OrchestrationEvent = Schema.Union([
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("space.created"),
+    payload: SpaceCreatedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("space.meta-updated"),
+    payload: SpaceMetaUpdatedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("space.order-updated"),
+    payload: SpaceOrderUpdatedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("space.deleted"),
+    payload: SpaceDeletedPayload,
+  }),
   Schema.Struct({
     ...EventBaseFields,
     type: Schema.Literal("project.created"),

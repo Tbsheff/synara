@@ -39,6 +39,8 @@ export interface ProviderMaintenanceCommandAction {
   readonly executable: string;
   readonly args: ReadonlyArray<string>;
   readonly lockKey: string;
+  /** Put the selected provider binary's directory first so its package manager matches. */
+  readonly pathPrepend?: string;
 }
 
 export interface ProviderMaintenanceCapabilityResolutionOptions {
@@ -46,12 +48,13 @@ export interface ProviderMaintenanceCapabilityResolutionOptions {
   readonly env?: NodeJS.ProcessEnv;
   readonly platform?: NodeJS.Platform;
   readonly realCommandPath?: string | null;
+  readonly commandDirectory?: string | null;
 }
 
 export interface PackageManagedProviderMaintenanceDefinition {
   readonly provider: ProviderKind;
   readonly binaryName: string;
-  readonly npmPackageName: string;
+  readonly npmPackageName: string | null;
   readonly homebrew: {
     readonly name: string;
     readonly kind: "formula" | "cask";
@@ -138,7 +141,7 @@ function comparePrereleaseIdentifier(left: string, right: string): number {
   return left.localeCompare(right);
 }
 
-function compareSemverVersions(left: string, right: string): number {
+export function compareSemverVersions(left: string, right: string): number {
   const parsedLeft = parseSemver(left);
   const parsedRight = parseSemver(right);
   if (!parsedLeft || !parsedRight) {
@@ -191,6 +194,29 @@ export function normalizeCommandPath(commandPath: string): string {
   return commandPath.replaceAll("\\", "/").toLowerCase();
 }
 
+/**
+ * npm resolves its global prefix from the `node` binary that runs it, not from
+ * npm's own location, so a bare `npm install -g` can write to a different
+ * install tree than the one the detected provider binary lives in (e.g. a
+ * Homebrew-prefix install checked by Synara while nvm's node makes npm install
+ * into nvm's prefix). Derive the prefix that owns the detected binary so the
+ * update can pin it explicitly.
+ */
+export function deriveNpmGlobalPrefix(commandPath: string): string | null {
+  // normalizeCommandPath preserves length, so indices map back onto the
+  // original string, keeping its casing and separators intact.
+  const normalized = normalizeCommandPath(commandPath);
+  const unixIndex = normalized.indexOf("/lib/node_modules/");
+  if (unixIndex > 0) {
+    return commandPath.slice(0, unixIndex);
+  }
+  const windowsIndex = normalized.indexOf("/npm/node_modules/");
+  if (windowsIndex > 0) {
+    return commandPath.slice(0, windowsIndex + "/npm".length);
+  }
+  return null;
+}
+
 function hasPathSeparator(value: string): boolean {
   return value.includes("/") || value.includes("\\");
 }
@@ -202,15 +228,21 @@ export function makeProviderMaintenanceCapabilities(input: {
   readonly updateExecutable: string | null;
   readonly updateArgs: ReadonlyArray<string>;
   readonly updateLockKey: string | null;
+  readonly updatePathPrepend?: string | null;
 }): ProviderMaintenanceCapabilities {
   const update =
     input.updateExecutable === null || input.updateLockKey === null
       ? null
       : {
-          command: [input.updateExecutable, ...input.updateArgs].join(" "),
+          command: [input.updateExecutable, ...input.updateArgs]
+            .map((part) => (/\s/.test(part) ? `"${part}"` : part))
+            .join(" "),
           executable: input.updateExecutable,
           args: input.updateArgs,
           lockKey: input.updateLockKey,
+          ...(nonEmptyString(input.updatePathPrepend)
+            ? { pathPrepend: nonEmptyString(input.updatePathPrepend)! }
+            : {}),
         };
   return {
     provider: input.provider,
@@ -237,42 +269,74 @@ function makeManualOnlyProviderMaintenanceCapabilities(input: {
 
 function makeNpmGlobalProviderMaintenanceCapabilities(
   definition: PackageManagedProviderMaintenanceDefinition,
+  pathPrepend?: string | null,
+  commandPath?: string | null,
 ): ProviderMaintenanceCapabilities {
+  if (!definition.npmPackageName) {
+    return makeManualOnlyProviderMaintenanceCapabilities({
+      provider: definition.provider,
+      packageName: null,
+    });
+  }
+  const globalPrefix = commandPath ? deriveNpmGlobalPrefix(commandPath) : null;
   return makeProviderMaintenanceCapabilities({
     provider: definition.provider,
     packageName: definition.npmPackageName,
     updateExecutable: "npm",
-    updateArgs: ["install", "-g", `${definition.npmPackageName}@latest`],
+    updateArgs: [
+      "install",
+      "-g",
+      ...(globalPrefix ? ["--prefix", globalPrefix] : []),
+      `${definition.npmPackageName}@latest`,
+    ],
     updateLockKey: "npm-global",
+    ...(pathPrepend === undefined ? {} : { updatePathPrepend: pathPrepend }),
   });
 }
 
 function makeBunGlobalProviderMaintenanceCapabilities(
   definition: PackageManagedProviderMaintenanceDefinition,
+  pathPrepend?: string | null,
 ): ProviderMaintenanceCapabilities {
+  if (!definition.npmPackageName) {
+    return makeManualOnlyProviderMaintenanceCapabilities({
+      provider: definition.provider,
+      packageName: null,
+    });
+  }
   return makeProviderMaintenanceCapabilities({
     provider: definition.provider,
     packageName: definition.npmPackageName,
     updateExecutable: "bun",
     updateArgs: ["i", "-g", `${definition.npmPackageName}@latest`],
     updateLockKey: "bun-global",
+    ...(pathPrepend === undefined ? {} : { updatePathPrepend: pathPrepend }),
   });
 }
 
 function makePnpmGlobalProviderMaintenanceCapabilities(
   definition: PackageManagedProviderMaintenanceDefinition,
+  pathPrepend?: string | null,
 ): ProviderMaintenanceCapabilities {
+  if (!definition.npmPackageName) {
+    return makeManualOnlyProviderMaintenanceCapabilities({
+      provider: definition.provider,
+      packageName: null,
+    });
+  }
   return makeProviderMaintenanceCapabilities({
     provider: definition.provider,
     packageName: definition.npmPackageName,
     updateExecutable: "pnpm",
     updateArgs: ["add", "-g", `${definition.npmPackageName}@latest`],
     updateLockKey: "pnpm-global",
+    ...(pathPrepend === undefined ? {} : { updatePathPrepend: pathPrepend }),
   });
 }
 
 function makeHomebrewProviderMaintenanceCapabilities(
   definition: PackageManagedProviderMaintenanceDefinition,
+  pathPrepend?: string | null,
 ): ProviderMaintenanceCapabilities {
   if (!definition.homebrew) {
     return makeManualOnlyProviderMaintenanceCapabilities({
@@ -291,13 +355,14 @@ function makeHomebrewProviderMaintenanceCapabilities(
         ? ["upgrade", "--cask", definition.homebrew.name]
         : ["upgrade", definition.homebrew.name],
     updateLockKey: "homebrew",
+    ...(pathPrepend === undefined ? {} : { updatePathPrepend: pathPrepend }),
   });
 }
 
 function resolveLatestVersionSourceForInstallSource(
   definition: PackageManagedProviderMaintenanceDefinition,
   installSource: ProviderInstallSource,
-): ProviderLatestVersionSource {
+): ProviderLatestVersionSource | null {
   if (definition.latestVersionSource) {
     return definition.latestVersionSource;
   }
@@ -308,13 +373,14 @@ function resolveLatestVersionSourceForInstallSource(
       homebrewKind: definition.homebrew.kind,
     };
   }
-  return { kind: "npm", name: definition.npmPackageName };
+  return definition.npmPackageName ? { kind: "npm", name: definition.npmPackageName } : null;
 }
 
 function makeNativeProviderMaintenanceCapabilities(
   definition: PackageManagedProviderMaintenanceDefinition,
   installSource: ProviderInstallSource,
   executable?: string | null,
+  pathPrepend?: string | null,
 ): ProviderMaintenanceCapabilities | null {
   if (!definition.nativeUpdate) {
     return null;
@@ -329,6 +395,7 @@ function makeNativeProviderMaintenanceCapabilities(
     updateExecutable: executable ?? definition.nativeUpdate.executable,
     updateArgs: definition.nativeUpdate.args(installSource),
     updateLockKey: definition.nativeUpdate.lockKey,
+    ...(pathPrepend === undefined ? {} : { updatePathPrepend: pathPrepend }),
   });
 }
 
@@ -358,14 +425,22 @@ function makeProviderMaintenanceForInstallSource(input: {
   readonly definition: PackageManagedProviderMaintenanceDefinition;
   readonly installSource: ProviderInstallSource;
   readonly executable?: string | null;
+  readonly pathPrepend?: string | null;
+  /** Path that matched install-source detection, used to pin the install tree. */
+  readonly commandPath?: string | null;
 }): ProviderMaintenanceCapabilities {
-  const { definition, installSource, executable } = input;
+  const { definition, installSource, executable, pathPrepend, commandPath } = input;
   if (
     definition.nativeUpdate?.strategy === "always" &&
     !definition.nativeUpdate.excludedInstallSources?.includes(installSource)
   ) {
     return (
-      makeNativeProviderMaintenanceCapabilities(definition, installSource, executable) ??
+      makeNativeProviderMaintenanceCapabilities(
+        definition,
+        installSource,
+        executable,
+        pathPrepend,
+      ) ??
       makeManualOnlyProviderMaintenanceCapabilities({
         provider: definition.provider,
         packageName: definition.npmPackageName,
@@ -374,7 +449,12 @@ function makeProviderMaintenanceForInstallSource(input: {
   }
   if (installSource === "native") {
     return (
-      makeNativeProviderMaintenanceCapabilities(definition, installSource, executable) ??
+      makeNativeProviderMaintenanceCapabilities(
+        definition,
+        installSource,
+        executable,
+        pathPrepend,
+      ) ??
       makeManualOnlyProviderMaintenanceCapabilities({
         provider: definition.provider,
         packageName: definition.npmPackageName,
@@ -382,16 +462,16 @@ function makeProviderMaintenanceForInstallSource(input: {
     );
   }
   if (installSource === "bun") {
-    return makeBunGlobalProviderMaintenanceCapabilities(definition);
+    return makeBunGlobalProviderMaintenanceCapabilities(definition, pathPrepend);
   }
   if (installSource === "pnpm") {
-    return makePnpmGlobalProviderMaintenanceCapabilities(definition);
+    return makePnpmGlobalProviderMaintenanceCapabilities(definition, pathPrepend);
   }
   if (installSource === "npm") {
-    return makeNpmGlobalProviderMaintenanceCapabilities(definition);
+    return makeNpmGlobalProviderMaintenanceCapabilities(definition, pathPrepend, commandPath);
   }
   if (installSource === "homebrew") {
-    return makeHomebrewProviderMaintenanceCapabilities(definition);
+    return makeHomebrewProviderMaintenanceCapabilities(definition, pathPrepend);
   }
   return makeManualOnlyProviderMaintenanceCapabilities({
     provider: definition.provider,
@@ -459,6 +539,10 @@ export function resolvePackageManagedProviderMaintenance(
         definition,
         installSource,
         executable: binaryPath,
+        commandPath,
+        ...(options?.commandDirectory === undefined
+          ? {}
+          : { pathPrepend: options.commandDirectory }),
       });
     }
   }
@@ -468,6 +552,7 @@ export function resolvePackageManagedProviderMaintenance(
       definition,
       installSource: "unknown",
       executable: binaryPath,
+      ...(options?.commandDirectory === undefined ? {} : { pathPrepend: options.commandDirectory }),
     });
   }
 
@@ -510,6 +595,7 @@ export const resolveProviderMaintenanceCapabilitiesEffect = Effect.fn(
         ...options,
         binaryPath,
         realCommandPath,
+        commandDirectory: entry,
       });
     }
   }

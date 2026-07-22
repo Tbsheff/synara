@@ -710,8 +710,8 @@ export function getProviderStartOptionsCustomBinaryPath(
       return normalizeCustomBinaryPath(providerOptions?.codex?.binaryPath);
     case "claudeAgent":
       return normalizeCustomBinaryPath(providerOptions?.claudeAgent?.binaryPath);
-    case "gemini":
-      return normalizeCustomBinaryPath(providerOptions?.gemini?.binaryPath);
+    case "antigravity":
+      return normalizeCustomBinaryPath(providerOptions?.antigravity?.binaryPath);
     case "grok":
       return normalizeCustomBinaryPath(providerOptions?.grok?.binaryPath);
     case "droid":

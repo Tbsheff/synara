@@ -5,7 +5,7 @@
 
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Option, Schema } from "effect";
+import { Option, Schema, SchemaTransformation } from "effect";
 import {
   type AssistantDeliveryMode,
   DEFAULT_GIT_TEXT_GENERATION_MODEL,
@@ -22,8 +22,14 @@ import {
   normalizeModelSlug,
   resolveSelectableModel,
 } from "@synara/shared/model";
+import {
+  APP_SNAP_SHORTCUT_KEYS,
+  APP_SNAP_SHORTCUT_MODIFIERS,
+  DEFAULT_APP_SNAP_SHORTCUT,
+} from "@synara/shared/appSnapShortcut";
 import { useLocalStorage } from "./hooks/useLocalStorage";
 import { EnvMode } from "./components/BranchToolbar.logic";
+import { normalizeCursorModelVariantBaseId } from "./cursorModelVariants";
 import { formatProviderModelOptionName, type ProviderModelOption } from "./providerModelOptions";
 import {
   DEFAULT_PROVIDER_ORDER,
@@ -92,6 +98,15 @@ export const DEFAULT_SIDEBAR_THREAD_SORT_ORDER: SidebarThreadSortOrder = "update
 export const UiDensity = Schema.Literals(UI_DENSITY_MODES);
 export type UiDensity = typeof UiDensity.Type;
 export { DEFAULT_UI_DENSITY };
+
+const AppSnapShortcut = Schema.Union([
+  Schema.Struct({ kind: Schema.Literal("both-option-keys") }),
+  Schema.Struct({
+    kind: Schema.Literal("key-chord"),
+    modifier: Schema.Literals(APP_SNAP_SHORTCUT_MODIFIERS),
+    key: Schema.Literals(APP_SNAP_SHORTCUT_KEYS),
+  }),
+]);
 export const ReviewWalkthroughDiffStyle = Schema.Literals(["auto", "unified", "split"]);
 export type ReviewWalkthroughDiffStyle = typeof ReviewWalkthroughDiffStyle.Type;
 export const DEFAULT_REVIEW_WALKTHROUGH_DIFF_STYLE: ReviewWalkthroughDiffStyle = "auto";
@@ -104,7 +119,7 @@ type CustomModelSettingsKey =
   | "customCodexModels"
   | "customClaudeModels"
   | "customCursorModels"
-  | "customGeminiModels"
+  | "customAntigravityModels"
   | "customGrokModels"
   | "customDroidModels"
   | "customKiloModels"
@@ -124,7 +139,7 @@ const BUILT_IN_MODEL_SLUGS_BY_PROVIDER: Record<ProviderKind, ReadonlySet<string>
   codex: new Set(getModelOptions("codex").map((option) => option.slug)),
   claudeAgent: new Set(getModelOptions("claudeAgent").map((option) => option.slug)),
   cursor: new Set(getModelOptions("cursor").map((option) => option.slug)),
-  gemini: new Set(getModelOptions("gemini").map((option) => option.slug)),
+  antigravity: new Set(getModelOptions("antigravity").map((option) => option.slug)),
   grok: new Set(getModelOptions("grok").map((option) => option.slug)),
   droid: new Set(getModelOptions("droid").map((option) => option.slug)),
   kilo: new Set(getModelOptions("kilo").map((option) => option.slug)),
@@ -149,6 +164,27 @@ const SandboxStringSetting = Schema.String.check(Schema.isMaxLength(4096)).pipe(
   withDefaults(() => ""),
 );
 
+const PersistedProviderKind = Schema.Literals([
+  "codex",
+  "claudeAgent",
+  "cursor",
+  "antigravity",
+  "gemini",
+  "grok",
+  "droid",
+  "kilo",
+  "opencode",
+  "pi",
+]).pipe(
+  Schema.decodeTo(
+    ProviderKind,
+    SchemaTransformation.transform({
+      decode: (provider) => (provider === "gemini" ? "antigravity" : provider),
+      encode: (provider) => provider,
+    }),
+  ),
+);
+
 export const AppSettingsSchema = Schema.Struct({
   claudeBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   uiDensity: UiDensity.pipe(withDefaults(() => DEFAULT_UI_DENSITY)),
@@ -162,7 +198,9 @@ export const AppSettingsSchema = Schema.Struct({
   codexHomePath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   cursorBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   cursorApiEndpoint: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
-  geminiBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
+  antigravityBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
+  // Deprecated Gemini keys remain decodable until normalization rewrites local storage.
+  geminiBinaryPath: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(4096))),
   grokBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   droidBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   kiloBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
@@ -211,6 +249,10 @@ export const AppSettingsSchema = Schema.Struct({
   enableNativeFontSmoothing: Schema.Boolean.pipe(withDefaults(getDefaultNativeFontSmoothing)),
   enableTaskCompletionToasts: Schema.Boolean.pipe(withDefaults(() => true)),
   enableSystemTaskCompletionNotifications: Schema.Boolean.pipe(withDefaults(() => true)),
+  enableAppSnap: Schema.Boolean.pipe(withDefaults(() => false)),
+  appSnapShortcut: AppSnapShortcut.pipe(withDefaults(() => DEFAULT_APP_SNAP_SHORTCUT)),
+  appSnapPlaySound: Schema.Boolean.pipe(withDefaults(() => true)),
+  enableAppshots: Schema.optionalKey(Schema.Boolean),
   sidebarSide: SidebarSide.pipe(withDefaults(() => DEFAULT_SIDEBAR_SIDE)),
   sidebarProjectSortOrder: SidebarProjectSortOrder.pipe(
     withDefaults(() => DEFAULT_SIDEBAR_PROJECT_SORT_ORDER),
@@ -222,27 +264,30 @@ export const AppSettingsSchema = Schema.Struct({
   customCodexModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customClaudeModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customCursorModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
-  customGeminiModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
+  customAntigravityModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
+  customGeminiModels: Schema.optionalKey(Schema.Array(Schema.String)),
   customGrokModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customDroidModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customKiloModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customOpenCodeModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customPiModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
-  textGenerationProvider: ProviderKind.pipe(withDefaults(() => "codex" as const)),
+  textGenerationProvider: PersistedProviderKind.pipe(withDefaults(() => "codex" as const)),
   textGenerationModel: Schema.optional(TrimmedNonEmptyString),
   uiFontFamily: Schema.String.check(Schema.isMaxLength(256)).pipe(withDefaults(() => "")),
-  defaultProvider: ProviderKind.pipe(withDefaults(() => "codex" as const)),
+  defaultProvider: PersistedProviderKind.pipe(withDefaults(() => "codex" as const)),
   // Local-only UI preference: providers explicitly hidden from the composer picker.
   // The active/locked provider for a thread is always shown regardless, so users
   // never get stuck on a thread whose provider they later chose to hide.
-  hiddenProviders: Schema.Array(ProviderKind).pipe(withDefaults(() => [])),
+  hiddenProviders: Schema.Array(PersistedProviderKind).pipe(withDefaults(() => [])),
   // Local-only UI preference: top-level provider order in Settings and the composer picker.
-  providerOrder: Schema.Array(ProviderKind).pipe(withDefaults(() => [...DEFAULT_PROVIDER_ORDER])),
+  providerOrder: Schema.Array(PersistedProviderKind).pipe(
+    withDefaults(() => [...DEFAULT_PROVIDER_ORDER]),
+  ),
   // Deprecated local-only preference kept for backward-compatible decoding.
   // Model-level hiding caused too many edge cases, so the app now normalizes it away.
   hiddenModels: Schema.Array(
     Schema.Struct({
-      provider: ProviderKind,
+      provider: PersistedProviderKind,
       slug: Schema.String,
     }),
   ).pipe(withDefaults(() => [])),
@@ -271,6 +316,23 @@ export const AppSettingsSchema = Schema.Struct({
   sandboxCloudflareBridgeToken: SandboxStringSetting,
 });
 export type AppSettings = typeof AppSettingsSchema.Type;
+
+export type AppSettingsBinding = {
+  readonly settings: AppSettings;
+  readonly defaults: AppSettings;
+  readonly updateSettings: (patch: Partial<AppSettings>) => void;
+};
+
+export function isGitTextGenerationSettingsDirty(
+  settings: AppSettings,
+  defaults: AppSettings,
+): boolean {
+  return (
+    (settings.textGenerationProvider ?? "codex") !== (defaults.textGenerationProvider ?? "codex") ||
+    (settings.textGenerationModel ?? DEFAULT_GIT_TEXT_GENERATION_MODEL) !==
+      (defaults.textGenerationModel ?? DEFAULT_GIT_TEXT_GENERATION_MODEL)
+  );
+}
 
 export function runtimePlanDefaultsFromSettings(settings: AppSettings): RuntimePlanDefaults {
   const provider = resolveDefaultRemoteProvider(settings.sandboxDefaultRemoteProvider);
@@ -325,14 +387,14 @@ const PROVIDER_CUSTOM_MODEL_CONFIG: Record<ProviderKind, ProviderCustomModelConf
     placeholder: "cursor-model-slug",
     example: "composer-2",
   },
-  gemini: {
-    provider: "gemini",
-    settingsKey: "customGeminiModels",
-    defaultSettingsKey: "customGeminiModels",
-    title: "Gemini",
-    description: "Save additional Gemini model slugs for the picker and `/model` command.",
-    placeholder: "your-gemini-model-slug",
-    example: "gemini-3.5-pro-preview",
+  antigravity: {
+    provider: "antigravity",
+    settingsKey: "customAntigravityModels",
+    defaultSettingsKey: "customAntigravityModels",
+    title: "Antigravity",
+    description: "Save additional Antigravity CLI base model names for the picker.",
+    placeholder: "Model Name",
+    example: "Gemini 4 Pro",
   },
   grok: {
     provider: "grok",
@@ -382,6 +444,9 @@ const PROVIDER_CUSTOM_MODEL_CONFIG: Record<ProviderKind, ProviderCustomModelConf
 };
 
 export const MODEL_PROVIDER_SETTINGS = Object.values(PROVIDER_CUSTOM_MODEL_CONFIG);
+export const CUSTOM_MODEL_EDITOR_PROVIDER_SETTINGS = MODEL_PROVIDER_SETTINGS.filter(
+  (config) => config.provider !== "droid",
+);
 
 export function normalizeCustomModelSlugs(
   models: Iterable<string | null | undefined>,
@@ -477,12 +542,22 @@ function normalizeProviderBinaryPathOverride(
 }
 
 function normalizeAppSettings(settings: AppSettings): AppSettings {
+  const {
+    enableAppshots: legacyEnableAppshots,
+    geminiBinaryPath: legacyGeminiBinaryPath,
+    customGeminiModels: legacyCustomGeminiModels,
+    ...currentSettings
+  } = settings;
   return {
-    ...settings,
+    ...currentSettings,
+    enableAppSnap: settings.enableAppSnap || legacyEnableAppshots === true,
     claudeBinaryPath: normalizeProviderBinaryPathOverride("claudeAgent", settings.claudeBinaryPath),
     codexBinaryPath: normalizeProviderBinaryPathOverride("codex", settings.codexBinaryPath),
     cursorBinaryPath: normalizeProviderBinaryPathOverride("cursor", settings.cursorBinaryPath),
-    geminiBinaryPath: normalizeProviderBinaryPathOverride("gemini", settings.geminiBinaryPath),
+    antigravityBinaryPath: normalizeProviderBinaryPathOverride(
+      "antigravity",
+      settings.antigravityBinaryPath || legacyGeminiBinaryPath,
+    ),
     grokBinaryPath: normalizeProviderBinaryPathOverride("grok", settings.grokBinaryPath),
     droidBinaryPath: normalizeProviderBinaryPathOverride("droid", settings.droidBinaryPath),
     kiloBinaryPath: normalizeProviderBinaryPathOverride("kilo", settings.kiloBinaryPath),
@@ -498,7 +573,10 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
     customCodexModels: normalizeCustomModelSlugs(settings.customCodexModels, "codex"),
     customClaudeModels: normalizeCustomModelSlugs(settings.customClaudeModels, "claudeAgent"),
     customCursorModels: normalizeCustomModelSlugs(settings.customCursorModels, "cursor"),
-    customGeminiModels: normalizeCustomModelSlugs(settings.customGeminiModels, "gemini"),
+    customAntigravityModels: normalizeCustomModelSlugs(
+      [...settings.customAntigravityModels, ...(legacyCustomGeminiModels ?? [])],
+      "antigravity",
+    ),
     customGrokModels: normalizeCustomModelSlugs(settings.customGrokModels, "grok"),
     customDroidModels: normalizeCustomModelSlugs(settings.customDroidModels, "droid"),
     customKiloModels: normalizeCustomModelSlugs(settings.customKiloModels, "kilo"),
@@ -521,7 +599,7 @@ function serverSettingsToAppSettings(settings: ServerSettings): Partial<AppSetti
     defaultThreadEnvMode: settings.defaultThreadEnvMode,
     enableAssistantStreaming: settings.enableAssistantStreaming,
     enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
-    geminiBinaryPath: settings.providers.gemini.binaryPath,
+    antigravityBinaryPath: settings.providers.antigravity.binaryPath,
     grokBinaryPath: settings.providers.grok.binaryPath,
     droidBinaryPath: settings.providers.droid.binaryPath,
     kiloBinaryPath: settings.providers.kilo.binaryPath,
@@ -536,7 +614,7 @@ function serverSettingsToAppSettings(settings: ServerSettings): Partial<AppSetti
     customCodexModels: settings.providers.codex.customModels,
     customClaudeModels: settings.providers.claudeAgent.customModels,
     customCursorModels: settings.providers.cursor.customModels,
-    customGeminiModels: settings.providers.gemini.customModels,
+    customAntigravityModels: settings.providers.antigravity.customModels,
     customGrokModels: settings.providers.grok.customModels,
     customDroidModels: settings.providers.droid.customModels,
     customKiloModels: settings.providers.kilo.customModels,
@@ -635,11 +713,13 @@ function appSettingsPatchToServerSettingsPatch(patch: Partial<AppSettings>): Ser
         : {}),
     };
   }
-  if (hasOwn(patch, "geminiBinaryPath") || hasOwn(patch, "customGeminiModels")) {
-    providers.gemini = {
-      ...(hasOwn(patch, "geminiBinaryPath") ? { binaryPath: patch.geminiBinaryPath ?? "" } : {}),
-      ...(hasOwn(patch, "customGeminiModels")
-        ? { customModels: patch.customGeminiModels ?? [] }
+  if (hasOwn(patch, "antigravityBinaryPath") || hasOwn(patch, "customAntigravityModels")) {
+    providers.antigravity = {
+      ...(hasOwn(patch, "antigravityBinaryPath")
+        ? { binaryPath: patch.antigravityBinaryPath ?? "" }
+        : {}),
+      ...(hasOwn(patch, "customAntigravityModels")
+        ? { customModels: patch.customAntigravityModels ?? [] }
         : {}),
     };
   }
@@ -735,7 +815,7 @@ function buildInitialServerSettingsMigrationPatch(settings: AppSettings): Server
     "defaultThreadEnvMode",
     "enableAssistantStreaming",
     "enableProviderUpdateChecks",
-    "geminiBinaryPath",
+    "antigravityBinaryPath",
     "grokBinaryPath",
     "droidBinaryPath",
     "kiloBinaryPath",
@@ -765,7 +845,7 @@ function buildInitialServerSettingsMigrationPatch(settings: AppSettings): Server
     "customCodexModels",
     "customClaudeModels",
     "customCursorModels",
-    "customGeminiModels",
+    "customAntigravityModels",
     "customGrokModels",
     "customDroidModels",
     "customKiloModels",
@@ -788,14 +868,14 @@ export function getCustomModelsForProvider(
   settings: Pick<AppSettings, CustomModelSettingsKey>,
   provider: ProviderKind,
 ): readonly string[] {
-  return settings[PROVIDER_CUSTOM_MODEL_CONFIG[provider].settingsKey];
+  return settings[PROVIDER_CUSTOM_MODEL_CONFIG[provider].settingsKey] ?? [];
 }
 
 export function getDefaultCustomModelsForProvider(
   defaults: Pick<AppSettings, CustomModelSettingsKey>,
   provider: ProviderKind,
 ): readonly string[] {
-  return defaults[PROVIDER_CUSTOM_MODEL_CONFIG[provider].defaultSettingsKey];
+  return defaults[PROVIDER_CUSTOM_MODEL_CONFIG[provider].defaultSettingsKey] ?? [];
 }
 
 export function patchCustomModels(
@@ -814,7 +894,7 @@ export function getCustomModelsByProvider(
     codex: getCustomModelsForProvider(settings, "codex"),
     claudeAgent: getCustomModelsForProvider(settings, "claudeAgent"),
     cursor: getCustomModelsForProvider(settings, "cursor"),
-    gemini: getCustomModelsForProvider(settings, "gemini"),
+    antigravity: getCustomModelsForProvider(settings, "antigravity"),
     grok: getCustomModelsForProvider(settings, "grok"),
     droid: getCustomModelsForProvider(settings, "droid"),
     kilo: getCustomModelsForProvider(settings, "kilo"),
@@ -851,7 +931,10 @@ export function getAppModelOptions(
     });
   }
 
-  const normalizedSelectedModel = normalizeModelSlug(selectedModel, provider);
+  const normalizedSelectedModel =
+    provider === "cursor"
+      ? normalizeCursorModelVariantBaseId(selectedModel)
+      : normalizeModelSlug(selectedModel, provider);
   const selectedModelMatchesExistingName =
     typeof trimmedSelectedModel === "string" &&
     options.some((option) => option.name.toLowerCase() === trimmedSelectedModel);
@@ -959,7 +1042,7 @@ export function getCustomModelOptionsByProvider(
     codex: getAppModelOptions("codex", customModelsByProvider.codex),
     claudeAgent: getAppModelOptions("claudeAgent", customModelsByProvider.claudeAgent),
     cursor: getAppModelOptions("cursor", customModelsByProvider.cursor),
-    gemini: getAppModelOptions("gemini", customModelsByProvider.gemini),
+    antigravity: getAppModelOptions("antigravity", customModelsByProvider.antigravity),
     grok: getAppModelOptions("grok", customModelsByProvider.grok),
     droid: getAppModelOptions("droid", customModelsByProvider.droid),
     kilo: getAppModelOptions("kilo", customModelsByProvider.kilo),
@@ -976,7 +1059,7 @@ export function getProviderStartOptions(
     | "codexHomePath"
     | "cursorApiEndpoint"
     | "cursorBinaryPath"
-    | "geminiBinaryPath"
+    | "antigravityBinaryPath"
     | "grokBinaryPath"
     | "droidBinaryPath"
     | "kiloBinaryPath"
@@ -996,7 +1079,10 @@ export function getProviderStartOptions(
   );
   const codexBinaryPath = normalizeProviderBinaryPathOverride("codex", settings.codexBinaryPath);
   const cursorBinaryPath = normalizeProviderBinaryPathOverride("cursor", settings.cursorBinaryPath);
-  const geminiBinaryPath = normalizeProviderBinaryPathOverride("gemini", settings.geminiBinaryPath);
+  const antigravityBinaryPath = normalizeProviderBinaryPathOverride(
+    "antigravity",
+    settings.antigravityBinaryPath,
+  );
   const grokBinaryPath = normalizeProviderBinaryPathOverride("grok", settings.grokBinaryPath);
   const droidBinaryPath = normalizeProviderBinaryPathOverride("droid", settings.droidBinaryPath);
   const kiloBinaryPath = normalizeProviderBinaryPathOverride("kilo", settings.kiloBinaryPath);
@@ -1035,10 +1121,10 @@ export function getProviderStartOptions(
           },
         }
       : {}),
-    ...(geminiBinaryPath
+    ...(antigravityBinaryPath
       ? {
-          gemini: {
-            binaryPath: geminiBinaryPath,
+          antigravity: {
+            binaryPath: antigravityBinaryPath,
           },
         }
       : {}),
@@ -1106,7 +1192,7 @@ export function getCustomBinaryPathForProvider(
     | "claudeBinaryPath"
     | "codexBinaryPath"
     | "cursorBinaryPath"
-    | "geminiBinaryPath"
+    | "antigravityBinaryPath"
     | "grokBinaryPath"
     | "droidBinaryPath"
     | "kiloBinaryPath"
@@ -1122,8 +1208,8 @@ export function getCustomBinaryPathForProvider(
       return normalizeProviderBinaryPathOverride(provider, settings.claudeBinaryPath);
     case "cursor":
       return normalizeProviderBinaryPathOverride(provider, settings.cursorBinaryPath);
-    case "gemini":
-      return normalizeProviderBinaryPathOverride(provider, settings.geminiBinaryPath);
+    case "antigravity":
+      return normalizeProviderBinaryPathOverride(provider, settings.antigravityBinaryPath);
     case "grok":
       return normalizeProviderBinaryPathOverride(provider, settings.grokBinaryPath);
     case "droid":

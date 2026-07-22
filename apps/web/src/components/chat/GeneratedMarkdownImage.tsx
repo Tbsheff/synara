@@ -8,7 +8,7 @@
 //        <button> because it wires into class-based stylesheet selectors
 //        (`chat-generated-image__*`) rather than shadcn Button.
 
-import { type MouseEvent, useCallback } from "react";
+import { type MouseEvent } from "react";
 
 import { DownloadIcon, Loader2Icon, Maximize2 } from "~/lib/icons";
 
@@ -27,6 +27,10 @@ export interface GeneratedMarkdownImageProps {
   onImageLoad?: (() => void) | undefined;
 }
 
+function stopPropagation(event: MouseEvent<HTMLElement>) {
+  event.stopPropagation();
+}
+
 export function GeneratedMarkdownImage(props: GeneratedMarkdownImageProps) {
   const { src, alt, cwd, onImageExpand, onImageLoad } = props;
   const { previewUrl, downloadUrl, fileName, downloadName, status, imgProps } =
@@ -38,23 +42,16 @@ export function GeneratedMarkdownImage(props: GeneratedMarkdownImageProps) {
     errorTitle: "Could not download generated image",
   });
 
-  const expandImage = useCallback(
-    (event: MouseEvent<HTMLElement>) => {
-      event.preventDefault();
-      if (status === "error") {
-        return;
-      }
-      onImageExpand?.({
-        images: [{ src: previewUrl, name: fileName || accessibleName }],
-        index: 0,
-      });
-    },
-    [accessibleName, fileName, onImageExpand, previewUrl, status],
-  );
-
-  const stopPropagation = useCallback((event: MouseEvent<HTMLElement>) => {
-    event.stopPropagation();
-  }, []);
+  const expandImage = (event: MouseEvent<HTMLElement>) => {
+    event.preventDefault();
+    if (status === "error") {
+      return;
+    }
+    onImageExpand?.({
+      images: [{ src: previewUrl, name: fileName || accessibleName }],
+      index: 0,
+    });
+  };
 
   if (status === "error") {
     return (

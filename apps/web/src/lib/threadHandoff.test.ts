@@ -1,103 +1,53 @@
-import { type ModelSelection } from "@synara/contracts";
+import { EventId, type ModelSelection, type OrchestrationThreadActivity } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 import {
+  buildThreadHandoffImportedActivities,
   resolveAvailableHandoffTargetProviders,
   resolveThreadHandoffTitle,
   resolveThreadHandoffModelSelection,
 } from "./threadHandoff";
 
 describe("threadHandoff", () => {
+  it("does not import a source provider's configured context window", () => {
+    const activity = (kind: string): OrchestrationThreadActivity => ({
+      id: EventId.makeUnsafe(`activity-${kind}`),
+      createdAt: "2026-07-21T00:00:00.000Z",
+      tone: "info",
+      kind,
+      summary: kind,
+      payload: {},
+      turnId: null,
+    });
+
+    const imported = buildThreadHandoffImportedActivities({
+      activities: [
+        activity("context-window.configured"),
+        activity("context-window.updated"),
+        activity("tool.started"),
+      ],
+    });
+
+    expect(imported.map(({ kind }) => kind)).toEqual(["context-window.updated"]);
+  });
+
   it("lists all supported handoff targets except the active provider", () => {
-    expect(resolveAvailableHandoffTargetProviders("codex")).toEqual([
+    const providers = [
+      "codex",
       "claudeAgent",
       "cursor",
-      "gemini",
+      "antigravity",
       "grok",
       "droid",
       "kilo",
       "opencode",
       "pi",
-    ]);
-    expect(resolveAvailableHandoffTargetProviders("claudeAgent")).toEqual([
-      "codex",
-      "cursor",
-      "gemini",
-      "grok",
-      "droid",
-      "kilo",
-      "opencode",
-      "pi",
-    ]);
-    expect(resolveAvailableHandoffTargetProviders("cursor")).toEqual([
-      "codex",
-      "claudeAgent",
-      "gemini",
-      "grok",
-      "droid",
-      "kilo",
-      "opencode",
-      "pi",
-    ]);
-    expect(resolveAvailableHandoffTargetProviders("gemini")).toEqual([
-      "codex",
-      "claudeAgent",
-      "cursor",
-      "grok",
-      "droid",
-      "kilo",
-      "opencode",
-      "pi",
-    ]);
-    expect(resolveAvailableHandoffTargetProviders("grok")).toEqual([
-      "codex",
-      "claudeAgent",
-      "cursor",
-      "gemini",
-      "droid",
-      "kilo",
-      "opencode",
-      "pi",
-    ]);
-    expect(resolveAvailableHandoffTargetProviders("droid")).toEqual([
-      "codex",
-      "claudeAgent",
-      "cursor",
-      "gemini",
-      "grok",
-      "kilo",
-      "opencode",
-      "pi",
-    ]);
-    expect(resolveAvailableHandoffTargetProviders("kilo")).toEqual([
-      "codex",
-      "claudeAgent",
-      "cursor",
-      "gemini",
-      "grok",
-      "droid",
-      "opencode",
-      "pi",
-    ]);
-    expect(resolveAvailableHandoffTargetProviders("opencode")).toEqual([
-      "codex",
-      "claudeAgent",
-      "cursor",
-      "gemini",
-      "grok",
-      "droid",
-      "kilo",
-      "pi",
-    ]);
-    expect(resolveAvailableHandoffTargetProviders("pi")).toEqual([
-      "codex",
-      "claudeAgent",
-      "cursor",
-      "gemini",
-      "grok",
-      "droid",
-      "kilo",
-      "opencode",
-    ]);
+    ] as const;
+
+    for (const source of providers) {
+      expect(resolveAvailableHandoffTargetProviders(source)).toEqual(
+        providers.filter((provider) => provider !== source),
+      );
+    }
   });
 
   it("preserves the source thread title for the created handoff thread", () => {
@@ -109,8 +59,8 @@ describe("threadHandoff", () => {
 
   it("prefers sticky model selection for the chosen handoff target", () => {
     const stickySelection = {
-      provider: "gemini",
-      model: "gemini-2.5-pro",
+      provider: "antigravity",
+      model: "Gemini 3.5 Flash",
     } satisfies ModelSelection;
 
     expect(
@@ -121,13 +71,13 @@ describe("threadHandoff", () => {
             model: "claude-sonnet-4-6",
           },
         },
-        targetProvider: "gemini",
+        targetProvider: "antigravity",
         projectDefaultModelSelection: {
-          provider: "gemini",
-          model: "gemini-3.1-pro-preview",
+          provider: "antigravity",
+          model: "Claude Sonnet 4.6",
         },
         stickyModelSelectionByProvider: {
-          gemini: stickySelection,
+          antigravity: stickySelection,
         },
       }),
     ).toEqual(stickySelection);
@@ -138,8 +88,8 @@ describe("threadHandoff", () => {
       resolveThreadHandoffModelSelection({
         sourceThread: {
           modelSelection: {
-            provider: "gemini",
-            model: "gemini-2.5-pro",
+            provider: "antigravity",
+            model: "Gemini 3.5 Flash",
           },
         },
         targetProvider: "codex",

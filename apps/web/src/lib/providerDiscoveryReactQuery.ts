@@ -222,6 +222,14 @@ export function providerModelsQueryOptions(input: {
   });
 }
 
+export function isInitialModelDiscoveryPending(query: {
+  readonly isLoading: boolean;
+  readonly isFetching: boolean;
+  readonly isPlaceholderData: boolean;
+}): boolean {
+  return query.isLoading || (query.isFetching && query.isPlaceholderData);
+}
+
 export function providerAgentsQueryOptions(input: {
   provider: ProviderKind;
   binaryPath?: string | null;

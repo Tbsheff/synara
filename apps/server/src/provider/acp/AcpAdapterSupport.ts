@@ -3,34 +3,65 @@
  *
  * @module AcpAdapterSupport
  */
-import { type ProviderApprovalDecision, type ProviderKind, type ThreadId } from "@synara/contracts";
-import { Schema } from "effect";
-import * as EffectAcpErrors from "effect-acp/errors";
-
 import {
-  ProviderAdapterRequestError,
-  ProviderAdapterSessionClosedError,
-  type ProviderAdapterError,
-} from "../Errors.ts";
+  type ProviderApprovalDecision,
+  type ProviderInteractionMode,
+  type ProviderKind,
+  type RuntimeMode,
+  type ThreadId,
+  type ToolLifecycleItemType,
+} from "@synara/contracts";
+import { Schema } from "effect";
+import * as AcpErrors from "./AcpErrors.ts";
+
+import { ProviderAdapterRequestError, type ProviderAdapterError } from "../Errors.ts";
+
+export function canonicalItemTypeFromAcpToolKind(kind: string | undefined): ToolLifecycleItemType {
+  switch (kind) {
+    case "execute":
+      return "command_execution";
+    case "edit":
+    case "delete":
+    case "move":
+      return "file_change";
+    case "fetch":
+      return "web_search";
+    case "search":
+    default:
+      return "dynamic_tool_call";
+  }
+}
+
+function acpRequestErrorDetail(error: AcpErrors.AcpRequestError): string {
+  const message = error.message.trim();
+  const dataDetail =
+    typeof error.data === "string"
+      ? error.data.trim()
+      : typeof error.data === "object" && error.data !== null
+        ? (() => {
+            const data = error.data as Record<string, unknown>;
+            const detail = data.detail ?? data.details;
+            return typeof detail === "string" ? detail.trim() : "";
+          })()
+        : "";
+
+  if (dataDetail && /^(?:internal error(?:: agent error)?|agent error)$/iu.test(message)) {
+    return dataDetail;
+  }
+  return message || dataDetail || "ACP request failed.";
+}
 
 export function mapAcpToAdapterError(
   provider: ProviderKind,
-  threadId: ThreadId,
+  _threadId: ThreadId,
   method: string,
-  error: EffectAcpErrors.AcpError,
+  error: AcpErrors.AcpError,
 ): ProviderAdapterError {
-  if (Schema.is(EffectAcpErrors.AcpProcessExitedError)(error)) {
-    return new ProviderAdapterSessionClosedError({
-      provider,
-      threadId,
-      cause: error,
-    });
-  }
-  if (Schema.is(EffectAcpErrors.AcpRequestError)(error)) {
+  if (Schema.is(AcpErrors.AcpRequestError)(error)) {
     return new ProviderAdapterRequestError({
       provider,
       method,
-      detail: error.message,
+      detail: acpRequestErrorDetail(error),
       cause: error,
     });
   }
@@ -58,6 +89,10 @@ type AcpPermissionOptionLike = {
   readonly kind: "allow_once" | "allow_always" | "reject_once" | "reject_always";
   readonly optionId: string;
 };
+
+export type AcpPermissionPolicyOutcome =
+  | { readonly outcome: "selected"; readonly optionId: string }
+  | { readonly outcome: "cancelled" };
 
 export function selectAcpPermissionOptionId(
   decision: ProviderApprovalDecision,
@@ -89,21 +124,39 @@ export function selectAcpFullAccessPermissionOptionId(
   return selectAcpPermissionOptionId("acceptForSession", options);
 }
 
-export type AcpRequestPermissionOutcome =
-  | { readonly outcome: "cancelled" }
-  | { readonly outcome: "selected"; readonly optionId: string };
-
-export function resolveAcpPermissionOutcome(
-  decision: ProviderApprovalDecision,
+/** Full access never blocks on a human prompt, even if an agent offers no allow option. */
+export function resolveAcpFullAccessPermissionOutcome(
   options: ReadonlyArray<AcpPermissionOptionLike>,
-): AcpRequestPermissionOutcome {
-  if (decision === "cancel") {
+): AcpPermissionPolicyOutcome {
+  const optionId = selectAcpFullAccessPermissionOptionId(options);
+  return optionId === undefined ? { outcome: "cancelled" } : { outcome: "selected", optionId };
+}
+
+/**
+ * Applies Synara's turn-scoped permission precedence to ACP reverse requests.
+ *
+ * `interactionMode: undefined` means that no turn owns the request. Those
+ * requests are cancelled so replay or late provider activity cannot inherit a
+ * previous Plan turn or a future Full Access turn. Active adapters normalize
+ * an omitted turn mode to `default` before dispatching the prompt.
+ */
+export function resolveAcpPermissionPolicy(input: {
+  readonly runtimeMode: RuntimeMode;
+  readonly interactionMode: ProviderInteractionMode | undefined;
+  readonly options: ReadonlyArray<AcpPermissionOptionLike>;
+}): AcpPermissionPolicyOutcome | undefined {
+  if (input.interactionMode === "plan") {
+    const optionId = selectAcpPermissionOptionId("decline", input.options);
+    return optionId === undefined ? { outcome: "cancelled" } : { outcome: "selected", optionId };
+  }
+
+  if (input.interactionMode === undefined) {
     return { outcome: "cancelled" };
   }
-  const selectedOptionId = selectAcpPermissionOptionId(decision, options);
-  return selectedOptionId === undefined
-    ? { outcome: "cancelled" }
-    : { outcome: "selected", optionId: selectedOptionId };
+
+  return input.runtimeMode === "full-access"
+    ? resolveAcpFullAccessPermissionOutcome(input.options)
+    : undefined;
 }
 
 type AcpToolCallLike = {

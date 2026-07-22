@@ -18,20 +18,19 @@ import {
   getDefaultAutoCompactWindow,
   getDefaultContextWindow,
   getDefaultModel,
-  getGeminiThinkingModelAlias,
   getModelCapabilities,
   getModelOptions,
   hasContextWindowOption,
   hasAutoCompactWindowOption,
   isClaudeUltrathinkPrompt,
+  normalizeAntigravityModelOptions,
   normalizeClaudeModelOptions,
   normalizeCodexModelOptions,
-  normalizeGeminiModelOptions,
   normalizeGrokModelOptions,
   normalizeModelSlug,
+  parseCursorCliReasoningEffort,
   resolveApiModelId,
   resolveSelectableModel,
-  resolveGeminiApiModelId,
   resolveModelSlug,
   resolveModelSlugForProvider,
   getDefaultEffort,
@@ -40,6 +39,21 @@ import {
   buildProviderOptionSelectionsFromDescriptors,
   hasEffortLevel,
 } from "./model";
+
+describe("parseCursorCliReasoningEffort", () => {
+  it.each([
+    ["gpt-5.5-xhigh", "xhigh"],
+    ["gpt-5.5-extra-high", "xhigh"],
+    ["claude-fable-5-max", "max"],
+    ["gpt-5.5-none", "none"],
+    ["gpt-5.5-low", "low"],
+    ["gpt-5.5-medium", "medium"],
+    ["gpt-5.5-high", "high"],
+    ["gpt-5.5-fast", undefined],
+  ] as const)("parses %s as %s", (model, expected) => {
+    expect(parseCursorCliReasoningEffort(model)).toBe(expected);
+  });
+});
 
 describe("normalizeModelSlug", () => {
   it("maps known aliases to canonical slugs", () => {
@@ -183,12 +197,33 @@ describe("resolveSelectableModel", () => {
 });
 
 describe("getModelCapabilities reasoningEffortLevels", () => {
-  const values = (provider: "codex" | "claudeAgent" | "gemini" | "grok", model: string | null) =>
+  const values = (provider: "codex" | "claudeAgent" | "grok" | "droid", model: string | null) =>
     getModelCapabilities(provider, model).reasoningEffortLevels.map((l) => l.value);
 
   it("returns codex reasoning options for codex", () => {
     expect(values("codex", "gpt-5.5")).toEqual([...CODEX_REASONING_EFFORT_OPTIONS]);
     expect(values("codex", "gpt-5.4")).toEqual([...CODEX_REASONING_EFFORT_OPTIONS]);
+  });
+
+  it("matches Droid's GPT-5.5 and GPT-5.6 fallback effort ladders", () => {
+    expect(values("droid", "gpt-5.5")).toEqual(["low", "medium", "high", "xhigh"]);
+    expect(values("droid", "gpt-5.5-pro")).toEqual(["medium", "high", "xhigh"]);
+    expect(values("droid", "gpt-5.6-sol")).toEqual([
+      "none",
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max",
+    ]);
+  });
+
+  it("models Droid fast mode as a separate GPT-5.5 slug, not a GPT-5.6 toggle", () => {
+    const droidSlugs = MODEL_OPTIONS_BY_PROVIDER.droid.map((model) => model.slug);
+
+    expect(droidSlugs).toContain("gpt-5.5-fast");
+    expect(droidSlugs).not.toContain("gpt-5.6-fast");
+    expect(getModelCapabilities("droid", "gpt-5.6-sol").supportsFastMode).toBe(false);
   });
 
   it("returns claude effort options for Opus 4.6", () => {
@@ -287,19 +322,10 @@ describe("getModelCapabilities reasoningEffortLevels", () => {
     expect(values("claudeAgent", "claude-haiku-4-5")).toEqual([]);
   });
 
-  it("keeps Gemini 2.5 Pro and auto 2.5 on supported budgets only", () => {
-    expect(values("gemini", "gemini-2.5-pro")).toEqual(["-1", "512"]);
-    expect(values("gemini", "auto-gemini-2.5")).toEqual(["-1", "512"]);
-  });
-
-  it("keeps all Gemini 2.5 models on CLI-safe budgets only", () => {
-    expect(values("gemini", "gemini-2.5-flash")).toEqual(["-1", "512"]);
-    expect(values("gemini", "gemini-2.5-flash-lite")).toEqual(["-1", "512"]);
-  });
-
   it("returns Grok effort options for Grok Build models", () => {
     expect(values("grok", "grok-build-0.1")).toEqual([...GROK_REASONING_EFFORT_OPTIONS]);
     expect(values("grok", "grok-build")).toEqual([...GROK_REASONING_EFFORT_OPTIONS]);
+    expect(values("grok", "grok-4.5")).toEqual([...GROK_REASONING_EFFORT_OPTIONS]);
   });
 
   it("co-locates labels with effort values", () => {
@@ -330,7 +356,6 @@ describe("getDefaultEffort", () => {
     expect(getDefaultEffort(getModelCapabilities("claudeAgent", "claude-opus-4-6"))).toBe("high");
     expect(getDefaultEffort(getModelCapabilities("claudeAgent", "claude-sonnet-5"))).toBe("high");
     expect(getDefaultEffort(getModelCapabilities("claudeAgent", "claude-haiku-4-5"))).toBeNull();
-    expect(getDefaultEffort(getModelCapabilities("gemini", "gemini-2.5-flash-lite"))).toBe("-1");
     expect(getDefaultEffort(getModelCapabilities("grok", "grok-build-0.1"))).toBe("low");
     expect(getDefaultEffort(getModelCapabilities("grok", "grok-build"))).toBe("low");
   });
@@ -374,19 +399,6 @@ describe("provider option descriptor helpers", () => {
     expect(fastMode).toMatchObject({
       type: "boolean",
       currentValue: true,
-    });
-  });
-
-  it("coerces legacy numeric Gemini budgets into string select values", () => {
-    const descriptors = getProviderOptionDescriptors({
-      provider: "gemini",
-      caps: getModelCapabilities("gemini", "gemini-2.5-pro"),
-      selections: { thinkingBudget: 512 },
-    });
-
-    expect(descriptors.find((descriptor) => descriptor.id === "thinkingBudget")).toMatchObject({
-      type: "select",
-      currentValue: "512",
     });
   });
 
@@ -677,6 +689,24 @@ describe("claudeSelectionRequiresRestart", () => {
     ).toBe(false);
   });
 
+  it("restarts when a model switch makes a persisted max effort effective", () => {
+    expect(
+      claudeSelectionRequiresRestart(
+        selection("claude-haiku-4-5", { effort: "max" }),
+        selection("claude-sonnet-5", { effort: "max" }),
+      ),
+    ).toBe(true);
+  });
+
+  it("restarts when a model switch makes a persisted max effort unsupported", () => {
+    expect(
+      claudeSelectionRequiresRestart(
+        selection("claude-sonnet-5", { effort: "max" }),
+        selection("claude-haiku-4-5", { effort: "max" }),
+      ),
+    ).toBe(true);
+  });
+
   it("does not restart when a model switch carries an unsupported thinking override", () => {
     expect(
       claudeSelectionRequiresRestart(
@@ -713,13 +743,39 @@ describe("claudeSelectionRequiresRestart", () => {
     ).toBe(false);
   });
 
-  it("restarts when the effective effort changes", () => {
+  it("restarts when max effort toggles on", () => {
     expect(
       claudeSelectionRequiresRestart(
         selection("claude-opus-4-8", { effort: "high" }),
         selection("claude-opus-4-8", { effort: "max" }),
       ),
     ).toBe(true);
+  });
+
+  it("restarts when max effort toggles off", () => {
+    expect(
+      claudeSelectionRequiresRestart(
+        selection("claude-opus-4-8", { effort: "max" }),
+        selection("claude-opus-4-8", { effort: "high" }),
+      ),
+    ).toBe(true);
+  });
+
+  it("does not restart for a non-max effort change", () => {
+    // Non-max effort rides in the flag-settings layer (`effortLevel`) and
+    // switches live via applyFlagSettings.
+    expect(
+      claudeSelectionRequiresRestart(
+        selection("claude-opus-4-8", { effort: "high" }),
+        selection("claude-opus-4-8", { effort: "xhigh" }),
+      ),
+    ).toBe(false);
+    expect(
+      claudeSelectionRequiresRestart(
+        selection("claude-opus-4-8"),
+        selection("claude-opus-4-8", { effort: "low" }),
+      ),
+    ).toBe(false);
   });
 
   it("treats ultrathink as prompt-injected, not a spawn change", () => {
@@ -733,31 +789,34 @@ describe("claudeSelectionRequiresRestart", () => {
     ).toBe(false);
   });
 
-  it("restarts when ultracode toggles", () => {
+  it("does not restart when ultracode toggles", () => {
+    // ultracode is a Settings key (xhigh effortLevel + ultracode) applied live.
     expect(
       claudeSelectionRequiresRestart(
         selection("claude-opus-4-8", { effort: "xhigh" }),
         selection("claude-opus-4-8", { effort: "ultracode" }),
       ),
-    ).toBe(true);
+    ).toBe(false);
   });
 
-  it("restarts when fast mode toggles", () => {
+  it("does not restart when fast mode toggles", () => {
+    // fastMode is a Settings key applied live via applyFlagSettings.
     expect(
       claudeSelectionRequiresRestart(
         selection("claude-opus-4-8", { effort: "high" }),
         selection("claude-opus-4-8", { effort: "high", fastMode: true }),
       ),
-    ).toBe(true);
+    ).toBe(false);
   });
 
-  it("restarts when the thinking toggle changes on a supported model", () => {
+  it("does not restart when the thinking toggle changes", () => {
+    // The thinking toggle switches live via the SDK flag-settings control.
     expect(
       claudeSelectionRequiresRestart(
         selection("claude-haiku-4-5"),
         selection("claude-haiku-4-5", { thinking: false }),
       ),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("ignores options the target model does not support", () => {
@@ -768,17 +827,6 @@ describe("claudeSelectionRequiresRestart", () => {
         selection("claude-sonnet-5", { effort: "high", fastMode: true }),
       ),
     ).toBe(false);
-  });
-});
-
-describe("normalizeGeminiModelOptions", () => {
-  it("drops unsupported thinking-off overrides for the Gemini 2.5 family", () => {
-    expect(normalizeGeminiModelOptions("gemini-2.5-pro", { thinkingBudget: 0 })).toBeUndefined();
-    expect(normalizeGeminiModelOptions("auto-gemini-2.5", { thinkingBudget: 0 })).toBeUndefined();
-    expect(normalizeGeminiModelOptions("gemini-2.5-flash", { thinkingBudget: 0 })).toBeUndefined();
-    expect(
-      normalizeGeminiModelOptions("gemini-2.5-flash-lite", { thinkingBudget: 0 }),
-    ).toBeUndefined();
   });
 });
 
@@ -795,21 +843,46 @@ describe("normalizeGrokModelOptions", () => {
     expect(normalizeGrokModelOptions("grok-build-0.1", { reasoningEffort: "high" })).toEqual({
       reasoningEffort: "high",
     });
+    expect(normalizeGrokModelOptions("grok-4.5", { reasoningEffort: "high" })).toEqual({
+      reasoningEffort: "high",
+    });
   });
 });
 
-describe("getGeminiThinkingModelAlias", () => {
-  it("refuses unsupported Gemini 2.5 off aliases", () => {
-    expect(getGeminiThinkingModelAlias("gemini-2.5-pro", { thinkingBudget: 0 })).toBeNull();
-    expect(resolveGeminiApiModelId("gemini-2.5-pro", { thinkingBudget: 0 })).toBe("gemini-2.5-pro");
-    expect(getGeminiThinkingModelAlias("gemini-2.5-flash", { thinkingBudget: 0 })).toBeNull();
-    expect(resolveGeminiApiModelId("gemini-2.5-flash", { thinkingBudget: 0 })).toBe(
-      "gemini-2.5-flash",
-    );
-    expect(getGeminiThinkingModelAlias("gemini-2.5-flash-lite", { thinkingBudget: 0 })).toBeNull();
-    expect(resolveGeminiApiModelId("gemini-2.5-flash-lite", { thinkingBudget: 0 })).toBe(
-      "gemini-2.5-flash-lite",
-    );
+describe("normalizeAntigravityModelOptions", () => {
+  it("stores only supported non-default effort overrides", () => {
+    const runtimeCapabilities = {
+      reasoningEffortLevels: [
+        { value: "low", label: "Low" },
+        { value: "medium", label: "Medium", isDefault: true as const },
+        { value: "high", label: "High" },
+      ],
+      supportsFastMode: false,
+      supportsThinkingToggle: false,
+      promptInjectedEffortLevels: [],
+      contextWindowOptions: [],
+    };
+    expect(
+      normalizeAntigravityModelOptions(
+        "Gemini 3.5 Flash",
+        { reasoningEffort: "medium" },
+        runtimeCapabilities,
+      ),
+    ).toBeUndefined();
+    expect(
+      normalizeAntigravityModelOptions(
+        "Gemini 3.5 Flash",
+        { reasoningEffort: "ultra" },
+        runtimeCapabilities,
+      ),
+    ).toBeUndefined();
+    expect(
+      normalizeAntigravityModelOptions(
+        "Gemini 3.5 Flash",
+        { reasoningEffort: "high" },
+        runtimeCapabilities,
+      ),
+    ).toEqual({ reasoningEffort: "high" });
   });
 });
 

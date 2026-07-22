@@ -25,6 +25,7 @@ import {
   NonNegativeInt,
   PositiveInt,
   ProjectId,
+  SpaceId,
   RuntimeActivityLeaseId,
   RuntimeProcessId,
   RuntimeRouteId,
@@ -55,6 +56,10 @@ import {
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   ProjectScript,
+  SPACE_PROJECTS_ASSIGN_MAX_COUNT,
+  SPACES_MAX_COUNT,
+  SpaceIconName,
+  SpaceName,
   ProviderApprovalDecision,
   ProviderInteractionMode,
   ProviderReviewTarget,
@@ -81,6 +86,46 @@ const ClientThreadTurnStartAttachments = Schema.Array(UploadChatAttachment).chec
   Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_ATTACHMENTS),
 );
 
+export const SpaceCreateCommand = Schema.Struct({
+  type: Schema.Literal("space.create"),
+  commandId: CommandId,
+  spaceId: SpaceId,
+  name: SpaceName,
+  icon: SpaceIconName,
+  createdAt: IsoDateTime,
+});
+
+export const SpaceMetaUpdateCommand = Schema.Struct({
+  type: Schema.Literal("space.meta.update"),
+  commandId: CommandId,
+  spaceId: SpaceId,
+  name: Schema.optional(SpaceName),
+  icon: Schema.optional(SpaceIconName),
+});
+
+export const SpaceReorderCommand = Schema.Struct({
+  type: Schema.Literal("space.reorder"),
+  commandId: CommandId,
+  spaceId: SpaceId,
+  orderedSpaceIds: Schema.Array(SpaceId).check(Schema.isMaxLength(SPACES_MAX_COUNT)),
+});
+
+export const SpaceDeleteCommand = Schema.Struct({
+  type: Schema.Literal("space.delete"),
+  commandId: CommandId,
+  spaceId: SpaceId,
+});
+
+export const SpaceProjectsAssignCommand = Schema.Struct({
+  type: Schema.Literal("space.projects.assign"),
+  commandId: CommandId,
+  spaceId: SpaceId,
+  projectIds: Schema.Array(ProjectId).check(
+    Schema.isMinLength(1),
+    Schema.isMaxLength(SPACE_PROJECTS_ASSIGN_MAX_COUNT),
+  ),
+});
+
 export const ProjectCreateCommand = Schema.Struct({
   type: Schema.Literal("project.create"),
   commandId: CommandId,
@@ -93,6 +138,7 @@ export const ProjectCreateCommand = Schema.Struct({
   ),
   defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
   isPinned: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
+  spaceId: Schema.optional(Schema.NullOr(SpaceId)),
   createdAt: IsoDateTime,
 });
 
@@ -106,6 +152,7 @@ const ProjectMetaUpdateCommand = Schema.Struct({
   defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
   scripts: Schema.optional(Schema.Array(ProjectScript)),
   isPinned: Schema.optional(Schema.Boolean),
+  spaceId: Schema.optional(Schema.NullOr(SpaceId)),
 });
 
 const ProjectDeleteCommand = Schema.Struct({
@@ -537,6 +584,11 @@ const ThreadActivityAppendCommand = Schema.Struct({
 });
 
 const DispatchableClientOrchestrationCommand = Schema.Union([
+  SpaceCreateCommand,
+  SpaceMetaUpdateCommand,
+  SpaceReorderCommand,
+  SpaceDeleteCommand,
+  SpaceProjectsAssignCommand,
   ProjectCreateCommand,
   ProjectMetaUpdateCommand,
   ProjectDeleteCommand,
@@ -573,6 +625,11 @@ export type DispatchableClientOrchestrationCommand =
   typeof DispatchableClientOrchestrationCommand.Type;
 
 export const ClientOrchestrationCommand = Schema.Union([
+  SpaceCreateCommand,
+  SpaceMetaUpdateCommand,
+  SpaceReorderCommand,
+  SpaceDeleteCommand,
+  SpaceProjectsAssignCommand,
   ProjectCreateCommand,
   ProjectMetaUpdateCommand,
   ProjectDeleteCommand,

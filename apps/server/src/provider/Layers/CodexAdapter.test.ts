@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import path from "node:path";
 import {
   ApprovalRequestId,
   EventId,
@@ -14,7 +15,7 @@ import {
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { afterAll, it, vi } from "@effect/vitest";
 
-import { Effect, Fiber, Layer, Option, Stream } from "effect";
+import { Effect, Fiber, FileSystem, Layer, Option, Stream } from "effect";
 
 import {
   CodexAppServerManager,
@@ -148,7 +149,7 @@ class FakeCodexManager extends CodexAppServerManager {
     return this.respondToUserInputImpl(threadId, requestId, answers);
   }
 
-  override stopSession(_threadId: ThreadId): void {}
+  override async stopSession(_threadId: ThreadId): Promise<void> {}
 
   override listSessions(): ProviderSession[] {
     return [];
@@ -158,7 +159,7 @@ class FakeCodexManager extends CodexAppServerManager {
     return false;
   }
 
-  override stopAll(): void {
+  override async stopAll(): Promise<void> {
     this.stopAllImpl();
   }
 }
@@ -214,6 +215,7 @@ validationLayer("CodexAdapterLive validation", (it) => {
       yield* adapter.startSession({
         provider: "codex",
         threadId: asThreadId("thread-1"),
+        lifecycleGeneration: "generation-start-a",
         modelSelection: {
           provider: "codex",
           model: "gpt-5.3-codex",
@@ -228,6 +230,7 @@ validationLayer("CodexAdapterLive validation", (it) => {
       assert.deepStrictEqual(validationManager.startSessionImpl.mock.calls[0]?.[0], {
         provider: "codex",
         threadId: asThreadId("thread-1"),
+        lifecycleGeneration: "generation-start-a",
         model: "gpt-5.3-codex",
         effort: "high",
         serviceTier: "fast",
@@ -388,6 +391,135 @@ sessionErrorLayer("CodexAdapterLive session errors", (it) => {
         effort: "high",
         serviceTier: "fast",
       });
+    }),
+  );
+});
+
+const turnPreparationManager = new FakeCodexManager();
+const turnPreparationLayer = it.layer(
+  makeCodexAdapterLive({ manager: turnPreparationManager }).pipe(
+    Layer.provideMerge(ServerConfig.layerTest(process.cwd(), { prefix: "codex-turn-input-" })),
+    Layer.provideMerge(providerSessionDirectoryTestLayer),
+    Layer.provideMerge(NodeServices.layer),
+  ),
+);
+
+turnPreparationLayer("CodexAdapterLive turn input preparation", (it) => {
+  it.effect("prepares equivalent rich send and steer manager payloads", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const serverConfig = yield* ServerConfig;
+      const imageBytes = Uint8Array.from([1, 2, 3, 4]);
+      const imageId = "codex-rich-input-image";
+      const fileId = "codex-rich-input-file";
+      const imagePath = path.join(serverConfig.attachmentsDir, `${imageId}.png`);
+      const filePath = path.join(serverConfig.attachmentsDir, `${fileId}.txt`);
+      yield* fileSystem.writeFile(imagePath, imageBytes);
+      yield* fileSystem.writeFileString(filePath, "notes");
+
+      turnPreparationManager.sendTurnImpl.mockClear();
+      turnPreparationManager.steerTurnImpl.mockClear();
+      const input = {
+        threadId: asThreadId("thread-rich-input"),
+        input: "Inspect the attached context",
+        attachments: [
+          {
+            type: "image" as const,
+            id: imageId,
+            name: "screen.png",
+            mimeType: "image/png",
+            sizeBytes: imageBytes.byteLength,
+          },
+          {
+            type: "file" as const,
+            id: fileId,
+            name: "notes.txt",
+            mimeType: "text/plain",
+            sizeBytes: 5,
+          },
+        ],
+        skills: [{ name: "check-code", path: "/skills/check-code/SKILL.md" }],
+        mentions: [{ name: "github", path: "plugin://github@openai-curated" }],
+        modelSelection: {
+          provider: "codex" as const,
+          model: "gpt-5.3-codex",
+          options: {
+            reasoningEffort: "high",
+            fastMode: true,
+          },
+        },
+        interactionMode: "plan" as const,
+      };
+
+      yield* adapter.sendTurn(input);
+      const steerTurn = adapter.steerTurn;
+      assert.ok(steerTurn);
+      yield* steerTurn(input);
+
+      const sendInput = turnPreparationManager.sendTurnImpl.mock.calls[0]?.[0];
+      const steerInput = turnPreparationManager.steerTurnImpl.mock.calls[0]?.[0];
+      assert.deepStrictEqual(steerInput, sendInput);
+      assert.deepStrictEqual(sendInput, {
+        threadId: asThreadId("thread-rich-input"),
+        input: [
+          "Inspect the attached context",
+          "",
+          "<attached_files>",
+          "The user attached the following file(s), saved on disk. Read/extract them with your tools as needed; do not assume their contents.",
+          `- \"notes.txt\" - text/plain - 5 B - ${filePath}`,
+          "</attached_files>",
+        ].join("\n"),
+        skills: [{ name: "check-code", path: "/skills/check-code/SKILL.md" }],
+        mentions: [{ name: "github", path: "plugin://github@openai-curated" }],
+        model: "gpt-5.3-codex",
+        effort: "high",
+        serviceTier: "fast",
+        interactionMode: "plan",
+        attachments: [
+          {
+            type: "image",
+            url: `data:image/png;base64,${Buffer.from(imageBytes).toString("base64")}`,
+          },
+        ],
+      });
+      assert.equal(turnPreparationManager.sendTurnImpl.mock.calls.length, 1);
+      assert.equal(turnPreparationManager.steerTurnImpl.mock.calls.length, 1);
+    }),
+  );
+
+  it.effect("preserves the steer method and cause for an invalid native image path", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      turnPreparationManager.steerTurnImpl.mockClear();
+      const steerTurn = adapter.steerTurn;
+      assert.ok(steerTurn);
+
+      const result = yield* steerTurn({
+        threadId: asThreadId("thread-invalid-image"),
+        attachments: [
+          {
+            type: "image",
+            id: "../invalid-image",
+            name: "screen.png",
+            mimeType: "image/png",
+            sizeBytes: 4,
+          },
+        ],
+      }).pipe(Effect.result);
+
+      assert.equal(result._tag, "Failure");
+      if (result._tag !== "Failure") {
+        return;
+      }
+      assert.equal(result.failure._tag, "ProviderAdapterRequestError");
+      if (result.failure._tag !== "ProviderAdapterRequestError") {
+        return;
+      }
+      assert.equal(result.failure.method, "turn/steer");
+      assert.equal(result.failure.detail, "Invalid attachment id '../invalid-image'.");
+      assert.equal(result.failure.cause instanceof Error, true);
+      assert.equal(turnPreparationManager.steerTurnImpl.mock.calls.length, 0);
     }),
   );
 });
@@ -1452,6 +1584,7 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
           provider: "codex",
           threadId: asThreadId("thread-1"),
           createdAt: new Date().toISOString(),
+          lifecycleGeneration: "generation-request-a",
           method: "item/tool/requestUserInput",
           requestId: ApprovalRequestId.makeUnsafe("req-user-input-1"),
           payload: {
@@ -1476,6 +1609,7 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
           provider: "codex",
           threadId: asThreadId("thread-1"),
           createdAt: new Date().toISOString(),
+          lifecycleGeneration: "generation-request-a",
           method: "item/tool/requestUserInput/answered",
           requestId: ApprovalRequestId.makeUnsafe("req-user-input-1"),
           payload: {
@@ -1491,12 +1625,14 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
         assert.equal(events[0]?.type, "user-input.requested");
         if (events[0]?.type === "user-input.requested") {
           assert.equal(events[0].requestId, "req-user-input-1");
+          assert.equal(events[0].lifecycleGeneration, "generation-request-a");
           assert.equal(events[0].payload.questions[0]?.id, "sandbox_mode");
         }
 
         assert.equal(events[1]?.type, "user-input.resolved");
         if (events[1]?.type === "user-input.resolved") {
           assert.equal(events[1].requestId, "req-user-input-1");
+          assert.equal(events[1].lifecycleGeneration, "generation-request-a");
           assert.deepEqual(events[1].payload.answers, {
             sandbox_mode: "workspace-write",
           });

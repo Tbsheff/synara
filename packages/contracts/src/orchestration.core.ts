@@ -8,11 +8,11 @@
 //   internal helpers (SidechatSourceThreadId, SourceProposedPlanReference).
 import { Schema } from "effect";
 import {
+  AntigravityModelOptions,
   ClaudeModelOptions,
   CodexModelOptions,
   CursorModelOptions,
   DroidModelOptions,
-  GeminiModelOptions,
   GrokModelOptions,
   OpenCodeModelOptions,
   PiModelOptions,
@@ -29,6 +29,7 @@ import {
   NonNegativeInt,
   PositiveInt,
   ProjectId,
+  SpaceId,
   ProviderItemId,
   RuntimeItemId,
   ThreadMarkerId,
@@ -65,12 +66,12 @@ export const CursorModelSelection = Schema.Struct({
 });
 export type CursorModelSelection = typeof CursorModelSelection.Type;
 
-export const GeminiModelSelection = Schema.Struct({
-  provider: Schema.Literal("gemini"),
+export const AntigravityModelSelection = Schema.Struct({
+  provider: Schema.Literal("antigravity"),
   model: TrimmedNonEmptyString,
-  options: Schema.optional(GeminiModelOptions),
+  options: Schema.optional(AntigravityModelOptions),
 });
-export type GeminiModelSelection = typeof GeminiModelSelection.Type;
+export type AntigravityModelSelection = typeof AntigravityModelSelection.Type;
 
 export const GrokModelSelection = Schema.Struct({
   provider: Schema.Literal("grok"),
@@ -111,7 +112,7 @@ export const ModelSelection = Schema.Union([
   CodexModelSelection,
   ClaudeModelSelection,
   CursorModelSelection,
-  GeminiModelSelection,
+  AntigravityModelSelection,
   GrokModelSelection,
   DroidModelSelection,
   KiloModelSelection,
@@ -131,7 +132,7 @@ export const ClaudeProviderStartOptions = Schema.Struct({
   maxThinkingTokens: Schema.optional(NonNegativeInt),
 });
 
-export const GeminiProviderStartOptions = Schema.Struct({
+export const AntigravityProviderStartOptions = Schema.Struct({
   binaryPath: Schema.optional(TrimmedNonEmptyString),
 });
 
@@ -170,7 +171,7 @@ export const ProviderStartOptions = Schema.Struct({
   codex: Schema.optional(CodexProviderStartOptions),
   claudeAgent: Schema.optional(ClaudeProviderStartOptions),
   cursor: Schema.optional(CursorProviderStartOptions),
-  gemini: Schema.optional(GeminiProviderStartOptions),
+  antigravity: Schema.optional(AntigravityProviderStartOptions),
   grok: Schema.optional(GrokProviderStartOptions),
   droid: Schema.optional(DroidProviderStartOptions),
   kilo: Schema.optional(KiloProviderStartOptions),
@@ -349,6 +350,58 @@ export const ProjectScript = Schema.Struct({
 });
 export type ProjectScript = typeof ProjectScript.Type;
 
+export const SPACE_NAME_MAX_LENGTH = 32;
+export const SPACES_MAX_COUNT = 50;
+export const RESERVED_VOID_SPACE_ID = "void";
+export const SPACE_PROJECTS_ASSIGN_MAX_COUNT = 200;
+export const SPACE_ICON_NAMES = [
+  "bag",
+  "home",
+  "code-brackets",
+  "rocket",
+  "light-bulb",
+  "color-palette",
+  "book",
+  "lab",
+  "heart",
+  "star",
+  "globe",
+  "cloud",
+  "hammer",
+  "chart-2",
+  "gamecontroller",
+  "camera-1",
+  "target",
+  "tree",
+  "school",
+  "backpack",
+] as const;
+export const SpaceIconName = Schema.Literals(SPACE_ICON_NAMES);
+export type SpaceIconName = typeof SpaceIconName.Type;
+export const SpaceName = TrimmedNonEmptyString.check(Schema.isMaxLength(SPACE_NAME_MAX_LENGTH));
+export type SpaceName = typeof SpaceName.Type;
+
+export const OrchestrationSpace = Schema.Struct({
+  id: SpaceId,
+  name: SpaceName,
+  icon: SpaceIconName,
+  sortOrder: NonNegativeInt,
+  createdAt: IsoDateTime,
+  updatedAt: IsoDateTime,
+  deletedAt: Schema.NullOr(IsoDateTime),
+});
+export type OrchestrationSpace = typeof OrchestrationSpace.Type;
+
+export const OrchestrationSpaceShell = Schema.Struct({
+  id: SpaceId,
+  name: SpaceName,
+  icon: SpaceIconName,
+  sortOrder: NonNegativeInt,
+  createdAt: IsoDateTime,
+  updatedAt: IsoDateTime,
+});
+export type OrchestrationSpaceShell = typeof OrchestrationSpaceShell.Type;
+
 export const OrchestrationProject = Schema.Struct({
   id: ProjectId,
   kind: Schema.optional(ProjectKind).pipe(Schema.withDecodingDefault(() => "project")),
@@ -357,6 +410,7 @@ export const OrchestrationProject = Schema.Struct({
   defaultModelSelection: Schema.NullOr(ModelSelection),
   scripts: Schema.Array(ProjectScript),
   isPinned: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
+  spaceId: Schema.optional(Schema.NullOr(SpaceId)).pipe(Schema.withDecodingDefault(() => null)),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   deletedAt: Schema.NullOr(IsoDateTime),
@@ -371,6 +425,7 @@ export const OrchestrationProjectShell = Schema.Struct({
   defaultModelSelection: Schema.NullOr(ModelSelection),
   scripts: Schema.Array(ProjectScript),
   isPinned: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
+  spaceId: Schema.optional(Schema.NullOr(SpaceId)).pipe(Schema.withDecodingDefault(() => null)),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
@@ -778,6 +833,7 @@ export type OrchestrationThreadShell = typeof OrchestrationThreadShell.Type;
 
 export const OrchestrationReadModel = Schema.Struct({
   snapshotSequence: NonNegativeInt,
+  spaces: Schema.Array(OrchestrationSpace),
   projects: Schema.Array(OrchestrationProject),
   threads: Schema.Array(OrchestrationThread),
   updatedAt: IsoDateTime,
@@ -786,6 +842,7 @@ export type OrchestrationReadModel = typeof OrchestrationReadModel.Type;
 
 export const OrchestrationShellSnapshot = Schema.Struct({
   snapshotSequence: NonNegativeInt,
+  spaces: Schema.Array(OrchestrationSpaceShell),
   projects: Schema.Array(OrchestrationProjectShell),
   threads: Schema.Array(OrchestrationThreadShell),
   updatedAt: IsoDateTime,
@@ -793,6 +850,22 @@ export const OrchestrationShellSnapshot = Schema.Struct({
 export type OrchestrationShellSnapshot = typeof OrchestrationShellSnapshot.Type;
 
 export const OrchestrationShellStreamEvent = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("space-upserted"),
+    sequence: NonNegativeInt,
+    space: OrchestrationSpaceShell,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("space-removed"),
+    sequence: NonNegativeInt,
+    spaceId: SpaceId,
+    updatedAt: IsoDateTime,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("space-order-updated"),
+    sequence: NonNegativeInt,
+    orderedSpaceIds: Schema.Array(SpaceId),
+  }),
   Schema.Struct({
     kind: Schema.Literal("project-upserted"),
     sequence: NonNegativeInt,

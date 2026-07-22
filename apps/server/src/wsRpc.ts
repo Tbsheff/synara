@@ -23,7 +23,7 @@ import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstab
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 
 import { AutomationService } from "./automation/Services/AutomationService";
-import { authErrorResponse, makeEffectAuthRequest } from "./auth/http";
+import { authErrorResponse, makeEffectAuthRequest } from "./auth/effectHttp";
 import { ServerAuth } from "./auth/Services/ServerAuth";
 import { SessionCredentialService } from "./auth/Services/SessionCredentialService";
 import { CheckpointDiffQuery } from "./checkpointing/Services/CheckpointDiffQuery";

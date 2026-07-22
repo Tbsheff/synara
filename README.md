@@ -1,5 +1,8 @@
 # Synara
 
+To let a local MCP-capable app create and follow scoped Synara tasks, see
+[External MCP integrations](docs/external-mcp.md).
+
 Synara is a local-first desktop app for coding with the AI agents and subscriptions you already use.
 
 It brings chats, terminals, browser previews, diffs, branches, provider sessions, and handoffs into one focused workspace so you can run agent work without juggling a dozen windows.
@@ -8,7 +11,7 @@ It brings chats, terminals, browser previews, diffs, branches, provider sessions
 
 ## What it does
 
-- Use the AI accounts you already pay for: Claude Code, Codex, Gemini, OpenCode, Cursor, Grok, Kilo Code, and Pi.
+- Use the AI accounts you already pay for: Claude Code, Codex, Antigravity, OpenCode, Cursor, Grok, Kilo Code, and Pi.
 - Run parallel work across projects, threads, and isolated Git worktrees without branches stepping on each other.
 - Keep split chats, terminals, browser previews, and agent output visible in the same window.
 - Hand off a thread to another provider when you want a second model to pick up with the same context.
@@ -45,4 +48,4 @@ Focused issues and PRs are welcome, especially bug fixes, reliability fixes, and
 
 Read [CONTRIBUTING.md](./CONTRIBUTING.md) before opening an issue or PR.
 
-Need support? Join the [Discord](https://discord.gg/jn4EGJjrvv).
+Need support? [Open a GitHub issue](https://github.com/Emanuele-web04/synara/issues).
