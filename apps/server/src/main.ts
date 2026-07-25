@@ -11,8 +11,17 @@ import { Config, Data, Effect, FileSystem, Layer, Option, Path, Schema, ServiceM
 import { Command, Flag } from "effect/unstable/cli";
 import { NetService } from "@synara/shared/Net";
 import {
+  optionalBooleanEnvironmentConfig,
+  optionalBooleanFlag,
+  resolveBooleanConfig,
+  type BooleanFlagInput,
+} from "@synara/shared/cli";
+import {
   DEFAULT_PORT,
   deriveServerPaths,
+  normalizeHttpsPublicOrigin,
+  preparePrivateServerPaths,
+  remoteAccessPolicyError,
   resolveCanonicalWorkspaceRoots,
   resolveStaticDir,
   ServerConfig,
@@ -22,26 +31,51 @@ import {
 import { fixPath, resolveBaseDir } from "./os-jank";
 import { migrateLegacyHomeIfNeeded } from "./homeMigration";
 import { Open } from "./open";
+import { ServerAuth } from "./auth/Services/ServerAuth";
 import * as SqlitePersistence from "./persistence/Layers/Sqlite";
-import { makeServerProviderLayer, makeServerRuntimeServicesLayer } from "./serverLayers";
+import { makeServerApplicationLayers } from "./serverLayers";
 import { startServerMemoryDiagnostics } from "./memoryDiagnostics";
 import { startClaudeCredentialKeepalive } from "./provider/claudeCredentialKeepalive";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
-import { ProviderHealthLive } from "./provider/Layers/ProviderHealth";
 import { ProviderSessionReaperLive } from "./provider/Layers/ProviderSessionReaper";
 import { Server } from "./effectServer";
 import { ServerLoggerLive } from "./serverLogger";
 import { ServerSettingsService } from "./serverSettings";
-import { formatHostForUrl, isWildcardHost } from "./startupAccess";
+import { formatHostForUrl, isLoopbackHost, isWildcardHost } from "./startupAccess";
 import { AnalyticsServiceLayerLive } from "./telemetry/Layers/AnalyticsService";
 import { AnalyticsService } from "./telemetry/Services/AnalyticsService";
 import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine";
 import { startThreadRetentionJob } from "./threadRetention";
+import {
+  pairExternalMcpClient,
+  resolveExternalMcpBaseDir,
+  serveExternalMcpStdio,
+} from "./externalMcp/bridge";
+import { externalMcpLauncher, externalMcpShellCommand } from "./externalMcp/launcher";
 
 export class StartupError extends Data.TaggedError("StartupError")<{
   readonly message: string;
   readonly cause?: unknown;
 }> {}
+
+const DESKTOP_SHUTDOWN_TOKEN_ENV_KEY = "SYNARA_DESKTOP_SHUTDOWN_TOKEN";
+
+function consumeDesktopShutdownTokenFromProcessEnvironment(): string | undefined {
+  const matchingKeys =
+    process.platform === "win32"
+      ? Object.keys(process.env).filter(
+          (key) => key.toUpperCase() === DESKTOP_SHUTDOWN_TOKEN_ENV_KEY,
+        )
+      : [DESKTOP_SHUTDOWN_TOKEN_ENV_KEY];
+  let token: string | undefined;
+
+  for (const key of matchingKeys) {
+    token ??= process.env[key];
+    delete process.env[key];
+  }
+
+  return token;
+}
 
 interface CliInput {
   readonly mode: Option.Option<RuntimeMode>;
@@ -49,11 +83,13 @@ interface CliInput {
   readonly host: Option.Option<string>;
   readonly synaraHome: Option.Option<string>;
   readonly devUrl: Option.Option<URL>;
-  readonly noBrowser: Option.Option<boolean>;
+  readonly publicUrl: Option.Option<URL>;
+  readonly allowInsecureRemote: BooleanFlagInput;
+  readonly noBrowser: BooleanFlagInput;
   readonly authToken: Option.Option<string>;
-  readonly autoBootstrapProjectFromCwd: Option.Option<boolean>;
-  readonly logProviderEvents: Option.Option<boolean>;
-  readonly logWebSocketEvents: Option.Option<boolean>;
+  readonly autoBootstrapProjectFromCwd: BooleanFlagInput;
+  readonly logProviderEvents: BooleanFlagInput;
+  readonly logWebSocketEvents: BooleanFlagInput;
 }
 
 /**
@@ -113,30 +149,23 @@ const CliEnvConfig = Config.all({
   host: Config.string("SYNARA_HOST").pipe(Config.option, Config.map(Option.getOrUndefined)),
   synaraHome: Config.string("SYNARA_HOME").pipe(Config.option, Config.map(Option.getOrUndefined)),
   devUrl: Config.url("VITE_DEV_SERVER_URL").pipe(Config.option, Config.map(Option.getOrUndefined)),
-  noBrowser: Config.boolean("SYNARA_NO_BROWSER").pipe(
-    Config.option,
-    Config.map(Option.getOrUndefined),
-  ),
+  publicUrl: Config.url("SYNARA_PUBLIC_URL").pipe(Config.option, Config.map(Option.getOrUndefined)),
+  allowInsecureRemote: optionalBooleanEnvironmentConfig("SYNARA_ALLOW_INSECURE_REMOTE"),
+  noBrowser: optionalBooleanEnvironmentConfig("SYNARA_NO_BROWSER"),
   authToken: Config.string("SYNARA_AUTH_TOKEN").pipe(
     Config.option,
     Config.map(Option.getOrUndefined),
   ),
-  autoBootstrapProjectFromCwd: Config.boolean("SYNARA_AUTO_BOOTSTRAP_PROJECT_FROM_CWD").pipe(
+  desktopShutdownToken: Config.string("SYNARA_DESKTOP_SHUTDOWN_TOKEN").pipe(
     Config.option,
     Config.map(Option.getOrUndefined),
   ),
-  logProviderEvents: Config.boolean("SYNARA_LOG_PROVIDER_EVENTS").pipe(
-    Config.option,
-    Config.map(Option.getOrUndefined),
+  autoBootstrapProjectFromCwd: optionalBooleanEnvironmentConfig(
+    "SYNARA_AUTO_BOOTSTRAP_PROJECT_FROM_CWD",
   ),
-  logWebSocketEvents: Config.boolean("SYNARA_LOG_WS_EVENTS").pipe(
-    Config.option,
-    Config.map(Option.getOrUndefined),
-  ),
+  logProviderEvents: optionalBooleanEnvironmentConfig("SYNARA_LOG_PROVIDER_EVENTS"),
+  logWebSocketEvents: optionalBooleanEnvironmentConfig("SYNARA_LOG_WS_EVENTS"),
 });
-
-const resolveBooleanFlag = (flag: Option.Option<boolean>, envValue: boolean) =>
-  Option.getOrElse(Option.filter(flag, Boolean), () => envValue);
 
 const ServerConfigLive = (input: CliInput) =>
   Layer.effect(
@@ -149,6 +178,9 @@ const ServerConfigLive = (input: CliInput) =>
           (cause) =>
             new StartupError({ message: "Failed to read environment configuration", cause }),
         ),
+      );
+      const liveProcessDesktopShutdownToken = yield* Effect.sync(
+        consumeDesktopShutdownTokenFromProcessEnvironment,
       );
 
       const mode = Option.getOrElse(input.mode, () => env.mode);
@@ -167,6 +199,21 @@ const ServerConfigLive = (input: CliInput) =>
       });
 
       const devUrl = Option.getOrElse(input.devUrl, () => env.devUrl);
+      const configuredPublicUrl = Option.getOrUndefined(input.publicUrl) ?? env.publicUrl;
+      const publicUrl = configuredPublicUrl
+        ? (normalizeHttpsPublicOrigin(configuredPublicUrl) ?? undefined)
+        : undefined;
+      if (configuredPublicUrl && publicUrl === undefined) {
+        return yield* new StartupError({
+          message:
+            "SYNARA_PUBLIC_URL/--public-url must be an HTTPS root origin without credentials, path, query, or fragment (for example https://synara.example.com).",
+        });
+      }
+      const allowInsecureRemote = resolveBooleanConfig(
+        input.allowInsecureRemote,
+        env.allowInsecureRemote,
+        false,
+      );
       const configuredHome = Option.getOrUndefined(input.synaraHome) ?? env.synaraHome;
       const baseDir = yield* resolveBaseDir(configuredHome);
       const userHomeDir = OS.homedir();
@@ -184,29 +231,50 @@ const ServerConfigLive = (input: CliInput) =>
         ),
       );
       const derivedPaths = yield* deriveServerPaths(baseDir, devUrl);
-      const noBrowser = resolveBooleanFlag(input.noBrowser, env.noBrowser ?? mode === "desktop");
+      yield* Effect.try({
+        try: () => preparePrivateServerPaths(derivedPaths),
+        catch: (cause) =>
+          new StartupError({ message: "Failed to secure Synara's local state directory", cause }),
+      });
+      const noBrowser = resolveBooleanConfig(input.noBrowser, env.noBrowser, mode === "desktop");
       const authToken = Option.getOrUndefined(input.authToken) ?? env.authToken;
-      const autoBootstrapProjectFromCwd = resolveBooleanFlag(
+      const desktopShutdownToken = env.desktopShutdownToken ?? liveProcessDesktopShutdownToken;
+      const autoBootstrapProjectFromCwd = resolveBooleanConfig(
         input.autoBootstrapProjectFromCwd,
-        env.autoBootstrapProjectFromCwd ?? mode === "web",
+        env.autoBootstrapProjectFromCwd,
+        mode === "web",
       );
       // Provider event NDJSON logging is helpful for debugging, but it is too
       // expensive to keep enabled on the streaming hot path by default.
-      const logProviderEvents = resolveBooleanFlag(
+      const logProviderEvents = resolveBooleanConfig(
         input.logProviderEvents,
-        env.logProviderEvents ?? false,
+        env.logProviderEvents,
+        false,
       );
       // Keep websocket payload logging opt-in in dev. Terminal/TUI traffic is
       // high-volume enough that automatic logging adds noticeable CPU and I/O.
-      const logWebSocketEvents = resolveBooleanFlag(
+      const logWebSocketEvents = resolveBooleanConfig(
         input.logWebSocketEvents,
-        env.logWebSocketEvents ?? false,
+        env.logWebSocketEvents,
+        false,
       );
       const staticDir = devUrl ? undefined : yield* cliConfig.resolveStaticDir;
-      const host =
-        Option.getOrUndefined(input.host) ??
-        env.host ??
-        (mode === "desktop" ? "127.0.0.1" : undefined);
+      // Omitting Node's host listens on an unspecified address, which exposes
+      // the server beyond the local machine on common platforms. Keep every
+      // mode loopback-only unless remote access is explicit and authenticated.
+      const host = Option.getOrUndefined(input.host) ?? env.host ?? "127.0.0.1";
+      const remotePolicyError = remoteAccessPolicyError({
+        host,
+        authToken,
+        devUrl,
+        publicUrl,
+        allowInsecureRemote,
+      });
+      if (remotePolicyError) {
+        return yield* new StartupError({
+          message: remotePolicyError,
+        });
+      }
 
       const { homeDir, chatWorkspaceRoot, studioWorkspaceRoot } =
         yield* resolveCanonicalWorkspaceRoots({ homeDir: userHomeDir });
@@ -223,8 +291,11 @@ const ServerConfigLive = (input: CliInput) =>
         ...derivedPaths,
         staticDir,
         devUrl,
+        publicUrl,
+        allowInsecureRemote,
         noBrowser,
         authToken,
+        desktopShutdownToken,
         autoBootstrapProjectFromCwd,
         logProviderEvents,
         logWebSocketEvents,
@@ -235,13 +306,7 @@ const ServerConfigLive = (input: CliInput) =>
   );
 
 const LayerLive = (input: CliInput) => {
-  const runtimeServicesLayer = makeServerRuntimeServicesLayer();
-  const providerLayer = makeServerProviderLayer();
-  const providerHealthLayer = ProviderHealthLive.pipe(
-    // Provider health reads persisted provider settings while constructing its
-    // cache, so build it with the same runtime services layer exposed to Server.
-    Layer.provideMerge(runtimeServicesLayer),
-  );
+  const { runtimeServicesLayer, providerLayer } = makeServerApplicationLayers();
   const providerSessionReaperLayer = ProviderSessionReaperLive.pipe(
     // The reaper coordinates orchestration state with live provider sessions,
     // so it belongs at the top level where both layers are available.
@@ -252,7 +317,6 @@ const LayerLive = (input: CliInput) => {
   return Layer.empty.pipe(
     Layer.provideMerge(runtimeServicesLayer),
     Layer.provideMerge(providerLayer),
-    Layer.provideMerge(providerHealthLayer),
     Layer.provideMerge(providerSessionReaperLayer),
     Layer.provideMerge(SqlitePersistence.layerConfig),
     Layer.provideMerge(ServerLoggerLive),
@@ -282,11 +346,25 @@ export const recordStartupHeartbeat = Effect.gen(function* () {
   });
 });
 
+export function makeServerStartupLogData(config: ServerConfigShape): Record<string, unknown> {
+  const safeConfig: Record<string, unknown> = { ...config };
+  delete safeConfig.authToken;
+  delete safeConfig.desktopShutdownToken;
+  delete safeConfig.devUrl;
+
+  return {
+    ...safeConfig,
+    devUrl: config.devUrl?.toString(),
+    authEnabled: Boolean(config.authToken),
+  };
+}
+
 const makeServerProgram = (input: CliInput) =>
   Effect.gen(function* () {
     const cliConfig = yield* CliConfig;
     const { start, stopSignal } = yield* Server;
     const openDeps = yield* Open;
+    const serverAuth = yield* ServerAuth;
     const serverSettings = yield* ServerSettingsService;
     yield* cliConfig.fixPath;
 
@@ -303,6 +381,25 @@ const makeServerProgram = (input: CliInput) =>
     }
 
     yield* start;
+
+    const localUrl = `http://localhost:${config.port}`;
+    const bindUrl =
+      config.host && !isWildcardHost(config.host)
+        ? `http://${formatHostForUrl(config.host)}:${config.port}`
+        : localUrl;
+    const pairingBaseUrl = config.publicUrl?.origin ?? bindUrl;
+    const startupPairingUrl =
+      config.publicUrl || !isLoopbackHost(config.host)
+        ? yield* serverAuth.issueStartupPairingUrl(pairingBaseUrl).pipe(
+            Effect.mapError(
+              (cause) =>
+                new StartupError({
+                  message: "Failed to create the remote-access startup pairing link.",
+                  cause,
+                }),
+            ),
+          )
+        : undefined;
 
     const orchestrationEngine = yield* OrchestrationEngineService;
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
@@ -329,20 +426,33 @@ const makeServerProgram = (input: CliInput) =>
       }),
     );
 
-    const localUrl = `http://localhost:${config.port}`;
-    const bindUrl =
-      config.host && !isWildcardHost(config.host)
-        ? `http://${formatHostForUrl(config.host)}:${config.port}`
-        : localUrl;
-    const { authToken, devUrl, ...safeConfig } = config;
-    yield* Effect.logInfo("Synara running", {
-      ...safeConfig,
-      devUrl: devUrl?.toString(),
-      authEnabled: Boolean(authToken),
-    });
+    yield* Effect.logInfo("Synara running", makeServerStartupLogData(config));
+    if (startupPairingUrl) {
+      if (config.allowInsecureRemote && !config.publicUrl) {
+        yield* Effect.logWarning(
+          "INSECURE REMOTE ACCESS ENABLED: credentials and session traffic are unencrypted",
+          {
+            pairingUrl: startupPairingUrl,
+            hint: "Use only on a trusted LAN. Configure SYNARA_PUBLIC_URL behind HTTPS for protected remote access.",
+          },
+        );
+      }
+      yield* Effect.logInfo(
+        config.publicUrl
+          ? "Remote access requires an authenticated owner session"
+          : "Insecure remote pairing link created",
+        {
+          pairingUrl: startupPairingUrl,
+          hint:
+            isWildcardHost(config.host) && !config.publicUrl
+              ? "Replace localhost in this one-time URL with the server's reachable hostname or IP."
+              : "Open this one-time URL to establish the first owner session.",
+        },
+      );
+    }
 
     if (!config.noBrowser) {
-      const target = config.devUrl?.toString() ?? bindUrl;
+      const target = startupPairingUrl ?? config.devUrl?.toString() ?? bindUrl;
       yield* openDeps.openBrowser(target).pipe(
         Effect.catch(() =>
           Effect.logInfo("browser auto-open unavailable", {
@@ -353,7 +463,7 @@ const makeServerProgram = (input: CliInput) =>
     }
 
     return yield* stopSignal;
-  }).pipe(Effect.provide(LayerLive(input)));
+  }).pipe(Effect.scoped, Effect.provide(LayerLive(input)));
 
 /**
  * These flags mirrors the environment variables and the config shape.
@@ -381,47 +491,128 @@ const devUrlFlag = Flag.string("dev-url").pipe(
   Flag.withDescription("Dev web URL to proxy/redirect to (equivalent to VITE_DEV_SERVER_URL)."),
   Flag.optional,
 );
-const noBrowserFlag = Flag.boolean("no-browser").pipe(
-  Flag.withDescription("Disable automatic browser opening."),
+const publicUrlFlag = Flag.string("public-url").pipe(
+  Flag.withSchema(Schema.URLFromString),
+  Flag.withDescription(
+    "HTTPS public root origin provided by a TLS-terminating reverse proxy (equivalent to SYNARA_PUBLIC_URL).",
+  ),
   Flag.optional,
 );
+const allowInsecureRemoteFlag = optionalBooleanFlag("allow-insecure-remote", {
+  description:
+    "Explicitly allow unencrypted authenticated remote access on a trusted LAN (equivalent to SYNARA_ALLOW_INSECURE_REMOTE).",
+});
+const noBrowserFlag = optionalBooleanFlag("no-browser", {
+  description: "Disable automatic browser opening.",
+  negativeName: "browser",
+  negativeDescription: "Enable automatic browser opening.",
+});
 const authTokenFlag = Flag.string("auth-token").pipe(
   Flag.withDescription("Auth token required for WebSocket connections."),
   Flag.withAlias("token"),
   Flag.optional,
 );
-const autoBootstrapProjectFromCwdFlag = Flag.boolean("auto-bootstrap-project-from-cwd").pipe(
-  Flag.withDescription(
-    "Create a project for the current working directory on startup when missing.",
-  ),
-  Flag.optional,
-);
-const logProviderEventsFlag = Flag.boolean("log-provider-events").pipe(
-  Flag.withDescription(
+const autoBootstrapProjectFromCwdFlag = optionalBooleanFlag("auto-bootstrap-project-from-cwd", {
+  description: "Create a project for the current working directory on startup when missing.",
+});
+const logProviderEventsFlag = optionalBooleanFlag("log-provider-events", {
+  description:
     "Emit native/canonical provider NDJSON logs for debugging (equivalent to SYNARA_LOG_PROVIDER_EVENTS).",
-  ),
-  Flag.optional,
-);
-const logWebSocketEventsFlag = Flag.boolean("log-websocket-events").pipe(
-  Flag.withDescription(
+});
+const logWebSocketEventsFlag = optionalBooleanFlag("log-websocket-events", {
+  description:
     "Emit server-side logs for outbound WebSocket push traffic (equivalent to SYNARA_LOG_WS_EVENTS).",
+  aliases: ["log-ws-events"],
+});
+
+const mcpIntegrationFlag = Flag.string("integration").pipe(
+  Flag.withDescription(
+    "Paired integration id to serve (required only when more than one is stored).",
   ),
-  Flag.withAlias("log-ws-events"),
   Flag.optional,
 );
 
-export const synaraCli = Command.make("synara", {
+// Base `synara` command defined before the MCP subcommands so they can yield
+// its parsed input (notably `--home-dir` / `synaraHome`) via Effect's command
+// context. This avoids a duplicate `--home-dir` flag between the root command
+// and its MCP subcommands, which the Effect CLI assigns to the parent and
+// leaves the subcommand flag unset.
+const baseServerCommand = Command.make("synara", {
   mode: modeFlag,
   port: portFlag,
   host: hostFlag,
   synaraHome: synaraHomeFlag,
   devUrl: devUrlFlag,
+  publicUrl: publicUrlFlag,
+  allowInsecureRemote: allowInsecureRemoteFlag,
   noBrowser: noBrowserFlag,
   authToken: authTokenFlag,
   autoBootstrapProjectFromCwd: autoBootstrapProjectFromCwdFlag,
   logProviderEvents: logProviderEventsFlag,
   logWebSocketEvents: logWebSocketEventsFlag,
-}).pipe(
-  Command.withDescription("Run the Synara server."),
-  Command.withHandler((input) => Effect.scoped(makeServerProgram(input))),
+}).pipe(Command.withDescription("Run the Synara server."));
+
+const mcpServeCommand = Command.make(
+  "serve",
+  { integration: mcpIntegrationFlag },
+  ({ integration }) =>
+    Effect.gen(function* () {
+      const parent = yield* baseServerCommand;
+      const baseDir = resolveExternalMcpBaseDir(Option.getOrUndefined(parent.synaraHome));
+      yield* Effect.tryPromise({
+        try: () =>
+          serveExternalMcpStdio({
+            baseDir,
+            ...(Option.isSome(integration) ? { integrationId: integration.value } : {}),
+          }),
+        catch: (cause) =>
+          new StartupError({ message: "External MCP stdio bridge stopped.", cause }),
+      });
+    }),
+).pipe(
+  Command.withDescription(
+    "Serve the paired Synara external MCP integration over stdio for Codex, Claude, and other MCP clients.",
+  ),
 );
+
+const mcpPairCommand = Command.make(
+  "pair",
+  {
+    code: Flag.string("code").pipe(
+      Flag.withDescription("Short-lived pairing code issued by Synara Settings."),
+    ),
+  },
+  ({ code }) =>
+    Effect.gen(function* () {
+      const parent = yield* baseServerCommand;
+      const baseDir = resolveExternalMcpBaseDir(Option.getOrUndefined(parent.synaraHome));
+      const paired = yield* Effect.tryPromise({
+        try: () =>
+          pairExternalMcpClient({
+            baseDir,
+            pairingCode: code,
+          }),
+        catch: (cause) => new StartupError({ message: "External MCP pairing failed.", cause }),
+      });
+      process.stdout.write(
+        `Paired Synara external MCP integration "${paired.paired.name}".\nCredential stored privately at ${paired.storePath}.\nConfigure the MCP client command as: ${externalMcpShellCommand(externalMcpLauncher(["mcp", "serve", "--integration", paired.paired.integrationId, "--home-dir", baseDir]))}\n`,
+      );
+      if (process.platform === "win32") {
+        process.stdout.write(
+          "Windows note: Synara stores this credential under your user profile, but Windows does not expose POSIX 0600 permission checks. Protect the profile and its Synara data directory.\n",
+        );
+      }
+    }),
+).pipe(Command.withDescription("Pair this CLI with a user-approved Synara MCP integration."));
+
+const mcpCommand = Command.make("mcp").pipe(
+  Command.withDescription("Manage Synara's loopback external MCP bridge."),
+  Command.withSubcommands([mcpServeCommand, mcpPairCommand]),
+);
+
+const serverCommand = baseServerCommand.pipe(
+  Command.withHandler((input) => makeServerProgram(input)),
+  Command.withSubcommands([mcpCommand]),
+);
+
+export const synaraCli = serverCommand;

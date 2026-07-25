@@ -209,10 +209,61 @@ export const UserInputResolvedPayload = Schema.Struct({
 });
 export type UserInputResolvedPayload = typeof UserInputResolvedPayload.Type;
 
+export const WorkflowPhase = Schema.Struct({
+  title: TrimmedNonEmptyStringSchema,
+  detail: Schema.optional(TrimmedNonEmptyStringSchema),
+});
+export type WorkflowPhase = typeof WorkflowPhase.Type;
+
+export const WorkflowAgentSnapshot = Schema.Struct({
+  label: TrimmedNonEmptyStringSchema,
+  phaseIndex: Schema.optional(Schema.Int),
+  phaseTitle: Schema.optional(TrimmedNonEmptyStringSchema),
+  agentId: Schema.optional(TrimmedNonEmptyStringSchema),
+  model: Schema.optional(TrimmedNonEmptyStringSchema),
+  effort: Schema.optional(TrimmedNonEmptyStringSchema),
+  state: Schema.optional(TrimmedNonEmptyStringSchema),
+  tokens: Schema.optional(Schema.Int),
+  toolCalls: Schema.optional(Schema.Int),
+  durationMs: Schema.optional(Schema.Int),
+  lastToolName: Schema.optional(TrimmedNonEmptyStringSchema),
+  promptPreview: Schema.optional(TrimmedNonEmptyStringSchema),
+});
+export type WorkflowAgentSnapshot = typeof WorkflowAgentSnapshot.Type;
+
+export const WorkflowAgentRuntimeSnapshot = Schema.Struct({
+  agentId: TrimmedNonEmptyStringSchema,
+  label: Schema.optional(TrimmedNonEmptyStringSchema),
+  model: Schema.optional(TrimmedNonEmptyStringSchema),
+  effort: Schema.optional(TrimmedNonEmptyStringSchema),
+  state: Schema.optional(Schema.Literals(["running", "completed"])),
+  tokens: Schema.optional(Schema.Int),
+  toolCalls: Schema.optional(Schema.Int),
+  recentToolNames: Schema.optional(Schema.Array(TrimmedNonEmptyStringSchema)),
+  promptPreview: Schema.optional(TrimmedNonEmptyStringSchema),
+  startedAt: Schema.optional(TrimmedNonEmptyStringSchema),
+  lastActivityAt: Schema.optional(TrimmedNonEmptyStringSchema),
+});
+export type WorkflowAgentRuntimeSnapshot = typeof WorkflowAgentRuntimeSnapshot.Type;
+
+export const WorkflowAgentPlan = Schema.Struct({
+  phase: Schema.optional(TrimmedNonEmptyStringSchema),
+  model: Schema.optional(TrimmedNonEmptyStringSchema),
+  effort: Schema.optional(TrimmedNonEmptyStringSchema),
+});
+export type WorkflowAgentPlan = typeof WorkflowAgentPlan.Type;
+
 export const TaskStartedPayload = Schema.Struct({
   taskId: RuntimeTaskId,
   description: Schema.optional(TrimmedNonEmptyStringSchema),
   taskType: Schema.optional(TrimmedNonEmptyStringSchema),
+  subagentType: Schema.optional(TrimmedNonEmptyStringSchema),
+  workflowName: Schema.optional(TrimmedNonEmptyStringSchema),
+  workflowTaskId: Schema.optional(RuntimeTaskId),
+  workflowPhases: Schema.optional(Schema.Array(WorkflowPhase)),
+  workflowAgentPhases: Schema.optional(Schema.Record(Schema.String, Schema.String)),
+  workflowAgentPlans: Schema.optional(Schema.Record(Schema.String, WorkflowAgentPlan)),
+  toolUseId: Schema.optional(TrimmedNonEmptyStringSchema),
 });
 export type TaskStartedPayload = typeof TaskStartedPayload.Type;
 
@@ -222,14 +273,32 @@ export const TaskProgressPayload = Schema.Struct({
   summary: Schema.optional(TrimmedNonEmptyStringSchema),
   usage: Schema.optional(Schema.Unknown),
   lastToolName: Schema.optional(TrimmedNonEmptyStringSchema),
+  workflowTaskId: Schema.optional(RuntimeTaskId),
+  workflowAgents: Schema.optional(Schema.Array(WorkflowAgentRuntimeSnapshot)),
 });
 export type TaskProgressPayload = typeof TaskProgressPayload.Type;
+
+export const TaskUpdatedPayload = Schema.Struct({
+  taskId: RuntimeTaskId,
+  status: Schema.optional(
+    Schema.Literals(["pending", "running", "completed", "failed", "killed", "paused"]),
+  ),
+  error: Schema.optional(TrimmedNonEmptyStringSchema),
+  isBackgrounded: Schema.optional(Schema.Boolean),
+  toolUseId: Schema.optional(TrimmedNonEmptyStringSchema),
+  workflowTaskId: Schema.optional(RuntimeTaskId),
+  workflowRunId: Schema.optional(TrimmedNonEmptyStringSchema),
+  workflowScriptPath: Schema.optional(TrimmedNonEmptyStringSchema),
+});
+export type TaskUpdatedPayload = typeof TaskUpdatedPayload.Type;
 
 export const TaskCompletedPayload = Schema.Struct({
   taskId: RuntimeTaskId,
   status: Schema.Literals(["completed", "failed", "stopped"]),
   summary: Schema.optional(TrimmedNonEmptyStringSchema),
   usage: Schema.optional(Schema.Unknown),
+  workflowTaskId: Schema.optional(RuntimeTaskId),
+  workflowAgents: Schema.optional(Schema.Array(WorkflowAgentSnapshot)),
 });
 export type TaskCompletedPayload = typeof TaskCompletedPayload.Type;
 

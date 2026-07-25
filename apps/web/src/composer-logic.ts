@@ -1,5 +1,9 @@
 import { splitPromptIntoComposerSegments } from "./composer-editor-mentions";
 import { isBuiltInComposerSlashCommand, type ComposerSlashCommand } from "./composerSlashCommands";
+import {
+  composerMentionQuotedPathHasClosingQuote,
+  decodeComposerMentionQuotedPath,
+} from "./lib/composerMentions";
 import { INLINE_TERMINAL_CONTEXT_PLACEHOLDER } from "./lib/terminalContext";
 
 export type ComposerTriggerKind = "mention" | "slash-command" | "slash-model" | "skill";
@@ -296,8 +300,6 @@ export function isCollapsedCursorAdjacentToInlineToken(
   return false;
 }
 
-export const isCollapsedCursorAdjacentToMention = isCollapsedCursorAdjacentToInlineToken;
-
 export function detectComposerTrigger(text: string, cursorInput: number): ComposerTrigger | null {
   const cursor = clampCursor(text, cursorInput);
   const lineStart = text.lastIndexOf("\n", Math.max(0, cursor - 1)) + 1;
@@ -362,10 +364,10 @@ export function detectComposerTrigger(text: string, cursorInput: number): Compos
   const quotedMentionStart = linePrefix.lastIndexOf('@"');
   if (quotedMentionStart !== -1) {
     const afterOpen = linePrefix.slice(quotedMentionStart + 2);
-    if (!afterOpen.includes("@") && !afterOpen.includes('"')) {
+    if (!composerMentionQuotedPathHasClosingQuote(afterOpen)) {
       return {
         kind: "mention",
-        query: afterOpen,
+        query: decodeComposerMentionQuotedPath(afterOpen),
         rangeStart: lineStart + quotedMentionStart,
         rangeEnd: cursor,
       };

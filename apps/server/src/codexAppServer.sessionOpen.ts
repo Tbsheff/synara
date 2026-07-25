@@ -59,7 +59,7 @@ export interface CodexSessionOpenDeps {
     readonly cwd: string;
     readonly homePath?: string;
     readonly hasSuppliedTransport?: boolean;
-  }): void;
+  }): Promise<void>;
   createTransport(
     input: CodexTransportFactoryInput,
     perSessionFactory?: CodexTransportFactory,
@@ -151,7 +151,7 @@ export async function startSession(
     const codexOptions = readCodexProviderOptions(input);
     const codexBinaryPath = codexOptions.binaryPath ?? "codex";
     const codexHomePath = codexOptions.homePath;
-    deps.assertSupportedCodexCliVersion({
+    await deps.assertSupportedCodexCliVersion({
       binaryPath: codexBinaryPath,
       cwd: resolvedCwd,
       ...(codexHomePath ? { homePath: codexHomePath } : {}),
@@ -528,7 +528,7 @@ export async function forkThread(
     });
     const codexBinaryPath = codexOptions.binaryPath ?? "codex";
     const codexHomePath = codexOptions.homePath;
-    deps.assertSupportedCodexCliVersion({
+    await deps.assertSupportedCodexCliVersion({
       binaryPath: codexBinaryPath,
       cwd: resolvedCwd,
       ...(codexHomePath ? { homePath: codexHomePath } : {}),

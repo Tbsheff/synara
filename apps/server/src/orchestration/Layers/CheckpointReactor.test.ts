@@ -1559,15 +1559,20 @@ describe("CheckpointReactor", () => {
         createdAt,
       }),
     );
-    await waitForThread(harness.engine, (entry) =>
-      entry.checkpoints.some(
-        (checkpoint) => checkpoint.checkpointTurnCount === 2 && checkpoint.files?.length === 0,
-      ),
+    await waitForThread(
+      harness.engine,
+      (entry) =>
+        entry.checkpoints.some(
+          (checkpoint) => checkpoint.checkpointTurnCount === 2 && checkpoint.files?.length === 0,
+        ) && entry.activities.some((activity) => activity.kind === "checkpoint.revert.succeeded"),
     );
     const afterFirstUndo = (await Effect.runPromise(harness.engine.getReadModel())).threads.find(
       (entry) => entry.id === threadId,
     );
-    expect(afterFirstUndo?.activities).toEqual([]);
+    expect(afterFirstUndo?.activities.map((activity) => activity.kind)).toEqual([
+      "checkpoint.revert.started",
+      "checkpoint.revert.succeeded",
+    ]);
     expect(
       afterFirstUndo?.checkpoints.find((checkpoint) => checkpoint.checkpointTurnCount === 2)?.files,
     ).toEqual([]);
@@ -1721,10 +1726,12 @@ describe("CheckpointReactor", () => {
         createdAt,
       }),
     );
-    await waitForThread(harness.engine, (entry) =>
-      entry.checkpoints.some(
-        (checkpoint) => checkpoint.checkpointTurnCount === 2 && checkpoint.files?.length === 0,
-      ),
+    await waitForThread(
+      harness.engine,
+      (entry) =>
+        entry.checkpoints.some(
+          (checkpoint) => checkpoint.checkpointTurnCount === 2 && checkpoint.files?.length === 0,
+        ) && entry.activities.some((activity) => activity.kind === "checkpoint.revert.succeeded"),
     );
 
     expect(fs.existsSync(path.join(harness.cwd, "before.txt"))).toBe(true);
@@ -1733,7 +1740,10 @@ describe("CheckpointReactor", () => {
     const thread = (await Effect.runPromise(harness.engine.getReadModel())).threads.find(
       (entry) => entry.id === threadId,
     );
-    expect(thread?.activities).toEqual([]);
+    expect(thread?.activities.map((activity) => activity.kind)).toEqual([
+      "checkpoint.revert.started",
+      "checkpoint.revert.succeeded",
+    ]);
     expect(harness.provider.rollbackConversation).not.toHaveBeenCalled();
   });
 
@@ -2060,6 +2070,12 @@ describe("CheckpointReactor", () => {
         turnCount: 1,
         createdAt,
       }),
+    );
+    await waitForThread(harness.engine, (entry) =>
+      entry.activities.some(
+        (activity) =>
+          activity.kind === "checkpoint.revert.succeeded" && activity.payload.turnCount === 1,
+      ),
     );
     await Effect.runPromise(
       harness.engine.dispatch({

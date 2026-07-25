@@ -348,6 +348,72 @@ export interface BrowserCaptureScreenshotResult {
   bytes: Uint8Array;
 }
 
+export type DesktopAppSnapPlatform = "macos" | "windows" | "linux" | "other";
+export type DesktopAppSnapPermission =
+  | "granted"
+  | "denied"
+  | "not-determined"
+  | "restricted"
+  | "unknown";
+export type DesktopAppSnapStatus =
+  | "unsupported"
+  | "disabled"
+  | "permission-required"
+  | "starting"
+  | "ready"
+  | "error";
+
+export type DesktopAppSnapShortcutModifier = "command" | "control" | "option" | "shift";
+
+export interface DesktopAppSnapKeyChord {
+  kind: "key-chord";
+  modifier: DesktopAppSnapShortcutModifier;
+  /** A physical DOM KeyboardEvent.code, such as `KeyS` or `Space`. */
+  key: string;
+}
+
+export type DesktopAppSnapShortcut = { kind: "both-option-keys" } | DesktopAppSnapKeyChord;
+
+export interface DesktopAppSnapShortcutAvailability {
+  available: boolean;
+  reason: string | null;
+}
+
+export interface DesktopAppSnapShortcutUpdateResult {
+  state: DesktopAppSnapState;
+  availability: DesktopAppSnapShortcutAvailability;
+}
+
+export interface DesktopAppSnapState {
+  platform: DesktopAppSnapPlatform;
+  supported: boolean;
+  enabled: boolean;
+  status: DesktopAppSnapStatus;
+  shortcut: DesktopAppSnapShortcut | null;
+  inputMonitoringPermission: DesktopAppSnapPermission;
+  screenRecordingPermission: DesktopAppSnapPermission;
+  message: string | null;
+}
+
+export interface DesktopAppSnapCapture {
+  id: string;
+  capturedAt: string;
+  name: string;
+  mimeType: "image/png";
+  sizeBytes: number;
+  bytes: Uint8Array;
+  sourceAppName: string | null;
+  sourceBundleIdentifier: string | null;
+  sourceAppIconDataUrl: string | null;
+  sourceWindowTitle: string | null;
+}
+
+export interface DesktopAppSnapErrorEvent {
+  code: string;
+  message: string;
+  capturedAt: string;
+}
+
 export interface BrowserExecuteCdpInput extends BrowserTabInput {
   method: string;
   params?: Record<string, unknown>;
@@ -380,6 +446,11 @@ export interface SynaraStorageSnapshot {
 
 export interface DesktopBridge {
   getWsUrl: () => string | null;
+  /**
+   * Absolute filesystem path for a File from drag/drop or file inputs.
+   * Electron only (`webUtils.getPathForFile`). Returns null when unavailable.
+   */
+  getPathForFile?: (file: File) => string | null;
   pickFolder: () => Promise<string | null>;
   saveFile?: (input: {
     defaultFilename: string;
@@ -418,6 +489,20 @@ export interface DesktopBridge {
   notifications: {
     isSupported: () => Promise<boolean>;
     show: (input: DesktopNotificationInput) => Promise<boolean>;
+  };
+  appSnap: {
+    getState: () => Promise<DesktopAppSnapState>;
+    setEnabled: (enabled: boolean) => Promise<DesktopAppSnapState>;
+    checkShortcut: (
+      shortcut: DesktopAppSnapShortcut,
+    ) => Promise<DesktopAppSnapShortcutAvailability>;
+    setShortcut: (shortcut: DesktopAppSnapShortcut) => Promise<DesktopAppSnapShortcutUpdateResult>;
+    requestPermissions: () => Promise<DesktopAppSnapState>;
+    listPendingCaptures: () => Promise<DesktopAppSnapCapture[]>;
+    acknowledgeCapture: (captureId: string) => Promise<void>;
+    onCaptured: (listener: (capture: DesktopAppSnapCapture) => void) => () => void;
+    onError: (listener: (error: DesktopAppSnapErrorEvent) => void) => () => void;
+    onState: (listener: (state: DesktopAppSnapState) => void) => () => void;
   };
   storageMigration: {
     readSnapshot: () => SynaraStorageSnapshot | null;

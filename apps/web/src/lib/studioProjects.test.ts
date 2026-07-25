@@ -59,6 +59,7 @@ vi.mock("../nativeApi", () => ({
             ? nativeApiMock.shellSnapshotProjectBatches.shift()!
             : nativeApiMock.shellSnapshotProjects;
         return {
+          spaces: [],
           projects,
           threads: [],
           snapshotSequence: 1,
@@ -80,6 +81,7 @@ function makeProject(overrides: Partial<Project> = {}): Project {
     cwd: "/Users/tester/Documents/Synara/Studio",
     defaultModelSelection: null,
     expanded: false,
+    spaceId: null,
     scripts: [],
     ...overrides,
   };
@@ -92,10 +94,11 @@ describe("studioProjects", () => {
     nativeApiMock.shellSnapshotProjects = [];
     nativeApiMock.shellSnapshotProjectBatches = [];
     useStore.setState({
+      spaces: [],
       projects: [],
-      threads: [],
       sidebarThreadSummaryById: {},
       threadIds: [],
+      threadShellById: {},
       threadsHydrated: true,
     });
   });

@@ -22,11 +22,7 @@ export function deriveUserMessagePreviewState(
   const maxChars = Math.max(0, safeMaxChars);
 
   if (expanded || text.length <= maxChars) {
-    return {
-      text,
-      collapsible: text.length > maxChars,
-      truncated: false,
-    };
+    return { text, collapsible: text.length > maxChars, truncated: false };
   }
 
   return {

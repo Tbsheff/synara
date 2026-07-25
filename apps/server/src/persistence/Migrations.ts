@@ -13,7 +13,7 @@ import * as Layer from "effect/Layer";
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
-import { MigrationLineageError } from "./Errors.ts";
+import { MigrationLineageError, MigrationSchemaTooNewError } from "./Errors.ts";
 
 // Import all migrations statically
 import Migration0001 from "./Migrations/001_OrchestrationEvents.ts";
@@ -53,34 +53,62 @@ import Migration0034 from "./Migrations/034_AuthAccessManagement.ts";
 import Migration0035 from "./Migrations/035_NormalizeLegacyModelSelectionOptions.ts";
 import Migration0036 from "./Migrations/036_ProjectionThreadsPinned.ts";
 import Migration0037 from "./Migrations/037_ProjectionSnapshotCapIndexes.ts";
-import Migration0038 from "./Migrations/038_ExecutionRuntimeTables.ts";
-import Migration0039 from "./Migrations/039_ReviewCache.ts";
-import Migration0040 from "./Migrations/040_ProjectionThreadsReviewChatTarget.ts";
-import Migration0041 from "./Migrations/041_BackfillReviewChangesetPatchSignature.ts";
-import Migration0042 from "./Migrations/042_BackfillRuntimeWarningSummaries.ts";
-import Migration0043 from "./Migrations/043_ReconcileProjectionThreadAnnotations.ts";
-import Migration0044 from "./Migrations/044_ReconcileProjectionProjectsPinned.ts";
-import Migration0045 from "./Migrations/045_ProfileStatsIndexes.ts";
-import Migration0046 from "./Migrations/046_ReviewPullRequests.ts";
-import Migration0047 from "./Migrations/047_ReviewReviewRequests.ts";
-import Migration0048 from "./Migrations/038_ReconcileLegacySidechatSource.ts";
-import Migration0049 from "./Migrations/039_ReconcileLegacyPinnedThreads.ts";
-import Migration0050 from "./Migrations/040_ProjectionThreadsPinnedMessagesNotes.ts";
-import Migration0051 from "./Migrations/041_ProjectionProjectsPinned.ts";
-import Migration0052 from "./Migrations/042_ProjectionThreadsMarkers.ts";
-import Migration0053 from "./Migrations/044_Automations.ts";
-import Migration0054 from "./Migrations/045_AutomationPolicies.ts";
-import Migration0055 from "./Migrations/046_AutomationCompletionPolicy.ts";
-import Migration0056 from "./Migrations/047_AutomationCompletionPolicyVersion.ts";
-import Migration0057 from "./Migrations/048_ReviewWalkthroughCache.ts";
-import Migration0058 from "./Migrations/049_ReviewWalkthroughCacheTokenIdentity.ts";
-import Migration0059 from "./Migrations/050_EnsureReviewWalkthroughCacheTokenIdentity.ts";
-import Migration0060 from "./Migrations/048_AutomationCompletionEvaluationBacklog.ts";
-import Migration0061 from "./Migrations/061_ProjectionThreadProviderItems.ts";
-import Migration0062 from "./Migrations/049_ProjectionThreadMessagesDispatchOrigin.ts";
-import Migration0063 from "./Migrations/050_ProfileStatsArchive.ts";
-import Migration0064 from "./Migrations/051_ProfileStatsDeletedTokensModel.ts";
-import Migration0065 from "./Migrations/052_ProjectionThreadUserMessageSummaryIndex.ts";
+import Migration0038 from "./Migrations/038_ReconcileLegacySidechatSource.ts";
+import Migration0039 from "./Migrations/039_ReconcileLegacyPinnedThreads.ts";
+import Migration0040 from "./Migrations/040_ProjectionThreadsPinnedMessagesNotes.ts";
+import Migration0041 from "./Migrations/041_ProjectionProjectsPinned.ts";
+import Migration0042 from "./Migrations/042_ProjectionThreadsMarkers.ts";
+import Migration0043 from "./Migrations/043_ProfileStatsIndexes.ts";
+import Migration0044 from "./Migrations/044_Automations.ts";
+import Migration0045 from "./Migrations/045_AutomationPolicies.ts";
+import Migration0046 from "./Migrations/046_AutomationCompletionPolicy.ts";
+import Migration0047 from "./Migrations/047_AutomationCompletionPolicyVersion.ts";
+import Migration0048 from "./Migrations/048_AutomationCompletionEvaluationBacklog.ts";
+import Migration0049 from "./Migrations/049_ProjectionThreadMessagesDispatchOrigin.ts";
+import Migration0050 from "./Migrations/050_ProfileStatsArchive.ts";
+import Migration0051 from "./Migrations/051_ProfileStatsDeletedTokensModel.ts";
+import Migration0052 from "./Migrations/052_ProjectionThreadUserMessageSummaryIndex.ts";
+import Migration0053 from "./Migrations/053_BackfillThreadActivitySequence.ts";
+import Migration0054 from "./Migrations/054_ReservedDurableProviderCommandDelivery.ts";
+import Migration0055 from "./Migrations/055_ManagedAttachments.ts";
+import Migration0056 from "./Migrations/056_CommandReceiptFingerprints.ts";
+import Migration0057 from "./Migrations/057_ThreadScopedProjectionMessageIdentity.ts";
+import Migration0058 from "./Migrations/058_ThreadScopedPendingApprovalIdentity.ts";
+import Migration0059 from "./Migrations/059_ProviderSessionLifecycleGeneration.ts";
+import Migration0060 from "./Migrations/060_PendingApprovalLifecycleGeneration.ts";
+import Migration0061 from "./Migrations/061_PendingApprovalSettlementState.ts";
+import Migration0062 from "./Migrations/062_PendingInteractionSettlementParity.ts";
+import Migration0063 from "./Migrations/063_ProjectionMessageCausalSequence.ts";
+import Migration0064 from "./Migrations/064_DurableProviderCommandDelivery.ts";
+import Migration0065 from "./Migrations/065_DurableQueuedTurnPromotions.ts";
+import Migration0066 from "./Migrations/066_DurableProviderRuntimeEvents.ts";
+import Migration0067 from "./Migrations/067_ProviderDeliveryReconciliation.ts";
+import Migration0068 from "./Migrations/068_GitHandoffOperations.ts";
+import Migration0069 from "./Migrations/069_ProjectPullRequestPins.ts";
+import Migration0070 from "./Migrations/070_AgentGatewayOperations.ts";
+import Migration0071 from "./Migrations/071_ProjectionThreadsGatewayProvenance.ts";
+import Migration0072 from "./Migrations/072_AgentGatewayOperationRetention.ts";
+import Migration0073 from "./Migrations/073_OperationalDiagnostics.ts";
+import Migration0074 from "./Migrations/074_ExternalMcpIntegrations.ts";
+import Migration0075 from "./Migrations/075_ExternalMcpActiveCapacity.ts";
+import Migration0076 from "./Migrations/076_ExternalMcpHardening.ts";
+import Migration0077 from "./Migrations/077_ExternalMcpCompensatingCapacity.ts";
+import Migration0078 from "./Migrations/078_ExternalMcpLiveTurnCapacity.ts";
+import Migration0079 from "./Migrations/079_Spaces.ts";
+import Migration0080 from "./Migrations/080_ExternalMcpProjectScope.ts";
+import Migration0081 from "./Migrations/038_ExecutionRuntimeTables.ts";
+import Migration0082 from "./Migrations/039_ReviewCache.ts";
+import Migration0083 from "./Migrations/040_ProjectionThreadsReviewChatTarget.ts";
+import Migration0084 from "./Migrations/041_BackfillReviewChangesetPatchSignature.ts";
+import Migration0085 from "./Migrations/042_BackfillRuntimeWarningSummaries.ts";
+import Migration0086 from "./Migrations/043_ReconcileProjectionThreadAnnotations.ts";
+import Migration0087 from "./Migrations/044_ReconcileProjectionProjectsPinned.ts";
+import Migration0088 from "./Migrations/046_ReviewPullRequests.ts";
+import Migration0089 from "./Migrations/047_ReviewReviewRequests.ts";
+import Migration0090 from "./Migrations/048_ReviewWalkthroughCache.ts";
+import Migration0091 from "./Migrations/049_ReviewWalkthroughCacheTokenIdentity.ts";
+import Migration0092 from "./Migrations/050_EnsureReviewWalkthroughCacheTokenIdentity.ts";
+import Migration0093 from "./Migrations/061_ProjectionThreadProviderItems.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -130,34 +158,65 @@ export const migrationEntries = [
   [35, "NormalizeLegacyModelSelectionOptions", Migration0035],
   [36, "ProjectionThreadsPinned", Migration0036],
   [37, "ProjectionSnapshotCapIndexes", Migration0037],
-  [38, "ExecutionRuntimeTables", Migration0038],
-  [39, "ReviewCache", Migration0039],
-  [40, "ProjectionThreadsReviewChatTarget", Migration0040],
-  [41, "BackfillReviewChangesetPatchSignature", Migration0041],
-  [42, "BackfillRuntimeWarningSummaries", Migration0042],
-  [43, "ReconcileProjectionThreadAnnotations", Migration0043],
-  [44, "ReconcileProjectionProjectsPinned", Migration0044],
-  [45, "ProfileStatsIndexes", Migration0045],
-  [46, "ReviewPullRequests", Migration0046],
-  [47, "ReviewReviewRequests", Migration0047],
-  [48, "ReconcileLegacySidechatSource", Migration0048],
-  [49, "ReconcileLegacyPinnedThreads", Migration0049],
-  [50, "ProjectionThreadsPinnedMessagesNotes", Migration0050],
-  [51, "ProjectionProjectsPinned", Migration0051],
-  [52, "ProjectionThreadsMarkers", Migration0052],
-  [53, "Automations", Migration0053],
-  [54, "AutomationPolicies", Migration0054],
-  [55, "AutomationCompletionPolicy", Migration0055],
-  [56, "AutomationCompletionPolicyVersion", Migration0056],
-  [57, "ReviewWalkthroughCache", Migration0057],
-  [58, "ReviewWalkthroughCacheTokenIdentity", Migration0058],
-  [59, "EnsureReviewWalkthroughCacheTokenIdentity", Migration0059],
-  [60, "AutomationCompletionEvaluationBacklog", Migration0060],
-  [61, "ProjectionThreadProviderItems", Migration0061],
-  [62, "ProjectionThreadMessagesDispatchOrigin", Migration0062],
-  [63, "ProfileStatsArchive", Migration0063],
-  [64, "ProfileStatsDeletedTokensModel", Migration0064],
-  [65, "ProjectionThreadUserMessageSummaryIndex", Migration0065],
+  [38, "ReconcileLegacySidechatSource", Migration0038],
+  [39, "ReconcileLegacyPinnedThreads", Migration0039],
+  [40, "ProjectionThreadsPinnedMessagesNotes", Migration0040],
+  [41, "ProjectionProjectsPinned", Migration0041],
+  [42, "ProjectionThreadsMarkers", Migration0042],
+  [43, "ProfileStatsIndexes", Migration0043],
+  [44, "Automations", Migration0044],
+  [45, "AutomationPolicies", Migration0045],
+  [46, "AutomationCompletionPolicy", Migration0046],
+  [47, "AutomationCompletionPolicyVersion", Migration0047],
+  [48, "AutomationCompletionEvaluationBacklog", Migration0048],
+  [49, "ProjectionThreadMessagesDispatchOrigin", Migration0049],
+  [50, "ProfileStatsArchive", Migration0050],
+  [51, "ProfileStatsDeletedTokensModel", Migration0051],
+  [52, "ProjectionThreadUserMessageSummaryIndex", Migration0052],
+  [53, "BackfillThreadActivitySequence", Migration0053],
+  // Private development builds briefly recorded this tracker identity while
+  // exercising provider delivery. Keep the ID/name canonical as a no-op; the
+  // production cutover is registered independently at migration 64.
+  [54, "DurableProviderCommandDelivery", Migration0054],
+  [55, "ManagedAttachments", Migration0055],
+  [56, "CommandReceiptFingerprints", Migration0056],
+  [57, "ThreadScopedProjectionMessageIdentity", Migration0057],
+  [58, "ThreadScopedPendingApprovalIdentity", Migration0058],
+  [59, "ProviderSessionLifecycleGeneration", Migration0059],
+  [60, "PendingApprovalLifecycleGeneration", Migration0060],
+  [61, "PendingApprovalSettlementState", Migration0061],
+  [62, "PendingInteractionSettlementParity", Migration0062],
+  [63, "ProjectionMessageCausalSequence", Migration0063],
+  [64, "DurableProviderCommandDeliveryCutover", Migration0064],
+  [65, "DurableQueuedTurnPromotions", Migration0065],
+  [66, "DurableProviderRuntimeEvents", Migration0066],
+  [67, "ProviderDeliveryReconciliation", Migration0067],
+  [68, "GitHandoffOperations", Migration0068],
+  [69, "ProjectPullRequestPins", Migration0069],
+  [70, "AgentGatewayOperations", Migration0070],
+  [71, "ProjectionThreadsGatewayProvenance", Migration0071],
+  [72, "AgentGatewayOperationRetention", Migration0072],
+  [73, "OperationalDiagnostics", Migration0073],
+  [74, "ExternalMcpIntegrations", Migration0074],
+  [75, "ExternalMcpActiveCapacity", Migration0075],
+  [76, "ExternalMcpHardening", Migration0076],
+  [77, "ExternalMcpCompensatingCapacity", Migration0077],
+  [78, "ExternalMcpLiveTurnCapacity", Migration0078],
+  [79, "Spaces", Migration0079],
+  [80, "ExternalMcpProjectScope", Migration0080],
+  [81, "ExecutionRuntimeTables", Migration0081],
+  [82, "ReviewCache", Migration0082],
+  [83, "ProjectionThreadsReviewChatTarget", Migration0083],
+  [84, "BackfillReviewChangesetPatchSignature", Migration0084],
+  [85, "BackfillRuntimeWarningSummaries", Migration0085],
+  [86, "ReconcileProjectionThreadAnnotations", Migration0086],
+  [87, "ReconcileProjectionProjectsPinned", Migration0087],
+  [88, "ReviewPullRequests", Migration0088],
+  [89, "ReviewReviewRequests", Migration0089],
+  [90, "ReviewWalkthroughCache", Migration0090],
+  [91, "ReviewWalkthroughCacheTokenIdentity", Migration0091],
+  [92, "EnsureReviewWalkthroughCacheTokenIdentity", Migration0092],
+  [93, "ProjectionThreadProviderItems", Migration0093],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>
@@ -176,6 +235,7 @@ export const makeMigrationLoader = (throughId?: number) =>
  * migrations could destroy data — refuse to start instead.
  */
 const LAST_SHARED_LINEAGE_MIGRATION_ID = 16;
+const LATEST_MIGRATION_ID = Math.max(...migrationEntries.map(([id]) => id));
 
 /**
  * Repairs the migration tracker of an imported legacy database before the
@@ -243,8 +303,18 @@ export const reconcileMigrationLineage = Effect.gen(function* () {
     ([id, name]) => id <= highWaterMark && recordedNamesById.get(id) !== name,
   );
   if (diverged === undefined) {
-    // Healthy tracker. Recorded IDs beyond our latest migration mean the
-    // database was written by a newer build; leave those rows for it.
+    // An exact known prefix followed by unknown migrations is a database from
+    // a newer Synara build. Continuing would expose it to stale writable
+    // repositories and background services, so fail before the migrator can
+    // mutate either schema or tracker state.
+    if (highWaterMark > LATEST_MIGRATION_ID) {
+      return yield* Effect.fail(
+        new MigrationSchemaTooNewError({
+          databaseMigrationId: highWaterMark,
+          latestSupportedMigrationId: LATEST_MIGRATION_ID,
+        }),
+      );
+    }
     return;
   }
 

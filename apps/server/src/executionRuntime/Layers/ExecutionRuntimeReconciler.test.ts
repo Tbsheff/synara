@@ -20,6 +20,7 @@ import { OrchestrationEngineService } from "../../orchestration/Services/Orchest
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Layers/OrchestrationCommandReceipts.ts";
 import { OrchestrationEventStoreLive } from "../../persistence/Layers/OrchestrationEventStore.ts";
+import { ProjectionThreadRuntimeRepositoryLive } from "../../persistence/Layers/ProjectionThreadRuntime.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import { ProjectionThreadRuntimeRepository } from "../../persistence/Services/ProjectionThreadRuntime.ts";
 import type { FakeRuntimeFlavor } from "../Services/FakeRuntimeFlavor.ts";
@@ -63,6 +64,7 @@ const makeReconcilerRuntime = (options?: ReconcilerOptions) => {
     Layer.provideMerge(OrchestrationProjectionSnapshotQueryLive),
     Layer.provideMerge(NodeServices.layer),
     Layer.provideMerge(serverConfigLayer),
+    Layer.provideMerge(ProjectionThreadRuntimeRepositoryLive),
     Layer.provideMerge(SqlitePersistenceMemory),
   );
   const reconcilerLayer = makeExecutionRuntimeReconcilerLive({

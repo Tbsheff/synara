@@ -37,6 +37,10 @@ export {
   CODEX_GENERATED_IMAGE_ARTIFACT_KIND,
   ItemLifecyclePayload,
   UserInputQuestion,
+  WorkflowAgentPlan,
+  WorkflowAgentRuntimeSnapshot,
+  WorkflowAgentSnapshot,
+  WorkflowPhase,
 } from "./providerRuntime.payloads";
 export type {
   AccountRateLimitsUpdatedPayload,
@@ -65,6 +69,7 @@ export type {
   TaskCompletedPayload,
   TaskProgressPayload,
   TaskStartedPayload,
+  TaskUpdatedPayload,
   ThreadMetadataUpdatedPayload,
   ThreadRealtimeAudioDeltaPayload,
   ThreadRealtimeClosedPayload,
@@ -126,6 +131,7 @@ export type {
   ProviderRuntimeTaskCompletedEvent,
   ProviderRuntimeTaskProgressEvent,
   ProviderRuntimeTaskStartedEvent,
+  ProviderRuntimeTaskUpdatedEvent,
   ProviderRuntimeThreadMetadataUpdatedEvent,
   ProviderRuntimeThreadRealtimeAudioDeltaEvent,
   ProviderRuntimeThreadRealtimeClosedEvent,

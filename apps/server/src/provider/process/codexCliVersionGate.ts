@@ -16,17 +16,17 @@ const supportedVersionChecks = new Set<string>();
  * session manager stays off `node:child_process`; a remote execution target
  * cannot run `codex --version` against this host and skips or relocates it.
  */
-export function assertSupportedCodexCliVersion(input: {
+export async function assertSupportedCodexCliVersion(input: {
   readonly binaryPath: string;
   readonly cwd: string;
   readonly homePath?: string;
-}): void {
+}): Promise<void> {
   const cacheKey = [input.binaryPath, input.cwd, input.homePath ?? ""].join("\u001f");
   if (supportedVersionChecks.has(cacheKey)) {
     return;
   }
 
-  const env = buildCodexProcessEnv(input.homePath ? { homePath: input.homePath } : {});
+  const env = await buildCodexProcessEnv(input.homePath ? { homePath: input.homePath } : {});
   const prepared = prepareWindowsSafeProcess(input.binaryPath, ["--version"], {
     cwd: input.cwd,
     env,

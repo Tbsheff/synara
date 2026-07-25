@@ -22,6 +22,7 @@ import {
   resolveShortcutCommand,
   shouldShowThreadJumpHints,
   shortcutLabelForCommand,
+  spaceJumpIndexFromCommand,
   terminalNavigationShortcutData,
   threadJumpCommandForIndex,
   threadJumpIndexFromCommand,
@@ -114,7 +115,13 @@ const DEFAULT_BINDINGS = compile([
     command: "sidebar.toggle",
     whenAst: whenNot(whenIdentifier("terminalFocus")),
   },
-  { shortcut: modShortcut("k"), command: "sidebar.search" },
+  // Mirror server defaults: Cmd+K everywhere; Ctrl+K only off macOS.
+  { shortcut: modShortcut("k", { metaKey: true, modKey: false }), command: "sidebar.search" },
+  {
+    shortcut: ctrlShortcut("k"),
+    command: "sidebar.search",
+    whenAst: whenNot(whenIdentifier("isMac")),
+  },
   { shortcut: modShortcut("j"), command: "terminal.toggle" },
   {
     shortcut: modShortcut("d"),
@@ -236,11 +243,6 @@ const DEFAULT_BINDINGS = compile([
     whenAst: whenCreationAllowed,
   },
   {
-    shortcut: modShortcut("g", { altKey: true }),
-    command: "chat.newGemini",
-    whenAst: whenCreationAllowed,
-  },
-  {
     shortcut: ctrlShortcut("tab"),
     command: "view.recent.next",
   },
@@ -248,6 +250,11 @@ const DEFAULT_BINDINGS = compile([
     shortcut: ctrlShortcut("tab", { shiftKey: true }),
     command: "view.recent.previous",
   },
+  ...Array.from({ length: 9 }, (_, index) => ({
+    shortcut: modShortcut(String(index + 1), { altKey: true }),
+    command: `space.jump.${index + 1}` as KeybindingCommand,
+    whenAst: whenCreationAllowed,
+  })),
   {
     shortcut: modShortcut("1"),
     command: "thread.jump.1",
@@ -630,6 +637,66 @@ describe("thread jump shortcuts", () => {
   });
 });
 
+describe("space jump shortcuts", () => {
+  it("maps space jump commands to strip indices", () => {
+    assert.strictEqual(spaceJumpIndexFromCommand("space.jump.1"), 0);
+    assert.strictEqual(spaceJumpIndexFromCommand("space.jump.9"), 8);
+    assert.isNull(spaceJumpIndexFromCommand("thread.jump.1"));
+  });
+
+  it("resolves Cmd+Alt+digit even when Option shifts event.key on macOS", () => {
+    assert.strictEqual(
+      resolveShortcutCommand(
+        event({ code: "Digit2", key: "™", metaKey: true, altKey: true }),
+        DEFAULT_BINDINGS,
+        {
+          platform: "MacIntel",
+          context: { terminalFocus: false, terminalWorkspaceOpen: false },
+        },
+      ),
+      "space.jump.2",
+    );
+  });
+
+  it("resolves space jumps from the built-in fallbacks when no config is present", () => {
+    assert.strictEqual(
+      resolveShortcutCommand(event({ code: "Digit1", key: "1", metaKey: true, altKey: true }), [], {
+        platform: "MacIntel",
+        context: { terminalFocus: false },
+      }),
+      "space.jump.1",
+    );
+  });
+
+  it("does not shadow plain numbered thread jumps", () => {
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "2", metaKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+        context: { terminalFocus: false, terminalWorkspaceOpen: false },
+      }),
+      "thread.jump.2",
+    );
+  });
+
+  it("fires from a focused terminal on macOS but yields to it elsewhere", () => {
+    assert.strictEqual(
+      resolveShortcutCommand(
+        event({ code: "Digit3", key: "3", metaKey: true, altKey: true }),
+        DEFAULT_BINDINGS,
+        { platform: "MacIntel", context: { terminalFocus: true } },
+      ),
+      "space.jump.3",
+    );
+    assert.isNull(
+      resolveShortcutCommand(
+        event({ code: "Digit3", key: "3", ctrlKey: true, altKey: true }),
+        DEFAULT_BINDINGS,
+        { platform: "Linux", context: { terminalFocus: true } },
+      ),
+    );
+  });
+});
+
 describe("workspace terminal tab shortcuts", () => {
   it("resolves the full-width terminal shortcut", () => {
     assert.strictEqual(
@@ -943,13 +1010,6 @@ describe("chat/editor shortcuts", () => {
       "chat.newCursor",
     );
     assert.strictEqual(
-      resolveShortcutCommand(event({ key: "g", metaKey: true, altKey: true }), DEFAULT_BINDINGS, {
-        platform: "MacIntel",
-        context: { terminalFocus: false },
-      }),
-      "chat.newGemini",
-    );
-    assert.strictEqual(
       resolveShortcutCommand(
         event({ code: "KeyC", key: "ç", metaKey: true, altKey: true }),
         DEFAULT_BINDINGS,
@@ -981,17 +1041,6 @@ describe("chat/editor shortcuts", () => {
         },
       ),
       "chat.newCursor",
-    );
-    assert.strictEqual(
-      resolveShortcutCommand(
-        event({ code: "KeyG", key: "©", metaKey: true, altKey: true }),
-        DEFAULT_BINDINGS,
-        {
-          platform: "MacIntel",
-          context: { terminalFocus: false },
-        },
-      ),
-      "chat.newGemini",
     );
   });
 
@@ -1151,6 +1200,44 @@ describe("chat/editor shortcuts", () => {
         context: { terminalFocus: true },
       }),
       "sidebar.search",
+    );
+  });
+
+  it("keeps Cmd+K for sidebar.search on macOS and releases Ctrl+K", () => {
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "k", metaKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+      }),
+      "sidebar.search",
+    );
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "k", ctrlKey: true }), DEFAULT_BINDINGS, {
+        platform: "MacIntel",
+      }),
+      null,
+    );
+    assert.strictEqual(
+      shortcutLabelForCommand(DEFAULT_BINDINGS, "sidebar.search", "MacIntel"),
+      "⌘K",
+    );
+  });
+
+  it("keeps Ctrl+K for sidebar.search on Windows and Linux", () => {
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "k", ctrlKey: true }), DEFAULT_BINDINGS, {
+        platform: "Win32",
+      }),
+      "sidebar.search",
+    );
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "k", ctrlKey: true }), DEFAULT_BINDINGS, {
+        platform: "Linux x86_64",
+      }),
+      "sidebar.search",
+    );
+    assert.strictEqual(
+      shortcutLabelForCommand(DEFAULT_BINDINGS, "sidebar.search", "Win32"),
+      "Ctrl+K",
     );
   });
 
@@ -1406,8 +1493,7 @@ describe("resolveShortcutCommand", () => {
       (binding) =>
         binding.command !== "chat.newClaude" &&
         binding.command !== "chat.newCodex" &&
-        binding.command !== "chat.newCursor" &&
-        binding.command !== "chat.newGemini",
+        binding.command !== "chat.newCursor",
     );
 
     assert.strictEqual(
@@ -1430,13 +1516,6 @@ describe("resolveShortcutCommand", () => {
         context: { terminalFocus: false },
       }),
       "chat.newCursor",
-    );
-    assert.strictEqual(
-      resolveShortcutCommand(event({ key: "g", metaKey: true, altKey: true }), legacyBindings, {
-        platform: "MacIntel",
-        context: { terminalFocus: false },
-      }),
-      "chat.newGemini",
     );
     assert.strictEqual(
       resolveShortcutCommand(
@@ -1471,17 +1550,6 @@ describe("resolveShortcutCommand", () => {
       ),
       "chat.newCursor",
     );
-    assert.strictEqual(
-      resolveShortcutCommand(
-        event({ code: "KeyG", key: "©", metaKey: true, altKey: true }),
-        legacyBindings,
-        {
-          platform: "MacIntel",
-          context: { terminalFocus: false },
-        },
-      ),
-      "chat.newGemini",
-    );
   });
 });
 
@@ -1507,19 +1575,16 @@ describe("formatShortcutLabel", () => {
 });
 
 describe("isTerminalClearShortcut", () => {
-  it("matches Ctrl+L on all platforms", () => {
-    assert.isTrue(isTerminalClearShortcut(event({ key: "l", ctrlKey: true }), "Linux"));
-    assert.isTrue(isTerminalClearShortcut(event({ key: "l", ctrlKey: true }), "MacIntel"));
+  it("matches Ctrl+L", () => {
+    assert.isTrue(isTerminalClearShortcut(event({ key: "l", ctrlKey: true })));
   });
 
   it("does not match Cmd+K (reserved for sidebar search)", () => {
-    assert.isFalse(isTerminalClearShortcut(event({ key: "k", metaKey: true }), "MacIntel"));
+    assert.isFalse(isTerminalClearShortcut(event({ key: "k", metaKey: true })));
   });
 
   it("ignores non-keydown events", () => {
-    assert.isFalse(
-      isTerminalClearShortcut(event({ type: "keyup", key: "l", ctrlKey: true }), "Linux"),
-    );
+    assert.isFalse(isTerminalClearShortcut(event({ type: "keyup", key: "l", ctrlKey: true })));
   });
 });
 

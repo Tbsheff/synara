@@ -2069,6 +2069,9 @@ const make = Effect.gen(function* () {
       .respondToRequest({
         threadId: providerThreadId,
         requestId: event.payload.requestId,
+        ...(event.payload.lifecycleGeneration !== undefined
+          ? { lifecycleGeneration: event.payload.lifecycleGeneration }
+          : {}),
         decision: event.payload.decision,
       })
       .pipe(
@@ -2117,6 +2120,9 @@ const make = Effect.gen(function* () {
       .respondToUserInput({
         threadId: providerThreadId,
         requestId: event.payload.requestId,
+        ...(event.payload.lifecycleGeneration !== undefined
+          ? { lifecycleGeneration: event.payload.lifecycleGeneration }
+          : {}),
         answers: event.payload.answers,
       })
       .pipe(

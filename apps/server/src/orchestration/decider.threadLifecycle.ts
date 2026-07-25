@@ -16,11 +16,13 @@ import { doThreadMarkerRangesOverlap } from "@synara/shared/threadMarkers";
 import { OrchestrationCommandInvariantError } from "./Errors.ts";
 import { hasNativeHandoffMessages } from "./handoff.ts";
 import {
+  checkpointRevertDeleteInProgressDetail,
   requireProject,
   requireThread,
   requireThreadAbsent,
   requireThreadArchived,
   requireThreadNotArchived,
+  threadHasCheckpointRevertInProgress,
 } from "./commandInvariants.ts";
 import {
   deriveCommandAssociatedWorktreeMetadata,
@@ -335,11 +337,17 @@ export const decideThreadLifecycleCommand = Effect.fn("decideThreadLifecycleComm
     }
 
     case "thread.delete": {
-      yield* requireThread({
+      const thread = yield* requireThread({
         readModel,
         command,
         threadId: command.threadId,
       });
+      if (threadHasCheckpointRevertInProgress(thread)) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: checkpointRevertDeleteInProgressDetail(command.threadId),
+        });
+      }
       const occurredAt = nowIso();
       return {
         ...withEventBase({

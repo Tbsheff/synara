@@ -6,6 +6,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  buildModelSelection,
+  buildNextProviderOptions,
   buildProviderOptionPatch,
   formatProviderModelOptionName,
   groupProviderModelOptions,
@@ -16,6 +18,21 @@ import {
   shouldUseCollapsibleModelGroups,
   type ProviderModelOption,
 } from "./providerModelOptions";
+
+describe("Antigravity model options", () => {
+  it("keeps the base model and effort as separate selection fields", () => {
+    const options = buildNextProviderOptions("antigravity", undefined, {
+      reasoningEffort: "high",
+    });
+
+    expect(options).toEqual({ reasoningEffort: "high" });
+    expect(buildModelSelection("antigravity", "Gemini 3.5 Flash", options)).toEqual({
+      provider: "antigravity",
+      model: "Gemini 3.5 Flash",
+      options: { reasoningEffort: "high" },
+    });
+  });
+});
 
 describe("formatProviderModelOptionName", () => {
   it("humanizes unknown OpenCode runtime model slugs using the model identifier", () => {
@@ -47,6 +64,57 @@ describe("formatProviderModelOptionName", () => {
 });
 
 describe("mergeDynamicModelOptions", () => {
+  it("does not offer Pi Anthropic models when discovery only returns local models", () => {
+    expect(
+      mergeDynamicModelOptions({
+        provider: "pi",
+        staticOptions: [],
+        dynamicModels: [
+          {
+            slug: "local/glm-5.2",
+            name: "GLM 5.2",
+            upstreamProviderId: "local",
+            upstreamProviderName: "Local",
+          },
+        ],
+      }).map((option) => option.slug),
+    ).toEqual(["local/glm-5.2"]);
+  });
+
+  it("offers Pi Fable and Opus when authenticated discovery returns them", () => {
+    expect(
+      mergeDynamicModelOptions({
+        provider: "pi",
+        staticOptions: [],
+        dynamicModels: [
+          { slug: "anthropic/claude-fable-5", name: "Claude Fable 5" },
+          { slug: "anthropic/claude-opus-4-8", name: "Claude Opus 4.8" },
+        ],
+      }).map((option) => option.slug),
+    ).toEqual(["anthropic/claude-fable-5", "anthropic/claude-opus-4-8"]);
+  });
+
+  it("uses the live Antigravity catalog as authoritative and includes newly discovered models", () => {
+    expect(
+      mergeDynamicModelOptions({
+        provider: "antigravity",
+        staticOptions: [
+          { slug: "Gemini 3.5 Flash", name: "Gemini 3.5 Flash" },
+          { slug: "Claude Sonnet 4.6", name: "Claude Sonnet 4.6" },
+          { slug: "custom/private-model", name: "custom/private-model", isCustom: true },
+        ],
+        dynamicModels: [
+          { slug: "Gemini 4 Pro", name: "Gemini 4 Pro" },
+          { slug: "Claude Sonnet 5", name: "Claude Sonnet 5" },
+        ],
+      }),
+    ).toEqual([
+      { slug: "Gemini 4 Pro", name: "Gemini 4 Pro" },
+      { slug: "Claude Sonnet 5", name: "Claude Sonnet 5" },
+      { slug: "custom/private-model", name: "custom/private-model", isCustom: true },
+    ]);
+  });
+
   it("preserves runtime descriptions without inventing them for custom models", () => {
     const options = mergeDynamicModelOptions({
       provider: "droid",
@@ -70,6 +138,50 @@ describe("mergeDynamicModelOptions", () => {
       { slug: "custom:model", name: "Custom model" },
     ]);
   });
+
+  it("treats the live Droid catalog as authoritative and drops invalid custom slugs", () => {
+    expect(
+      mergeDynamicModelOptions({
+        provider: "droid",
+        staticOptions: [
+          { slug: "retired-model", name: "Retired" },
+          { slug: "made-up-model", name: "Made up", isCustom: true },
+        ],
+        dynamicModels: [{ slug: "gpt-5.6-sol", name: "GPT-5.6 Sol" }],
+      }),
+    ).toEqual([{ slug: "gpt-5.6-sol", name: "GPT-5.6 Sol" }]);
+  });
+
+  it("deduplicates Cursor transport variants by their base model", () => {
+    expect(
+      mergeDynamicModelOptions({
+        provider: "cursor",
+        staticOptions: [
+          {
+            slug: "grok-4.5[thinking=true]",
+            name: "Cursor Grok 4.5",
+            isCustom: true,
+          },
+        ],
+        dynamicModels: [
+          {
+            slug: "grok-4.5",
+            name: "Cursor Grok 4.5",
+            upstreamProviderId: "xai",
+            upstreamProviderName: "xAI",
+          },
+          { slug: "grok-4.5[thinking=true]", name: "Cursor Grok 4.5" },
+        ],
+      }),
+    ).toEqual([
+      {
+        slug: "grok-4.5",
+        name: "Cursor Grok 4.5",
+        upstreamProviderId: "xai",
+        upstreamProviderName: "xAI",
+      },
+    ]);
+  });
 });
 
 describe("providerModelCostMultiplierLabel", () => {
@@ -85,16 +197,7 @@ describe("providerModelCostMultiplierLabel", () => {
 });
 
 describe("buildProviderOptionPatch", () => {
-  it("maps generic Gemini thinking selections back to the provider-specific option shape", () => {
-    expect(buildProviderOptionPatch("gemini", "thinkingBudget", "512")).toEqual({
-      thinkingBudget: 512,
-    });
-    expect(buildProviderOptionPatch("gemini", "thinkingLevel", "HIGH")).toEqual({
-      thinkingLevel: "HIGH",
-    });
-  });
-
-  it("passes through non-Gemini option ids unchanged", () => {
+  it("passes through option ids unchanged", () => {
     expect(buildProviderOptionPatch("codex", "reasoningEffort", "xhigh")).toEqual({
       reasoningEffort: "xhigh",
     });

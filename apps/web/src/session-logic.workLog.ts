@@ -160,13 +160,19 @@ function isLiveTurnlessWorkActivity(activity: OrchestrationThreadActivity): bool
 export function deriveWorkLogEntries(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
   latestTurnId: TurnId | undefined,
-  options: { visibleTurnIds?: ReadonlySet<TurnId | string> } = {},
+  options: {
+    visibleTurnIds?: ReadonlySet<TurnId | string>;
+    includeRoutedSubagentActivities?: boolean;
+  } = {},
 ): WorkLogEntry[] {
   const visibleTurnIds = options.visibleTurnIds;
   const ordered = [...activities].toSorted(compareActivitiesByOrder);
   const entries = ordered
     .filter((activity) => shouldKeepActivityForWorkLog(activity, latestTurnId, visibleTurnIds))
-    .filter((activity) => !isCollabAgentToolActivity(activity))
+    .filter(
+      (activity) =>
+        options.includeRoutedSubagentActivities === true || !isCollabAgentToolActivity(activity),
+    )
     .filter((activity) => !isQuietTaskLifecycleActivity(activity))
     .filter((activity) => !isQuietTurnLifecycleActivity(activity))
     .filter((activity) => activity.kind !== "account.rate-limits.updated")

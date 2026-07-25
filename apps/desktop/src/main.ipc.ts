@@ -50,8 +50,10 @@ import { DESKTOP_WS_URL_CHANNEL } from "./desktopWsBridge";
 import {
   acknowledgeSynaraStorageSnapshot,
   readSynaraStorageSnapshot,
-  STORAGE_MIGRATION_IPC_CHANNELS,
 } from "./desktopStorageMigration";
+import { DESKTOP_IPC_CHANNELS } from "./ipcChannels";
+
+const STORAGE_MIGRATION_IPC_CHANNELS = DESKTOP_IPC_CHANNELS.storageMigration;
 
 interface UpdateActionResult {
   readonly accepted: boolean;

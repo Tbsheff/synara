@@ -6,6 +6,7 @@ import type {
   ModelSelection,
   MessageDispatchOrigin,
   OrchestrationMessageSource,
+  OrchestrationPendingInteraction,
   TurnDispatchMode,
   OrchestrationLatestTurn,
   OrchestrationReviewChatTarget,
@@ -21,6 +22,8 @@ import type {
   ProjectScript as ContractProjectScript,
   ThreadId,
   ProjectId,
+  SpaceId,
+  SpaceIconName,
   TurnId,
   MessageId,
   ProviderMentionReference,
@@ -30,6 +33,7 @@ import type {
   ProviderInteractionMode,
   ProjectKind,
   RuntimeMode,
+  ThreadCreationSource,
   ThreadEnvironmentMode,
 } from "@synara/contracts";
 import type { RuntimeHeaderPresentation } from "./lib/runtimePresentation";
@@ -177,9 +181,20 @@ export interface Project {
   defaultModelSelection: ModelSelection | null;
   expanded: boolean;
   isPinned?: boolean;
+  /** Missing on renderer state written before Spaces; normalized snapshots always set it. */
+  spaceId?: SpaceId | null;
   createdAt?: string | undefined;
   updatedAt?: string | undefined;
   scripts: ProjectScript[];
+}
+
+export interface Space {
+  id: SpaceId;
+  name: string;
+  icon: SpaceIconName;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface ThreadWorkspaceState {
@@ -226,6 +241,8 @@ export interface Thread extends ThreadWorkspaceState {
   pendingSourceProposedPlan?: OrchestrationLatestTurn["sourceProposedPlan"];
   lastVisitedAt?: string | undefined;
   parentThreadId?: ThreadId | null;
+  creationSource?: ThreadCreationSource | null;
+  sourceThreadId?: ThreadId | null;
   subagentAgentId?: string | null;
   subagentNickname?: string | null;
   subagentRole?: string | null;
@@ -239,6 +256,7 @@ export interface Thread extends ThreadWorkspaceState {
   hasPendingApprovals?: boolean;
   hasPendingUserInput?: boolean;
   hasActionableProposedPlan?: boolean;
+  pendingInteractions?: OrchestrationPendingInteraction[];
   turnDiffSummaries: TurnDiffSummary[];
   activities: OrchestrationThreadActivity[];
 }
@@ -264,6 +282,8 @@ export interface ThreadShell extends ThreadWorkspaceState {
   threadMarkers?: ThreadMarker[];
   notes?: string;
   parentThreadId?: ThreadId | null;
+  creationSource?: ThreadCreationSource | null;
+  sourceThreadId?: ThreadId | null;
   subagentAgentId?: string | null;
   subagentNickname?: string | null;
   subagentRole?: string | null;
@@ -277,6 +297,7 @@ export interface ThreadShell extends ThreadWorkspaceState {
   hasPendingApprovals?: boolean;
   hasPendingUserInput?: boolean;
   hasActionableProposedPlan?: boolean;
+  pendingInteractions?: OrchestrationPendingInteraction[];
   lastVisitedAt?: string | undefined;
 }
 

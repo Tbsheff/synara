@@ -37,15 +37,19 @@ import {
 } from "./chatHeaderControls";
 import { getRightDockPaneMeta, resolveRightDockPaneLabel } from "./rightDockPaneMeta";
 
+export const RIGHT_DOCK_MIN_WIDTH = 26 * 16;
+export const RIGHT_DOCK_DEFAULT_WIDTH = "max(28rem, calc(50vw - 8rem))";
+
 interface RightDockProps {
   state: RightDockThreadState;
   minWidth: number;
   defaultWidth: string;
-  storageKey: string;
+  storageKey?: string;
   shouldAcceptWidth: (context: { nextWidth: number; wrapper: HTMLElement }) => boolean;
   paneLabelOverrides?: Record<string, string | undefined>;
+  paneIconOverrides?: Record<string, ReactNode | undefined>;
   addMenuKinds: readonly RightDockPaneKind[];
-  onSelectPane: (paneId: string) => void;
+  onSelectPane?: (paneId: string) => void;
   onClosePane: (paneId: string) => void;
   onCollapse: () => void;
   onOpenChange: (open: boolean) => void;
@@ -54,15 +58,16 @@ interface RightDockProps {
   activePaneRuntimeMode?: DockPaneRuntimeMode;
   renderPane: (
     pane: RightDockPane,
-    context: { runtimeMode: DockPaneRuntimeMode; isActive: boolean },
+    context: { runtimeMode: DockPaneRuntimeMode; isActive: boolean; isVisible: boolean },
   ) => ReactNode;
 }
 
 function RightDockTab(props: {
   pane: RightDockPane;
   label: string;
+  icon?: ReactNode;
   active: boolean;
-  onSelect: () => void;
+  onSelect?: () => void;
   onClose: () => void;
 }) {
   const { Icon } = getRightDockPaneMeta(props.pane.kind);
@@ -84,7 +89,9 @@ function RightDockTab(props: {
           props.onClose();
         }}
       >
-        <SurfaceChipIcon icon={Icon} className={DOCK_TAB_ICON_HOVER_HIDE_CLASS_NAME} />
+        {props.icon ?? (
+          <SurfaceChipIcon icon={Icon} className={DOCK_TAB_ICON_HOVER_HIDE_CLASS_NAME} />
+        )}
         <CentralIcon name="cross-small" className={DOCK_TAB_CLOSE_GLYPH_CLASS_NAME} />
       </button>
       <button
@@ -93,6 +100,7 @@ function RightDockTab(props: {
         title={props.label}
         aria-pressed={props.active}
         onClick={props.onSelect}
+        disabled={!props.onSelect}
       >
         {props.label}
       </button>
@@ -176,7 +184,7 @@ export function RightDock(props: RightDockProps) {
         resizable={{
           minWidth: props.minWidth,
           shouldAcceptWidth: props.shouldAcceptWidth,
-          storageKey: props.storageKey,
+          ...(props.storageKey ? { storageKey: props.storageKey } : {}),
         }}
       >
         <div className="flex h-full min-h-0 w-full flex-col" hidden={!props.state.open}>
@@ -187,8 +195,9 @@ export function RightDock(props: RightDockProps) {
                   key={pane.id}
                   pane={pane}
                   label={resolveRightDockPaneLabel(pane, props.paneLabelOverrides)}
+                  icon={props.paneIconOverrides?.[pane.id]}
                   active={pane.id === props.state.activePaneId}
-                  onSelect={() => props.onSelectPane(pane.id)}
+                  onSelect={props.onSelectPane ? () => props.onSelectPane?.(pane.id) : undefined}
                   onClose={() => props.onClosePane(pane.id)}
                 />
               ))}
@@ -252,7 +261,11 @@ export function RightDock(props: RightDockProps) {
                       : undefined
                   }
                 >
-                  {props.renderPane(pane, { runtimeMode, isActive })}
+                  {props.renderPane(pane, {
+                    runtimeMode,
+                    isActive,
+                    isVisible: isActive && props.state.open,
+                  })}
                 </div>
               );
             })}

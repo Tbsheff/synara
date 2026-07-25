@@ -270,7 +270,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     if (factory) {
       return factory(input);
     }
-    const env = buildCodexProcessEnv(input.homePath ? { homePath: input.homePath } : {});
+    const env = await buildCodexProcessEnv(input.homePath ? { homePath: input.homePath } : {});
     const prepared = prepareWindowsSafeProcess(input.binaryPath, ["app-server"], {
       cwd: input.cwd,
       env,
@@ -1174,12 +1174,12 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     this.emit("event", event);
   }
 
-  private assertSupportedCodexCliVersion(input: {
+  private async assertSupportedCodexCliVersion(input: {
     readonly binaryPath: string;
     readonly cwd: string;
     readonly homePath?: string;
     readonly hasSuppliedTransport?: boolean;
-  }): void {
+  }): Promise<void> {
     // The CLI version gate runs `codex --version` against this host, so it only
     // applies to the local-process transport. A supplied transport (in-memory
     // test fake, or a remote sandbox runtime) has no local binary to probe —
@@ -1187,7 +1187,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     if (this.transportFactory || input.hasSuppliedTransport) {
       return;
     }
-    assertSupportedCodexCliVersion(input);
+    await assertSupportedCodexCliVersion(input);
   }
 
   // Resolve the model to send to a sandbox-backed codex against the catalog it

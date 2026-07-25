@@ -28,9 +28,9 @@ export function settingsSearchEntryTarget(entry: SettingsSearchEntry): string | 
   return entry.target === undefined ? settingRowAnchorId(entry.title) : entry.target;
 }
 
-// Mirrors row titles/descriptions rendered in settings panels. Panels only mount the active
-// section, so the sidebar cannot read row text at runtime; keep this list in sync when rows
-// are added, renamed, hidden conditionally, or represented as panel-level results.
+// Mirrors row titles/descriptions rendered in settings panels. Panels stay mounted but render
+// null while inactive, so the sidebar cannot read every row at runtime; keep this list in sync
+// when rows are added, renamed, hidden conditionally, or represented as panel-level results.
 export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
   // ── General ────────────────────────────────────────────────────────────────
   {
@@ -131,6 +131,12 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     keywords: "Show highlighted and underlined transcript text in the Environment panel.",
   },
   {
+    id: "general:environment-instructions",
+    section: "general",
+    title: "Project instructions",
+    keywords: "Show project-level instructions in the Environment panel.",
+  },
+  {
     id: "general:environment-notepad",
     section: "general",
     title: "Notepad",
@@ -143,6 +149,12 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     section: "appearance",
     title: "Theme",
     keywords: "Choose how Synara looks across the app. dark light system color",
+  },
+  {
+    id: "appearance:system-ui-font",
+    section: "appearance",
+    title: "Use system UI font",
+    keywords: "Use the operating system interface font throughout Synara.",
   },
   {
     id: "appearance:ui-density",
@@ -200,6 +212,43 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     title: "Desktop notifications",
     keywords:
       "Show an OS notification when a chat or managed terminal agent finishes or needs input while the app is in the background. alerts toast",
+  },
+
+  // ── AppSnap ───────────────────────────────────────────────────────────────────
+  {
+    id: "appsnap:enable",
+    section: "appsnap",
+    title: "Enable AppSnap",
+    keywords:
+      "Capture the frontmost macOS app window with a configurable two-key shortcut and add it to a recent task. appshot screenshot snap window capture hotkey",
+  },
+  {
+    id: "appsnap:shortcut",
+    section: "appsnap",
+    title: "Shortcut",
+    keywords: "Press the left and right Option keys at the same time. hotkey chord alt keys",
+  },
+  {
+    id: "appsnap:destination",
+    section: "appsnap",
+    title: "Destination",
+    keywords:
+      "Snaps join the task you interacted with in the last minute, otherwise a fresh task opens. automatic target composer",
+  },
+  {
+    id: "appsnap:capture-sound",
+    section: "appsnap",
+    title: "Capture sound",
+    keywords: "Play a short shutter cue when a window is captured. sound effect audio mute",
+  },
+  {
+    id: "appsnap:permissions",
+    section: "appsnap",
+    title: "Permission status",
+    keywords:
+      "Input Monitoring and Screen Recording permissions for AppSnap in macOS System Settings. privacy security recheck grant",
+    // Renders only in the macOS desktop app, so no stable anchor on other platforms.
+    target: null,
   },
 
   // ── Behavior ──────────────────────────────────────────────────────────────────
@@ -336,6 +385,13 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     title: "Recovery tools",
     keywords:
       "Rebuild local project indexes without clearing existing chats when the local state gets out of sync.",
+  },
+  {
+    id: "integrations:external-mcp",
+    section: "integrations",
+    title: "External MCP integrations",
+    keywords:
+      "Pair Codex Claude and other local MCP clients with scoped project access. revoke credential task create wait read worktree approval",
   },
   {
     id: "advanced:version",

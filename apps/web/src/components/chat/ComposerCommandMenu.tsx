@@ -7,7 +7,7 @@ import {
   type ProviderPluginDescriptor,
   type ProviderSkillDescriptor,
 } from "@synara/contracts";
-import { memo, useEffect, useMemo, useRef, type ReactNode } from "react";
+import { memo, useEffect, useRef, type ReactNode } from "react";
 import { type ComposerTriggerKind } from "../../composer-logic";
 import { type ComposerSlashCommand } from "../../composerSlashCommands";
 import {
@@ -83,6 +83,8 @@ function commandMenuTitle(
       return "Status";
     case "subagents":
       return "Subagents";
+    case "feedback":
+      return "Feedback Synara";
     default:
       return humanizeProviderCommandName(item.command);
   }
@@ -288,7 +290,7 @@ export function groupCommandItems(
   return groups;
 }
 
-export const ComposerCommandMenu = memo(function ComposerCommandMenu(props: {
+export function ComposerCommandMenu(props: {
   items: ComposerCommandItem[];
   resolvedTheme: "light" | "dark";
   isLoading: boolean;
@@ -300,10 +302,10 @@ export const ComposerCommandMenu = memo(function ComposerCommandMenu(props: {
   onSelect: (item: ComposerCommandItem) => void;
 }) {
   const itemRefs = useRef<Record<string, HTMLElement | null>>({});
-  const groups = useMemo(
-    () =>
-      groupCommandItems(props.items, props.triggerKind, props.groupSlashCommandSections ?? true),
-    [props.groupSlashCommandSections, props.items, props.triggerKind],
+  const groups = groupCommandItems(
+    props.items,
+    props.triggerKind,
+    props.groupSlashCommandSections ?? true,
   );
 
   useEffect(() => {
@@ -343,9 +345,7 @@ export const ComposerCommandMenu = memo(function ComposerCommandMenu(props: {
                     item={item}
                     resolvedTheme={props.resolvedTheme}
                     isActive={props.activeItemId === item.id}
-                    itemRef={(node) => {
-                      itemRefs.current[item.id] = node;
-                    }}
+                    itemRef={(node) => storeCommandItemNode(itemRefs, item.id, node)}
                     onHighlight={props.onHighlightedItemChange}
                     onSelect={props.onSelect}
                   />
@@ -392,7 +392,7 @@ export const ComposerCommandMenu = memo(function ComposerCommandMenu(props: {
       </div>
     </Command>
   );
-});
+}
 
 // Single icon column shared by every menu row. Rows differ only by the glyph,
 // its color, and the name — slot geometry stays constant so files, folders,
@@ -423,6 +423,7 @@ const SLASH_COMMAND_ICONS: Record<string, LucideIcon> = {
   side: TemporaryThreadIcon,
   status: InfoIcon,
   subagents: BotIcon,
+  feedback: BugIcon,
   automation: ClockIcon,
 };
 
@@ -479,7 +480,7 @@ function commandMenuItemGlyph(item: ComposerCommandItem, theme: "light" | "dark"
   }
 }
 
-const ComposerCommandItemIcon = memo(function ComposerCommandItemIcon(props: {
+function ComposerCommandItemIcon(props: {
   item: ComposerCommandItem;
   resolvedTheme: "light" | "dark";
   isActive: boolean;
@@ -494,8 +495,9 @@ const ComposerCommandItemIcon = memo(function ComposerCommandItemIcon(props: {
       {commandMenuItemGlyph(props.item, props.resolvedTheme)}
     </span>
   );
-});
+}
 
+// Manual memoization kept: this file does not compile under React Compiler (see compile-report).
 const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
   item: ComposerCommandItem;
   resolvedTheme: "light" | "dark";
@@ -550,3 +552,14 @@ const ComposerCommandMenuItem = memo(function ComposerCommandMenuItem(props: {
     </CommandItem>
   );
 });
+
+// Ref-callback body kept out of the compiled component: React Compiler cannot
+// tell a custom `itemRef` prop is a ref callback and would reject the render-
+// scoped mutation otherwise.
+function storeCommandItemNode(
+  refs: { current: Record<string, HTMLElement | null> },
+  itemId: string,
+  node: HTMLElement | null,
+): void {
+  refs.current[itemId] = node;
+}

@@ -1,6 +1,6 @@
 import { type AutomationDefinition, type AutomationRun } from "@synara/contracts";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useMemo, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 
 import { getProviderStartOptions, useAppSettings } from "~/appSettings";
 import {
@@ -14,6 +14,7 @@ import { Button } from "~/components/ui/button";
 import { RouteInsetSurface } from "~/components/RouteInsetSurface";
 import {
   hasBlockingAutomationDraftWarnings,
+  updateAutomationDraftWarningAcknowledgement,
   type AutomationDraftWarning,
   type AutomationDraftWarningId,
 } from "~/lib/automationDraft";
@@ -26,6 +27,7 @@ import { CentralIcon } from "~/lib/central-icons";
 import { cn } from "~/lib/utils";
 import { ensureNativeApi } from "~/nativeApi";
 import { useStore } from "~/store";
+import { createAllThreadsSelector } from "~/storeSelectors";
 import {
   type AutomationFormState,
   AutomationDialog,
@@ -54,6 +56,8 @@ import { resolveThreadPickerTitle } from "./-chatThreadRoute.logic";
 export const Route = createFileRoute("/_chat/automations/")({
   component: AutomationsRouteView,
 });
+
+const selectAllThreads = createAllThreadsSelector();
 
 type LiveAutomationRun = AutomationRun & {
   readonly status: "pending" | "claimed" | "running" | "waiting-for-approval";
@@ -154,7 +158,7 @@ function AutomationsRouteView() {
   const desktopTopBarWindowControlsGutterClassName =
     useDesktopTopBarWindowControlsGutterClassName();
   const projects = useStore((state) => state.projects);
-  const threads = useStore((state) => state.threads);
+  const threads = useStore(selectAllThreads);
   const [editingDefinition, setEditingDefinition] = useState<AutomationDefinition | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [dialogWarnings, setDialogWarnings] = useState<readonly AutomationDraftWarning[]>([]);
@@ -176,7 +180,7 @@ function AutomationsRouteView() {
     deleteMutation,
     runsByAutomationId,
   } = useAutomations((threadId) => void navigate({ to: "/$threadId", params: { threadId } }));
-  const providerOptionsForDispatch = useMemo(() => getProviderStartOptions(settings), [settings]);
+  const providerOptionsForDispatch = getProviderStartOptions(settings);
 
   const updateDialogForm = (nextForm: AutomationFormState) => {
     setForm(nextForm);
@@ -184,15 +188,9 @@ function AutomationsRouteView() {
   };
 
   const toggleWarning = (id: AutomationDraftWarningId, checked: boolean) => {
-    setAcknowledgedWarningIds((current) => {
-      const next = new Set(current);
-      if (checked) {
-        next.add(id);
-      } else {
-        next.delete(id);
-      }
-      return next;
-    });
+    setAcknowledgedWarningIds((current) =>
+      updateAutomationDraftWarningAcknowledgement(current, id, checked),
+    );
   };
 
   const openCreateDialog = () => {

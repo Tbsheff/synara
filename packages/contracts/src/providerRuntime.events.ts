@@ -32,6 +32,7 @@ import {
   TaskCompletedPayload,
   TaskProgressPayload,
   TaskStartedPayload,
+  TaskUpdatedPayload,
   ThreadMetadataUpdatedPayload,
   ThreadRealtimeAudioDeltaPayload,
   ThreadRealtimeClosedPayload,
@@ -84,6 +85,7 @@ const UserInputRequestedType = Schema.Literal("user-input.requested");
 const UserInputResolvedType = Schema.Literal("user-input.resolved");
 const TaskStartedType = Schema.Literal("task.started");
 const TaskProgressType = Schema.Literal("task.progress");
+const TaskUpdatedType = Schema.Literal("task.updated");
 const TaskCompletedType = Schema.Literal("task.completed");
 const HookStartedType = Schema.Literal("hook.started");
 const HookProgressType = Schema.Literal("hook.progress");
@@ -327,6 +329,13 @@ const ProviderRuntimeTaskProgressEvent = Schema.Struct({
 });
 export type ProviderRuntimeTaskProgressEvent = typeof ProviderRuntimeTaskProgressEvent.Type;
 
+const ProviderRuntimeTaskUpdatedEvent = Schema.Struct({
+  ...ProviderRuntimeEventBase.fields,
+  type: TaskUpdatedType,
+  payload: TaskUpdatedPayload,
+});
+export type ProviderRuntimeTaskUpdatedEvent = typeof ProviderRuntimeTaskUpdatedEvent.Type;
+
 const ProviderRuntimeTaskCompletedEvent = Schema.Struct({
   ...ProviderRuntimeEventBase.fields,
   type: TaskCompletedType,
@@ -487,6 +496,7 @@ export const ProviderRuntimeEventV2 = Schema.Union([
   ProviderRuntimeUserInputResolvedEvent,
   ProviderRuntimeTaskStartedEvent,
   ProviderRuntimeTaskProgressEvent,
+  ProviderRuntimeTaskUpdatedEvent,
   ProviderRuntimeTaskCompletedEvent,
   ProviderRuntimeHookStartedEvent,
   ProviderRuntimeHookProgressEvent,

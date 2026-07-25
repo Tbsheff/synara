@@ -1,6 +1,8 @@
 // Purpose: Scores sidebar palette results for actions, themes, projects, and chat threads.
 // Keeps search local and deterministic so the palette can rank title hits above
 // message-content hits while still surfacing a useful snippet for chat matches.
+import type { ReactNode } from "react";
+
 import type { ProviderKind } from "@synara/contracts";
 import { basenameOfPath } from "../file-icons";
 import type { ThemeMode, ThemeVariant } from "../theme/theme.logic";
@@ -11,6 +13,15 @@ export interface SidebarSearchAction {
   description: string;
   keywords?: readonly string[];
   shortcutLabel?: string | null;
+  /** Dynamic actions (e.g. "Switch to <space>") execute this instead of a wired-up prop. */
+  run?: () => void;
+  /** Overrides the id-keyed icon map for actions whose glyph is data (a space's icon). */
+  icon?: (props: { className?: string }) => ReactNode;
+  /**
+   * Type-to-jump targets (one per space) only appear once the user types; listing them
+   * all in the empty palette would push threads and projects below the fold.
+   */
+  requiresQuery?: boolean;
 }
 
 export interface SidebarSearchTheme {
@@ -32,6 +43,7 @@ export interface SidebarSearchProject {
   folderName: string;
   localName: string | null;
   cwd: string;
+  spaceName: string;
   createdAt?: string | undefined;
   updatedAt?: string | undefined;
 }
@@ -47,6 +59,7 @@ export interface SidebarSearchThread {
   projectId: string;
   projectName: string;
   projectRemoteName: string;
+  spaceName: string;
   provider: ProviderKind;
   createdAt: string;
   updatedAt?: string | undefined;
@@ -216,6 +229,7 @@ function scoreProject(project: SidebarSearchProject, query: string): number | nu
   const remoteName = normalizeText(project.remoteName);
   const cwd = normalizeText(project.cwd);
   const folder = normalizeText(project.folderName || basenameOfPath(project.cwd));
+  const spaceName = normalizeText(project.spaceName);
 
   if (name === query) return 150;
   if (remoteName === query) return 150;
@@ -226,7 +240,9 @@ function scoreProject(project: SidebarSearchProject, query: string): number | nu
   if (name.includes(query)) return 105;
   if (remoteName.includes(query)) return 105;
   if (folder.includes(query)) return 95;
+  if (spaceName === query) return 90;
   if (cwd.includes(query)) return 70;
+  if (spaceName.includes(query)) return 60;
   return null;
 }
 
@@ -237,6 +253,7 @@ export function matchSidebarSearchActions(
   const normalizedQuery = normalizeText(query);
 
   return actions
+    .filter((action) => !action.requiresQuery || normalizedQuery.length > 0)
     .map((action, index) => ({
       action,
       index,
@@ -335,6 +352,7 @@ export function matchSidebarSearchThreads(
       const title = normalizeText(thread.title);
       const projectName = normalizeText(thread.projectName);
       const projectRemoteName = normalizeText(thread.projectRemoteName);
+      const spaceName = normalizeText(thread.spaceName);
       const messageMatch = scoreMessage(thread.messages, normalizedQuery, queryTokens);
       let score: number | null = null;
       let matchKind: SidebarSearchThreadMatch["matchKind"] = "title";
@@ -365,6 +383,9 @@ export function matchSidebarSearchThreads(
       ) {
         score = 65;
         matchKind = "project";
+      } else if (spaceName.includes(normalizedQuery)) {
+        score = 55;
+        matchKind = "project";
       }
 
       return {
@@ -394,134 +415,4 @@ export function matchSidebarSearchThreads(
       snippet,
       messageMatchCount,
     }));
-}
-
-export function hasSidebarSearchResults(input: {
-  actions: readonly SidebarSearchAction[];
-  projects: readonly SidebarSearchProjectMatch[];
-  threads: readonly SidebarSearchThreadMatch[];
-}): boolean {
-  return input.actions.length > 0 || input.projects.length > 0 || input.threads.length > 0;
-}
-
-export function expandHomeInPath(value: string, homeDir: string | null): string {
-  if (!homeDir) return value;
-  if (value === "~") return homeDir;
-  if (value.startsWith("~/") || value.startsWith("~\\")) {
-    return `${homeDir}${value.slice(1)}`;
-  }
-  return value;
-}
-
-export interface ThemeCommandItem {
-  description: string;
-  id: string;
-  isActive: boolean;
-  label: string;
-  mode: "system" | "light" | "dark";
-}
-
-function paletteQueryTokens(query: string): string[] {
-  return query
-    .trim()
-    .toLowerCase()
-    .split(/\s+/)
-    .filter((token) => token.length > 0);
-}
-
-function hasTokenEqual(query: string, token: string): boolean {
-  return paletteQueryTokens(query).includes(token);
-}
-
-// Treat any token of length >= 2 that is a prefix of `keyword` as a match,
-// so typing `th` / `the` already starts surfacing theme actions.
-function hasTokenPrefixOf(query: string, keyword: string): boolean {
-  return paletteQueryTokens(query).some((token) => token.length >= 2 && keyword.startsWith(token));
-}
-
-// Keep the palette quiet by default, then expose one focused appearance action
-// once the user is clearly asking about themes.
-export function buildThemeCommandItem(input: {
-  query: string;
-  resolvedTheme: "light" | "dark";
-  theme: "system" | "light" | "dark";
-}): ThemeCommandItem | null {
-  const normalizedQuery = input.query.trim().toLowerCase();
-  if (!normalizedQuery) {
-    return null;
-  }
-
-  if (hasTokenEqual(normalizedQuery, "system")) {
-    return {
-      id: "theme-command:system",
-      label: "Follow system theme",
-      description: "Match your OS appearance setting.",
-      mode: "system",
-      isActive: input.theme === "system",
-    };
-  }
-
-  if (hasTokenEqual(normalizedQuery, "light")) {
-    return {
-      id: "theme-command:light",
-      label: "Switch to light theme",
-      description: "Always use the light theme.",
-      mode: "light",
-      isActive: input.theme === "light",
-    };
-  }
-
-  if (hasTokenEqual(normalizedQuery, "dark")) {
-    return {
-      id: "theme-command:dark",
-      label: "Switch to dark theme",
-      description: "Always use the dark theme.",
-      mode: "dark",
-      isActive: input.theme === "dark",
-    };
-  }
-
-  if (
-    hasTokenPrefixOf(normalizedQuery, "theme") ||
-    hasTokenPrefixOf(normalizedQuery, "appearance")
-  ) {
-    const nextMode = input.resolvedTheme === "dark" ? "light" : "dark";
-    return {
-      id: `theme-command:${nextMode}`,
-      label: `Switch to ${nextMode} theme`,
-      description:
-        nextMode === "light" ? "Always use the light theme." : "Always use the dark theme.",
-      mode: nextMode,
-      isActive: input.theme === nextMode,
-    };
-  }
-
-  return null;
-}
-
-export function threadMatchLabel(input: {
-  matchKind: "message" | "project" | "title";
-  messageMatchCount: number;
-}): string | null {
-  if (input.matchKind === "message") {
-    return input.messageMatchCount > 1 ? `${input.messageMatchCount} chat hits` : "Chat match";
-  }
-  if (input.matchKind === "project") {
-    return "Project match";
-  }
-  return null;
-}
-
-export function tokenizeHighlightQuery(query: string): string[] {
-  const tokens = query
-    .trim()
-    .toLowerCase()
-    .split(/\s+/)
-    .filter((token) => token.length > 0)
-    .filter((token, index, allTokens) => allTokens.indexOf(token) === index);
-  return tokens.toSorted((left, right) => right.length - left.length);
-}
-
-export function escapeRegExp(value: string): string {
-  return value.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

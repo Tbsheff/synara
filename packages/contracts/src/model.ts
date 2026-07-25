@@ -17,10 +17,6 @@ export const CLAUDE_CODE_EFFORT_OPTIONS = [
   ...CLAUDE_CODE_MODE_OPTIONS,
 ] as const;
 export type ClaudeCodeEffort = (typeof CLAUDE_CODE_EFFORT_OPTIONS)[number];
-export const GEMINI_THINKING_LEVEL_OPTIONS = ["LOW", "HIGH"] as const;
-export type GeminiThinkingLevel = (typeof GEMINI_THINKING_LEVEL_OPTIONS)[number];
-export const GEMINI_THINKING_BUDGET_OPTIONS = [-1, 512, 0] as const;
-export type GeminiThinkingBudget = (typeof GEMINI_THINKING_BUDGET_OPTIONS)[number];
 export const PI_THINKING_LEVEL_OPTIONS = [
   "off",
   "minimal",
@@ -42,12 +38,12 @@ export const DROID_REASONING_EFFORT_OPTIONS = [
   "xhigh",
   "max",
 ] as const;
-export type DroidReasoningEffort = (typeof DROID_REASONING_EFFORT_OPTIONS)[number];
+// Droid exposes effort values dynamically over ACP; keep the static list only
+// as an offline fallback so newly added values survive transport and drafts.
+export type DroidReasoningEffort = string;
 export type ProviderReasoningEffort =
   | CodexReasoningEffort
   | ClaudeCodeEffort
-  | GeminiThinkingLevel
-  | `${GeminiThinkingBudget}`
   | PiThinkingLevel
   | GrokReasoningEffort
   | DroidReasoningEffort;
@@ -114,11 +110,10 @@ export const ClaudeModelOptions = Schema.Struct({
 });
 export type ClaudeModelOptions = typeof ClaudeModelOptions.Type;
 
-export const GeminiModelOptions = Schema.Struct({
-  thinkingLevel: Schema.optional(Schema.Literals(GEMINI_THINKING_LEVEL_OPTIONS)),
-  thinkingBudget: Schema.optional(Schema.Literals(GEMINI_THINKING_BUDGET_OPTIONS)),
+export const AntigravityModelOptions = Schema.Struct({
+  reasoningEffort: Schema.optional(TrimmedNonEmptyString),
 });
-export type GeminiModelOptions = typeof GeminiModelOptions.Type;
+export type AntigravityModelOptions = typeof AntigravityModelOptions.Type;
 
 export const OpenCodeModelOptions = Schema.Struct({
   variant: Schema.optional(TrimmedNonEmptyString),
@@ -145,7 +140,7 @@ export const GrokModelOptions = Schema.Struct({
 export type GrokModelOptions = typeof GrokModelOptions.Type;
 
 export const DroidModelOptions = Schema.Struct({
-  reasoningEffort: Schema.optional(Schema.Literals(DROID_REASONING_EFFORT_OPTIONS)),
+  reasoningEffort: Schema.optional(TrimmedNonEmptyString),
 });
 export type DroidModelOptions = typeof DroidModelOptions.Type;
 
@@ -153,7 +148,7 @@ export const ProviderModelOptions = Schema.Struct({
   codex: Schema.optional(CodexModelOptions),
   claudeAgent: Schema.optional(ClaudeModelOptions),
   cursor: Schema.optional(CursorModelOptions),
-  gemini: Schema.optional(GeminiModelOptions),
+  antigravity: Schema.optional(AntigravityModelOptions),
   grok: Schema.optional(GrokModelOptions),
   droid: Schema.optional(DroidModelOptions),
   kilo: Schema.optional(OpenCodeModelOptions),
@@ -202,17 +197,6 @@ export type ModelCapabilities = {
   readonly contextWindowTokens?: number;
   readonly variantOptions?: readonly EffortOption[];
   readonly agentOptions?: readonly EffortOption[];
-};
-
-const GEMINI_2_5_CAPABILITIES: ModelCapabilities = {
-  reasoningEffortLevels: [
-    { value: "-1", label: "Dynamic", isDefault: true },
-    { value: "512", label: "512 Tokens" },
-  ],
-  supportsFastMode: false,
-  supportsThinkingToggle: false,
-  promptInjectedEffortLevels: [],
-  contextWindowOptions: [],
 };
 
 const CODEX_GPT_5_CAPABILITIES: ModelCapabilities = {
@@ -286,8 +270,22 @@ const DROID_CLAUDE_BASIC_CAPABILITIES = droidCapabilities([
 ]);
 
 const DROID_GPT_MEDIUM_CAPABILITIES = droidCapabilities([
+  { value: "low", label: "Low" },
+  { value: "medium", label: "Medium", isDefault: true },
+  { value: "high", label: "High" },
+  { value: "xhigh", label: "Extra High" },
+]);
+
+const DROID_GPT_5_6_CAPABILITIES = droidCapabilities([
   { value: "none", label: "None" },
   { value: "low", label: "Low" },
+  { value: "medium", label: "Medium", isDefault: true },
+  { value: "high", label: "High" },
+  { value: "xhigh", label: "Extra High" },
+  { value: "max", label: "Maximum" },
+]);
+
+const DROID_GPT_PRO_CAPABILITIES = droidCapabilities([
   { value: "medium", label: "Medium", isDefault: true },
   { value: "high", label: "High" },
   { value: "xhigh", label: "Extra High" },
@@ -534,84 +532,9 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
       },
     },
   ],
-  gemini: [
-    {
-      slug: "auto-gemini-3",
-      name: "Auto Gemini 3",
-      capabilities: {
-        reasoningEffortLevels: [
-          { value: "HIGH", label: "High", isDefault: true },
-          { value: "LOW", label: "Low" },
-        ],
-        supportsFastMode: false,
-        supportsThinkingToggle: false,
-        promptInjectedEffortLevels: [],
-        contextWindowOptions: [],
-      },
-    },
-    {
-      slug: "auto-gemini-2.5",
-      name: "Auto Gemini 2.5",
-      capabilities: GEMINI_2_5_CAPABILITIES,
-    },
-    {
-      slug: "gemini-3.1-pro-preview",
-      name: "Gemini 3.1 Pro Preview",
-      capabilities: {
-        reasoningEffortLevels: [
-          { value: "HIGH", label: "High", isDefault: true },
-          { value: "LOW", label: "Low" },
-        ],
-        supportsFastMode: false,
-        supportsThinkingToggle: false,
-        promptInjectedEffortLevels: [],
-        contextWindowOptions: [],
-      },
-    },
-    {
-      slug: "gemini-3-flash-preview",
-      name: "Gemini 3 Flash Preview",
-      capabilities: {
-        reasoningEffortLevels: [
-          { value: "HIGH", label: "High", isDefault: true },
-          { value: "LOW", label: "Low" },
-        ],
-        supportsFastMode: false,
-        supportsThinkingToggle: false,
-        promptInjectedEffortLevels: [],
-        contextWindowOptions: [],
-      },
-    },
-    {
-      slug: "gemini-3.1-flash-lite-preview",
-      name: "Gemini 3.1 Flash Lite Preview",
-      capabilities: {
-        reasoningEffortLevels: [
-          { value: "HIGH", label: "High", isDefault: true },
-          { value: "LOW", label: "Low" },
-        ],
-        supportsFastMode: false,
-        supportsThinkingToggle: false,
-        promptInjectedEffortLevels: [],
-        contextWindowOptions: [],
-      },
-    },
-    {
-      slug: "gemini-2.5-pro",
-      name: "Gemini 2.5 Pro",
-      capabilities: GEMINI_2_5_CAPABILITIES,
-    },
-    {
-      slug: "gemini-2.5-flash",
-      name: "Gemini 2.5 Flash",
-      capabilities: GEMINI_2_5_CAPABILITIES,
-    },
-    {
-      slug: "gemini-2.5-flash-lite",
-      name: "Gemini 2.5 Flash Lite",
-      capabilities: GEMINI_2_5_CAPABILITIES,
-    },
-  ],
+  // Antigravity owns its model catalog. The web app populates this provider from
+  // `agy models` so CLI updates appear without a Synara release.
+  antigravity: [],
   grok: [
     {
       slug: "grok-build-0.1",
@@ -688,6 +611,21 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
       capabilities: DROID_CLAUDE_BASIC_CAPABILITIES,
     },
     {
+      slug: "gpt-5.6-sol",
+      name: "GPT-5.6 Sol",
+      capabilities: DROID_GPT_5_6_CAPABILITIES,
+    },
+    {
+      slug: "gpt-5.6-terra",
+      name: "GPT-5.6 Terra",
+      capabilities: DROID_GPT_5_6_CAPABILITIES,
+    },
+    {
+      slug: "gpt-5.6-luna",
+      name: "GPT-5.6 Luna",
+      capabilities: DROID_GPT_5_6_CAPABILITIES,
+    },
+    {
       slug: "gpt-5.5",
       name: "GPT-5.5",
       capabilities: DROID_GPT_MEDIUM_CAPABILITIES,
@@ -700,7 +638,7 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
     {
       slug: "gpt-5.5-pro",
       name: "GPT-5.5 Pro",
-      capabilities: DROID_GPT_MEDIUM_CAPABILITIES,
+      capabilities: DROID_GPT_PRO_CAPABILITIES,
     },
     {
       slug: "gpt-5.4",
@@ -819,6 +757,7 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
       },
     },
   ],
+  // Pi discovery owns the live catalog, including auth-gated Anthropic models.
   pi: [],
   cursor: [
     {
@@ -888,7 +827,7 @@ export const DEFAULT_MODEL_BY_PROVIDER: Record<ProviderWithDefaultModel, ModelSl
   codex: "gpt-5.5",
   claudeAgent: "claude-sonnet-5",
   cursor: "auto",
-  gemini: "auto-gemini-3",
+  antigravity: "Gemini 3.5 Flash",
   grok: "grok-build",
   droid: "claude-opus-4-8",
   kilo: "kilo/kilo-auto/free",
@@ -948,18 +887,7 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string,
     "codex-5.3": "gpt-5.3-codex",
     "gemini-3": "gemini-3-pro",
   },
-  gemini: {
-    auto: "auto-gemini-3",
-    "auto-gemini-3": "auto-gemini-3",
-    "auto-gemini-2.5": "auto-gemini-2.5",
-    "gemini-3-pro-preview": "gemini-3.1-pro-preview",
-    "gemini-3.1-pro-preview": "gemini-3.1-pro-preview",
-    "gemini-3-flash-preview": "gemini-3-flash-preview",
-    "gemini-3.1-flash-lite-preview": "gemini-3.1-flash-lite-preview",
-    "gemini-2.5-pro": "gemini-2.5-pro",
-    "gemini-2.5-flash": "gemini-2.5-flash",
-    "gemini-2.5-flash-lite": "gemini-2.5-flash-lite",
-  },
+  antigravity: {},
   droid: {
     droid: "claude-opus-4-8",
     factory: "claude-opus-4-8",
@@ -1045,7 +973,7 @@ export const PROVIDER_DISPLAY_NAMES: Record<ProviderKind, string> = {
   codex: "Codex",
   claudeAgent: "Claude",
   cursor: "Cursor",
-  gemini: "Gemini",
+  antigravity: "Antigravity",
   grok: "Grok",
   droid: "Droid",
   kilo: "Kilo",

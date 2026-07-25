@@ -8,7 +8,6 @@
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useStore } from "zustand";
 import {
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
@@ -507,8 +506,8 @@ export function BrowserPanel({
 }: BrowserPanelProps) {
   const api = readNativeApi();
   const isLiveRuntime = runtimeMode === "live";
-  const threadBrowserState = useStore(useBrowserStateStore, selectThreadBrowserState(threadId));
-  const recentHistory = useStore(useBrowserStateStore, selectThreadBrowserHistory(threadId));
+  const threadBrowserState = useBrowserStateStore(selectThreadBrowserState(threadId));
+  const recentHistory = useBrowserStateStore(selectThreadBrowserHistory(threadId));
   const upsertThreadState = useBrowserStateStore((store) => store.upsertThreadState);
   const addComposerDraftImage = useComposerDraftStore((store) => store.addImage);
   const composerDraftImageCount = useComposerDraftStore(
@@ -644,24 +643,32 @@ export function BrowserPanel({
       return;
     }
 
+    // Timeout-0 keeps the reset writes asynchronous (no wasted pre-paint
+    // render), which also keeps this component eligible for React Compiler.
     let cancelled = false;
-    setWorkspaceReady(false);
-    setLocalError(null);
-
-    void runBrowserAction(() => api.browser.open({ threadId })).then((state) => {
+    const timeoutId = window.setTimeout(() => {
       if (cancelled) {
         return;
       }
-      if (!state) {
+      setWorkspaceReady(false);
+      setLocalError(null);
+
+      void runBrowserAction(() => api.browser.open({ threadId })).then((state) => {
+        if (cancelled) {
+          return;
+        }
+        if (!state) {
+          setWorkspaceReady(true);
+          return;
+        }
+        upsertThreadState(state);
         setWorkspaceReady(true);
-        return;
-      }
-      upsertThreadState(state);
-      setWorkspaceReady(true);
-    });
+      });
+    }, 0);
 
     return () => {
       cancelled = true;
+      window.clearTimeout(timeoutId);
       void api.browser.hide({ threadId });
     };
   }, [api, isLiveRuntime, runBrowserAction, threadId, upsertThreadState]);
@@ -1386,7 +1393,7 @@ export function BrowserPanel({
             }}
             placeholder="Search or enter a URL"
             className={cn(
-              "font-mono min-w-0 [-webkit-app-region:no-drag]",
+              "min-w-0 [-webkit-app-region:no-drag]",
               BROWSER_CHROME_CONTROL_CLASS_NAME,
               BROWSER_CHROME_CONTROL_FILLED_CLASS_NAME,
             )}

@@ -6,7 +6,10 @@
 
 import { Effect, Option } from "effect";
 
-import { type ProjectionThreadRuntime } from "../../persistence/Services/ProjectionThreadRuntime.ts";
+import {
+  ProjectionThreadRuntimeRepository,
+  type ProjectionThreadRuntime,
+} from "../../persistence/Services/ProjectionThreadRuntime.ts";
 import { applyProjectMetadataProjection } from "../projectMetadataProjection.ts";
 import type { ProjectorDefinition } from "./ProjectionPipeline.types.ts";
 import type { ProjectionProjectorDeps } from "./ProjectionPipeline.projectors.ts";
@@ -512,3 +515,10 @@ export const makeMiscProjectors = (deps: ProjectionProjectorDeps) => {
     applyThreadRuntimeProjection,
   };
 };
+
+export const makeThreadRuntimeProjection = (
+  projectionThreadRuntimeRepository: typeof ProjectionThreadRuntimeRepository.Service,
+) =>
+  makeMiscProjectors({
+    projectionThreadRuntimeRepository,
+  } as ProjectionProjectorDeps).applyThreadRuntimeProjection;

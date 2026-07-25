@@ -6,7 +6,7 @@
 import type { ComponentProps } from "react";
 
 import { cn } from "~/lib/utils";
-import { MenuPopup, MenuSubPopup } from "../ui/menu";
+import { MenuPopupBase, MenuSubPopup } from "../ui/menu";
 import { SelectPopup } from "../ui/select";
 import {
   type ComposerPickerSize,
@@ -15,7 +15,7 @@ import {
   resolveComposerPickerSize,
 } from "./composerPickerSize";
 
-type ComposerPickerMenuPopupProps = Omit<ComponentProps<typeof MenuPopup>, "surface"> & {
+type ComposerPickerMenuPopupProps = Omit<ComponentProps<typeof MenuPopupBase>, "surface"> & {
   /** Override global COMPOSER_PICKER_SIZE for this panel. */
   size?: ComposerPickerSize;
   /** Apply the fixed picker width (model/effort/provider pickers). Off = content-sized. */
@@ -31,7 +31,7 @@ export function ComposerPickerMenuPopup({
 }: ComposerPickerMenuPopupProps) {
   const resolvedSize = resolveComposerPickerSize(size);
   return (
-    <MenuPopup
+    <MenuPopupBase
       surface="composer"
       pickerSize={resolvedSize}
       className={cn(
@@ -44,9 +44,6 @@ export function ComposerPickerMenuPopup({
     />
   );
 }
-
-/** Alias for menus outside the composer footer that share the same open panel chrome. */
-export const PickerMenuPopup = ComposerPickerMenuPopup;
 
 type ComposerPickerSelectPopupProps = Omit<ComponentProps<typeof SelectPopup>, "surface"> & {
   size?: ComposerPickerSize;
@@ -72,9 +69,6 @@ export function ComposerPickerSelectPopup({
     />
   );
 }
-
-/** Alias for settings and other non-menu pickers that open a select list panel. */
-export const PickerSelectPopup = ComposerPickerSelectPopup;
 
 type ComposerPickerMenuSubPopupProps = Omit<ComponentProps<typeof MenuSubPopup>, "surface"> & {
   /** Override global COMPOSER_PICKER_SIZE for this submenu. */

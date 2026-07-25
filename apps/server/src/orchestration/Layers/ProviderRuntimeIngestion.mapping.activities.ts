@@ -488,6 +488,9 @@ export function runtimeEventToActivities(
                   : "Approval requested",
           payload: toActivityPayload({
             requestId: toApprovalRequestId(event.requestId),
+            ...(event.lifecycleGeneration !== undefined
+              ? { lifecycleGeneration: event.lifecycleGeneration }
+              : {}),
             ...(requestKind ? { requestKind } : {}),
             requestType: event.payload.requestType,
             ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
@@ -512,6 +515,9 @@ export function runtimeEventToActivities(
           summary: "Approval resolved",
           payload: toActivityPayload({
             requestId: toApprovalRequestId(event.requestId),
+            ...(event.lifecycleGeneration !== undefined
+              ? { lifecycleGeneration: event.lifecycleGeneration }
+              : {}),
             ...(requestKind ? { requestKind } : {}),
             requestType: event.payload.requestType,
             ...(event.payload.decision ? { decision: event.payload.decision } : {}),
@@ -659,6 +665,9 @@ export function runtimeEventToActivities(
           kind: "user-input.requested",
           summary: "User input requested",
           payload: toActivityPayload({
+            ...(event.lifecycleGeneration !== undefined
+              ? { lifecycleGeneration: event.lifecycleGeneration }
+              : {}),
             ...(event.requestId ? { requestId: event.requestId } : {}),
             questions: event.payload.questions,
           }),
@@ -677,6 +686,9 @@ export function runtimeEventToActivities(
           kind: "user-input.resolved",
           summary: "User input submitted",
           payload: toActivityPayload({
+            ...(event.lifecycleGeneration !== undefined
+              ? { lifecycleGeneration: event.lifecycleGeneration }
+              : {}),
             ...(event.requestId ? { requestId: event.requestId } : {}),
             answers: event.payload.answers,
           }),

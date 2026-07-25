@@ -531,6 +531,13 @@ export function deriveTranscriptTailFollowKey(input: {
   return [message.id, message.text.length].join(":");
 }
 
+export function buildTranscriptAutoFollowSignal(input: {
+  messageCount: number;
+  tailKey: string;
+}): string {
+  return `${input.messageCount}:${input.tailKey}`;
+}
+
 export function shouldMaintainTranscriptTailFollow(input: {
   previousTailKey: string | null | undefined;
   nextTailKey: string;
@@ -710,8 +717,8 @@ export function getProviderStartOptionsCustomBinaryPath(
       return normalizeCustomBinaryPath(providerOptions?.codex?.binaryPath);
     case "claudeAgent":
       return normalizeCustomBinaryPath(providerOptions?.claudeAgent?.binaryPath);
-    case "gemini":
-      return normalizeCustomBinaryPath(providerOptions?.gemini?.binaryPath);
+    case "antigravity":
+      return normalizeCustomBinaryPath(providerOptions?.antigravity?.binaryPath);
     case "grok":
       return normalizeCustomBinaryPath(providerOptions?.grok?.binaryPath);
     case "droid":
@@ -1126,6 +1133,8 @@ export interface QueuedSteerGate {
   sawInterruptGap: boolean;
   /** Epoch ms when the gap started; null while the original turn still runs. */
   gapStartedAt: number | null;
+  /** Turn active when the steer gate was armed, used to detect the replacement turn. */
+  armedActiveTurnId: string | null;
 }
 
 /** Recovery bound: a healthy interrupt→steered-turn handoff takes ~1-2s. */
@@ -1139,6 +1148,7 @@ export function resolveQueuedSteerGateTransition(input: {
   gate: QueuedSteerGate;
   phase: SessionPhase;
   sessionErrored: boolean;
+  activeTurnId: string | null;
   now: number;
 }): QueuedSteerGateTransition {
   if (input.phase === "disconnected" || input.sessionErrored) {
@@ -1150,10 +1160,18 @@ export function resolveQueuedSteerGateTransition(input: {
       // The steered turn is live; normal live-turn guards take over from here.
       return { kind: "clear" };
     }
+    if (
+      input.gate.armedActiveTurnId !== null &&
+      input.activeTurnId !== null &&
+      input.activeTurnId !== input.gate.armedActiveTurnId
+    ) {
+      return { kind: "clear" };
+    }
+    const armedActiveTurnId = input.gate.armedActiveTurnId ?? input.activeTurnId;
     // Original turn still running (interrupt not processed yet): keep holding.
     return {
       kind: "hold",
-      gate: { sawInterruptGap: false, gapStartedAt: null },
+      gate: { sawInterruptGap: false, gapStartedAt: null, armedActiveTurnId },
       expiresInMs: null,
     };
   }
@@ -1166,7 +1184,7 @@ export function resolveQueuedSteerGateTransition(input: {
   }
   return {
     kind: "hold",
-    gate: { sawInterruptGap: true, gapStartedAt },
+    gate: { ...input.gate, sawInterruptGap: true, gapStartedAt },
     expiresInMs,
   };
 }
@@ -1486,7 +1504,14 @@ export function enrichSubagentWorkEntries(
         threads,
       });
       const status = deriveSubagentStatus(matchedThread);
-      const fallbackStatusLabel = humanizeSubagentRawStatus(subagent.rawStatus);
+      const providerStatusLabel = humanizeSubagentRawStatus(
+        subagent.rawStatus ?? entry.subagentAction?.status,
+      );
+      const providerStatusIsTerminal =
+        providerStatusLabel !== undefined &&
+        providerStatusLabel !== "Running" &&
+        providerStatusLabel !== "Queued" &&
+        providerStatusLabel !== "Idle";
       const matchedPresentation =
         matchedThread !== undefined
           ? resolveSubagentPresentationForThread({ thread: matchedThread, threads })
@@ -1498,10 +1523,13 @@ export function enrichSubagentWorkEntries(
       if (matchedPresentation) {
         nextSubagent.title = matchedPresentation.fullLabel;
       }
-      if (status.label ?? fallbackStatusLabel) {
-        nextSubagent.statusLabel = status.label ?? fallbackStatusLabel;
+      const statusLabel = providerStatusIsTerminal
+        ? providerStatusLabel
+        : (status.label ?? providerStatusLabel);
+      if (statusLabel) {
+        nextSubagent.statusLabel = statusLabel;
       }
-      if (status.isActive || fallbackStatusLabel === "Running") {
+      if (status.isActive || (status.label === undefined && providerStatusLabel === "Running")) {
         nextSubagent.isActive = true;
       }
       return nextSubagent;

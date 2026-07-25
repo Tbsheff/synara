@@ -5,15 +5,11 @@
 // Exports: none; communicates over JSON-RPC stdio.
 
 import { appendFileSync } from "node:fs";
+import { Readable, Writable } from "node:stream";
 
+import * as OfficialAcp from "@agentclientprotocol/sdk";
 import * as Effect from "effect/Effect";
-
-import * as NodeServices from "@effect/platform-node/NodeServices";
-import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
-
-import * as EffectAcpAgent from "effect-acp/agent";
-import * as AcpError from "effect-acp/errors";
-import type * as AcpSchema from "effect-acp/schema";
+import type * as AcpSchema from "@agentclientprotocol/sdk";
 
 const requestLogPath = process.env.SYNARA_ACP_REQUEST_LOG_PATH;
 const exitLogPath = process.env.SYNARA_ACP_EXIT_LOG_PATH;
@@ -29,6 +25,7 @@ const failSetConfigOption = process.env.SYNARA_ACP_FAIL_SET_CONFIG_OPTION === "1
 const exitOnSetConfigOption = process.env.SYNARA_ACP_EXIT_ON_SET_CONFIG_OPTION === "1";
 const promptResponseText = process.env.SYNARA_ACP_PROMPT_RESPONSE_TEXT;
 const supportsSessionResume = process.env.SYNARA_ACP_SUPPORT_SESSION_RESUME === "1";
+const supportsSessionLoad = process.env.SYNARA_ACP_SUPPORT_SESSION_LOAD !== "0";
 const supportsSessionFork = process.env.SYNARA_ACP_SUPPORT_SESSION_FORK === "1";
 const emitAvailableCommands = process.env.SYNARA_ACP_EMIT_AVAILABLE_COMMANDS === "1";
 const modeConfigId = process.env.SYNARA_ACP_MODE_CONFIG_ID || "mode";
@@ -63,7 +60,7 @@ process.once("exit", (code) => {
   logExit(`exit:${code}`);
 });
 
-function configOptions(): ReadonlyArray<AcpSchema.SessionConfigOption> {
+function configOptions(): Array<AcpSchema.SessionConfigOption> {
   if (parameterizedModelPicker) {
     const baseOptions: Array<AcpSchema.SessionConfigOption> = [
       {
@@ -194,7 +191,7 @@ function configOptions(): ReadonlyArray<AcpSchema.SessionConfigOption> {
   ];
 }
 
-const availableModes: ReadonlyArray<AcpSchema.SessionMode> = [
+const availableModes: Array<AcpSchema.SessionMode> = [
   {
     id: "ask",
     name: "Ask",
@@ -219,10 +216,56 @@ function modeState(): AcpSchema.SessionModeState {
   };
 }
 
-const program = Effect.gen(function* () {
-  const agent = yield* EffectAcpAgent.AcpAgent;
+function runEffect<A>(effect: Effect.Effect<A, unknown>): Promise<A> {
+  return Effect.runPromise(effect);
+}
 
-  yield* agent.handleInitialize((request) =>
+function makeClient(context: OfficialAcp.AgentContext) {
+  return {
+    sessionUpdate: (notification: AcpSchema.SessionNotification) =>
+      Effect.promise(() => context.notify(OfficialAcp.methods.client.session.update, notification)),
+    requestPermission: (request: AcpSchema.RequestPermissionRequest) =>
+      Effect.promise(() =>
+        context.request(OfficialAcp.methods.client.session.requestPermission, request),
+      ),
+    extRequest: (method: string, params: unknown) =>
+      Effect.promise(() => context.request(method, params)),
+  };
+}
+
+function requestInput(): ReadableStream<Uint8Array> {
+  const input = Readable.toWeb(process.stdin) as ReadableStream<Uint8Array>;
+  if (!requestLogPath) return input;
+
+  const decoder = new TextDecoder();
+  let pending = "";
+  const logLines = (chunk: Uint8Array, final: boolean) => {
+    pending += decoder.decode(chunk, { stream: !final });
+    const lines = pending.split("\n");
+    pending = final ? "" : (lines.pop() ?? "");
+    for (const line of lines) {
+      if (line.length > 0) appendFileSync(requestLogPath, `${line}\n`, "utf8");
+    }
+    if (final && pending.length > 0) appendFileSync(requestLogPath, `${pending}\n`, "utf8");
+  };
+
+  return input.pipeThrough(
+    new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, controller) {
+        logLines(chunk, false);
+        controller.enqueue(chunk);
+      },
+      flush() {
+        logLines(new Uint8Array(), true);
+      },
+    }),
+  );
+}
+
+const app = OfficialAcp.agent({ name: "synara-acp-mock" });
+
+app.onRequest(OfficialAcp.methods.agent.initialize, ({ params: request }) =>
+  runEffect(
     Effect.sync(() => {
       parameterizedModelPicker =
         request.clientCapabilities?._meta !== null &&
@@ -231,7 +274,7 @@ const program = Effect.gen(function* () {
       return {
         protocolVersion: 1,
         agentCapabilities: {
-          loadSession: true,
+          loadSession: supportsSessionLoad,
           sessionCapabilities: {
             ...(supportsSessionResume ? { resume: {} } : {}),
             ...(supportsSessionFork ? { fork: {} } : {}),
@@ -239,14 +282,17 @@ const program = Effect.gen(function* () {
         },
       };
     }),
-  );
+  ),
+);
 
-  yield* agent.handleAuthenticate(() => Effect.succeed({}));
+app.onRequest(OfficialAcp.methods.agent.authenticate, () => ({}));
 
-  yield* agent.handleCreateSession(() =>
+app.onRequest(OfficialAcp.methods.agent.session.new, ({ client: context }) => {
+  const client = makeClient(context);
+  return runEffect(
     Effect.gen(function* () {
       if (emitAvailableCommands) {
-        yield* agent.client.sessionUpdate({
+        yield* client.sessionUpdate({
           sessionId,
           update: {
             sessionUpdate: "available_commands_update",
@@ -261,9 +307,12 @@ const program = Effect.gen(function* () {
       };
     }),
   );
+});
 
-  yield* agent.handleLoadSession((request) =>
-    agent.client
+app.onRequest(OfficialAcp.methods.agent.session.load, ({ client: context, params: request }) => {
+  const client = makeClient(context);
+  return runEffect(
+    client
       .sessionUpdate({
         sessionId: String(request.sessionId ?? sessionId),
         update: {
@@ -278,37 +327,35 @@ const program = Effect.gen(function* () {
         }),
       ),
   );
+});
 
-  yield* agent.handleResumeSession(() =>
-    Effect.succeed({
-      modes: modeState(),
-      configOptions: configOptions(),
-    }),
-  );
+app.onRequest(OfficialAcp.methods.agent.session.resume, () => ({
+  modes: modeState(),
+  configOptions: configOptions(),
+}));
 
-  yield* agent.handleForkSession(() =>
-    Effect.succeed({
-      sessionId: "mock-session-fork-1",
-      modes: modeState(),
-      configOptions: configOptions(),
-    }),
-  );
+app.onRequest(OfficialAcp.methods.agent.session.fork, () => ({
+  sessionId: "mock-session-fork-1",
+  modes: modeState(),
+  configOptions: configOptions(),
+}));
 
-  yield* agent.handleSetSessionConfigOption((request) =>
+app.onRequest(OfficialAcp.methods.agent.session.setConfigOption, ({ params: request }) => {
+  if (failSetConfigOption) {
+    throw OfficialAcp.RequestError.invalidParams(
+      {
+        method: "session/set_config_option",
+        params: request,
+      },
+      "Mock invalid params for session/set_config_option",
+    );
+  }
+  return runEffect(
     Effect.gen(function* () {
       if (exitOnSetConfigOption) {
         return yield* Effect.sync(() => {
           process.exit(7);
         });
-      }
-      if (failSetConfigOption) {
-        return yield* AcpError.AcpRequestError.invalidParams(
-          "Mock invalid params for session/set_config_option",
-          {
-            method: "session/set_config_option",
-            params: request,
-          },
-        );
       }
       if (request.configId === modeConfigId && typeof request.value === "string") {
         currentModeId = request.value;
@@ -330,21 +377,22 @@ const program = Effect.gen(function* () {
       };
     }),
   );
+});
 
-  yield* agent.handleCancel(({ sessionId }) =>
-    Effect.sync(() => {
-      cancelledSessions.add(String(sessionId ?? "mock-session-1"));
-    }),
-  );
+app.onNotification(OfficialAcp.methods.agent.session.cancel, ({ params: { sessionId } }) => {
+  cancelledSessions.add(String(sessionId ?? "mock-session-1"));
+});
 
-  yield* agent.handlePrompt((request) =>
+app.onRequest(OfficialAcp.methods.agent.session.prompt, ({ client: context, params: request }) => {
+  const client = makeClient(context);
+  return runEffect(
     Effect.gen(function* () {
       const requestedSessionId = String(request.sessionId ?? sessionId);
 
       if (emitInterleavedAssistantToolCalls) {
         const toolCallId = "tool-call-1";
 
-        yield* agent.client.sessionUpdate({
+        yield* client.sessionUpdate({
           sessionId: requestedSessionId,
           update: {
             sessionUpdate: "agent_message_chunk",
@@ -352,7 +400,7 @@ const program = Effect.gen(function* () {
           },
         });
 
-        yield* agent.client.sessionUpdate({
+        yield* client.sessionUpdate({
           sessionId: requestedSessionId,
           update: {
             sessionUpdate: "tool_call",
@@ -366,7 +414,7 @@ const program = Effect.gen(function* () {
           },
         });
 
-        yield* agent.client.sessionUpdate({
+        yield* client.sessionUpdate({
           sessionId: requestedSessionId,
           update: {
             sessionUpdate: "tool_call_update",
@@ -380,7 +428,7 @@ const program = Effect.gen(function* () {
           },
         });
 
-        yield* agent.client.sessionUpdate({
+        yield* client.sessionUpdate({
           sessionId: requestedSessionId,
           update: {
             sessionUpdate: "agent_message_chunk",
@@ -394,7 +442,7 @@ const program = Effect.gen(function* () {
       if (emitUpstreamAssistantMessageIds) {
         const toolCallId = "tool-call-upstream-message-id-1";
 
-        yield* agent.client.sessionUpdate({
+        yield* client.sessionUpdate({
           sessionId: requestedSessionId,
           update: {
             sessionUpdate: "agent_message_chunk",
@@ -403,7 +451,7 @@ const program = Effect.gen(function* () {
           },
         });
 
-        yield* agent.client.sessionUpdate({
+        yield* client.sessionUpdate({
           sessionId: requestedSessionId,
           update: {
             sessionUpdate: "tool_call",
@@ -417,7 +465,7 @@ const program = Effect.gen(function* () {
           },
         });
 
-        yield* agent.client.sessionUpdate({
+        yield* client.sessionUpdate({
           sessionId: requestedSessionId,
           update: {
             sessionUpdate: "tool_call_update",
@@ -431,7 +479,7 @@ const program = Effect.gen(function* () {
           },
         });
 
-        yield* agent.client.sessionUpdate({
+        yield* client.sessionUpdate({
           sessionId: requestedSessionId,
           update: {
             sessionUpdate: "agent_message_chunk",
@@ -440,7 +488,7 @@ const program = Effect.gen(function* () {
           },
         });
 
-        yield* agent.client.sessionUpdate({
+        yield* client.sessionUpdate({
           sessionId: requestedSessionId,
           update: {
             sessionUpdate: "agent_message_chunk",
@@ -455,7 +503,7 @@ const program = Effect.gen(function* () {
       if (emitReasoningThenToolCall) {
         const toolCallId = "tool-call-reasoning-1";
 
-        yield* agent.client.sessionUpdate({
+        yield* client.sessionUpdate({
           sessionId: requestedSessionId,
           update: {
             sessionUpdate: "agent_thought_chunk",
@@ -463,7 +511,7 @@ const program = Effect.gen(function* () {
           },
         });
 
-        yield* agent.client.sessionUpdate({
+        yield* client.sessionUpdate({
           sessionId: requestedSessionId,
           update: {
             sessionUpdate: "tool_call",
@@ -477,7 +525,7 @@ const program = Effect.gen(function* () {
           },
         });
 
-        yield* agent.client.sessionUpdate({
+        yield* client.sessionUpdate({
           sessionId: requestedSessionId,
           update: {
             sessionUpdate: "tool_call_update",
@@ -497,7 +545,7 @@ const program = Effect.gen(function* () {
       if (emitToolCalls) {
         const toolCallId = "tool-call-1";
 
-        yield* agent.client.sessionUpdate({
+        yield* client.sessionUpdate({
           sessionId: requestedSessionId,
           update: {
             sessionUpdate: "tool_call",
@@ -511,7 +559,7 @@ const program = Effect.gen(function* () {
           },
         });
 
-        yield* agent.client.sessionUpdate({
+        yield* client.sessionUpdate({
           sessionId: requestedSessionId,
           update: {
             sessionUpdate: "tool_call_update",
@@ -520,7 +568,7 @@ const program = Effect.gen(function* () {
           },
         });
 
-        const permission = yield* agent.client.requestPermission({
+        const permission = yield* client.requestPermission({
           sessionId: requestedSessionId,
           toolCall: {
             toolCallId,
@@ -548,7 +596,7 @@ const program = Effect.gen(function* () {
           cancelledSessions.delete(requestedSessionId) ||
           permission.outcome.outcome === "cancelled";
 
-        yield* agent.client.sessionUpdate({
+        yield* client.sessionUpdate({
           sessionId: requestedSessionId,
           update: {
             sessionUpdate: "tool_call_update",
@@ -564,7 +612,7 @@ const program = Effect.gen(function* () {
           },
         });
 
-        yield* agent.client.sessionUpdate({
+        yield* client.sessionUpdate({
           sessionId: requestedSessionId,
           update: {
             sessionUpdate: "agent_message_chunk",
@@ -578,7 +626,7 @@ const program = Effect.gen(function* () {
       if (emitGenericToolPlaceholders) {
         const toolCallId = "tool-call-generic-1";
 
-        yield* agent.client.sessionUpdate({
+        yield* client.sessionUpdate({
           sessionId: requestedSessionId,
           update: {
             sessionUpdate: "tool_call",
@@ -590,7 +638,7 @@ const program = Effect.gen(function* () {
           },
         });
 
-        yield* agent.client.sessionUpdate({
+        yield* client.sessionUpdate({
           sessionId: requestedSessionId,
           update: {
             sessionUpdate: "tool_call_update",
@@ -599,7 +647,7 @@ const program = Effect.gen(function* () {
           },
         });
 
-        yield* agent.client.sessionUpdate({
+        yield* client.sessionUpdate({
           sessionId: requestedSessionId,
           update: {
             sessionUpdate: "tool_call_update",
@@ -615,7 +663,7 @@ const program = Effect.gen(function* () {
       }
 
       if (emitAskQuestion) {
-        yield* agent.client.extRequest("cursor/ask_question", {
+        yield* client.extRequest("cursor/ask_question", {
           toolCallId: "ask-question-tool-call-1",
           title: "Question",
           questions: [
@@ -633,7 +681,7 @@ const program = Effect.gen(function* () {
         return { stopReason: "end_turn" };
       }
 
-      yield* agent.client.sessionUpdate({
+      yield* client.sessionUpdate({
         sessionId: requestedSessionId,
         update: {
           sessionUpdate: "plan",
@@ -652,7 +700,7 @@ const program = Effect.gen(function* () {
         },
       });
 
-      yield* agent.client.sessionUpdate({
+      yield* client.sessionUpdate({
         sessionId: requestedSessionId,
         update: {
           sessionUpdate: "agent_message_chunk",
@@ -663,12 +711,12 @@ const program = Effect.gen(function* () {
       return { stopReason: "end_turn" };
     }),
   );
+});
 
-  yield* agent.handleUnknownExtRequest((method, params) => {
-    if (method !== "session/mode/set") {
-      return Effect.fail(AcpError.AcpRequestError.methodNotFound(method));
-    }
-
+app.onRequest(
+  "session/mode/set",
+  { parse: (params: unknown) => params },
+  ({ client: context, params }) => {
     const nextModeId =
       typeof params === "object" &&
       params !== null &&
@@ -691,49 +739,23 @@ const program = Effect.gen(function* () {
 
     if (typeof nextModeId === "string" && nextModeId.trim()) {
       currentModeId = nextModeId.trim();
-      return agent.client
-        .sessionUpdate({
-          sessionId: requestedSessionId,
-          update: {
-            sessionUpdate: "current_mode_update",
-            currentModeId,
-          },
-        })
-        .pipe(Effect.as({}));
+      return runEffect(
+        makeClient(context)
+          .sessionUpdate({
+            sessionId: requestedSessionId,
+            update: {
+              sessionUpdate: "current_mode_update",
+              currentModeId,
+            },
+          })
+          .pipe(Effect.as({})),
+      );
     }
 
-    return Effect.succeed({});
-  });
-
-  return yield* Effect.never;
-}).pipe(
-  Effect.provide(
-    EffectAcpAgent.layerStdio(
-      requestLogPath
-        ? {
-            logIncoming: true,
-            logger: (event) => {
-              if (event.direction !== "incoming" || event.stage !== "raw") {
-                return Effect.void;
-              }
-              if (typeof event.payload !== "string") {
-                return Effect.void;
-              }
-              const payload = event.payload;
-              return Effect.sync(() => {
-                appendFileSync(
-                  requestLogPath,
-                  payload.endsWith("\n") ? payload : `${payload}\n`,
-                  "utf8",
-                );
-              });
-            },
-          }
-        : {},
-    ),
-  ),
-  Effect.scoped,
-  Effect.provide(NodeServices.layer),
+    return {};
+  },
 );
 
-NodeRuntime.runMain(program);
+const output = Writable.toWeb(process.stdout) as WritableStream<Uint8Array>;
+const connection = app.connect(OfficialAcp.ndJsonStream(output, requestInput()));
+await connection.closed;

@@ -72,12 +72,13 @@ export function resolveDesktopAppDataBase(input?: {
 
 export function resolveDesktopUserDataPath(input: {
   readonly appDataBase: string;
-  readonly isDevelopment: boolean;
+  readonly isDevelopment?: boolean;
+  readonly userDataDirectoryName?: string;
 }): string {
-  return Path.join(
-    input.appDataBase,
-    input.isDevelopment ? DEV_USER_DATA_DIR_NAME : PROD_USER_DATA_DIR_NAME,
-  );
+  const directoryName =
+    input.userDataDirectoryName ??
+    (input.isDevelopment ? DEV_USER_DATA_DIR_NAME : PROD_USER_DATA_DIR_NAME);
+  return Path.join(input.appDataBase, directoryName);
 }
 
 export function resolveLegacyDesktopUserDataPaths(input: {

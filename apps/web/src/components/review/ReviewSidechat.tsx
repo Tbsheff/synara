@@ -182,10 +182,10 @@ function buildReviewModelOptionsByProvider(
       [],
       selectedModelSelection.provider === "cursor" ? selectedModelSelection.model : null,
     ),
-    gemini: getAppModelOptions(
-      "gemini",
+    antigravity: getAppModelOptions(
+      "antigravity",
       [],
-      selectedModelSelection.provider === "gemini" ? selectedModelSelection.model : null,
+      selectedModelSelection.provider === "antigravity" ? selectedModelSelection.model : null,
     ),
     grok: getAppModelOptions(
       "grok",
