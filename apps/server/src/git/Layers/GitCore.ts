@@ -158,7 +158,10 @@ function sanitizeRemoteName(value: string): string {
 
 function normalizeRemoteUrl(value: string): string {
   const stripDecorators = (url: string) =>
-    url.replace(/\/+$/g, "").replace(/\.git$/i, "").replace(/\/+$/g, "");
+    url
+      .replace(/\/+$/g, "")
+      .replace(/\.git$/i, "")
+      .replace(/\/+$/g, "");
   const normalized = stripDecorators(value.trim()).toLowerCase();
 
   try {
@@ -1853,13 +1856,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
       execute({
         operation: "GitCore.readRangeDiff",
         cwd: input.cwd,
-        args: [
-          "diff",
-          "--patch",
-          "--no-color",
-          "--no-ext-diff",
-          `${input.base}...${input.head}`,
-        ],
+        args: ["diff", "--patch", "--no-color", "--no-ext-diff", `${input.base}...${input.head}`],
         maxOutputBytes: 10_000_000,
       }).pipe(Effect.map((result) => ({ patch: result.stdout })));
 

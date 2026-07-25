@@ -5,7 +5,8 @@
 // Depends on: apps/desktop package metadata, electron-builder, and GitHub release config.
 
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import rootPackageJson from "../package.json" with { type: "json" };
@@ -13,14 +14,20 @@ import desktopPackageJson from "../apps/desktop/package.json" with { type: "json
 import serverPackageJson from "../apps/server/package.json" with { type: "json" };
 
 import { BRAND_ASSET_PATHS } from "./lib/brand-assets.ts";
-import { DESKTOP_STAGE_DEPENDENCY_OVERRIDES } from "./lib/desktop-stage-dependency-overrides.ts";
 import {
   createDesktopPlatformBuildConfig,
+  MAC_APPSNAP_HELPER_STAGE_PATH,
   validateDesktopNativeBuildHost,
 } from "./lib/desktop-platform-build-config.ts";
 import { SYNARA_PRODUCTION_BUNDLE_ID } from "@synara/shared/desktopIdentity";
 import { parseBooleanEnvValue } from "./lib/env-bool.ts";
+import { finalizeSignedMacDmg } from "./lib/mac-dmg-finalize.ts";
 import { finalizeMacUpdateZip } from "./lib/mac-update-zip-finalize.ts";
+import {
+  RELEASE_LOCKFILE_PATH,
+  RELEASE_PATCHES_PATH,
+  RELEASE_WORKSPACE_MANIFEST_PATHS,
+} from "./lib/release-workspace-manifests.ts";
 import { resolveCatalogDependencies } from "./lib/resolve-catalog.ts";
 
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
@@ -58,6 +65,11 @@ const ProductionWindowsIconSource = Effect.zipWith(
 const NodePtySmokeScript = Effect.zipWith(RepoRoot, Effect.service(Path.Path), (repoRoot, path) =>
   path.join(repoRoot, "scripts/node-pty-smoke.mjs"),
 );
+const AppSnapHelperBuildScript = Effect.zipWith(
+  RepoRoot,
+  Effect.service(Path.Path),
+  (repoRoot, path) => path.join(repoRoot, "apps/desktop/scripts/build-appsnap-helper.mjs"),
+);
 const encodeJsonString = Schema.encodeEffect(Schema.UnknownFromJsonString);
 
 interface PlatformConfig {
@@ -89,6 +101,9 @@ interface BuildCliInput {
   readonly target: Option.Option<string>;
   readonly arch: Option.Option<typeof BuildArch.Type>;
   readonly buildVersion: Option.Option<string>;
+  readonly sourceCommit: Option.Option<string>;
+  readonly sourceTag: Option.Option<string>;
+  readonly lockfileSha256: Option.Option<string>;
   readonly outputDir: Option.Option<string>;
   readonly skipBuild: Option.Option<boolean>;
   readonly keepStage: Option.Option<boolean>;
@@ -126,19 +141,25 @@ class BuildScriptError extends Data.TaggedError("BuildScriptError")<{
   readonly cause?: unknown;
 }> {}
 
-function resolveGitCommitHash(repoRoot: string): string {
-  const result = spawnSync("git", ["rev-parse", "--short=12", "HEAD"], {
+function resolveGitCommitHash(repoRoot: string): string | undefined {
+  const result = spawnSync("git", ["rev-parse", "HEAD"], {
     cwd: repoRoot,
     encoding: "utf8",
   });
   if (result.status !== 0) {
-    return "unknown";
+    return undefined;
   }
   const hash = result.stdout.trim();
-  if (!/^[0-9a-f]{7,40}$/i.test(hash)) {
-    return "unknown";
+  if (!/^[0-9a-f]{40}$/i.test(hash)) {
+    return undefined;
   }
   return hash.toLowerCase();
+}
+
+function resolveLockfileSha256(repoRoot: string): string {
+  return createHash("sha256")
+    .update(readFileSync(join(repoRoot, "bun.lock")))
+    .digest("hex");
 }
 
 function resolvePythonForNodeGyp(): string | undefined {
@@ -179,6 +200,9 @@ interface ResolvedBuildOptions {
   readonly target: string;
   readonly arch: typeof BuildArch.Type;
   readonly version: string | undefined;
+  readonly sourceCommit: string | undefined;
+  readonly sourceTag: string | undefined;
+  readonly lockfileSha256: string | undefined;
   readonly outputDir: string;
   readonly skipBuild: boolean;
   readonly keepStage: boolean;
@@ -193,6 +217,9 @@ interface StagePackageJson {
   readonly version: string;
   readonly buildVersion: string;
   readonly synaraCommitHash: string;
+  readonly synaraLockfileSha256: string;
+  readonly synaraSourceTag: string | null;
+  readonly synaraWindowsPublisherSubject: string | null;
   readonly private: true;
   readonly description: string;
   readonly author: string;
@@ -207,6 +234,7 @@ interface StagePackageJson {
 
 const AzureTrustedSigningOptionsConfig = Config.all({
   publisherName: Config.string("AZURE_TRUSTED_SIGNING_PUBLISHER_NAME"),
+  subjectDistinguishedName: Config.string("AZURE_TRUSTED_SIGNING_SUBJECT_DN"),
   endpoint: Config.string("AZURE_TRUSTED_SIGNING_ENDPOINT"),
   certificateProfileName: Config.string("AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME"),
   codeSigningAccountName: Config.string("AZURE_TRUSTED_SIGNING_ACCOUNT_NAME"),
@@ -224,6 +252,9 @@ const BuildEnvConfig = Config.all({
   target: Config.string("SYNARA_DESKTOP_TARGET").pipe(Config.option),
   arch: Config.schema(BuildArch, "SYNARA_DESKTOP_ARCH").pipe(Config.option),
   version: Config.string("SYNARA_DESKTOP_VERSION").pipe(Config.option),
+  sourceCommit: Config.string("SYNARA_SOURCE_COMMIT").pipe(Config.option),
+  sourceTag: Config.string("SYNARA_SOURCE_TAG").pipe(Config.option),
+  lockfileSha256: Config.string("SYNARA_LOCKFILE_SHA256").pipe(Config.option),
   outputDir: Config.string("SYNARA_DESKTOP_OUTPUT_DIR").pipe(Config.option),
   skipBuild: Config.string("SYNARA_DESKTOP_SKIP_BUILD").pipe(Config.option),
   keepStage: Config.string("SYNARA_DESKTOP_KEEP_STAGE").pipe(Config.option),
@@ -273,6 +304,9 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
   const target = mergeOptions(input.target, env.target, PLATFORM_CONFIG[platform].defaultTarget);
   const arch = mergeOptions(input.arch, env.arch, getDefaultArch(platform));
   const version = mergeOptions(input.buildVersion, env.version, undefined);
+  const sourceCommit = mergeOptions(input.sourceCommit, env.sourceCommit, undefined);
+  const sourceTag = mergeOptions(input.sourceTag, env.sourceTag, undefined);
+  const lockfileSha256 = mergeOptions(input.lockfileSha256, env.lockfileSha256, undefined);
   const envSkipBuild = yield* resolveBooleanEnv("SYNARA_DESKTOP_SKIP_BUILD", env.skipBuild);
   const envKeepStage = yield* resolveBooleanEnv("SYNARA_DESKTOP_KEEP_STAGE", env.keepStage);
   const envSigned = yield* resolveBooleanEnv("SYNARA_DESKTOP_SIGNED", env.signed);
@@ -302,6 +336,9 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
     target,
     arch,
     version,
+    sourceCommit,
+    sourceTag,
+    lockfileSha256,
     outputDir,
     skipBuild,
     keepStage,
@@ -536,6 +573,117 @@ const verifyStagedNodePty = Effect.fn("verifyStagedNodePty")(function* (
   );
 });
 
+interface PatchFileExpectation {
+  readonly file: string;
+  readonly addedLines: ReadonlyArray<string>;
+}
+
+function parsePatchAddedLines(patchContents: string): PatchFileExpectation[] {
+  const expectations: Array<{ file: string; addedLines: string[] }> = [];
+  let current: { file: string; addedLines: string[] } | null = null;
+  for (const line of patchContents.split("\n")) {
+    if (line.startsWith("+++ ")) {
+      const target = line.slice(4).trim();
+      if (target === "/dev/null") {
+        current = null;
+        continue;
+      }
+      current = { file: target.startsWith("b/") ? target.slice(2) : target, addedLines: [] };
+      expectations.push(current);
+      continue;
+    }
+    if (current && line.startsWith("+")) {
+      const added = line.slice(1).trim();
+      if (added.length > 0) {
+        current.addedLines.push(added);
+      }
+    }
+  }
+  return expectations.filter((expectation) => expectation.addedLines.length > 0);
+}
+
+// Package managers can silently skip tracked patches when the staged install
+// diverges from the repo setup (that shipped broken Windows provider updates
+// in v0.5.2–v0.5.5), so fail the build unless every patched line is present.
+const verifyStagedPatchedDependencies = Effect.fn("verifyStagedPatchedDependencies")(function* (
+  repoRoot: string,
+  stageAppDir: string,
+) {
+  const path = yield* Path.Path;
+  const fs = yield* FileSystem.FileSystem;
+  yield* Effect.log("[desktop-artifact] Verifying staged patched dependencies...");
+  for (const [dependency, patchRelativePath] of Object.entries(
+    rootPackageJson.patchedDependencies ?? {},
+  )) {
+    const packageName = dependency.slice(0, dependency.indexOf("@", 1));
+    const patchContents = yield* fs.readFileString(path.join(repoRoot, patchRelativePath));
+    for (const expectation of parsePatchAddedLines(patchContents)) {
+      const stagedFilePath = path.join(stageAppDir, "node_modules", packageName, expectation.file);
+      const stagedContents = yield* fs.readFileString(stagedFilePath).pipe(
+        Effect.mapError(
+          (cause) =>
+            new BuildScriptError({
+              message: `Patched dependency file is missing from the stage: ${stagedFilePath} (expected by ${patchRelativePath}).`,
+              cause,
+            }),
+        ),
+      );
+      for (const addedLine of expectation.addedLines) {
+        if (!stagedContents.includes(addedLine)) {
+          return yield* new BuildScriptError({
+            message: `Staged dependency ${packageName} is missing patched content: ${expectation.file} does not contain "${addedLine}" from ${patchRelativePath}. The tracked patch was not applied by the staged install.`,
+          });
+        }
+      }
+    }
+  }
+});
+
+const installFrozenStageDependencies = Effect.fn("installFrozenStageDependencies")(function* (
+  repoRoot: string,
+  stageAppDir: string,
+  verbose: boolean,
+) {
+  const path = yield* Path.Path;
+  const fs = yield* FileSystem.FileSystem;
+
+  for (const relativePath of RELEASE_WORKSPACE_MANIFEST_PATHS) {
+    const destination = path.join(stageAppDir, relativePath);
+    yield* fs.makeDirectory(path.dirname(destination), { recursive: true });
+    yield* fs.copyFile(path.join(repoRoot, relativePath), destination);
+  }
+  yield* fs.copyFile(
+    path.join(repoRoot, RELEASE_LOCKFILE_PATH),
+    path.join(stageAppDir, RELEASE_LOCKFILE_PATH),
+  );
+  yield* fs.copy(
+    path.join(repoRoot, RELEASE_PATCHES_PATH),
+    path.join(stageAppDir, RELEASE_PATCHES_PATH),
+  );
+
+  yield* Effect.log(
+    "[desktop-artifact] Installing staged production dependencies from the repository lockfile...",
+  );
+  yield* runCommand(
+    ChildProcess.make({
+      cwd: stageAppDir,
+      ...commandOutputOptions(verbose),
+      // Windows needs shell mode to resolve .cmd shims (e.g. bun.cmd).
+      shell: process.platform === "win32",
+    })`bun install --production --frozen-lockfile --ignore-scripts --linker hoisted --filter @synara/cli --filter @synara/desktop`,
+  );
+
+  yield* verifyStagedPatchedDependencies(repoRoot, stageAppDir);
+
+  for (const relativePath of RELEASE_WORKSPACE_MANIFEST_PATHS) {
+    if (relativePath !== "package.json") {
+      yield* fs.remove(path.join(stageAppDir, relativePath));
+    }
+  }
+  yield* fs.remove(path.join(stageAppDir, RELEASE_LOCKFILE_PATH));
+  yield* fs.remove(path.join(stageAppDir, RELEASE_PATCHES_PATH), { recursive: true });
+});
+
 const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   platform: typeof BuildPlatform.Type,
   target: string,
@@ -551,6 +699,7 @@ const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     directories: {
       buildResources: "apps/desktop/resources",
     },
+    forceCodeSigning: signed,
   };
   const publishConfig = resolveGitHubPublishConfig();
   if (publishConfig) {
@@ -564,20 +713,33 @@ const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     ];
   }
 
-  const windowsAzureSignOptions =
+  const windowsSigningConfig =
     platform === "win" && signed ? yield* AzureTrustedSigningOptionsConfig : undefined;
+  const windowsAzureSignOptions = windowsSigningConfig
+    ? {
+        publisherName: windowsSigningConfig.publisherName,
+        endpoint: windowsSigningConfig.endpoint,
+        certificateProfileName: windowsSigningConfig.certificateProfileName,
+        codeSigningAccountName: windowsSigningConfig.codeSigningAccountName,
+        fileDigest: windowsSigningConfig.fileDigest,
+        timestampDigest: windowsSigningConfig.timestampDigest,
+        timestampRfc3161: windowsSigningConfig.timestampRfc3161,
+      }
+    : undefined;
 
   const platformBuildConfigInput = {
     platform,
     target,
-    ...(platform === "mac" ? { macSigned: signed } : {}),
-    ...(platform === "mac" && signed ? { macNotarize: true } : {}),
+    signed,
     ...(windowsAzureSignOptions ? { windowsAzureSignOptions } : {}),
   } as const;
 
   Object.assign(buildConfig, createDesktopPlatformBuildConfig(platformBuildConfigInput));
 
-  return buildConfig;
+  return {
+    buildConfig,
+    windowsPublisherSubject: windowsSigningConfig?.subjectDistinguishedName ?? null,
+  };
 });
 
 const assertPlatformBuildResources = Effect.fn("assertPlatformBuildResources")(function* (
@@ -598,6 +760,32 @@ const assertPlatformBuildResources = Effect.fn("assertPlatformBuildResources")(f
   if (platform === "win") {
     yield* stageWindowsIcons(stageResourcesDir);
     return;
+  }
+});
+
+const stageMacAppSnapHelper = Effect.fn("stageMacAppSnapHelper")(function* (
+  stageAppDir: string,
+  arch: typeof BuildArch.Type,
+  verbose: boolean,
+) {
+  const path = yield* Path.Path;
+  const fs = yield* FileSystem.FileSystem;
+  const buildScript = yield* AppSnapHelperBuildScript;
+  const outputPath = path.join(stageAppDir, MAC_APPSNAP_HELPER_STAGE_PATH);
+
+  yield* fs.makeDirectory(path.dirname(outputPath), { recursive: true });
+  yield* Effect.log(`[desktop-artifact] Building native AppSnap helper (${arch})...`);
+  yield* runCommand(
+    ChildProcess.make({
+      cwd: stageAppDir,
+      ...commandOutputOptions(verbose),
+    })`node ${buildScript} --arch ${arch} --release --output ${outputPath}`,
+  );
+
+  if (!(yield* fs.exists(outputPath))) {
+    return yield* new BuildScriptError({
+      message: `AppSnap helper build completed but output was not found at ${outputPath}`,
+    });
   }
 });
 
@@ -676,7 +864,61 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   });
 
   const appVersion = options.version ?? serverPackageJson.version;
-  const commitHash = resolveGitCommitHash(repoRoot);
+  const hasSourceCommit = options.sourceCommit !== undefined;
+  const hasLockfileSha256 = options.lockfileSha256 !== undefined;
+  const exactProvenanceRequested =
+    hasSourceCommit || hasLockfileSha256 || options.sourceTag !== undefined;
+  if (exactProvenanceRequested && (!hasSourceCommit || !hasLockfileSha256 || !options.version)) {
+    return yield* new BuildScriptError({
+      message:
+        "Exact release provenance requires an explicit build version, source commit, and lockfile SHA-256 together.",
+    });
+  }
+
+  const resolvedCommitHash = resolveGitCommitHash(repoRoot);
+  if (options.sourceCommit && !/^[0-9a-f]{40}$/i.test(options.sourceCommit)) {
+    return yield* new BuildScriptError({
+      message: `Expected a full 40-character source commit, got '${options.sourceCommit}'.`,
+    });
+  }
+  if (options.sourceCommit && resolvedCommitHash !== options.sourceCommit.toLowerCase()) {
+    return yield* new BuildScriptError({
+      message: `Release source commit mismatch: expected ${options.sourceCommit}, got ${resolvedCommitHash ?? "unknown"}.`,
+    });
+  }
+  const commitHash = resolvedCommitHash ?? "unknown";
+  const resolvedLockfileSha256 = resolveLockfileSha256(repoRoot);
+  if (options.lockfileSha256 && !/^[0-9a-f]{64}$/i.test(options.lockfileSha256)) {
+    return yield* new BuildScriptError({
+      message: `Expected a 64-character lockfile SHA-256, got '${options.lockfileSha256}'.`,
+    });
+  }
+  if (options.lockfileSha256 && resolvedLockfileSha256 !== options.lockfileSha256.toLowerCase()) {
+    return yield* new BuildScriptError({
+      message: `Release lockfile digest mismatch: expected ${options.lockfileSha256}, got ${resolvedLockfileSha256}.`,
+    });
+  }
+  if (options.sourceTag && options.sourceTag !== `v${appVersion}`) {
+    return yield* new BuildScriptError({
+      message: `Release source tag ${options.sourceTag} does not match artifact version ${appVersion}.`,
+    });
+  }
+  if (exactProvenanceRequested) {
+    const gitStatus = spawnSync("git", ["status", "--porcelain=v1", "--untracked-files=all"], {
+      cwd: repoRoot,
+      encoding: "utf8",
+    });
+    if (gitStatus.status !== 0) {
+      return yield* new BuildScriptError({
+        message: `Unable to inspect release worktree: ${gitStatus.stderr.trim() || "git failed"}.`,
+      });
+    }
+    if (gitStatus.stdout.trim().length > 0) {
+      return yield* new BuildScriptError({
+        message: "Release source worktree is not clean; refusing to stage uncommitted bytes.",
+      });
+    }
+  }
   const mkdir = options.keepStage ? fs.makeTempDirectory : fs.makeTempDirectoryScoped;
   const stageRoot = yield* mkdir({
     prefix: `synara-desktop-${options.platform}-stage-`,
@@ -729,26 +971,35 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
 
   yield* assertPlatformBuildResources(options.platform, stageResourcesDir, options.verbose);
 
+  if (options.platform === "mac") {
+    yield* stageMacAppSnapHelper(stageAppDir, options.arch, options.verbose);
+  }
+
   // electron-builder is filtering out stageResourcesDir directory in the AppImage for production
   yield* fs.copy(stageResourcesDir, path.join(stageAppDir, "apps/desktop/prod-resources"));
+
+  const resolvedBuildConfig = yield* createBuildConfig(
+    options.platform,
+    options.target,
+    desktopPackageJson.productName ?? "Synara",
+    options.signed,
+    options.mockUpdates,
+    options.mockUpdateServerPort,
+  );
 
   const stagePackageJson: StagePackageJson = {
     name: "synara-desktop",
     version: appVersion,
     buildVersion: appVersion,
     synaraCommitHash: commitHash,
+    synaraLockfileSha256: resolvedLockfileSha256,
+    synaraSourceTag: options.sourceTag ?? null,
+    synaraWindowsPublisherSubject: resolvedBuildConfig.windowsPublisherSubject,
     private: true,
     description: "Synara desktop build",
     author: "Emanuele Di Pietro",
     main: "apps/desktop/dist-electron/main.js",
-    build: yield* createBuildConfig(
-      options.platform,
-      options.target,
-      desktopPackageJson.productName ?? "Synara",
-      options.signed,
-      options.mockUpdates,
-      options.mockUpdateServerPort,
-    ),
+    build: resolvedBuildConfig.buildConfig,
     dependencies: {
       ...resolvedServerDependencies,
       ...resolvedDesktopRuntimeDependencies,
@@ -757,23 +1008,14 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       electron: electronVersion,
     },
     overrides: {
-      ...DESKTOP_STAGE_DEPENDENCY_OVERRIDES,
       ...resolvedOverrides,
     },
   };
 
+  yield* installFrozenStageDependencies(repoRoot, stageAppDir, options.verbose);
+
   const stagePackageJsonString = yield* encodeJsonString(stagePackageJson);
   yield* fs.writeFileString(path.join(stageAppDir, "package.json"), `${stagePackageJsonString}\n`);
-
-  yield* Effect.log("[desktop-artifact] Installing staged production dependencies...");
-  yield* runCommand(
-    ChildProcess.make({
-      cwd: stageAppDir,
-      ...commandOutputOptions(options.verbose),
-      // Windows needs shell mode to resolve .cmd shims (e.g. bun.cmd).
-      shell: process.platform === "win32",
-    })`bun install --production`,
-  );
 
   if (options.platform === "linux") {
     yield* verifyStagedNodePty(stageAppDir, options.verbose);
@@ -794,7 +1036,6 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     delete buildEnv.APPLE_API_KEY;
     delete buildEnv.APPLE_API_KEY_ID;
     delete buildEnv.APPLE_API_ISSUER;
-    delete buildEnv.APPLE_TEAM_ID;
   }
 
   if (process.platform === "win32") {
@@ -810,6 +1051,12 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   yield* Effect.log(
     `[desktop-artifact] Building ${options.platform}/${options.target} (arch=${options.arch}, version=${appVersion})...`,
   );
+  const electronBuilderExecutable = path.join(
+    repoRoot,
+    "node_modules",
+    ".bin",
+    process.platform === "win32" ? "electron-builder.cmd" : "electron-builder",
+  );
   yield* runCommand(
     ChildProcess.make({
       cwd: stageAppDir,
@@ -817,7 +1064,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       ...commandOutputOptions(options.verbose),
       // Windows needs shell mode to resolve .cmd shims.
       shell: process.platform === "win32",
-    })`bunx electron-builder ${platformConfig.cliFlag} --${options.arch} --publish never`,
+    })`${electronBuilderExecutable} ${platformConfig.cliFlag} --${options.arch} --publish never`,
   );
 
   const stageDistDir = path.join(stageAppDir, "dist");
@@ -827,44 +1074,51 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     });
   }
 
-  let stageEntries = yield* fs.readDirectory(stageDistDir);
+  if (options.platform === "mac" && options.target === "dmg" && options.signed) {
+    yield* Effect.log("[desktop-artifact] Notarizing and validating signed macOS DMG...");
+    const finalizedDmg = yield* Effect.try({
+      try: () =>
+        finalizeSignedMacDmg({
+          stageDistDir,
+          appleApiKey: buildEnv.APPLE_API_KEY,
+          appleApiKeyId: buildEnv.APPLE_API_KEY_ID,
+          appleApiIssuer: buildEnv.APPLE_API_ISSUER,
+          verbose: options.verbose,
+        }),
+      catch: (cause) =>
+        new BuildScriptError({
+          message: "macOS DMG signing/notarization finalization failed.",
+          cause,
+        }),
+    });
+    yield* Effect.log(
+      `[desktop-artifact] Signed and notarized macOS DMG (${finalizedDmg.dmgFileName}).`,
+    );
+  }
+
   if (options.platform === "mac") {
-    const hasMacUpdateManifest = stageEntries.some((entry) => entry.endsWith("-mac.yml"));
-    const hasMacUpdateZip = stageEntries.some((entry) => entry.endsWith(".zip"));
-    const expectsMacUpdateManifest =
-      options.mockUpdates || resolveGitHubPublishConfig() !== undefined;
-    if (hasMacUpdateManifest) {
-      yield* Effect.log("[desktop-artifact] Repacking and validating macOS update zip...");
-      const finalizedZip = yield* Effect.tryPromise({
-        try: () =>
-          finalizeMacUpdateZip({
-            stageDistDir,
-            signed: options.signed,
-            verbose: options.verbose,
-          }),
-        catch: (cause) =>
-          new BuildScriptError({
-            message: "macOS update zip finalization failed.",
-            cause,
-          }),
-      });
-      if (finalizedZip.removedZipBlockmapPath) {
-        yield* Effect.log(
-          `[desktop-artifact] Removed stale macOS zip blockmap (${path.basename(finalizedZip.removedZipBlockmapPath)}).`,
-        );
-      }
-      stageEntries = yield* fs.readDirectory(stageDistDir);
-    } else if (hasMacUpdateZip && expectsMacUpdateManifest) {
-      return yield* new BuildScriptError({
-        message: "macOS update zip was generated without an update manifest.",
-      });
-    } else {
+    yield* Effect.log("[desktop-artifact] Repacking and validating macOS update zip...");
+    const finalizedZip = yield* Effect.tryPromise({
+      try: () =>
+        finalizeMacUpdateZip({
+          stageDistDir,
+          signed: options.signed,
+          verbose: options.verbose,
+        }),
+      catch: (cause) =>
+        new BuildScriptError({
+          message: "macOS update zip finalization failed.",
+          cause,
+        }),
+    });
+    if (finalizedZip.removedZipBlockmapPath) {
       yield* Effect.log(
-        "[desktop-artifact] Skipping macOS update zip finalization because no update manifest was generated.",
+        `[desktop-artifact] Removed stale macOS zip blockmap (${path.basename(finalizedZip.removedZipBlockmapPath)}).`,
       );
     }
   }
 
+  const stageEntries = yield* fs.readDirectory(stageDistDir);
   yield* fs.makeDirectory(options.outputDir, { recursive: true });
 
   const copiedArtifacts: string[] = [];
@@ -873,7 +1127,11 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     const stat = yield* fs.stat(from).pipe(Effect.catch(() => Effect.succeed(null)));
     if (!stat || stat.type !== "File") continue;
 
-    const to = path.join(options.outputDir, entry);
+    const outputEntry =
+      options.platform === "mac" && options.arch !== "arm64" && entry === "latest-mac.yml"
+        ? `latest-mac-${options.arch}.yml`
+        : entry;
+    const to = path.join(options.outputDir, outputEntry);
     yield* fs.copyFile(from, to);
     copiedArtifacts.push(to);
   }
@@ -906,6 +1164,18 @@ const buildDesktopArtifactCli = Command.make("build-desktop-artifact", {
   ),
   buildVersion: Flag.string("build-version").pipe(
     Flag.withDescription("Artifact version metadata (env: SYNARA_DESKTOP_VERSION)."),
+    Flag.optional,
+  ),
+  sourceCommit: Flag.string("source-commit").pipe(
+    Flag.withDescription("Expected full source commit (env: SYNARA_SOURCE_COMMIT)."),
+    Flag.optional,
+  ),
+  sourceTag: Flag.string("source-tag").pipe(
+    Flag.withDescription("Exact source tag when building a release (env: SYNARA_SOURCE_TAG)."),
+    Flag.optional,
+  ),
+  lockfileSha256: Flag.string("lockfile-sha256").pipe(
+    Flag.withDescription("Expected bun.lock SHA-256 (env: SYNARA_LOCKFILE_SHA256)."),
     Flag.optional,
   ),
   outputDir: Flag.string("output-dir").pipe(

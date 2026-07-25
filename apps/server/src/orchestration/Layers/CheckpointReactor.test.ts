@@ -1559,10 +1559,12 @@ describe("CheckpointReactor", () => {
         createdAt,
       }),
     );
-    await waitForThread(harness.engine, (entry) =>
-      entry.checkpoints.some(
-        (checkpoint) => checkpoint.checkpointTurnCount === 2 && checkpoint.files?.length === 0,
-      ) && entry.activities.some((activity) => activity.kind === "checkpoint.revert.succeeded"),
+    await waitForThread(
+      harness.engine,
+      (entry) =>
+        entry.checkpoints.some(
+          (checkpoint) => checkpoint.checkpointTurnCount === 2 && checkpoint.files?.length === 0,
+        ) && entry.activities.some((activity) => activity.kind === "checkpoint.revert.succeeded"),
     );
     const afterFirstUndo = (await Effect.runPromise(harness.engine.getReadModel())).threads.find(
       (entry) => entry.id === threadId,
@@ -1724,10 +1726,12 @@ describe("CheckpointReactor", () => {
         createdAt,
       }),
     );
-    await waitForThread(harness.engine, (entry) =>
-      entry.checkpoints.some(
-        (checkpoint) => checkpoint.checkpointTurnCount === 2 && checkpoint.files?.length === 0,
-      ) && entry.activities.some((activity) => activity.kind === "checkpoint.revert.succeeded"),
+    await waitForThread(
+      harness.engine,
+      (entry) =>
+        entry.checkpoints.some(
+          (checkpoint) => checkpoint.checkpointTurnCount === 2 && checkpoint.files?.length === 0,
+        ) && entry.activities.some((activity) => activity.kind === "checkpoint.revert.succeeded"),
     );
 
     expect(fs.existsSync(path.join(harness.cwd, "before.txt"))).toBe(true);
@@ -2070,8 +2074,7 @@ describe("CheckpointReactor", () => {
     await waitForThread(harness.engine, (entry) =>
       entry.activities.some(
         (activity) =>
-          activity.kind === "checkpoint.revert.succeeded" &&
-          activity.payload.turnCount === 1,
+          activity.kind === "checkpoint.revert.succeeded" && activity.payload.turnCount === 1,
       ),
     );
     await Effect.runPromise(

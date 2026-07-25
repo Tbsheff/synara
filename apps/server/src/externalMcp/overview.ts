@@ -75,9 +75,7 @@ export function buildExternalMcpOverviewNextSteps(
   return [
     "Call synara_capabilities with a projectId to list the exact provider/model targets available to this integration.",
     ...(capabilities.has("tasks:create") ? ["Create work with synara_create_task."] : []),
-    ...(capabilities.has("tasks:wait")
-      ? ["Follow permitted work with synara_wait_for_task."]
-      : []),
+    ...(capabilities.has("tasks:wait") ? ["Follow permitted work with synara_wait_for_task."] : []),
     ...(capabilities.has("tasks:read")
       ? ["Read permitted task results with synara_read_task."]
       : []),

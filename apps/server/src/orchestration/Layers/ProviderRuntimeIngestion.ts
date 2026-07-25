@@ -1230,4 +1230,6 @@ const make = Effect.gen(function* () {
 export const ProviderRuntimeIngestionLive = Layer.effect(
   ProviderRuntimeIngestionService,
   make,
-).pipe(Layer.provide(Layer.merge(ProjectionTurnRepositoryLive, ProviderRuntimeEventRepositoryLive)));
+).pipe(
+  Layer.provide(Layer.merge(ProjectionTurnRepositoryLive, ProviderRuntimeEventRepositoryLive)),
+);

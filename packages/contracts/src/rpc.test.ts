@@ -34,5 +34,4 @@ describe("WS RPC contracts", () => {
   it("exports the automation create RPC", () => {
     expect(WsAutomationCreateRpc).toBeDefined();
   });
-
 });

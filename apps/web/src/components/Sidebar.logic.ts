@@ -10,9 +10,7 @@ import {
   type ThreadId,
 } from "@synara/contracts";
 import { pluralize } from "@synara/shared/text";
-import {
-  resolveThreadEnvironmentMode,
-} from "@synara/shared/threadEnvironment";
+import { resolveThreadEnvironmentMode } from "@synara/shared/threadEnvironment";
 import { resolveThreadEnvironmentPresentation } from "../lib/threadEnvironment";
 import { isWorkspaceRootWithin, workspaceRootsEqual } from "@synara/shared/threadWorkspace";
 import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "../appSettings";
@@ -32,10 +30,7 @@ import {
   SIDEBAR_THREAD_ROW_BASE_CLASS_NAME,
 } from "../sidebarRowStyles";
 
-export {
-  resolvePrStatePresentation,
-  type PrStatePresentation,
-} from "./Sidebar.logic.status";
+export { resolvePrStatePresentation, type PrStatePresentation } from "./Sidebar.logic.status";
 
 export function resolveWorktreeBadgeLabel(
   thread: Pick<Thread, "envMode" | "worktreePath">,

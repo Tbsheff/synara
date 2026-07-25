@@ -425,7 +425,9 @@ describe("ProviderCommandReactor", () => {
 
     const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));
     const reactor = await runtime.runPromise(Effect.service(ProviderCommandReactor));
-    const managedAttachments = await runtime.runPromise(Effect.service(ManagedAttachmentRepository));
+    const managedAttachments = await runtime.runPromise(
+      Effect.service(ManagedAttachmentRepository),
+    );
     const stageAttachment = (attachment: {
       readonly id: string;
       readonly type: "image" | "file";

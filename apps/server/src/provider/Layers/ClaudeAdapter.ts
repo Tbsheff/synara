@@ -2411,10 +2411,15 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         }
 
         for (const block of [...turnState.reasoningBlocks.values()]) {
-          yield* completeReasoningBlock(context, block, {
-            method: "claude/result",
-            payload: (result ?? { type: "result" }) as SDKMessage,
-          }, status === "completed" ? "completed" : "failed");
+          yield* completeReasoningBlock(
+            context,
+            block,
+            {
+              method: "claude/result",
+              payload: (result ?? { type: "result" }) as SDKMessage,
+            },
+            status === "completed" ? "completed" : "failed",
+          );
         }
 
         context.turns.push({
@@ -3504,9 +3509,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               provider: PROVIDER,
               createdAt: lifecycleStamp.createdAt,
               threadId: context.session.threadId,
-              ...(context.turnState
-                ? { turnId: asCanonicalTurnId(context.turnState.turnId) }
-                : {}),
+              ...(context.turnState ? { turnId: asCanonicalTurnId(context.turnState.turnId) } : {}),
               payload: completedStatus
                 ? {
                     taskId: RuntimeTaskId.makeUnsafe(message.task_id),

@@ -324,8 +324,7 @@ export function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
             deletions: typeof item.deletions === "number" ? item.deletions : 0,
             createdAt: typeof item.createdAt === "string" ? item.createdAt : "",
             updatedAt: typeof item.updatedAt === "string" ? item.updatedAt : "",
-            reviewDecision:
-              typeof item.reviewDecision === "string" ? item.reviewDecision : null,
+            reviewDecision: typeof item.reviewDecision === "string" ? item.reviewDecision : null,
             reviewRequestLogins: [],
             labels: [],
             mergeability:
@@ -387,8 +386,7 @@ export function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
       scenario.failWith
         ? Effect.fail(scenario.failWith)
         : Effect.succeed(scenario.reviewRequestedPullRequestNumbers ?? []),
-    commentOnPullRequest: () =>
-      scenario.failWith ? Effect.fail(scenario.failWith) : Effect.void,
+    commentOnPullRequest: () => (scenario.failWith ? Effect.fail(scenario.failWith) : Effect.void),
     listOpenPullRequests: (input) =>
       listPullRequestsWithState(input, { state: "open", defaultLimit: 1 }),
     listPullRequests: (input) =>

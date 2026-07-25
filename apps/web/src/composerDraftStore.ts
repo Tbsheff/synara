@@ -76,29 +76,33 @@ const composerPersistStorage = createDeferredPersistStorage<
 flushStorageBeforePageHide(() => composerPersistStorage.flush());
 
 export const useComposerDraftStore = create<ComposerDraftStoreState>()(
-  persist(createComposerDraftStoreState(() => composerPersistStorage.flush()), {
-    name: COMPOSER_DRAFT_STORAGE_KEY,
-    version: COMPOSER_DRAFT_STORAGE_VERSION,
-    storage: composerPersistStorage,
-    migrate: migratePersistedComposerDraftStoreState,
-    merge: (persistedState, currentState) => {
-      const normalizedPersisted = normalizeCurrentPersistedComposerDraftStoreState(persistedState);
-      const draftsByThreadId = Object.fromEntries(
-        Object.entries(normalizedPersisted.draftsByThreadId).map(([threadId, draft]) => [
-          threadId,
-          toHydratedThreadDraft(threadId as ThreadId, draft),
-        ]),
-      );
-      return {
-        ...currentState,
-        draftsByThreadId,
-        draftThreadsByThreadId: normalizedPersisted.draftThreadsByThreadId,
-        projectDraftThreadIdByProjectId: normalizedPersisted.projectDraftThreadIdByProjectId,
-        stickyModelSelectionByProvider: normalizedPersisted.stickyModelSelectionByProvider ?? {},
-        stickyActiveProvider: normalizedPersisted.stickyActiveProvider ?? null,
-      };
+  persist(
+    createComposerDraftStoreState(() => composerPersistStorage.flush()),
+    {
+      name: COMPOSER_DRAFT_STORAGE_KEY,
+      version: COMPOSER_DRAFT_STORAGE_VERSION,
+      storage: composerPersistStorage,
+      migrate: migratePersistedComposerDraftStoreState,
+      merge: (persistedState, currentState) => {
+        const normalizedPersisted =
+          normalizeCurrentPersistedComposerDraftStoreState(persistedState);
+        const draftsByThreadId = Object.fromEntries(
+          Object.entries(normalizedPersisted.draftsByThreadId).map(([threadId, draft]) => [
+            threadId,
+            toHydratedThreadDraft(threadId as ThreadId, draft),
+          ]),
+        );
+        return {
+          ...currentState,
+          draftsByThreadId,
+          draftThreadsByThreadId: normalizedPersisted.draftThreadsByThreadId,
+          projectDraftThreadIdByProjectId: normalizedPersisted.projectDraftThreadIdByProjectId,
+          stickyModelSelectionByProvider: normalizedPersisted.stickyModelSelectionByProvider ?? {},
+          stickyActiveProvider: normalizedPersisted.stickyActiveProvider ?? null,
+        };
+      },
     },
-  }),
+  ),
 );
 
 export function useComposerThreadDraft(threadId: ThreadId): ComposerThreadDraftState {
