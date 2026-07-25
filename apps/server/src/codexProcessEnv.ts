@@ -706,7 +706,13 @@ export async function buildCodexProcessEnv(
   }
 
   if (browserUsePipePath) {
-    effectiveEnv[NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS] = browserUsePipePath;
+    const allowedSockets = configuredEnv[NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS]
+      ?.split(",")
+      .map((socketPath) => socketPath.trim())
+      .filter(Boolean);
+    effectiveEnv[NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS] = [
+      ...new Set([...(allowedSockets ?? []), browserUsePipePath]),
+    ].join(",");
   }
 
   return effectiveEnv;

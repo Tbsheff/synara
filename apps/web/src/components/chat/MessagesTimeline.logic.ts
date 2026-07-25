@@ -669,7 +669,10 @@ export function deriveMessagesTimelineRows(input: {
   ) {
     nextRows.splice(findLiveTurnHeaderInsertIndex(nextRows), 0, {
       kind: "working-header",
-      id: "working-header-row",
+      // This replaces the untimed working row once the provider reports the
+      // turn start. Keep one list identity so LegendList cannot retain both
+      // forms during the transition.
+      id: "working-indicator-row",
       createdAt: input.activeTurnStartedAt,
       ...(workingLabel ? { label: workingLabel } : {}),
     });

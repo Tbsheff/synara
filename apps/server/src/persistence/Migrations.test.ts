@@ -248,7 +248,7 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         VALUES (54, 'DurableProviderCommandDelivery')
       `;
 
-      const executed = yield* runMigrations();
+      const executed = yield* runMigrations({ toMigrationInclusive: 80 });
       assert.deepStrictEqual(executed, [
         [55, "ManagedAttachments"],
         [56, "CommandReceiptFingerprints"],
@@ -368,7 +368,7 @@ agentGatewayRetentionLegacyLayer(
         )
       `;
 
-        const executed = yield* runMigrations();
+        const executed = yield* runMigrations({ toMigrationInclusive: 80 });
         assert.deepStrictEqual(executed, [
           [72, "AgentGatewayOperationRetention"],
           [73, "OperationalDiagnostics"],
@@ -441,7 +441,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         VALUES (70, 'Spaces')
       `;
 
-      const executed = yield* runMigrations();
+      const executed = yield* runMigrations({ toMigrationInclusive: 80 });
       assert.deepStrictEqual(executed, [
         [70, "AgentGatewayOperations"],
         [71, "ProjectionThreadsGatewayProvenance"],
@@ -532,7 +532,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         WHERE migration_id = 74
       `;
 
-      const executed = yield* runMigrations();
+      const executed = yield* runMigrations({ toMigrationInclusive: 80 });
       assert.deepStrictEqual(executed, [
         [74, "ExternalMcpIntegrations"],
         [75, "ExternalMcpActiveCapacity"],

@@ -11,6 +11,7 @@ import type { ThreadId } from "@synara/contracts";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { isPlainObject, sanitizeStringKeyedRecord } from "./persistedRecord";
+import { createBrowserStateStorage } from "./lib/storage";
 
 export interface WorkflowRunUiThreadState {
   pausedByUser: readonly string[];
@@ -158,7 +159,7 @@ export const useWorkflowRunUiStore = create<WorkflowRunUiStoreState>()(
     }),
     {
       name: WORKFLOW_RUN_UI_STORAGE_KEY,
-      storage: createJSONStorage(() => localStorage),
+      storage: createJSONStorage(createBrowserStateStorage),
       merge: (persisted, current) => ({
         ...current,
         stateByThreadId: sanitizeWorkflowRunUiStateByThreadId(

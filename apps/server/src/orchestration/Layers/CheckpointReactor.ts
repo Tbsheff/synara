@@ -112,6 +112,27 @@ const make = Effect.gen(function* () {
       createdAt: input.createdAt,
     });
 
+  const appendRevertSuccessActivity = (input: {
+    readonly threadId: ThreadId;
+    readonly turnCount: number;
+    readonly createdAt: string;
+  }) =>
+    orchestrationEngine.dispatch({
+      type: "thread.activity.append",
+      commandId: serverCommandId("checkpoint-revert-success"),
+      threadId: input.threadId,
+      activity: {
+        id: EventId.makeUnsafe(crypto.randomUUID()),
+        tone: "info",
+        kind: "checkpoint.revert.succeeded",
+        summary: "Checkpoint revert completed",
+        payload: { turnCount: input.turnCount },
+        turnId: null,
+        createdAt: input.createdAt,
+      },
+      createdAt: input.createdAt,
+    });
+
   const resolveSessionRuntimeForThread = Effect.fnUntraced(function* (
     threadId: ThreadId,
   ): Effect.fn.Return<Option.Option<{ readonly threadId: ThreadId; readonly cwd: string }>> {
@@ -757,6 +778,11 @@ const make = Effect.gen(function* () {
           : {}),
         checkpointTurnCount: targetCheckpoint.checkpointTurnCount,
         preserveLatestTurn: true,
+        createdAt: now,
+      });
+      yield* appendRevertSuccessActivity({
+        threadId: event.payload.threadId,
+        turnCount: event.payload.turnCount,
         createdAt: now,
       });
       return;

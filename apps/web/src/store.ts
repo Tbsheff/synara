@@ -36,6 +36,7 @@ import {
   type ChatAttachment,
   type ChatMessage,
   type Project,
+  type Space,
   type SidebarThreadSummary,
   type Thread,
   type ThreadSession,
@@ -63,6 +64,7 @@ import {
 // ── State ────────────────────────────────────────────────────────────
 
 export interface AppState {
+  spaces: Space[];
   projects: Project[];
   threads: Thread[];
   sidebarThreadSummaryById: Record<string, SidebarThreadSummary>;
@@ -159,6 +161,7 @@ const THREAD_SUMMARY_ACTIVITY_KINDS = new Set([
 const PENDING_INTERACTION_REQUEST_KINDS = new Set(["approval.requested", "user-input.requested"]);
 
 const initialState: AppState = {
+  spaces: [],
   projects: [],
   threads: [],
   sidebarThreadSummaryById: {},
@@ -3965,6 +3968,18 @@ export function applyOrchestrationEventsHotPath(
 
 // ── Pure state transition functions ────────────────────────────────────
 
+function mapSpaces(
+  incoming: OrchestrationShellSnapshot["spaces"] | OrchestrationReadModel["spaces"],
+  previous: ReadonlyArray<Space>,
+): Space[] {
+  const previousById = new Map(previous.map((space) => [space.id, space] as const));
+  const next = incoming.map((space) => {
+    const existing = previousById.get(space.id);
+    return existing && deepEqualJson(existing, space) ? existing : space;
+  });
+  return arraysShallowEqual(previous, next) ? (previous as Space[]) : next;
+}
+
 export function syncServerShellSnapshot(
   state: AppState,
   snapshot: OrchestrationShellSnapshot,
@@ -3981,6 +3996,7 @@ export function syncServerShellSnapshot(
     snapshot.projects.filter((project) => deletedProjectIdsById[project.id] !== true),
     state.projects,
   );
+  const spaces = mapSpaces(snapshot.spaces ?? [], state.spaces ?? []);
   const nextThreadIds = new Set(snapshotThreads.map((thread) => thread.id));
 
   let normalizedState: AppState = {
@@ -4037,6 +4053,7 @@ export function syncServerShellSnapshot(
 
   return {
     ...normalizedState,
+    spaces,
     projects,
     threads,
     sidebarThreadSummaryById,
@@ -4118,6 +4135,7 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
     ),
     state.projects,
   );
+  const spaces = mapSpaces(readModel.spaces ?? [], state.spaces ?? []);
   const existingThreadById = new Map(state.threads.map((thread) => [thread.id, thread] as const));
   const nextThreads = readModel.threads
     .filter(
@@ -4172,6 +4190,7 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
     ? state.sidebarThreadSummaryById
     : nextSidebarThreadSummaryById;
   if (
+    spaces === state.spaces &&
     projects === state.projects &&
     threads === state.threads &&
     sidebarThreadSummaryById === state.sidebarThreadSummaryById &&
@@ -4193,6 +4212,7 @@ export function syncServerReadModel(state: AppState, readModel: OrchestrationRea
   }
   return {
     ...normalizedState,
+    spaces,
     projects,
     threads,
     sidebarThreadSummaryById,

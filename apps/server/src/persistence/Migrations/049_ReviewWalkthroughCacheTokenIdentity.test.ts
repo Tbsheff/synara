@@ -31,7 +31,7 @@ describe("049_ReviewWalkthroughCacheTokenIdentity", () => {
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
 
-      yield* runMigrations({ toMigrationInclusive: 57 });
+      yield* runMigrations({ toMigrationInclusive: 90 });
       yield* sql`
         INSERT INTO review_cache_pr_walkthrough (
           repository_id,
@@ -49,7 +49,7 @@ describe("049_ReviewWalkthroughCacheTokenIdentity", () => {
         )
       `;
 
-      yield* runMigrations({ toMigrationInclusive: 58 });
+      yield* runMigrations({ toMigrationInclusive: 91 });
 
       assert.deepStrictEqual(yield* walkthroughRows(sql), [
         {
@@ -68,7 +68,7 @@ describe("049_ReviewWalkthroughCacheTokenIdentity", () => {
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
 
-      yield* runMigrations({ toMigrationInclusive: 58 });
+      yield* runMigrations({ toMigrationInclusive: 91 });
       yield* sql`
         INSERT INTO review_cache_pr_walkthrough (
           repository_id,
@@ -88,7 +88,7 @@ describe("049_ReviewWalkthroughCacheTokenIdentity", () => {
         )
       `;
 
-      yield* runMigrations({ toMigrationInclusive: 59 });
+      yield* runMigrations({ toMigrationInclusive: 92 });
 
       assert.deepStrictEqual(yield* walkthroughRows(sql), [
         {

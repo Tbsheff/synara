@@ -48,6 +48,7 @@ import {
   type StudioOutputReactorShape,
 } from "../Services/StudioOutputReactor.ts";
 import { attachmentRelativePath } from "../../attachmentStore.ts";
+import { ManagedAttachmentRepository } from "../../persistence/Services/ManagedAttachments.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { checkpointRefForThreadTurn } from "../../checkpointing/Utils.ts";
 import {
@@ -424,6 +425,40 @@ describe("ProviderCommandReactor", () => {
 
     const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));
     const reactor = await runtime.runPromise(Effect.service(ProviderCommandReactor));
+    const managedAttachments = await runtime.runPromise(Effect.service(ManagedAttachmentRepository));
+    const stageAttachment = (attachment: {
+      readonly id: string;
+      readonly type: "image" | "file";
+      readonly name: string;
+      readonly mimeType: string;
+      readonly sizeBytes: number;
+    }) =>
+      runtime.runPromise(
+        Effect.gen(function* () {
+          yield* managedAttachments.reserve({
+            attachmentId: attachment.id,
+            ownerThreadId: "thread-1",
+            ownerKind: "local-loopback",
+            ownerId: "local-loopback",
+            kind: attachment.type,
+            originalName: attachment.name,
+            mimeType: attachment.mimeType,
+            reservedBytes: attachment.sizeBytes,
+            relativePath: attachmentRelativePath(attachment),
+            now,
+          });
+          yield* managedAttachments.finalizeStaged({
+            attachmentId: attachment.id,
+            ownerThreadId: "thread-1",
+            ownerKind: "local-loopback",
+            ownerId: "local-loopback",
+            sizeBytes: attachment.sizeBytes,
+            sha256: "0".repeat(64),
+            stagingExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+            now,
+          });
+        }),
+      );
     const localRuntime = runtime;
     const getThreadRuntime = (threadId: ThreadId) =>
       localRuntime.runPromise(
@@ -494,6 +529,7 @@ describe("ProviderCommandReactor", () => {
       emitRuntimeEvent,
       getThreadRuntime,
       setRuntimeSessionTurnState,
+      stageAttachment,
     };
   }
 
@@ -756,6 +792,7 @@ describe("ProviderCommandReactor", () => {
       name: "README.md",
       path: "/tmp/project/README.md",
     };
+    await harness.stageAttachment(imageAttachment);
 
     await Effect.runPromise(
       harness.engine.dispatch({
@@ -938,6 +975,7 @@ describe("ProviderCommandReactor", () => {
     );
     fs.mkdirSync(path.dirname(attachmentPath), { recursive: true });
     fs.writeFileSync(attachmentPath, Buffer.from([1, 2, 3, 4]));
+    await harness.stageAttachment(imageAttachment);
 
     await Effect.runPromise(
       harness.engine.dispatch({
@@ -1930,8 +1968,8 @@ describe("ProviderCommandReactor", () => {
   it("uses the configured text generation model for providers without native title generation", async () => {
     const harness = await createHarness({
       threadModelSelection: {
-        provider: "gemini",
-        model: "auto-gemini-3",
+        provider: "antigravity",
+        model: "Gemini 3.5 Flash",
       },
     });
     const now = new Date().toISOString();
@@ -1962,8 +2000,8 @@ describe("ProviderCommandReactor", () => {
           attachments: [],
         },
         modelSelection: {
-          provider: "gemini",
-          model: "auto-gemini-3",
+          provider: "antigravity",
+          model: "Gemini 3.5 Flash",
         },
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
@@ -1990,8 +2028,8 @@ describe("ProviderCommandReactor", () => {
   it("uses a local fallback title when configured text generation fails", async () => {
     const harness = await createHarness({
       threadModelSelection: {
-        provider: "gemini",
-        model: "auto-gemini-3",
+        provider: "antigravity",
+        model: "Gemini 3.5 Flash",
       },
     });
     const now = new Date().toISOString();
@@ -2017,8 +2055,8 @@ describe("ProviderCommandReactor", () => {
           attachments: [],
         },
         modelSelection: {
-          provider: "gemini",
-          model: "auto-gemini-3",
+          provider: "antigravity",
+          model: "Gemini 3.5 Flash",
         },
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",
@@ -2133,8 +2171,8 @@ describe("ProviderCommandReactor", () => {
           attachments: [],
         },
         modelSelection: {
-          provider: "gemini",
-          model: "auto-gemini-3",
+          provider: "antigravity",
+          model: "Gemini 3.5 Flash",
         },
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
         runtimeMode: "approval-required",

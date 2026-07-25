@@ -28,6 +28,8 @@ import { copyAndAttributeStudioGeneratedImage } from "../../studioGeneratedImage
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
 import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
+import { ProviderRuntimeEventRepository } from "../../persistence/Services/ProviderRuntimeEvents.ts";
+import { ProviderRuntimeEventRepositoryLive } from "../../persistence/Layers/ProviderRuntimeEvents.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import {
   ProjectionSnapshotQuery,
@@ -263,6 +265,7 @@ const make = Effect.gen(function* () {
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const providerService = yield* ProviderService;
   const projectionTurnRepository = yield* ProjectionTurnRepository;
+  const providerRuntimeEventRepository = yield* ProviderRuntimeEventRepository;
 
   const pendingAssistantDeliveryModesByThread = new Map<string, AssistantDeliveryMode>();
   const assistantDeliveryModesByTurn = new Map<string, AssistantDeliveryMode>();
@@ -1187,6 +1190,16 @@ const make = Effect.gen(function* () {
 
   const worker = yield* makeDrainableWorker(processInputSafely);
 
+  const reconcileSettledOpenTurns: ProviderRuntimeIngestionShape["reconcileSettledOpenTurns"] =
+    providerRuntimeEventRepository.pruneSettledOpenTurns.pipe(
+      Effect.catchCause((cause) => {
+        if (Cause.hasInterruptsOnly(cause)) return Effect.failCause(cause);
+        return Effect.logWarning("provider runtime open-turn cleanup failed", {
+          cause: Cause.pretty(cause),
+        });
+      }),
+    );
+
   const start: ProviderRuntimeIngestionShape["start"] = Effect.gen(function* () {
     yield* Effect.forkScoped(
       Stream.runForEach(providerService.streamEvents, (event) =>
@@ -1209,6 +1222,7 @@ const make = Effect.gen(function* () {
 
   return {
     start,
+    reconcileSettledOpenTurns,
     drain: worker.drain,
   } satisfies ProviderRuntimeIngestionShape;
 });
@@ -1216,4 +1230,4 @@ const make = Effect.gen(function* () {
 export const ProviderRuntimeIngestionLive = Layer.effect(
   ProviderRuntimeIngestionService,
   make,
-).pipe(Layer.provide(ProjectionTurnRepositoryLive));
+).pipe(Layer.provide(Layer.merge(ProjectionTurnRepositoryLive, ProviderRuntimeEventRepositoryLive)));

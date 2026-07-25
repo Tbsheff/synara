@@ -8,12 +8,18 @@
 import { spawnSync } from "node:child_process";
 
 import { Effect } from "effect";
-import type { GitPullRequestCheck, GitPullRequestComment } from "@synara/contracts";
+import type {
+  GitPullRequestCheck,
+  GitPullRequestComment,
+  PullRequestMergeCapabilities,
+} from "@synara/contracts";
 
 import { GitHubCliError } from "../Errors.ts";
 import { decodePullRequestListJson } from "../Layers/GitHubCli.ts";
 import {
   type GitHubCliShape,
+  type GitHubPullRequestDetailData,
+  type GitHubPullRequestListItem,
   type GitHubPullRequestSummary,
   PULL_REQUEST_SUMMARY_JSON_FIELDS,
 } from "../Services/GitHubCli.ts";
@@ -41,6 +47,13 @@ export interface FakeGhScenario {
   failWith?: GitHubCliError;
   reviewCommentsError?: GitHubCliError;
   createPullRequestError?: GitHubCliError;
+  viewerLogin?: string;
+  repositoryPullRequestListJson?: string;
+  pullRequestDetail?: GitHubPullRequestDetailData;
+  pullRequestListItems?: GitHubPullRequestListItem[];
+  reviewRequestedPullRequestNumbers?: number[];
+  mergeCapabilities?: PullRequestMergeCapabilities;
+  pullRequestDiff?: { patch: string; truncated: boolean };
 }
 
 export type FakePullRequest = NonNullable<FakeGhScenario["pullRequest"]>;
@@ -256,6 +269,126 @@ export function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
 
   const service: Partial<GitHubCliShape> = {
     execute,
+    getViewerLogin: (input) => {
+      ghCalls.push(`api user --jq .login [cwd=${input.cwd}]`);
+      return scenario.failWith
+        ? Effect.fail(scenario.failWith)
+        : Effect.succeed(scenario.viewerLogin ?? "viewer");
+    },
+    listRepositoryPullRequests: ((input: {
+      readonly cwd: string;
+      readonly repository: string;
+      readonly state: string;
+      readonly involvement: string;
+      readonly viewer: string;
+      readonly limit?: number;
+    }) => {
+      const involvementArgs =
+        input.involvement === "authored"
+          ? ` --author ${input.viewer}`
+          : input.involvement === "reviewing"
+            ? ` --search review-requested:${input.viewer}`
+            : "";
+      ghCalls.push(
+        `pr list --repo ${input.repository}${involvementArgs} --state ${input.state} --limit ${input.limit ?? 50}`,
+      );
+      if (scenario.failWith) return Effect.fail(scenario.failWith);
+      const raw = JSON.parse(scenario.repositoryPullRequestListJson ?? "[]") as Array<
+        Record<string, unknown>
+      >;
+      const entries = raw.flatMap((item): GitHubPullRequestListItem[] => {
+        if (
+          typeof item.number !== "number" ||
+          typeof item.title !== "string" ||
+          typeof item.url !== "string"
+        ) {
+          return [];
+        }
+        const rawState = typeof item.state === "string" ? item.state.toLowerCase() : "open";
+        return [
+          {
+            number: item.number,
+            title: item.title,
+            url: item.url,
+            author:
+              typeof item.author === "object" &&
+              item.author !== null &&
+              typeof (item.author as { login?: unknown }).login === "string"
+                ? { login: (item.author as { login: string }).login }
+                : null,
+            headBranch: typeof item.headRefName === "string" ? item.headRefName : "",
+            baseBranch: typeof item.baseRefName === "string" ? item.baseRefName : "",
+            state: rawState === "merged" ? "merged" : rawState === "closed" ? "closed" : "open",
+            isDraft: item.isDraft === true,
+            additions: typeof item.additions === "number" ? item.additions : 0,
+            deletions: typeof item.deletions === "number" ? item.deletions : 0,
+            createdAt: typeof item.createdAt === "string" ? item.createdAt : "",
+            updatedAt: typeof item.updatedAt === "string" ? item.updatedAt : "",
+            reviewDecision:
+              typeof item.reviewDecision === "string" ? item.reviewDecision : null,
+            reviewRequestLogins: [],
+            labels: [],
+            mergeability:
+              item.mergeable === "MERGEABLE"
+                ? "mergeable"
+                : item.mergeable === "CONFLICTING"
+                  ? "conflicting"
+                  : "unknown",
+          },
+        ];
+      });
+      return Effect.succeed({ entries, rawCount: raw.length });
+    }) as GitHubCliShape["listRepositoryPullRequests"],
+    getPullRequestDetail: (input) => {
+      ghCalls.push(`pr view ${input.number} --repo ${input.repository}`);
+      return scenario.pullRequestDetail
+        ? Effect.succeed(scenario.pullRequestDetail)
+        : Effect.fail(
+            new GitHubCliError({
+              operation: "getPullRequestDetail",
+              detail: "Fake pull request detail was not configured.",
+            }),
+          );
+    },
+    getRepositoryMergeCapabilities: (input) => {
+      ghCalls.push(`repo view ${input.repository} --json merge-capabilities`);
+      return Effect.succeed(
+        scenario.mergeCapabilities ?? {
+          merge: true,
+          squash: true,
+          rebase: true,
+          deleteBranchOnMerge: false,
+        },
+      );
+    },
+    getPullRequestDiff: ((input: { repository: string; number: number }) => {
+      ghCalls.push(`pr diff ${input.number} --repo ${input.repository}`);
+      return Effect.succeed(scenario.pullRequestDiff ?? { patch: "", truncated: false });
+    }) as GitHubCliShape["getPullRequestDiff"],
+    runPullRequestAction: (input) => {
+      ghCalls.push(`pr action ${input.action} ${input.number} --repo ${input.repository}`);
+      return scenario.failWith ? Effect.fail(scenario.failWith) : Effect.void;
+    },
+    getPullRequestListItem: (input) => {
+      ghCalls.push(`pr view ${input.number} --repo ${input.repository} (list-item)`);
+      const item = scenario.pullRequestListItems?.find((entry) => entry.number === input.number);
+      return item
+        ? Effect.succeed(item)
+        : Effect.fail(
+            scenario.failWith ??
+              new GitHubCliError({
+                operation: "getPullRequestListItem",
+                detail: "Pull request not found.",
+                reason: "other",
+              }),
+          );
+    },
+    listReviewRequestedPullRequestNumbers: () =>
+      scenario.failWith
+        ? Effect.fail(scenario.failWith)
+        : Effect.succeed(scenario.reviewRequestedPullRequestNumbers ?? []),
+    commentOnPullRequest: () =>
+      scenario.failWith ? Effect.fail(scenario.failWith) : Effect.void,
     listOpenPullRequests: (input) =>
       listPullRequestsWithState(input, { state: "open", defaultLimit: 1 }),
     listPullRequests: (input) =>

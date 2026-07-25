@@ -181,6 +181,7 @@ export type CodexAppServerReviewTarget = ProviderStartReviewInput["target"];
 export interface CodexAppServerStartSessionInput {
   readonly threadId: ThreadId;
   readonly provider?: "codex";
+  readonly lifecycleGeneration?: string;
   readonly cwd?: string;
   readonly model?: string;
   readonly serviceTier?: string;

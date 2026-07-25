@@ -92,6 +92,7 @@ const harness = vi.hoisted(() => ({
 }));
 
 vi.mock("react", () => ({
+  forwardRef: (render: unknown) => render,
   useCallback: reactHarness.useCallback,
   useEffect: reactHarness.useEffect,
   useMemo: reactHarness.useMemo,

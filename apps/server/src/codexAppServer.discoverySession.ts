@@ -31,7 +31,7 @@ export interface CodexDiscoverySessionDeps {
   assertSupportedCodexCliVersion(input: {
     readonly binaryPath: string;
     readonly cwd: string;
-  }): void;
+  }): Promise<void>;
   createTransport(input: CodexTransportFactoryInput): Promise<JsonRpcLineTransport>;
   attachProcessListeners(context: CodexSessionContext): void;
   sendRequest<TResponse>(
@@ -141,7 +141,7 @@ export async function getOrCreateDiscoverySession(
   }
 
   const now = new Date().toISOString();
-  deps.assertSupportedCodexCliVersion({
+  await deps.assertSupportedCodexCliVersion({
     binaryPath: "codex",
     cwd: normalizedCwd,
   });

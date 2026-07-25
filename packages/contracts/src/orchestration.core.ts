@@ -21,6 +21,7 @@ import { ProviderMentionReference, ProviderSkillReference } from "./providerDisc
 import { ProjectKind } from "./project";
 import { OrchestrationThreadRuntime } from "./executionRuntime";
 import {
+  ApprovalRequestId,
   CheckpointRef,
   CommandId,
   EventId,
@@ -199,7 +200,7 @@ export type TurnDispatchMode = typeof TurnDispatchMode.Type;
 export const DEFAULT_TURN_DISPATCH_MODE: TurnDispatchMode = "queue";
 // Marks who dispatched a user turn. Older persisted messages omit this and are
 // interpreted as user-dispatched by their consumers.
-export const MessageDispatchOrigin = Schema.Literals(["user", "automation"]);
+export const MessageDispatchOrigin = Schema.Literals(["user", "automation", "agent"]);
 export type MessageDispatchOrigin = typeof MessageDispatchOrigin.Type;
 export const ProviderReviewTarget = Schema.Union([
   Schema.Struct({
@@ -689,6 +690,36 @@ export const ThreadMarkers = Schema.Array(ThreadMarker).check(
 );
 export type ThreadMarkers = typeof ThreadMarkers.Type;
 
+export const ProjectionPendingInteractionKind = Schema.Literals(["approval", "userInput"]);
+export type ProjectionPendingInteractionKind = typeof ProjectionPendingInteractionKind.Type;
+
+export const ProjectionPendingInteractionStatus = Schema.Literals([
+  "pending",
+  "responding",
+  "confirmed",
+  "retryable",
+  "uncertain",
+]);
+export type ProjectionPendingInteractionStatus = typeof ProjectionPendingInteractionStatus.Type;
+
+export const ProjectionPendingInteractionDecision = Schema.NullOr(ProviderApprovalDecision);
+export type ProjectionPendingInteractionDecision = typeof ProjectionPendingInteractionDecision.Type;
+
+export const OrchestrationPendingInteraction = Schema.Struct({
+  interactionKind: ProjectionPendingInteractionKind,
+  requestId: ApprovalRequestId,
+  threadId: ThreadId,
+  turnId: Schema.NullOr(TurnId),
+  lifecycleGeneration: Schema.NullOr(TrimmedNonEmptyString),
+  status: ProjectionPendingInteractionStatus,
+  decision: ProjectionPendingInteractionDecision,
+  responseCommandId: Schema.NullOr(CommandId),
+  responseRequestedAt: Schema.NullOr(IsoDateTime),
+  createdAt: IsoDateTime,
+  resolvedAt: Schema.NullOr(IsoDateTime),
+});
+export type OrchestrationPendingInteraction = typeof OrchestrationPendingInteraction.Type;
+
 export const OrchestrationThread = Schema.Struct({
   id: ThreadId,
   projectId: ProjectId,
@@ -758,6 +789,7 @@ export const OrchestrationThread = Schema.Struct({
   proposedPlans: Schema.Array(OrchestrationProposedPlan).pipe(Schema.withDecodingDefault(() => [])),
   activities: Schema.Array(OrchestrationThreadActivity),
   providerItems: Schema.Array(OrchestrationProviderItem).pipe(Schema.withDecodingDefault(() => [])),
+  pendingInteractions: Schema.optional(Schema.Array(OrchestrationPendingInteraction)),
   checkpoints: Schema.Array(OrchestrationCheckpointSummary),
   session: Schema.NullOr(OrchestrationSession),
 });

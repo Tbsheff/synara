@@ -7,7 +7,19 @@
  */
 import { ServiceMap } from "effect";
 import type { Effect } from "effect";
-import type { GitPullRequestCheck, GitPullRequestComment } from "@synara/contracts";
+import type {
+  GitPullRequestCheck,
+  GitPullRequestComment,
+  PullRequestActor,
+  PullRequestCheck,
+  PullRequestComment,
+  PullRequestCommit,
+  PullRequestInvolvement,
+  PullRequestLabel,
+  PullRequestMergeCapabilities,
+  PullRequestMergeMethod,
+  PullRequestState,
+} from "@synara/contracts";
 
 import type { ProcessRunResult } from "../../processRunner";
 import type { GitHubCliError } from "../Errors.ts";
@@ -51,6 +63,59 @@ export interface GitHubRepositoryCloneUrls {
   readonly nameWithOwner: string;
   readonly url: string;
   readonly sshUrl: string;
+}
+
+export interface GitHubPullRequestListItem {
+  readonly number: number;
+  readonly title: string;
+  readonly url: string;
+  readonly author: PullRequestActor | null;
+  readonly headBranch: string;
+  readonly baseBranch: string;
+  readonly state: PullRequestState;
+  readonly isDraft: boolean;
+  readonly additions: number;
+  readonly deletions: number;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly reviewDecision: string | null;
+  readonly reviewRequestLogins: ReadonlyArray<string>;
+  readonly labels: ReadonlyArray<PullRequestLabel>;
+  readonly mergeability: "mergeable" | "conflicting" | "unknown";
+}
+
+export interface GitHubPullRequestListBatch {
+  readonly entries: ReadonlyArray<GitHubPullRequestListItem>;
+  readonly rawCount: number;
+}
+
+export interface GitHubPullRequestDetailData {
+  readonly number: number;
+  readonly title: string;
+  readonly body: string;
+  readonly url: string;
+  readonly author: PullRequestActor | null;
+  readonly state: PullRequestState;
+  readonly isDraft: boolean;
+  readonly mergeable: string | null;
+  readonly mergeability: "mergeable" | "conflicting" | "unknown";
+  readonly mergeStateStatus: string | null;
+  readonly reviewDecision: string | null;
+  readonly additions: number;
+  readonly deletions: number;
+  readonly changedFiles: number;
+  readonly headBranch: string;
+  readonly baseBranch: string;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly mergedAt: string | null;
+  readonly closedAt: string | null;
+  readonly maintainerCanModify: boolean;
+  readonly reviewers: ReadonlyArray<PullRequestActor>;
+  readonly labels: ReadonlyArray<PullRequestLabel>;
+  readonly checks: ReadonlyArray<PullRequestCheck>;
+  readonly comments: ReadonlyArray<PullRequestComment>;
+  readonly commits: ReadonlyArray<PullRequestCommit>;
 }
 
 export type GitHubChecksStatus = "passing" | "failing" | "pending" | "none";
@@ -345,6 +410,10 @@ export interface GitHubCliShape {
     readonly stdin?: string;
   }) => Effect.Effect<ProcessRunResult, GitHubCliError>;
 
+  readonly getViewerLogin: (input: {
+    readonly cwd: string;
+  }) => Effect.Effect<string, GitHubCliError>;
+
   /**
    * List open pull requests for a head branch.
    */
@@ -394,28 +463,72 @@ export interface GitHubCliShape {
   /**
    * List repository pull requests filtered by state for the review surface.
    */
-  readonly listRepositoryPullRequests: (input: {
+  readonly listRepositoryPullRequests: {
+    (input: {
+      readonly cwd: string;
+      readonly repository: string;
+      readonly state: PullRequestState;
+      readonly involvement: PullRequestInvolvement;
+      readonly viewer: string;
+      readonly limit?: number;
+    }): Effect.Effect<GitHubPullRequestListBatch, GitHubCliError>;
+    (input: {
+      readonly cwd: string;
+      readonly state: "open" | "closed" | "merged" | "all";
+      readonly limit?: number;
+      readonly search?: string;
+      readonly author?: string;
+      readonly authors?: ReadonlyArray<string>;
+      readonly reviewRequested?: string;
+      readonly baseBranch?: string;
+      readonly baseBranches?: ReadonlyArray<string>;
+      readonly headBranch?: string;
+      readonly headBranches?: ReadonlyArray<string>;
+      readonly label?: string;
+      readonly labels?: ReadonlyArray<string>;
+      readonly assignee?: string;
+      readonly assignees?: ReadonlyArray<string>;
+      readonly draft?: boolean;
+      readonly checksStatuses?: ReadonlyArray<
+        Extract<GitHubChecksStatus, "passing" | "failing" | "pending">
+      >;
+      readonly reviewStatus?: "approved" | "changes-requested";
+    }): Effect.Effect<ReadonlyArray<GitHubReviewPullRequest>, GitHubCliError>;
+  };
+
+  readonly getPullRequestListItem: (input: {
     readonly cwd: string;
-    readonly state: "open" | "closed" | "merged" | "all";
+    readonly repository: string;
+    readonly number: number;
+  }) => Effect.Effect<GitHubPullRequestListItem, GitHubCliError>;
+  readonly listReviewRequestedPullRequestNumbers: (input: {
+    readonly cwd: string;
+    readonly repository: string;
+    readonly viewer: string;
     readonly limit?: number;
-    readonly search?: string;
-    readonly author?: string;
-    readonly authors?: ReadonlyArray<string>;
-    readonly reviewRequested?: string;
-    readonly baseBranch?: string;
-    readonly baseBranches?: ReadonlyArray<string>;
-    readonly headBranch?: string;
-    readonly headBranches?: ReadonlyArray<string>;
-    readonly label?: string;
-    readonly labels?: ReadonlyArray<string>;
-    readonly assignee?: string;
-    readonly assignees?: ReadonlyArray<string>;
-    readonly draft?: boolean;
-    readonly checksStatuses?: ReadonlyArray<
-      Extract<GitHubChecksStatus, "passing" | "failing" | "pending">
-    >;
-    readonly reviewStatus?: "approved" | "changes-requested";
-  }) => Effect.Effect<ReadonlyArray<GitHubReviewPullRequest>, GitHubCliError>;
+  }) => Effect.Effect<ReadonlyArray<number>, GitHubCliError>;
+  readonly getPullRequestDetail: (input: {
+    readonly cwd: string;
+    readonly repository: string;
+    readonly number: number;
+  }) => Effect.Effect<GitHubPullRequestDetailData, GitHubCliError>;
+  readonly getRepositoryMergeCapabilities: (input: {
+    readonly cwd: string;
+    readonly repository: string;
+  }) => Effect.Effect<PullRequestMergeCapabilities, GitHubCliError>;
+  readonly runPullRequestAction: (input: {
+    readonly cwd: string;
+    readonly repository: string;
+    readonly number: number;
+    readonly action: "merge" | "ready" | "draft" | "close" | "reopen";
+    readonly mergeMethod?: PullRequestMergeMethod;
+  }) => Effect.Effect<void, GitHubCliError>;
+  readonly commentOnPullRequest: (input: {
+    readonly cwd: string;
+    readonly repository: string;
+    readonly number: number;
+    readonly body: string;
+  }) => Effect.Effect<void, GitHubCliError>;
 
   /**
    * Load the lightweight PR detail needed to paint the review header quickly.
@@ -462,10 +575,17 @@ export interface GitHubCliShape {
   /**
    * Read the unified diff for a pull request.
    */
-  readonly getPullRequestDiff: (input: {
-    readonly cwd: string;
-    readonly reference: string;
-  }) => Effect.Effect<string, GitHubCliError>;
+  readonly getPullRequestDiff: {
+    (input: {
+      readonly cwd: string;
+      readonly repository: string;
+      readonly number: number;
+    }): Effect.Effect<{ readonly patch: string; readonly truncated: boolean }, GitHubCliError>;
+    (input: {
+      readonly cwd: string;
+      readonly reference: string;
+    }): Effect.Effect<string, GitHubCliError>;
+  };
 
   /**
    * Read the current head commit SHA for a pull request.

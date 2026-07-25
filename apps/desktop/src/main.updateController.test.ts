@@ -23,6 +23,20 @@ function createInstallMarkerPath(): string {
   return Path.join(directory, "pending-update-install.json");
 }
 
+function emitDownloadedUpdate(autoUpdater: FakeAutoUpdater): void {
+  const directory = FS.mkdtempSync(Path.join(OS.tmpdir(), "synara-downloaded-update-"));
+  temporaryDirectories.push(directory);
+  const downloadedFile = Path.join(directory, "Synara.zip");
+  FS.writeFileSync(downloadedFile, "test update payload");
+  autoUpdater.emit("update-downloaded", { version: "2.0.0", downloadedFile });
+}
+
+const markerArtifact = {
+  path: "/tmp/synara-test-update.zip",
+  size: 1,
+  sha512: "a".repeat(128),
+} as const;
+
 class FakeAutoUpdater extends EventEmitter {
   autoDownload = true;
   autoInstallOnAppQuit = true;
@@ -176,7 +190,7 @@ describe("DesktopUpdateController", () => {
     const { controller, deps, autoUpdater } = createController();
     controller.configure();
     autoUpdater.emit("update-available", { version: "2.0.0" });
-    autoUpdater.emit("update-downloaded", { version: "2.0.0" });
+    emitDownloadedUpdate(autoUpdater);
     expect(controller.getState().status).toBe("downloaded");
 
     const result = await controller.installDownloadedUpdate();
@@ -197,7 +211,7 @@ describe("DesktopUpdateController", () => {
     });
     controller.configure();
     autoUpdater.emit("update-available", { version: "2.0.0" });
-    autoUpdater.emit("update-downloaded", { version: "2.0.0" });
+    emitDownloadedUpdate(autoUpdater);
 
     await controller.installDownloadedUpdate();
     await vi.advanceTimersByTimeAsync(15_000);
@@ -222,7 +236,7 @@ describe("DesktopUpdateController", () => {
     });
     controller.configure();
     autoUpdater.emit("update-available", { version: "2.0.0" });
-    autoUpdater.emit("update-downloaded", { version: "2.0.0" });
+    emitDownloadedUpdate(autoUpdater);
     await controller.installDownloadedUpdate();
 
     controller.markInstallHandoff();
@@ -242,6 +256,7 @@ describe("DesktopUpdateController", () => {
         toVersion: "2.0.0",
         requestedAt: new Date().toISOString(),
         consecutiveFailures: 0,
+        artifact: markerArtifact,
       }),
     );
     const { controller } = createController({
@@ -265,6 +280,7 @@ describe("DesktopUpdateController", () => {
         toVersion: "2.0.0",
         requestedAt: new Date().toISOString(),
         consecutiveFailures: 0,
+        artifact: markerArtifact,
       }),
     );
     const { controller, deps, autoUpdater } = createController({

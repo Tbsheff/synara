@@ -11,7 +11,7 @@
 
 import { ThreadId, type OrchestrationThreadActivity } from "@synara/contracts";
 
-import { orderedActivities } from "../../session-logic";
+import { orderedActivities } from "../../workLog";
 import { formatSubagentModelLabel, type SubagentStatusKind } from "../../lib/subagentPresentation";
 
 export interface WorkflowAgentRow {

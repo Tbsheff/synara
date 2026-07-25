@@ -13,6 +13,7 @@ import {
 import { Effect, Option } from "effect";
 
 import { type ProjectionThread } from "../../persistence/Services/ProjectionThreads.ts";
+import { ProjectionThreadProviderItemRepository } from "../../persistence/Services/ProjectionThreadProviderItems.ts";
 import { deriveThreadSummaryState } from "@synara/shared/threadSummary";
 import type { ProjectorDefinition } from "./ProjectionPipeline.types.ts";
 import type { ProjectionProjectorDeps } from "./ProjectionPipeline.projectors.ts";
@@ -431,7 +432,8 @@ export const makeThreadProjectors = (deps: ProjectionProjectorDeps) => {
     Effect.gen(function* () {
       switch (event.type) {
         case "thread.message-sent": {
-          const existingMessage = yield* projectionThreadMessageRepository.getByMessageId({
+          const existingMessage = yield* projectionThreadMessageRepository.getByThreadAndMessageId({
+            threadId: event.payload.threadId,
             messageId: event.payload.messageId,
           });
           const nextText =
@@ -795,3 +797,12 @@ export const makeThreadProjectors = (deps: ProjectionProjectorDeps) => {
     applyThreadSessionsProjection,
   };
 };
+
+export const makeThreadProviderItemsProjection = (
+  projectionThreadProviderItemRepository: typeof ProjectionThreadProviderItemRepository.Service,
+  projectionTurnRepository: ProjectionProjectorDeps["projectionTurnRepository"],
+) =>
+  makeThreadProjectors({
+    projectionThreadProviderItemRepository,
+    projectionTurnRepository,
+  } as ProjectionProjectorDeps).applyThreadProviderItemsProjection;

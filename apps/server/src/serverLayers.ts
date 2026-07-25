@@ -74,8 +74,9 @@ import { ThreadDiagnosticsQueryLive } from "./diagnostics/Layers/ThreadDiagnosti
 import { ManagedAttachmentCleanupLive } from "./managedAttachmentCleanup";
 import { PullRequestServiceLive } from "./pullRequests/Layers/PullRequestService";
 import { ProviderHealthLive } from "./provider/Layers/ProviderHealth";
+import { makeServerProviderLayer } from "./provider/runtimeLayer";
 
-export { makeServerProviderLayer } from "./provider/runtimeLayer";
+export { makeServerProviderLayer };
 
 export function makeServerApplicationLayers() {
   const agentGatewayCredentialsLayer = AgentGatewayCredentialsWithSecretsLive;

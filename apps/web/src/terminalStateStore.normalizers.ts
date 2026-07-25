@@ -133,6 +133,7 @@ export function clearTerminalReviewState(
 function generatedTerminalTitleBase(cliKind: TerminalCliKind | null): string {
   if (cliKind === "codex") return "Codex";
   if (cliKind === "claude") return "Claude";
+  if (cliKind === "antigravity") return "Antigravity";
   return "Terminal";
 }
 

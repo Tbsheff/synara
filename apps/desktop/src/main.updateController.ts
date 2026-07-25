@@ -50,11 +50,14 @@ import {
   clearInstallMarker,
   createUpdateInstallMarker,
   markInstallHandoffSync,
+  recordInstallMarkerFailureSync,
   readInstallMarker,
   resolveInstallMarkerOutcome,
   writeInstallMarker,
   type UpdateInstallMarker,
+  type UpdateInstallHandoffExpectation,
 } from "./updateInstallMarker";
+import { fingerprintUpdateArtifact } from "./updateArtifactIdentity";
 
 type DesktopUpdateErrorContext = DesktopUpdateState["errorContext"];
 
@@ -106,6 +109,8 @@ export class DesktopUpdateController {
   private updateDownloadInFlight = false;
   private isUpdaterInstallPreparing = false;
   private isUpdaterQuitAndInstallInFlight = false;
+  private downloadedUpdateFile: string | null = null;
+  private installHandoffExpectation: UpdateInstallHandoffExpectation | null = null;
   private updatePollTimer: ReturnType<typeof setInterval> | null = null;
   private updateStartupTimer: ReturnType<typeof setTimeout> | null = null;
   private updateCheckTimeoutTimer: ReturnType<typeof setTimeout> | null = null;
@@ -190,20 +195,24 @@ export class DesktopUpdateController {
     if (result.marker.phase === "failed") {
       return result.marker.consecutiveFailures;
     }
-    const failedMarker: UpdateInstallMarker = {
-      ...result.marker,
-      phase: "failed",
-      consecutiveFailures: result.marker.consecutiveFailures + 1,
-      lastFailureAt: nowIso,
+    const expected = this.installHandoffExpectation ?? {
+      attemptId: result.marker.attemptId,
+      artifact: result.marker.artifact,
     };
-    try {
-      writeInstallMarker(this.deps.getInstallMarkerPath(), failedMarker);
-    } catch (error) {
+    const failure = recordInstallMarkerFailureSync(
+      this.deps.getInstallMarkerPath(),
+      expected,
+      nowIso,
+    );
+    if (failure.status === "recorded" || failure.status === "already-failed") {
+      return failure.marker.consecutiveFailures;
+    }
+    if (failure.status === "write-failed") {
       console.error(
-        `[desktop-updater] Failed to persist install failure marker: ${this.deps.formatErrorMessage(error)}`,
+        `[desktop-updater] Failed to persist install failure marker: ${this.deps.formatErrorMessage(failure.error)}`,
       );
     }
-    return failedMarker.consecutiveFailures;
+    return Math.max(1, this.updateState.installFailureCount + 1);
   }
 
   private clearInstallWatchdog(): void {
@@ -343,7 +352,9 @@ export class DesktopUpdateController {
   }
 
   markInstallHandoff(): void {
-    markInstallHandoffSync(this.deps.getInstallMarkerPath());
+    if (this.installHandoffExpectation !== null) {
+      markInstallHandoffSync(this.deps.getInstallMarkerPath(), this.installHandoffExpectation);
+    }
   }
 
   private applyConfiguredGitHubUpdateFeed(latestRelease: LatestGitHubRelease): void {
@@ -711,13 +722,25 @@ export class DesktopUpdateController {
       existingMarkerResult.marker.toVersion === versionToInstall
         ? existingMarkerResult.marker
         : null;
+    if (this.downloadedUpdateFile === null) {
+      this.setUpdateState(
+        reduceDesktopUpdateStateOnInstallFailure(
+          this.updateState,
+          "The downloaded update file is unavailable.",
+        ),
+      );
+      return { accepted: true, completed: false };
+    }
+    const artifact = await fingerprintUpdateArtifact(this.downloadedUpdateFile);
     const marker = createUpdateInstallMarker({
       fromVersion: this.deps.getAppVersion(),
       toVersion: versionToInstall,
       requestedAt: new Date().toISOString(),
       consecutiveFailures: existingMarker?.consecutiveFailures ?? 0,
       lastFailureAt: existingMarker?.lastFailureAt ?? null,
+      artifact,
     });
+    this.installHandoffExpectation = { attemptId: marker.attemptId, artifact: marker.artifact };
     let markerWritten = false;
     try {
       writeInstallMarker(markerPath, marker);
@@ -926,6 +949,7 @@ export class DesktopUpdateController {
       this.setUpdateState(
         reduceDesktopUpdateStateOnDownloadComplete(this.updateState, info.version),
       );
+      this.downloadedUpdateFile = info.downloadedFile;
       console.info(`[desktop-updater] Update downloaded: ${info.version}`);
     });
 

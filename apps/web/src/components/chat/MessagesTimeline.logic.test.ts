@@ -1169,6 +1169,29 @@ describe("deriveMessagesTimelineRows", () => {
     ).toEqual(["working-header"]);
   });
 
+  it("keeps one row identity when the working indicator gains a start time", () => {
+    const untimedRows = deriveMessagesTimelineRows({
+      ...baseInput,
+      isWorking: true,
+      activeTurnInProgress: true,
+      activeTurnStartedAt: undefined,
+      timelineEntries: [userEntry("u1", "2026-01-01T00:00:00Z")],
+    });
+    const timedRows = deriveMessagesTimelineRows({
+      ...baseInput,
+      isWorking: true,
+      activeTurnInProgress: true,
+      activeTurnStartedAt: "2026-01-01T00:00:01Z",
+      timelineEntries: [userEntry("u1", "2026-01-01T00:00:00Z")],
+    });
+
+    const untimedWorkingRow = untimedRows.find((row) => row.kind === "working");
+    const timedWorkingRow = timedRows.find((row) => row.kind === "working-header");
+
+    expect(untimedWorkingRow?.id).toBe("working-indicator-row");
+    expect(timedWorkingRow?.id).toBe(untimedWorkingRow?.id);
+  });
+
   it("collapses adjacent provider mini-turns into the same user-visible response", () => {
     const rows = deriveMessagesTimelineRows({
       ...baseInput,

@@ -8423,7 +8423,11 @@ export default function ChatView({
       // Non-Codex steers interrupt the live turn before re-dispatching; hold
       // queued auto-dispatch through that gap so it can't race the steer.
       if (dispatchMode === "steer" && modelSelectionForPlanDispatch.provider !== "codex") {
-        setQueuedSteerGate({ sawInterruptGap: false, gapStartedAt: null });
+        setQueuedSteerGate({
+          sawInterruptGap: false,
+          gapStartedAt: null,
+          armedActiveTurnId: activeThread?.latestTurn?.turnId ?? null,
+        });
       }
       // Optimistically open the plan sidebar when implementing (not refining).
       // "default" mode here means the agent is executing the plan, which produces
@@ -8601,6 +8605,7 @@ export default function ChatView({
       gate: queuedSteerGate,
       phase,
       sessionErrored: sessionErroredForSteerGate,
+      activeTurnId: activeThread?.latestTurn?.turnId ?? null,
       now: Date.now(),
     });
     if (transition.kind === "clear") {

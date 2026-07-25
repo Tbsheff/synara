@@ -6,11 +6,6 @@
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import type { ChildProcess } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import path from "node:path";
-
-import { AuthStorage, ModelRegistry } from "@earendil-works/pi-coding-agent";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import {
@@ -204,83 +199,51 @@ function makePiModel(input: {
 
 describe("getPiDiscoverableModels", () => {
   it("includes custom-provider models authenticated through auth.json semantics", () => {
-    const agentDir = mkdtempSync(path.join(tmpdir(), "synara-pi-models-"));
-    const modelsPath = path.join(agentDir, "models.json");
+    const localModel = {
+      id: "glm-5.2",
+      name: "GLM 5.2",
+      api: "openai-completions" as const,
+      provider: "local",
+      baseUrl: "http://127.0.0.1:11434/v1",
+      reasoning: false,
+      input: ["text"] as Array<"text">,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128_000,
+      maxTokens: 16_384,
+    };
+    const models = getPiDiscoverableModels({
+      getAvailable: () => [localModel],
+      getAll: () => [localModel],
+    });
 
-    try {
-      writeFileSync(
-        modelsPath,
-        JSON.stringify({
-          providers: {
-            local: {
-              api: "openai-completions",
-              baseUrl: "http://127.0.0.1:11434/v1",
-              models: [{ id: "glm-5.2" }],
-            },
-          },
-        }),
-      );
-      const authStorage = AuthStorage.inMemory({
-        local: { type: "api_key", key: "test-key" },
-      });
-      const registry = ModelRegistry.create(authStorage, modelsPath);
-
-      const models = getPiDiscoverableModels(registry);
-
-      expect(models.some((model) => model.provider === "local" && model.id === "glm-5.2")).toBe(
-        true,
-      );
-      expect(models.some((model) => model.provider === "anthropic")).toBe(false);
-    } finally {
-      rmSync(agentDir, { recursive: true, force: true });
-    }
+    expect(models.some((model) => model.provider === "local" && model.id === "glm-5.2")).toBe(true);
+    expect(models.some((model) => model.provider === "anthropic")).toBe(false);
   });
 
   it("restores Fable 5 and Opus 4.8 after an extension replaces the Anthropic catalog", () => {
-    const agentDir = mkdtempSync(path.join(tmpdir(), "synara-pi-anthropic-"));
-    const modelsPath = path.join(agentDir, "models.json");
+    const peer = {
+      id: "claude-opus-4-7",
+      name: "Claude Opus 4.7",
+      api: "anthropic-messages" as const,
+      provider: "anthropic",
+      baseUrl: "https://api.anthropic.com",
+      reasoning: true,
+      input: ["text", "image"] as Array<"text" | "image">,
+      cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+    };
+    const models = getPiDiscoverableModels({
+      getAvailable: () => [peer],
+      getAll: () => [peer],
+    });
 
-    try {
-      writeFileSync(modelsPath, "{}");
-      const authStorage = AuthStorage.inMemory({
-        anthropic: { type: "oauth", access: "tok", refresh: "ref", expires: Date.now() + 60_000 },
-      });
-      const registry = ModelRegistry.create(authStorage, modelsPath);
-      registry.registerProvider("anthropic", {
-        baseUrl: "https://api.anthropic.com",
-        api: "anthropic-messages",
-        apiKey: "test-key",
-        models: [
-          {
-            id: "claude-opus-4-7",
-            name: "Claude Opus 4.7",
-            api: "anthropic-messages",
-            reasoning: true,
-            input: ["text", "image"],
-            cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
-            contextWindow: 1_000_000,
-            maxTokens: 128_000,
-          },
-        ],
-      });
-
-      expect(
-        registry
-          .getAll()
-          .filter((model) => model.provider === "anthropic")
-          .map((model) => model.id),
-      ).toEqual(["claude-opus-4-7"]);
-      const models = getPiDiscoverableModels(registry);
-
-      expect(
-        models.some((model) => model.provider === "anthropic" && model.id === "claude-fable-5"),
-      ).toBe(true);
-      expect(
-        models.some((model) => model.provider === "anthropic" && model.id === "claude-opus-4-8"),
-      ).toBe(true);
-    } finally {
-      rmSync(agentDir, { recursive: true, force: true });
-    }
+    expect(
+      models.some((model) => model.provider === "anthropic" && model.id === "claude-fable-5"),
+    ).toBe(true);
+    expect(
+      models.some((model) => model.provider === "anthropic" && model.id === "claude-opus-4-8"),
+    ).toBe(true);
   });
 });
 

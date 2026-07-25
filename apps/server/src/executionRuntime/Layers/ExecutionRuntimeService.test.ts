@@ -27,6 +27,7 @@ import { OrchestrationEngineService } from "../../orchestration/Services/Orchest
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Layers/OrchestrationCommandReceipts.ts";
 import { OrchestrationEventStoreLive } from "../../persistence/Layers/OrchestrationEventStore.ts";
+import { ProjectionThreadRuntimeRepositoryLive } from "../../persistence/Layers/ProjectionThreadRuntime.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import type { InMemoryTransportController } from "../../provider/process/JsonRpcLineTransport.ts";
 import type { FakeRuntimeFlavor } from "../Services/FakeRuntimeFlavor.ts";
@@ -73,6 +74,7 @@ const makeServiceRuntime = () => {
     Layer.provideMerge(OrchestrationProjectionSnapshotQueryLive),
     Layer.provideMerge(NodeServices.layer),
     Layer.provideMerge(serverConfigLayer),
+    Layer.provideMerge(ProjectionThreadRuntimeRepositoryLive),
     Layer.provideMerge(SqlitePersistenceMemory),
   );
   return ManagedRuntime.make(layer);
@@ -523,6 +525,7 @@ const makePreflightRuntime = (configured: boolean) => {
     Layer.provideMerge(OrchestrationProjectionSnapshotQueryLive),
     Layer.provideMerge(NodeServices.layer),
     Layer.provideMerge(serverConfigLayer),
+    Layer.provideMerge(ProjectionThreadRuntimeRepositoryLive),
     Layer.provideMerge(SqlitePersistenceMemory),
   );
   return ManagedRuntime.make(layer);

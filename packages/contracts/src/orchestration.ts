@@ -14,6 +14,8 @@ export const ORCHESTRATION_WS_METHODS = {
   getTurnDiff: "orchestration.getTurnDiff",
   getFullThreadDiff: "orchestration.getFullThreadDiff",
   replayEvents: "orchestration.replayEvents",
+  listProviderDeliveryBlockers: "orchestration.listProviderDeliveryBlockers",
+  reconcileProviderDelivery: "orchestration.reconcileProviderDelivery",
   subscribeShell: "orchestration.subscribeShell",
   unsubscribeShell: "orchestration.unsubscribeShell",
   subscribeThread: "orchestration.subscribeThread",
