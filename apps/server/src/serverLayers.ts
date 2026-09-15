@@ -196,6 +196,10 @@ export function makeServerRuntimeServicesLayer(
     Layer.provideMerge(ServerSettingsLive),
     Layer.provideMerge(providerHealthLayer),
   );
+  const pluginHostLayer = PluginHostLive.pipe(
+    Layer.provideMerge(OrchestrationLayerLive),
+    Layer.provideMerge(ServerSettingsLive),
+  );
   const agentGatewayLayer = AgentGatewayLive.pipe(
     Layer.provideMerge(agentGatewayCredentialsLayer),
     Layer.provideMerge(automationServiceLayer),
@@ -212,17 +216,13 @@ export function makeServerRuntimeServicesLayer(
     // The gateway exposes device_* tools only where a backend can exist, but it
     // resolves the service on every platform to make that decision.
     Layer.provideMerge(DeviceServiceLive),
+    Layer.provideMerge(pluginHostLayer),
   );
   const pullRequestServiceLayer = PullRequestServiceLive.pipe(
     Layer.provideMerge(GitLayerLive),
     Layer.provideMerge(ProjectPullRequestPinsLive),
     Layer.provideMerge(OrchestrationLayerLive),
   );
-  const pluginHostLayer = PluginHostLive.pipe(
-    Layer.provideMerge(OrchestrationLayerLive),
-    Layer.provideMerge(ServerSettingsLive),
-  );
-
   return Layer.mergeAll(
     agentGatewayCredentialsLayer,
     agentGatewayLayer,

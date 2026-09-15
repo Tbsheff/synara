@@ -16,6 +16,8 @@ import {
   createPluginRegistry,
   type JsonValue,
   type PluginKvStorage,
+  type PluginRegistry,
+  type RegisteredPluginAgentTool,
   type SynaraPlugin,
   type PluginThreadStartInput,
 } from "@synara/plugin-sdk";
@@ -34,16 +36,31 @@ import { findPluginSource, PLUGIN_CONTROL_FILE, readPluginControl } from "./cont
 import { pluginBuildOutputRoot } from "./build";
 import { pluginAssetKey, readPluginManifest, type LocalPluginManifest } from "./manifest";
 import { removePluginSkills, syncPluginSkills } from "./skills";
+import {
+  assertPluginWriteAuthority,
+  runWithPluginInvocationAuthority,
+  type PluginAgentToolAuthority,
+} from "./invocationAuthority";
 
 export interface PluginHostShape {
   readonly list: () => Effect.Effect<PluginListResult, Error>;
   readonly call: (input: PluginCallInput) => Effect.Effect<{ readonly output: JsonValue }, Error>;
   readonly edit: (input: PluginEditInput) => Effect.Effect<{ readonly threadId: string }, Error>;
+  readonly agentTools: () => Effect.Effect<ReadonlyArray<RegisteredPluginAgentTool>, Error>;
+  readonly callAgentTool: (
+    input: PluginHostAgentToolCallInput,
+    authority: PluginAgentToolAuthority,
+  ) => Effect.Effect<JsonValue, Error>;
   readonly resolveAppAsset: (
     assetKey: string,
     fileName: string,
   ) => Effect.Effect<{ readonly path: string; readonly contentType: string } | undefined, Error>;
 }
+
+export type PluginHostAgentToolCallInput = Pick<
+  Parameters<PluginRegistry["callAgentTool"]>[0],
+  "pluginId" | "generation" | "toolId" | "input"
+>;
 
 export class PluginHostService extends ServiceMap.Service<PluginHostService, PluginHostShape>()(
   "synara/plugins/PluginHostService",
@@ -124,10 +141,7 @@ function reviewQueueSourceRoot(): string | undefined {
   if (!reviewQueueManifest.sourcePath) return undefined;
   return (
     findPluginSource(process.cwd(), reviewQueueManifest.sourcePath) ??
-    findPluginSource(
-      path.dirname(fileURLToPath(import.meta.url)),
-      reviewQueueManifest.sourcePath,
-    )
+    findPluginSource(path.dirname(fileURLToPath(import.meta.url)), reviewQueueManifest.sourcePath)
   );
 }
 
@@ -169,7 +183,7 @@ export const PluginHostLive = Layer.effect(
             }),
           ),
         );
-      const set = (key: string, value: JsonValue) =>
+      const setRaw = (key: string, value: JsonValue) =>
         Effect.runPromise(
           sql`
             INSERT INTO plugin_storage (plugin_id, key, value_json, updated_at)
@@ -179,7 +193,7 @@ export const PluginHostLive = Layer.effect(
               updated_at = excluded.updated_at
           `.pipe(Effect.asVoid),
         );
-      const deleteValue = (key: string) =>
+      const deleteRaw = (key: string) =>
         Effect.runPromise(
           sql`
             DELETE FROM plugin_storage WHERE plugin_id = ${pluginId} AND key = ${key}
@@ -188,16 +202,23 @@ export const PluginHostLive = Layer.effect(
 
       return {
         get,
-        set,
-        delete: deleteValue,
+        set: async (key, value) => {
+          await assertPluginWriteAuthority();
+          await setRaw(key, value);
+        },
+        delete: async (key) => {
+          await assertPluginWriteAuthority();
+          await deleteRaw(key);
+        },
         update: (key, updateValue) =>
           Effect.runPromise(
             storageUpdates.withLock(
               `${pluginId}\0${key}`,
               Effect.tryPromise(async () => {
                 const result = await updateValue(await get(key));
-                if (result === undefined) await deleteValue(key);
-                else await set(key, result);
+                await assertPluginWriteAuthority();
+                if (result === undefined) await deleteRaw(key);
+                else await setRaw(key, result);
                 return result;
               }),
             ),
@@ -205,8 +226,9 @@ export const PluginHostLive = Layer.effect(
       };
     };
 
-    const startThread = (pluginId: string, input: PluginThreadStartInput) =>
-      Effect.runPromise(
+    const startThread = async (pluginId: string, input: PluginThreadStartInput) => {
+      await assertPluginWriteAuthority();
+      return Effect.runPromise(
         Effect.gen(function* () {
           const projectId = ProjectId.makeUnsafe(input.projectId);
           const project = yield* projections.getProjectShellById(projectId).pipe(
@@ -222,6 +244,7 @@ export const PluginHostLive = Layer.effect(
             project.defaultModelSelection ?? serverSettings.textGenerationModelSelection;
           const digest = stableId(pluginId, input, "thread");
           const threadId = ThreadId.makeUnsafe(`plugin-${digest}`);
+          yield* Effect.tryPromise(() => assertPluginWriteAuthority());
           yield* orchestration.dispatch({
             type: "thread.create",
             commandId: CommandId.makeUnsafe(`plugin:${digest}:create`),
@@ -236,6 +259,7 @@ export const PluginHostLive = Layer.effect(
             worktreePath: null,
             createdAt: input.createdAt,
           });
+          yield* Effect.tryPromise(() => assertPluginWriteAuthority());
           yield* orchestration.dispatch({
             type: "thread.turn.start",
             commandId: CommandId.makeUnsafe(`plugin:${digest}:turn`),
@@ -255,6 +279,7 @@ export const PluginHostLive = Layer.effect(
           return { threadId };
         }),
       ).then(({ threadId }) => ({ threadId }));
+    };
 
     const registry = createPluginRegistry({
       storage: makeStorage,
@@ -270,72 +295,128 @@ export const PluginHostLive = Layer.effect(
       { readonly fingerprint: string; readonly attempt: number; readonly retryAt: number }
     >();
     const activeSources = new Map<string, ActivePluginSource>();
-    let pendingSync = Promise.resolve();
+    let activeSync: Promise<void> | undefined;
+    let cachedAgentTools: ReadonlyArray<RegisteredPluginAgentTool> = [];
+    const retryIsDue = () =>
+      [...activationFailures.values()].some((failure) => Date.now() >= failure.retryAt);
     const syncControl = () => {
-      const operation = pendingSync.then(async () => {
-        const control = currentControl();
-        const configuredReviewQueue = control.plugins[reviewQueueManifest.id];
-        const desired = [
-          {
-            id: reviewQueueManifest.id,
-            enabled: configuredReviewQueue?.enabled ?? true,
-            reloadToken: configuredReviewQueue?.reloadToken ?? "",
-            sourceRoot: reviewQueueSourceRoot(),
-            builtIn: true as const,
-          },
-          ...Object.entries(control.plugins)
-            .filter(([id, entry]) => id !== reviewQueueManifest.id && entry.sourceRoot)
-            .map(([id, entry]) => ({
-              id,
-              enabled: entry.enabled,
-              reloadToken: entry.reloadToken,
-              sourceRoot: entry.sourceRoot,
-              builtIn: false as const,
-            })),
-        ];
-        const desiredIds = new Set(desired.map((entry) => entry.id));
-        for (const pluginId of appliedControl.keys()) {
-          if (desiredIds.has(pluginId)) continue;
-          await registry.deactivate(pluginId);
-          activeSources.delete(pluginId);
-          appliedControl.delete(pluginId);
-          activationFailures.delete(pluginId);
-          removePluginSkills(config.baseDir, pluginId);
-        }
+      if (activeSync) return activeSync;
+      if (!controlChanged && !retryIsDue()) return Promise.resolve();
+      const operation = (async () => {
+        do {
+          const control = currentControl();
+          const configuredReviewQueue = control.plugins[reviewQueueManifest.id];
+          const desired = [
+            {
+              id: reviewQueueManifest.id,
+              enabled: configuredReviewQueue?.enabled ?? true,
+              reloadToken: configuredReviewQueue?.reloadToken ?? "",
+              sourceRoot: reviewQueueSourceRoot(),
+              builtIn: true as const,
+            },
+            ...Object.entries(control.plugins)
+              .filter(([id, entry]) => id !== reviewQueueManifest.id && entry.sourceRoot)
+              .map(([id, entry]) => ({
+                id,
+                enabled: entry.enabled,
+                reloadToken: entry.reloadToken,
+                sourceRoot: entry.sourceRoot,
+                builtIn: false as const,
+              })),
+          ];
+          const desiredIds = new Set(desired.map((entry) => entry.id));
+          for (const pluginId of appliedControl.keys()) {
+            if (desiredIds.has(pluginId)) continue;
+            await registry.deactivate(pluginId);
+            activeSources.delete(pluginId);
+            appliedControl.delete(pluginId);
+            activationFailures.delete(pluginId);
+            removePluginSkills(config.baseDir, pluginId);
+          }
 
-        for (const entry of desired) {
-          const fingerprint = JSON.stringify([
-            entry.enabled,
-            entry.reloadToken,
-            entry.sourceRoot ?? null,
-          ]);
-          if (appliedControl.get(entry.id) === fingerprint) continue;
-          const activationFailure = activationFailures.get(entry.id);
-          if (
-            activationFailure?.fingerprint === fingerprint &&
-            Date.now() < activationFailure.retryAt
-          ) {
-            continue;
-          }
-          if (!entry.enabled) {
-            await registry.deactivate(entry.id);
-            activeSources.delete(entry.id);
-            removePluginSkills(config.baseDir, entry.id);
-            appliedControl.set(entry.id, fingerprint);
-            activationFailures.delete(entry.id);
-            continue;
-          }
-          try {
-            if (entry.builtIn) {
-              if (entry.sourceRoot && entry.reloadToken) {
+          for (const entry of desired) {
+            const fingerprint = JSON.stringify([
+              entry.enabled,
+              entry.reloadToken,
+              entry.sourceRoot ?? null,
+            ]);
+            if (appliedControl.get(entry.id) === fingerprint) continue;
+            const activationFailure = activationFailures.get(entry.id);
+            if (
+              activationFailure?.fingerprint === fingerprint &&
+              Date.now() < activationFailure.retryAt
+            ) {
+              continue;
+            }
+            if (!entry.enabled) {
+              await registry.deactivate(entry.id);
+              activeSources.delete(entry.id);
+              removePluginSkills(config.baseDir, entry.id);
+              appliedControl.set(entry.id, fingerprint);
+              activationFailures.delete(entry.id);
+              continue;
+            }
+            try {
+              if (entry.builtIn) {
+                if (entry.sourceRoot && entry.reloadToken) {
+                  const manifest = readPluginManifest(entry.sourceRoot);
+                  if (manifest.id !== entry.id) {
+                    throw new Error(
+                      `Built-in plugin id ${entry.id} does not match manifest id ${manifest.id}.`,
+                    );
+                  }
+                  const plugin = await loadExternalPlugin(manifest, entry.reloadToken);
+                  const assets = pluginActivationAssets(manifest, entry.reloadToken);
+                  await registry.activate(
+                    {
+                      id: manifest.id,
+                      displayName: manifest.displayName,
+                      version: manifest.version,
+                      apiVersion: manifest.apiVersion,
+                      editable: true,
+                      ...(manifest.appEntry
+                        ? {
+                            app: manifest.appKey,
+                            appUrl: assets.appUrl!,
+                            ...(assets.appCssUrl ? { appCssUrl: assets.appCssUrl } : {}),
+                          }
+                        : {}),
+                    },
+                    plugin,
+                  );
+                  activeSources.set(entry.id, {
+                    id: entry.id,
+                    displayName: manifest.displayName,
+                    sourceRoot: manifest.sourceRoot,
+                    skillRoots: manifest.skillRoots,
+                    assetKey: assets.assetKey,
+                    ...(assets.appPath ? { appPath: assets.appPath } : {}),
+                    ...(assets.appCssPath ? { appCssPath: assets.appCssPath } : {}),
+                  });
+                } else {
+                  await registry.activate(
+                    { ...reviewQueueManifest, editable: entry.sourceRoot !== undefined },
+                    reviewQueuePlugin,
+                  );
+                  if (entry.sourceRoot) {
+                    activeSources.set(entry.id, {
+                      id: entry.id,
+                      displayName: reviewQueueManifest.displayName,
+                      sourceRoot: entry.sourceRoot,
+                    });
+                  }
+                }
+              } else {
+                if (!entry.sourceRoot) throw new Error(`Plugin source is missing: ${entry.id}`);
                 const manifest = readPluginManifest(entry.sourceRoot);
                 if (manifest.id !== entry.id) {
                   throw new Error(
-                    `Built-in plugin id ${entry.id} does not match manifest id ${manifest.id}.`,
+                    `Installed plugin id ${entry.id} does not match manifest id ${manifest.id}.`,
                   );
                 }
                 const plugin = await loadExternalPlugin(manifest, entry.reloadToken);
                 const assets = pluginActivationAssets(manifest, entry.reloadToken);
+                syncPluginSkills(config.baseDir, manifest.id, manifest.skillRoots);
                 await registry.activate(
                   {
                     id: manifest.id,
@@ -362,89 +443,58 @@ export const PluginHostLive = Layer.effect(
                   ...(assets.appPath ? { appPath: assets.appPath } : {}),
                   ...(assets.appCssPath ? { appCssPath: assets.appCssPath } : {}),
                 });
-              } else {
-                await registry.activate(
-                  { ...reviewQueueManifest, editable: entry.sourceRoot !== undefined },
-                  reviewQueuePlugin,
-                );
-                if (entry.sourceRoot) {
-                  activeSources.set(entry.id, {
-                    id: entry.id,
-                    displayName: reviewQueueManifest.displayName,
-                    sourceRoot: entry.sourceRoot,
-                  });
-                }
               }
-            } else {
-              if (!entry.sourceRoot) throw new Error(`Plugin source is missing: ${entry.id}`);
-              const manifest = readPluginManifest(entry.sourceRoot);
-              if (manifest.id !== entry.id) {
-                throw new Error(
-                  `Installed plugin id ${entry.id} does not match manifest id ${manifest.id}.`,
-                );
-              }
-              const plugin = await loadExternalPlugin(manifest, entry.reloadToken);
-              const assets = pluginActivationAssets(manifest, entry.reloadToken);
-              syncPluginSkills(config.baseDir, manifest.id, manifest.skillRoots);
-              await registry.activate(
-                {
-                  id: manifest.id,
-                  displayName: manifest.displayName,
-                  version: manifest.version,
-                  apiVersion: manifest.apiVersion,
-                  editable: true,
-                  ...(manifest.appEntry
-                    ? {
-                        app: manifest.appKey,
-                        appUrl: assets.appUrl!,
-                        ...(assets.appCssUrl ? { appCssUrl: assets.appCssUrl } : {}),
-                      }
-                    : {}),
-                },
-                plugin,
-              );
-              activeSources.set(entry.id, {
-                id: entry.id,
-                displayName: manifest.displayName,
-                sourceRoot: manifest.sourceRoot,
-                skillRoots: manifest.skillRoots,
-                assetKey: assets.assetKey,
-                ...(assets.appPath ? { appPath: assets.appPath } : {}),
-                ...(assets.appCssPath ? { appCssPath: assets.appCssPath } : {}),
+              appliedControl.set(entry.id, fingerprint);
+              activationFailures.delete(entry.id);
+            } catch (cause) {
+              const lastGenerationIsActive = registry
+                .list()
+                .some((plugin) => plugin.id === entry.id);
+              const previousFailure = activationFailures.get(entry.id);
+              const attempt =
+                previousFailure?.fingerprint === fingerprint ? previousFailure.attempt + 1 : 1;
+              activationFailures.set(entry.id, {
+                fingerprint,
+                attempt,
+                retryAt: Date.now() + Math.min(30_000, 500 * 2 ** (attempt - 1)),
               });
+              if (!lastGenerationIsActive) {
+                await registry.deactivate(entry.id);
+                activeSources.delete(entry.id);
+                removePluginSkills(config.baseDir, entry.id);
+                console.error(
+                  `Plugin activation failed for ${entry.id}; Synara will continue.`,
+                  cause,
+                );
+                continue;
+              }
+              const previousSkillRoots = activeSources.get(entry.id)?.skillRoots;
+              if (previousSkillRoots) {
+                syncPluginSkills(config.baseDir, entry.id, previousSkillRoots);
+              }
+              console.error(
+                `Plugin reload failed for ${entry.id}; the last active generation remains in use.`,
+                cause,
+              );
             }
-            appliedControl.set(entry.id, fingerprint);
-            activationFailures.delete(entry.id);
-          } catch (cause) {
-            const lastGenerationIsActive = registry.list().some((plugin) => plugin.id === entry.id);
-            const previousFailure = activationFailures.get(entry.id);
-            const attempt = previousFailure?.fingerprint === fingerprint ? previousFailure.attempt + 1 : 1;
-            activationFailures.set(entry.id, {
-              fingerprint,
-              attempt,
-              retryAt: Date.now() + Math.min(30_000, 500 * 2 ** (attempt - 1)),
-            });
-            if (!lastGenerationIsActive) {
-              await registry.deactivate(entry.id);
-              activeSources.delete(entry.id);
-              removePluginSkills(config.baseDir, entry.id);
-              console.error(`Plugin activation failed for ${entry.id}; Synara will continue.`, cause);
-              continue;
-            }
-            const previousSkillRoots = activeSources.get(entry.id)?.skillRoots;
-            if (previousSkillRoots) {
-              syncPluginSkills(config.baseDir, entry.id, previousSkillRoots);
-            }
-            console.error(
-              `Plugin reload failed for ${entry.id}; the last active generation remains in use.`,
-              cause,
-            );
           }
-        }
-      });
-      pendingSync = operation.then(
-        () => undefined,
-        () => undefined,
+        } while (controlChanged);
+      })()
+        .catch((cause) => {
+          controlChanged = true;
+          throw cause;
+        })
+        .finally(() => {
+          cachedAgentTools = registry.listAgentTools();
+        });
+      activeSync = operation;
+      void operation.then(
+        () => {
+          if (activeSync === operation) activeSync = undefined;
+        },
+        () => {
+          if (activeSync === operation) activeSync = undefined;
+        },
       );
       return operation;
     };
@@ -495,6 +545,38 @@ export const PluginHostLive = Layer.effect(
           },
           catch: (cause) =>
             cause instanceof Error ? cause : new Error("Plugin edit chat failed", { cause }),
+        }),
+      agentTools: () =>
+        Effect.tryPromise({
+          try: async () => {
+            await syncControl();
+            return cachedAgentTools;
+          },
+          catch: (cause) =>
+            cause instanceof Error
+              ? cause
+              : new Error("Plugin agent tool refresh failed", { cause }),
+        }),
+      callAgentTool: (input, authority) =>
+        Effect.tryPromise({
+          try: () => {
+            const tool = registry
+              .listAgentTools()
+              .find(
+                (candidate) =>
+                  candidate.pluginId === input.pluginId &&
+                  candidate.generation === input.generation &&
+                  candidate.id === input.toolId,
+              );
+            if (!tool) {
+              return Promise.reject(new Error(`Plugin agent tool is not active: ${input.toolId}`));
+            }
+            return runWithPluginInvocationAuthority({ access: tool.access, ...authority }, () =>
+              registry.callAgentTool({ ...input, signal: authority.signal }),
+            );
+          },
+          catch: (cause) =>
+            cause instanceof Error ? cause : new Error("Plugin agent tool call failed", { cause }),
         }),
       resolveAppAsset: (assetKey, fileName) =>
         Effect.tryPromise({

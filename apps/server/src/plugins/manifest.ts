@@ -8,7 +8,7 @@ export interface LocalPluginManifest {
   readonly id: string;
   readonly displayName: string;
   readonly version: string;
-  readonly apiVersion: 1;
+  readonly apiVersion: 1 | 2;
   readonly appKey: string;
   readonly sourceRoot: string;
   readonly serverEntry: string;
@@ -67,11 +67,16 @@ export function pluginAssetKey(pluginId: string): string {
 export function readPluginManifest(sourceRoot: string): LocalPluginManifest {
   const root = realpathSync(sourceRoot);
   const packageJsonPath = path.join(root, "package.json");
-  const packageJson = requireRecord(JSON.parse(readFileSync(packageJsonPath, "utf8")), "package.json");
+  const packageJson = requireRecord(
+    JSON.parse(readFileSync(packageJsonPath, "utf8")),
+    "package.json",
+  );
   const synara = requireRecord(packageJson.synara, "package.json synara field");
   const packageName = requireString(packageJson.name, "package.json name");
   const id = synara.id === undefined ? packageName : requireString(synara.id, "synara.id");
-  if (synara.apiVersion !== 1) throw new Error("synara.apiVersion must be 1.");
+  if (synara.apiVersion !== 1 && synara.apiVersion !== 2) {
+    throw new Error("synara.apiVersion must be 1 or 2.");
+  }
   const skills = synara.skills ?? [];
   if (!Array.isArray(skills)) throw new Error("synara.skills must be an array of paths.");
 
@@ -79,7 +84,7 @@ export function readPluginManifest(sourceRoot: string): LocalPluginManifest {
     id,
     displayName: requireString(synara.displayName, "synara.displayName"),
     version: requireString(packageJson.version, "package.json version"),
-    apiVersion: 1,
+    apiVersion: synara.apiVersion,
     appKey: pluginAppKey(id),
     sourceRoot: root,
     serverEntry: resolveEntry(root, synara.server, "synara.server", "file"),

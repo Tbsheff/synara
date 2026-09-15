@@ -19,7 +19,7 @@ export interface PluginManagementRecord {
   readonly id: string;
   readonly name: string;
   readonly version: string;
-  readonly apiVersion: 1;
+  readonly apiVersion: 1 | 2;
   readonly app: string | null;
   readonly enabled: boolean;
   readonly reloadToken: string;
@@ -32,7 +32,10 @@ function reviewQueueSourceRoot(cwd: string): string | null {
   if (!reviewQueueManifest.sourcePath) return null;
   return (
     findPluginSource(cwd, reviewQueueManifest.sourcePath) ??
-    findPluginSource(path.dirname(fileURLToPath(import.meta.url)), reviewQueueManifest.sourcePath) ??
+    findPluginSource(
+      path.dirname(fileURLToPath(import.meta.url)),
+      reviewQueueManifest.sourcePath,
+    ) ??
     null
   );
 }
@@ -87,7 +90,10 @@ export function listPluginRecords(baseDir: string, cwd = process.cwd()): PluginM
       });
     }
   }
-  return records.sort((left, right) => Number(right.builtIn) - Number(left.builtIn) || left.id.localeCompare(right.id));
+  return records.sort(
+    (left, right) =>
+      Number(right.builtIn) - Number(left.builtIn) || left.id.localeCompare(right.id),
+  );
 }
 
 export function resolvePluginRecord(
@@ -96,14 +102,20 @@ export function resolvePluginRecord(
   cwd = process.cwd(),
 ): PluginManagementRecord {
   const record = listPluginRecords(baseDir, cwd).find((candidate) => {
-    const shortId = candidate.id.split("/").at(-1)?.replace(/^synara-plugin-/, "");
+    const shortId = candidate.id
+      .split("/")
+      .at(-1)
+      ?.replace(/^synara-plugin-/, "");
     return candidate.id === input || candidate.app === input || shortId === input;
   });
   if (!record) throw new Error(`Unknown Synara plugin: ${input}`);
   return record;
 }
 
-export async function installPlugin(baseDir: string, sourcePath: string): Promise<{
+export async function installPlugin(
+  baseDir: string,
+  sourcePath: string,
+): Promise<{
   readonly record: PluginManagementRecord;
   readonly build: PluginBuildResult;
   readonly skills: ReadonlyArray<string>;
@@ -158,8 +170,7 @@ export function setPluginEnabled(
 ): PluginManagementRecord {
   const record = resolvePluginRecord(baseDir, input);
   if (record.error && enabled) throw new Error(record.error);
-  const skillSourceRoot =
-    enabled && !record.enabled && !record.builtIn ? record.sourceRoot : null;
+  const skillSourceRoot = enabled && !record.enabled && !record.builtIn ? record.sourceRoot : null;
   if (skillSourceRoot) {
     const manifest = readPluginManifest(skillSourceRoot);
     syncPluginSkills(baseDir, record.id, manifest.skillRoots);
@@ -180,7 +191,8 @@ export function uninstallPlugin(
 ): { readonly id: string; readonly sourceRoot: string | null; readonly removedSkills: boolean } {
   const record = resolvePluginRecord(baseDir, input);
   if (record.builtIn) throw new Error("Built-in Synara plugins cannot be uninstalled.");
-  if (!removePluginControl(baseDir, record.id)) throw new Error(`Plugin is not installed: ${record.id}`);
+  if (!removePluginControl(baseDir, record.id))
+    throw new Error(`Plugin is not installed: ${record.id}`);
   const removedSkills = removePluginSkills(baseDir, record.id);
   return { id: record.id, sourceRoot: record.sourceRoot, removedSkills };
 }
@@ -222,7 +234,10 @@ export async function watchPlugin(
   watch(sourceRoot, { recursive: true }, (_event, fileName) => {
     const relative = fileName?.toString() ?? "";
     const parts = relative.replaceAll("\\", "/").split("/");
-    if (!relative || parts.some((part) => part === "dist" || part === "node_modules" || part === ".git")) {
+    if (
+      !relative ||
+      parts.some((part) => part === "dist" || part === "node_modules" || part === ".git")
+    ) {
       return;
     }
     scheduleRebuild();

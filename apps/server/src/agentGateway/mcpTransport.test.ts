@@ -1,5 +1,9 @@
 import { assert, describe, it } from "@effect/vitest";
 import { ProjectId, ThreadId, TurnId, type OrchestrationThreadShell } from "@synara/contracts";
+import { createPluginRegistry, type JsonValue } from "@synara/plugin-sdk";
+import { reviewQueueContract } from "@synara/plugin-review-queue/contract";
+import { reviewQueueManifest } from "@synara/plugin-review-queue/manifest";
+import reviewQueuePlugin from "@synara/plugin-review-queue/server";
 import { Deferred, Effect, Fiber, Option } from "effect";
 
 import type { ProjectionSnapshotQueryShape } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
@@ -13,6 +17,7 @@ import { FALLBACK_OBJECT_DESCRIPTION } from "./sanitizeToolInputSchema.ts";
 import { countSchemaKeyOccurrences, isJsonRecord } from "./schemaTestUtils.ts";
 import { acquireAgentGatewaySessionLease, type AgentGatewaySessionLease } from "./sessionLease.ts";
 import type { ToolEntry } from "./toolRuntime.ts";
+import { makePluginAgentToolEntries, pluginAgentToolName } from "./pluginTools.ts";
 
 const NOW = "2026-07-22T03:00:00.000Z";
 
@@ -59,6 +64,7 @@ function makeThread(threadId: string): OrchestrationThreadShell {
 function makeTransport(input: {
   readonly tool: ToolEntry;
   readonly extraTools?: ReadonlyArray<ToolEntry>;
+  readonly dynamicTools?: () => Effect.Effect<ReadonlyArray<ToolEntry>, Error>;
   readonly threads: ReadonlyArray<OrchestrationThreadShell>;
 }) {
   const threads = new Map(input.threads.map((thread) => [String(thread.id), thread]));
@@ -136,6 +142,7 @@ function makeTransport(input: {
     credentials,
     snapshotQuery,
     tools: [input.tool, ...(input.extraTools ?? [])],
+    dynamicTools: input.dynamicTools,
     instructions: "test",
     requireThreadShell: (threadId) => {
       const thread = threads.get(threadId);
@@ -467,6 +474,246 @@ const findToolOrThrow = (tools: ReadonlyArray<unknown>, name: string): Record<st
   }
   return found;
 };
+
+describe("makeAgentGatewayMcpTransport dynamic plugin tools", () => {
+  it.effect("loads and invokes the Review Queue plugin tool through a thread credential", () =>
+    Effect.gen(function* () {
+      const values = new Map<string, JsonValue>();
+      const registry = createPluginRegistry({
+        host: {} as never,
+        storage: {
+          get: (key) => Promise.resolve(values.get(key)),
+          set: (key, value) => {
+            values.set(key, value);
+            return Promise.resolve();
+          },
+          delete: (key) => {
+            values.delete(key);
+            return Promise.resolve();
+          },
+          update: async (key, updateValue) => {
+            const next = await updateValue(values.get(key));
+            if (next === undefined) values.delete(key);
+            else values.set(key, next);
+            return next;
+          },
+        },
+      });
+      const generation = yield* Effect.promise(() =>
+        registry.activate(reviewQueueManifest, reviewQueuePlugin),
+      );
+      const registeredTool = registry.listAgentTools()[0];
+      if (!registeredTool) throw new Error("Expected Review Queue to register an agent tool.");
+      const toolName = pluginAgentToolName(registeredTool);
+      const transport = makeTransport({
+        threads: [makeThread("thread-review-queue")],
+        tool: {
+          definition: {
+            name: "built_in",
+            description: "built in",
+            inputSchema: { type: "object" },
+          },
+          requiredCapability: "thread:read",
+          handler: () => Effect.succeed({ content: [{ type: "text" as const, text: "built in" }] }),
+        },
+        dynamicTools: () =>
+          Effect.succeed(
+            makePluginAgentToolEntries(registry.listAgentTools(), (input, _context, signal) =>
+              Effect.tryPromise(() => registry.callAgentTool({ ...input, signal })),
+            ),
+          ),
+      });
+
+      const listed = yield* post(transport, "token-1", {
+        jsonrpc: "2.0",
+        id: "list-review-queue",
+        method: "tools/list",
+      });
+      if (!isJsonRecord(listed.body) || !isJsonRecord(listed.body.result)) {
+        throw new Error("Expected Review Queue tools/list result.");
+      }
+      findToolOrThrow(listed.body.result.tools as ReadonlyArray<unknown>, toolName);
+
+      const invalid = yield* post(transport, "token-1", {
+        jsonrpc: "2.0",
+        id: "invalid-review",
+        method: "tools/call",
+        params: { name: toolName, arguments: { title: 42 } },
+      });
+      if (!isJsonRecord(invalid.body) || !isJsonRecord(invalid.body.result)) {
+        throw new Error("Expected invalid Review Queue call result.");
+      }
+      assert.equal(invalid.body.result.isError, true);
+      assert.equal(values.has("items"), false);
+
+      const called = yield* post(transport, "token-1", {
+        jsonrpc: "2.0",
+        id: "add-review",
+        method: "tools/call",
+        params: {
+          name: toolName,
+          arguments: {
+            projectId: "project-review",
+            title: "Proof review",
+            prompt: "Review the plugin tool path.",
+          },
+        },
+      });
+      assert.equal(called.status, 200);
+
+      const queue = yield* Effect.promise(() =>
+        registry.call({
+          pluginId: reviewQueueManifest.id,
+          generation,
+          method: "list",
+          input: {},
+        }),
+      );
+      const parsedQueue = reviewQueueContract.list.output.parse(queue);
+      assert.equal(parsedQueue.items.length, 1);
+      assert.equal(parsedQueue.items[0]?.title, "Proof review");
+      assert.equal(parsedQueue.items[0]?.status, "queued");
+    }),
+  );
+
+  it.effect("resolves dynamic tools for each list and call request", () =>
+    Effect.gen(function* () {
+      let dynamicTools: ReadonlyArray<ToolEntry> = [];
+      let dynamicLoads = 0;
+      let calls = 0;
+      const transport = makeTransport({
+        threads: [makeThread("thread-dynamic")],
+        tool: {
+          definition: {
+            name: "built_in",
+            description: "built in",
+            inputSchema: { type: "object" },
+          },
+          requiredCapability: "thread:read",
+          handler: () => Effect.succeed({ content: [{ type: "text" as const, text: "built in" }] }),
+        },
+        dynamicTools: () => {
+          dynamicLoads += 1;
+          return Effect.succeed(dynamicTools);
+        },
+      });
+
+      const first = yield* post(transport, "token-1", {
+        jsonrpc: "2.0",
+        id: "list-before",
+        method: "tools/list",
+      });
+      if (!isJsonRecord(first.body) || !isJsonRecord(first.body.result)) {
+        throw new Error("Expected the first tools/list result.");
+      }
+      assert.deepEqual(
+        (first.body.result.tools as ReadonlyArray<Record<string, unknown>>).map(
+          (tool) => tool.name,
+        ),
+        ["built_in"],
+      );
+
+      dynamicTools = [
+        {
+          definition: {
+            name: "plugin_acme_echo",
+            description: "dynamic",
+            inputSchema: { type: "object" },
+          },
+          requiredCapability: "thread:write",
+          requiresActiveTurn: true,
+          handler: () => {
+            calls += 1;
+            return Effect.succeed({ content: [{ type: "text" as const, text: "dynamic" }] });
+          },
+        },
+      ];
+
+      const second = yield* post(transport, "token-1", {
+        jsonrpc: "2.0",
+        id: "list-after",
+        method: "tools/list",
+      });
+      if (!isJsonRecord(second.body) || !isJsonRecord(second.body.result)) {
+        throw new Error("Expected the second tools/list result.");
+      }
+      assert.deepEqual(
+        (second.body.result.tools as ReadonlyArray<Record<string, unknown>>).map(
+          (tool) => tool.name,
+        ),
+        ["built_in", "plugin_acme_echo"],
+      );
+
+      const called = yield* post(transport, "token-1", {
+        jsonrpc: "2.0",
+        id: "call-dynamic",
+        method: "tools/call",
+        params: { name: "plugin_acme_echo", arguments: {} },
+      });
+      assert.equal(called.status, 200);
+      assert.equal(calls, 1);
+
+      const builtIn = yield* post(transport, "token-1", {
+        jsonrpc: "2.0",
+        id: "call-built-in",
+        method: "tools/call",
+        params: { name: "built_in", arguments: {} },
+      });
+      assert.equal(builtIn.status, 200);
+      assert.equal(dynamicLoads, 3);
+    }),
+  );
+
+  it.effect("keeps built-in and last-known plugin tools when catalog refresh fails", () =>
+    Effect.gen(function* () {
+      const pluginTool: ToolEntry = {
+        definition: {
+          name: "plugin_acme_echo",
+          description: "dynamic",
+          inputSchema: { type: "object" },
+        },
+        requiredCapability: "thread:read",
+        handler: () => Effect.succeed({ content: [{ type: "text" as const, text: "dynamic" }] }),
+      };
+      let shouldFail = false;
+      const transport = makeTransport({
+        threads: [makeThread("thread-dynamic-failure")],
+        tool: {
+          definition: {
+            name: "built_in",
+            description: "built in",
+            inputSchema: { type: "object" },
+          },
+          requiredCapability: "thread:read",
+          handler: () => Effect.succeed({ content: [{ type: "text" as const, text: "built in" }] }),
+        },
+        dynamicTools: () =>
+          shouldFail ? Effect.fail(new Error("catalog unavailable")) : Effect.succeed([pluginTool]),
+      });
+
+      yield* post(transport, "token-1", {
+        jsonrpc: "2.0",
+        id: "prime-catalog",
+        method: "tools/list",
+      });
+      shouldFail = true;
+      const response = yield* post(transport, "token-1", {
+        jsonrpc: "2.0",
+        id: "failed-refresh",
+        method: "tools/list",
+      });
+      if (!isJsonRecord(response.body) || !isJsonRecord(response.body.result)) {
+        throw new Error("Expected cached tools/list result.");
+      }
+      assert.deepEqual(
+        (response.body.result.tools as ReadonlyArray<Record<string, unknown>>).map(
+          (tool) => tool.name,
+        ),
+        ["built_in", "plugin_acme_echo"],
+      );
+    }),
+  );
+});
 
 describe("makeAgentGatewayMcpTransport tools/list schema sanitization", () => {
   it.effect("serves sanitized schemas while keeping stored definitions dirty", () =>

@@ -1,6 +1,6 @@
 # Synara plugin SDK
 
-This package defines the public boundary for trusted Synara app plugins. A plugin can register validated server RPC methods, store namespaced JSON data, add host-owned UI panels, and start threads through Synara's normal orchestration path.
+This package defines the public boundary for trusted Synara app plugins. A plugin can register validated server RPC methods and chat tools, store namespaced JSON data, add host-owned UI panels, and start threads through Synara's normal orchestration path.
 
 The built-in example is `@synara/plugin-review-queue`. Synara can also build and load trusted plugin packages from local directories. A package can ship a server entry, a web app entry, and one or more skills. Synara keeps React and the plugin SDK shared, so a plugin app does not load its own React copy.
 
@@ -32,7 +32,7 @@ An external package declares its entries in `package.json`:
   "type": "module",
   "synara": {
     "displayName": "Notes",
-    "apiVersion": 1,
+    "apiVersion": 2,
     "server": "./src/server.ts",
     "app": "./src/app.tsx",
     "skills": ["./skills"]
@@ -53,11 +53,20 @@ const echo = {
 };
 
 export default definePlugin((synara) => {
-  synara.rpc.register("echo", echo, async ({ value }) => ({ value }));
+  const runEcho = async ({ value }: { readonly value: string }) => ({ value });
+  synara.rpc.register("echo", echo, runEcho);
+  synara.agents.registerTool({
+    id: "echo",
+    title: "Echo value",
+    description: "Echo a value through this plugin.",
+    access: "read",
+    contract: echo,
+    execute: runEcho,
+  });
 });
 ```
 
-RPC inputs and outputs are checked at run time. Storage is scoped to the package ID. Use `storage.update` for read-modify-write work so calls from the same process cannot overwrite each other.
+RPC and chat-tool inputs and outputs are checked at run time. A read tool uses the caller's `thread:read` authority. A write tool uses `thread:write` and rechecks the exact calling turn before each host write. The MCP endpoint uses the current handler for a known tool name, but an active provider session can need a restart to discover a new or renamed tool. Storage is scoped to the package ID. Use `storage.update` for read-modify-write work so calls from the same process cannot overwrite each other.
 
 ## App entry
 
@@ -77,4 +86,4 @@ Panels get public plugin context and RPC hooks. They must not import Synara stor
 
 Call `usePluginRuntime().editPlugin({ plugin, projectId })` to start an edit chat for the installed source package. The host starts a normal full-access thread, loads the `synara-plugin-authoring` skill, and includes the exact source root in the first message. The agent edits with its usual workspace tools; the SDK does not add another file-write path.
 
-Plugins run as trusted code in the server process and web app. This API is an ownership boundary, not a security sandbox. Remote install, marketplace publishing, agent tools, event hooks, provider adapters, and untrusted plugin isolation are not in this version.
+Plugins run as trusted code in the server process and web app. This API is an ownership boundary, not a security sandbox. Remote install, marketplace publishing, event hooks, provider adapters, and untrusted plugin isolation are not in this version.

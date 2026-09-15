@@ -3,14 +3,20 @@ export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue
 
 export interface PluginSchema<Value> {
   readonly parse: (input: unknown, path?: string) => Value;
+  readonly jsonSchema: Readonly<Record<string, JsonValue>>;
+  readonly isOptional?: boolean;
 }
 
-export function schema<Value>(parse: PluginSchema<Value>["parse"]): PluginSchema<Value> {
-  return { parse };
+export function schema<Value>(
+  parse: PluginSchema<Value>["parse"],
+  jsonSchema: Readonly<Record<string, JsonValue>> = {},
+): PluginSchema<Value> {
+  return { parse, jsonSchema };
 }
 
 export function string(): PluginSchema<string> {
   return {
+    jsonSchema: { type: "string" },
     parse(input, path = "value") {
       if (typeof input !== "string") throw new Error(`${path} must be a string.`);
       return input;
@@ -18,8 +24,15 @@ export function string(): PluginSchema<string> {
   };
 }
 
-export function nonEmptyString(options: { readonly maxLength?: number } = {}): PluginSchema<string> {
+export function nonEmptyString(
+  options: { readonly maxLength?: number } = {},
+): PluginSchema<string> {
   return {
+    jsonSchema: {
+      type: "string",
+      minLength: 1,
+      ...(options.maxLength === undefined ? {} : { maxLength: options.maxLength }),
+    },
     parse(input, path = "value") {
       if (typeof input !== "string" || input.trim().length === 0) {
         throw new Error(`${path} must be a non-empty string.`);
@@ -35,6 +48,8 @@ export function nonEmptyString(options: { readonly maxLength?: number } = {}): P
 
 export function optional<Value>(schema: PluginSchema<Value>): PluginSchema<Value | undefined> {
   return {
+    jsonSchema: schema.jsonSchema,
+    isOptional: true,
     parse(input, path) {
       return input === undefined ? undefined : schema.parse(input, path);
     },
@@ -43,6 +58,7 @@ export function optional<Value>(schema: PluginSchema<Value>): PluginSchema<Value
 
 export function literal<const Value extends JsonPrimitive>(value: Value): PluginSchema<Value> {
   return {
+    jsonSchema: { const: value },
     parse(input, path = "value") {
       if (input !== value) throw new Error(`${path} must be ${JSON.stringify(value)}.`);
       return value;
@@ -52,6 +68,7 @@ export function literal<const Value extends JsonPrimitive>(value: Value): Plugin
 
 export function array<Value>(schema: PluginSchema<Value>): PluginSchema<Value[]> {
   return {
+    jsonSchema: { type: "array", items: schema.jsonSchema },
     parse(input, path = "value") {
       if (!Array.isArray(input)) throw new Error(`${path} must be an array.`);
       return input.map((entry, index) => schema.parse(entry, `${path}[${index}]`));
@@ -61,15 +78,30 @@ export function array<Value>(schema: PluginSchema<Value>): PluginSchema<Value[]>
 
 export function object<Shape extends Readonly<Record<string, PluginSchema<unknown>>>>(
   shape: Shape,
-): PluginSchema<{ [Key in keyof Shape]: Shape[Key] extends PluginSchema<infer Value> ? Value : never }> {
+): PluginSchema<{
+  [Key in keyof Shape]: Shape[Key] extends PluginSchema<infer Value> ? Value : never;
+}> {
   return {
+    jsonSchema: {
+      type: "object",
+      properties: Object.fromEntries(
+        Object.entries(shape).map(([key, schema]) => [key, schema.jsonSchema]),
+      ),
+      required: Object.entries(shape)
+        .filter(([, schema]) => schema.isOptional !== true)
+        .map(([key]) => key),
+      additionalProperties: false,
+    },
     parse(input, path = "value") {
       if (typeof input !== "object" || input === null || Array.isArray(input)) {
         throw new Error(`${path} must be an object.`);
       }
       const source = input as Record<string, unknown>;
       return Object.fromEntries(
-        Object.entries(shape).map(([key, schema]) => [key, schema.parse(source[key], `${path}.${key}`)]),
+        Object.entries(shape).map(([key, schema]) => [
+          key,
+          schema.parse(source[key], `${path}.${key}`),
+        ]),
       ) as { [Key in keyof Shape]: Shape[Key] extends PluginSchema<infer Value> ? Value : never };
     },
   };
@@ -110,9 +142,30 @@ export interface PluginCall {
   readonly pluginId: string;
   readonly generation: number;
   readonly host: PluginHostApi;
+  readonly signal: AbortSignal;
 }
 
-type RpcHandler<Input, Output> = (input: Input, call: PluginCall) => Promise<Output>;
+export type PluginHandler<Input, Output> = (input: Input, call: PluginCall) => Promise<Output>;
+
+export type PluginAgentToolAccess = "read" | "write";
+
+export interface PluginAgentToolRegistration<Input, Output> {
+  readonly id: string;
+  readonly title?: string;
+  readonly description: string;
+  readonly contract: PluginRpcContract<Input, Output>;
+  readonly access: PluginAgentToolAccess;
+  readonly execute: PluginHandler<Input, Output>;
+}
+
+export type RegisteredPluginAgentTool = Omit<
+  PluginAgentToolRegistration<unknown, unknown>,
+  "contract" | "execute"
+> & {
+  readonly pluginId: string;
+  readonly generation: number;
+  readonly inputSchema: Readonly<Record<string, JsonValue>>;
+};
 
 export interface SynaraPluginApi {
   readonly storage: PluginKvStorage;
@@ -120,7 +173,12 @@ export interface SynaraPluginApi {
     readonly register: <Input, Output>(
       method: string,
       contract: PluginRpcContract<Input, Output>,
-      handler: RpcHandler<Input, Output>,
+      handler: PluginHandler<Input, Output>,
+    ) => void;
+  };
+  readonly agents: {
+    readonly registerTool: <Input, Output>(
+      registration: PluginAgentToolRegistration<Input, Output>,
     ) => void;
   };
 }
@@ -135,7 +193,7 @@ export interface SynaraPluginManifest {
   readonly id: string;
   readonly displayName: string;
   readonly version: string;
-  readonly apiVersion: 1;
+  readonly apiVersion: 1 | 2;
   readonly app?: string;
   readonly appUrl?: string;
   readonly appCssUrl?: string;
@@ -145,13 +203,18 @@ export interface SynaraPluginManifest {
 
 interface RegisteredMethod {
   readonly contract: PluginRpcContract<unknown, unknown>;
-  readonly handler: RpcHandler<unknown, unknown>;
+  readonly handler: PluginHandler<unknown, unknown>;
 }
+
+type PendingAgentTool = PluginAgentToolRegistration<unknown, unknown>;
+
+interface RegisteredAgentTool extends PendingAgentTool, RegisteredPluginAgentTool {}
 
 interface ActivePlugin {
   readonly manifest: SynaraPluginManifest;
   readonly generation: number;
   readonly methods: ReadonlyMap<string, RegisteredMethod>;
+  readonly agentTools: ReadonlyMap<string, RegisteredAgentTool>;
   accepting: boolean;
   inFlight: number;
   readonly drained: Set<() => void>;
@@ -167,39 +230,171 @@ export interface PluginRegistry {
     readonly method: string;
     readonly input: unknown;
   }) => Promise<JsonValue>;
+  readonly listAgentTools: () => ReadonlyArray<RegisteredPluginAgentTool>;
+  readonly callAgentTool: (input: {
+    readonly pluginId: string;
+    readonly generation: number;
+    readonly toolId: string;
+    readonly input: unknown;
+    readonly host?: PluginHostApi;
+    readonly signal?: AbortSignal;
+  }) => Promise<JsonValue>;
 }
+
+const PLUGIN_CONTRIBUTION_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 
 export function createPluginRegistry(input: {
   readonly host: PluginHostApi | ((pluginId: string) => PluginHostApi);
   readonly storage: PluginKvStorage | ((pluginId: string) => PluginKvStorage);
+  readonly drainTimeoutMs?: number;
 }): PluginRegistry {
   const active = new Map<string, ActivePlugin>();
   let nextGeneration = 0;
 
+  const invoke = async (
+    plugin: ActivePlugin,
+    contract: PluginRpcContract<unknown, unknown>,
+    handler: PluginHandler<unknown, unknown>,
+    rawInput: unknown,
+    outputName: string,
+    invocation?: { readonly host?: PluginHostApi; readonly signal?: AbortSignal },
+  ): Promise<JsonValue> => {
+    const parsedInput = contract.input.parse(rawInput, "input");
+    const host =
+      invocation?.host ??
+      (typeof input.host === "function" ? input.host(plugin.manifest.id) : input.host);
+    const signal = invocation?.signal ?? new AbortController().signal;
+    signal.throwIfAborted();
+    plugin.inFlight += 1;
+    try {
+      const output = await handler(parsedInput, {
+        pluginId: plugin.manifest.id,
+        generation: plugin.generation,
+        host,
+        signal,
+      });
+      const parsedOutput = contract.output.parse(output, "output");
+      const serialized = JSON.stringify(parsedOutput);
+      if (serialized === undefined) throw new Error(`${outputName} must be JSON serializable.`);
+      return JSON.parse(serialized) as JsonValue;
+    } finally {
+      plugin.inFlight -= 1;
+      if (plugin.inFlight === 0) {
+        for (const resolve of plugin.drained) resolve();
+        plugin.drained.clear();
+      }
+    }
+  };
+
+  const waitForDrain = async (plugin: ActivePlugin): Promise<void> => {
+    if (plugin.inFlight === 0) return;
+    const timeoutMs = input.drainTimeoutMs ?? 30_000;
+    await new Promise<void>((resolve) => {
+      const timeout = setTimeout(() => {
+        plugin.drained.delete(onDrained);
+        resolve();
+      }, timeoutMs);
+      const onDrained = () => {
+        clearTimeout(timeout);
+        resolve();
+      };
+      plugin.drained.add(onDrained);
+    });
+  };
+
   return {
     async activate(manifest, plugin) {
       const methods = new Map<string, RegisteredMethod>();
+      const agentTools = new Map<string, PendingAgentTool>();
       const register: SynaraPluginApi["rpc"]["register"] = (method, contract, handler) => {
         if (methods.has(method)) throw new Error(`Duplicate plugin RPC method: ${method}`);
         methods.set(method, {
           contract: contract as PluginRpcContract<unknown, unknown>,
-          handler: handler as RpcHandler<unknown, unknown>,
+          handler: handler as PluginHandler<unknown, unknown>,
         });
       };
-      const storage = typeof input.storage === "function" ? input.storage(manifest.id) : input.storage;
-      plugin({ storage, rpc: { register } });
+      const registerTool: SynaraPluginApi["agents"]["registerTool"] = (registration) => {
+        if (manifest.apiVersion < 2) {
+          throw new Error("Plugin agent tools require Synara API version 2.");
+        }
+        if (!PLUGIN_CONTRIBUTION_ID_PATTERN.test(registration.id)) {
+          throw new Error(
+            `Plugin agent tool id must match ${PLUGIN_CONTRIBUTION_ID_PATTERN}: ${registration.id}`,
+          );
+        }
+        if (agentTools.has(registration.id)) {
+          throw new Error(`Duplicate plugin agent tool: ${registration.id}`);
+        }
+        if (
+          typeof registration.description !== "string" ||
+          registration.description.trim() === ""
+        ) {
+          throw new Error(
+            `Plugin agent tool description must be a non-empty string: ${registration.id}`,
+          );
+        }
+        if (
+          registration.title !== undefined &&
+          (typeof registration.title !== "string" || registration.title.trim() === "")
+        ) {
+          throw new Error(`Plugin agent tool title must be a non-empty string: ${registration.id}`);
+        }
+        if (registration.access !== "read" && registration.access !== "write") {
+          throw new Error(`Plugin agent tool access must be read or write: ${registration.id}`);
+        }
+        if (
+          typeof registration.contract?.input?.parse !== "function" ||
+          typeof registration.contract?.output?.parse !== "function" ||
+          typeof registration.execute !== "function"
+        ) {
+          throw new Error(
+            `Plugin agent tool contract and execute handler are required: ${registration.id}`,
+          );
+        }
+        let inputSchema: Readonly<Record<string, JsonValue>>;
+        try {
+          const serializedSchema = JSON.stringify(registration.contract.input.jsonSchema);
+          if (serializedSchema === undefined) throw new Error("Schema is not JSON serializable.");
+          const parsedSchema = JSON.parse(serializedSchema) as unknown;
+          if (
+            typeof parsedSchema !== "object" ||
+            parsedSchema === null ||
+            Array.isArray(parsedSchema)
+          ) {
+            throw new Error("Schema root must be an object.");
+          }
+          inputSchema = parsedSchema as Readonly<Record<string, JsonValue>>;
+        } catch (cause) {
+          throw new Error(`Plugin agent tool input schema is invalid: ${registration.id}`, {
+            cause,
+          });
+        }
+        agentTools.set(registration.id, {
+          id: registration.id,
+          ...(registration.title === undefined ? {} : { title: registration.title }),
+          description: registration.description,
+          inputSchema,
+          access: registration.access,
+          contract: registration.contract as PluginRpcContract<unknown, unknown>,
+          execute: registration.execute as PluginHandler<unknown, unknown>,
+        });
+      };
+      const storage =
+        typeof input.storage === "function" ? input.storage(manifest.id) : input.storage;
+      plugin({ storage, rpc: { register }, agents: { registerTool } });
       const generation = (nextGeneration += 1);
       const previous = active.get(manifest.id);
       if (previous) {
         previous.accepting = false;
-        if (previous.inFlight > 0) {
-          await new Promise<void>((resolve) => previous.drained.add(resolve));
-        }
+        await waitForDrain(previous);
       }
       active.set(manifest.id, {
         manifest,
         generation,
         methods,
+        agentTools: new Map(
+          [...agentTools].map(([id, tool]) => [id, { ...tool, pluginId: manifest.id, generation }]),
+        ),
         accepting: true,
         inFlight: 0,
         drained: new Set(),
@@ -210,13 +405,20 @@ export function createPluginRegistry(input: {
       const plugin = active.get(pluginId);
       if (!plugin) return false;
       plugin.accepting = false;
-      if (plugin.inFlight > 0) {
-        await new Promise<void>((resolve) => plugin.drained.add(resolve));
-      }
+      await waitForDrain(plugin);
       return active.get(pluginId) === plugin && active.delete(pluginId);
     },
     list() {
       return [...active.values()].map(({ manifest, generation }) => ({ ...manifest, generation }));
+    },
+    listAgentTools() {
+      return [...active.values()].flatMap((plugin) =>
+        plugin.accepting
+          ? [...plugin.agentTools.values()].map(
+              ({ contract: _contract, execute: _execute, ...tool }) => tool,
+            )
+          : [],
+      );
     },
     async call(callInput) {
       const plugin = active.get(callInput.pluginId);
@@ -226,26 +428,27 @@ export function createPluginRegistry(input: {
       }
       const method = plugin.methods.get(callInput.method);
       if (!method) throw new Error(`Plugin RPC method is not registered: ${callInput.method}`);
-      const parsedInput = method.contract.input.parse(callInput.input, "input");
-      const host = typeof input.host === "function" ? input.host(callInput.pluginId) : input.host;
-      plugin.inFlight += 1;
-      try {
-        const output = await method.handler(parsedInput, {
-          pluginId: callInput.pluginId,
-          generation: callInput.generation,
-          host,
-        });
-        const parsedOutput = method.contract.output.parse(output, "output");
-        const serialized = JSON.stringify(parsedOutput);
-        if (serialized === undefined) throw new Error("Plugin RPC output must be JSON serializable.");
-        return JSON.parse(serialized) as JsonValue;
-      } finally {
-        plugin.inFlight -= 1;
-        if (plugin.inFlight === 0) {
-          for (const resolve of plugin.drained) resolve();
-          plugin.drained.clear();
-        }
+      return invoke(plugin, method.contract, method.handler, callInput.input, "Plugin RPC output");
+    },
+    async callAgentTool(callInput) {
+      const plugin = active.get(callInput.pluginId);
+      if (!plugin) throw new Error(`Plugin is not active: ${callInput.pluginId}`);
+      if (!plugin.accepting || plugin.generation !== callInput.generation) {
+        throw new Error(`Plugin generation is stale: ${callInput.pluginId}`);
       }
+      const tool = plugin.agentTools.get(callInput.toolId);
+      if (!tool) throw new Error(`Plugin agent tool is not registered: ${callInput.toolId}`);
+      return invoke(
+        plugin,
+        tool.contract,
+        tool.execute,
+        callInput.input,
+        "Plugin agent tool output",
+        {
+          ...(callInput.host === undefined ? {} : { host: callInput.host }),
+          ...(callInput.signal === undefined ? {} : { signal: callInput.signal }),
+        },
+      );
     },
   };
 }

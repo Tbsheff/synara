@@ -35,7 +35,7 @@ The package manifest must contain a `synara` block. The scaffold supplies the su
   "type": "module",
   "synara": {
     "displayName": "Example",
-    "apiVersion": 1,
+    "apiVersion": 2,
     "server": "./src/server.ts",
     "app": "./src/app.tsx",
     "skills": ["./skills"]
@@ -46,6 +46,8 @@ The package manifest must contain a `synara` block. The scaffold supplies the su
 Edit only when `sourceRoot` points to a local directory. Keep server behavior behind `@synara/plugin-sdk`, app behavior behind `@synara/plugin-sdk/app`, and shared transport shapes in the plugin contract. Do not import Synara's stores, database tables, routes, or internal services from a plugin.
 
 Parse plugin input at the RPC boundary. Use plugin-owned storage for plugin state and `storage.update` for read-modify-write work. Start work through the public host API so normal Synara authority, persistence, and orchestration still apply.
+
+Register a chat tool with `synara.agents.registerTool`. Give it a stable lowercase ID, the same checked contract used by RPC, and an `access` value of `read` or `write`. The SDK derives the advertised JSON input schema from the contract. Reuse one handler when the app and chat perform the same action. Synara checks the plugin contract again at invocation. Write tools also require the calling chat's exact active turn and `thread:write` authority.
 
 After an edit, run the plugin's focused tests. Build and ask the active host to load the changed server and app entries:
 

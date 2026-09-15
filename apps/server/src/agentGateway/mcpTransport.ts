@@ -63,12 +63,46 @@ export function makeAgentGatewayMcpTransport(input: {
   readonly credentials: AgentGatewayCredentialsShape;
   readonly snapshotQuery: ProjectionSnapshotQueryShape;
   readonly tools: ReadonlyArray<ToolEntry>;
+  readonly dynamicTools?: () => Effect.Effect<ReadonlyArray<ToolEntry>, Error>;
   readonly instructions: string;
   readonly requireThreadShell: (
     threadId: string,
   ) => Effect.Effect<OrchestrationThreadShell, unknown>;
 }): AgentGatewayShape["handleMcpPost"] {
-  const toolsByName = new Map(input.tools.map((tool) => [tool.definition.name, tool]));
+  const staticToolsByName = new Map<string, ToolEntry>();
+  for (const tool of input.tools) {
+    if (staticToolsByName.has(tool.definition.name)) {
+      throw new Error(`Duplicate agent gateway tool name: ${tool.definition.name}`);
+    }
+    staticToolsByName.set(tool.definition.name, tool);
+  }
+  const emptyDynamicCatalog = {
+    tools: [] as ReadonlyArray<ToolEntry>,
+    toolsByName: new Map<string, ToolEntry>(),
+  };
+  let cachedDynamicCatalog = emptyDynamicCatalog;
+  const indexDynamicTools = (dynamicTools: ReadonlyArray<ToolEntry>) =>
+    Effect.gen(function* () {
+      const toolsByName = new Map<string, ToolEntry>();
+      for (const tool of dynamicTools) {
+        if (staticToolsByName.has(tool.definition.name) || toolsByName.has(tool.definition.name)) {
+          return yield* Effect.fail(
+            new Error(`Duplicate agent gateway tool name: ${tool.definition.name}`),
+          );
+        }
+        toolsByName.set(tool.definition.name, tool);
+      }
+      return { tools: dynamicTools, toolsByName };
+    });
+  const resolveDynamicTools = () => {
+    if (!input.dynamicTools) return Effect.succeed(emptyDynamicCatalog);
+    return input.dynamicTools().pipe(
+      Effect.timeout("2 seconds"),
+      Effect.flatMap(indexDynamicTools),
+      Effect.tap((catalog) => Effect.sync(() => (cachedDynamicCatalog = catalog))),
+      Effect.catch(() => Effect.succeed(cachedDynamicCatalog)),
+    );
+  };
   const handleRequest = (request: JsonRpcRequest, context: Omit<ToolContext, "jsonRpcRequestId">) =>
     Effect.gen(function* () {
       switch (request.method) {
@@ -83,9 +117,11 @@ export function makeAgentGatewayMcpTransport(input: {
           );
         case "ping":
           return jsonRpcResult(request.id, {});
-        case "tools/list":
+        case "tools/list": {
+          const { tools: dynamicTools } = yield* resolveDynamicTools();
+          const tools = [...input.tools, ...dynamicTools];
           return jsonRpcResult(request.id, {
-            tools: input.tools.map((tool) => ({
+            tools: tools.map((tool) => ({
               ...tool.definition,
               // SAFETY: ToolEntry.inputSchema is typed Record<string, unknown>; the sanitizer
               // returns a fresh object for object input, so this restores the static type.
@@ -95,12 +131,14 @@ export function makeAgentGatewayMcpTransport(input: {
               >,
             })),
           });
+        }
         case "tools/call": {
           const toolName = request.params.name;
           if (typeof toolName !== "string") {
             return jsonRpcError(request.id, JSON_RPC_INVALID_PARAMS, "Missing tool name.");
           }
-          const tool = toolsByName.get(toolName);
+          const staticTool = staticToolsByName.get(toolName);
+          const tool = staticTool ?? (yield* resolveDynamicTools()).toolsByName.get(toolName);
           if (!tool) {
             return jsonRpcError(request.id, JSON_RPC_INVALID_PARAMS, `Unknown tool "${toolName}".`);
           }

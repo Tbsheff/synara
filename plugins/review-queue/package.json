@@ -3,13 +3,6 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "synara": {
-    "id": "@synara/plugin-review-queue",
-    "displayName": "Review Queue",
-    "apiVersion": 1,
-    "server": "./src/server.ts",
-    "app": "./src/app.tsx"
-  },
   "exports": {
     "./manifest": "./src/manifest.ts",
     "./contract": "./src/contract.ts",
@@ -28,5 +21,12 @@
     "@types/react": "^19.0.0",
     "typescript": "catalog:",
     "vitest": "catalog:"
+  },
+  "synara": {
+    "id": "@synara/plugin-review-queue",
+    "displayName": "Review Queue",
+    "apiVersion": 2,
+    "server": "./src/server.ts",
+    "app": "./src/app.tsx"
   }
 }

@@ -6,7 +6,7 @@ export const SynaraPluginDescriptor = Schema.Struct({
   id: TrimmedNonEmptyString,
   displayName: TrimmedNonEmptyString,
   version: TrimmedNonEmptyString,
-  apiVersion: Schema.Literal(1),
+  apiVersion: Schema.Literal(1, 2),
   generation: Schema.Int.check(Schema.isGreaterThan(0)),
   app: Schema.optional(TrimmedNonEmptyString),
   appUrl: Schema.optional(TrimmedNonEmptyString),

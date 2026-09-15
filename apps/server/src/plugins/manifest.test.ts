@@ -12,7 +12,10 @@ function makePlugin(packageJson: unknown): string {
   mkdirSync(path.join(root, "skills", "example"), { recursive: true });
   writeFileSync(path.join(root, "src", "server.ts"), "export default () => {}\n");
   writeFileSync(path.join(root, "src", "app.tsx"), "export default () => {}\n");
-  writeFileSync(path.join(root, "skills", "example", "SKILL.md"), "---\nname: example\ndescription: Example.\n---\n");
+  writeFileSync(
+    path.join(root, "skills", "example", "SKILL.md"),
+    "---\nname: example\ndescription: Example.\n---\n",
+  );
   writeFileSync(path.join(root, "package.json"), JSON.stringify(packageJson));
   return root;
 }
@@ -42,6 +45,34 @@ describe("plugin manifest", () => {
       appEntry: path.join(realRoot, "src", "app.tsx"),
       skillRoots: [path.join(realRoot, "skills")],
     });
+  });
+
+  it("accepts API version 2", () => {
+    const root = makePlugin({
+      name: "@acme/synara-plugin-tools",
+      version: "1.0.0",
+      synara: {
+        displayName: "Tools",
+        apiVersion: 2,
+        server: "./src/server.ts",
+      },
+    });
+
+    expect(readPluginManifest(root).apiVersion).toBe(2);
+  });
+
+  it("rejects unsupported API versions", () => {
+    const root = makePlugin({
+      name: "@acme/synara-plugin-future",
+      version: "1.0.0",
+      synara: {
+        displayName: "Future",
+        apiVersion: 3,
+        server: "./src/server.ts",
+      },
+    });
+
+    expect(() => readPluginManifest(root)).toThrow("must be 1 or 2");
   });
 
   it("rejects entries that leave the package root", () => {

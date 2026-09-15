@@ -21,7 +21,7 @@ export default definePlugin((synara) => {
 
   synara.rpc.register("list", reviewQueueContract.list, async () => ({ items: await readItems() }));
 
-  synara.rpc.register("add", reviewQueueContract.add, async (input) => {
+  const addReview = async (input: ReturnType<typeof reviewQueueContract.add.input.parse>) => {
     const item: ReviewQueueItem = {
       id: makeItemId(),
       projectId: input.projectId,
@@ -32,6 +32,16 @@ export default definePlugin((synara) => {
     };
     await updateItems((items) => [...items, item]);
     return { item };
+  };
+
+  synara.rpc.register("add", reviewQueueContract.add, addReview);
+  synara.agents.registerTool({
+    id: "add-review",
+    title: "Add review",
+    description: "Add an item to the Synara review queue.",
+    access: "write",
+    contract: reviewQueueContract.add,
+    execute: addReview,
   });
 
   synara.rpc.register("start", reviewQueueContract.start, async ({ itemId }, call) => {

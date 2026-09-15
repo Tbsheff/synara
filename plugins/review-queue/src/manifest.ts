@@ -4,7 +4,7 @@ export const reviewQueueManifest = {
   id: "@synara/plugin-review-queue",
   displayName: "Review Queue",
   version: "0.1.0",
-  apiVersion: 1,
+  apiVersion: 2,
   app: "review-queue",
   sourcePath: "plugins/review-queue",
 } as const satisfies SynaraPluginManifest;

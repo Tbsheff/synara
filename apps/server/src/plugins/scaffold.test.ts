@@ -21,6 +21,9 @@ describe("plugin scaffold", () => {
     expect(packageJson.synara).toBeTruthy();
     expect(packageJson.dependencies["@synara/plugin-sdk"]).toBe("file:./.synara-sdk");
     expect(existsSync(path.join(result.sourceRoot, ".synara-sdk", "src", "app.ts"))).toBe(true);
+    expect(readFileSync(path.join(result.sourceRoot, "src", "server.ts"), "utf8")).toContain(
+      "synara.agents.registerTool({",
+    );
     expect(() => scaffoldPlugin(result.sourceRoot)).toThrow("already exists");
   });
 });

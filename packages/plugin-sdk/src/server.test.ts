@@ -119,4 +119,170 @@ describe("plugin registry", () => {
     await activation;
     expect(registry.list()[0]?.generation).toBe(2);
   });
+
+  it("registers, validates, and retires agent tools with their plugin generation", async () => {
+    const registry = createPluginRegistry({ host: {} as never, storage: {} as never });
+    await registry.activate(
+      { id: "acme.echo", displayName: "Echo", apiVersion: 2, version: "1.0.0" },
+      definePlugin((api) => {
+        api.agents.registerTool({
+          id: "echo",
+          description: "Echo a value.",
+          access: "write",
+          contract: echo,
+          execute: ({ value }) => Promise.resolve({ value }),
+        });
+      }),
+    );
+
+    expect(registry.listAgentTools()).toMatchObject([
+      {
+        pluginId: "acme.echo",
+        generation: 1,
+        id: "echo",
+        description: "Echo a value.",
+        access: "write",
+        inputSchema: {
+          type: "object",
+          properties: { value: { type: "string" } },
+          required: ["value"],
+          additionalProperties: false,
+        },
+      },
+    ]);
+    await expect(
+      registry.callAgentTool({
+        pluginId: "acme.echo",
+        generation: 1,
+        toolId: "echo",
+        input: { value: 4 },
+      }),
+    ).rejects.toThrow("value");
+    await expect(
+      registry.callAgentTool({
+        pluginId: "acme.echo",
+        generation: 1,
+        toolId: "echo",
+        input: { value: "ok" },
+      }),
+    ).resolves.toEqual({ value: "ok" });
+
+    await registry.activate(
+      { id: "acme.echo", displayName: "Echo", apiVersion: 1, version: "1.0.1" },
+      definePlugin(() => undefined),
+    );
+    await expect(
+      registry.callAgentTool({
+        pluginId: "acme.echo",
+        generation: 1,
+        toolId: "echo",
+        input: { value: "old" },
+      }),
+    ).rejects.toThrow("generation");
+    expect(registry.listAgentTools()).toEqual([]);
+  });
+
+  it("requires API version 2 for agent tools", async () => {
+    const registry = createPluginRegistry({ host: {} as never, storage: {} as never });
+    await expect(
+      registry.activate(
+        { id: "acme.echo", displayName: "Echo", apiVersion: 1, version: "1.0.0" },
+        definePlugin((api) => {
+          api.agents.registerTool({
+            id: "echo",
+            description: "Echo a value.",
+            access: "read",
+            contract: echo,
+            execute: ({ value }) => Promise.resolve({ value }),
+          });
+        }),
+      ),
+    ).rejects.toThrow("API version 2");
+  });
+
+  it("rejects a tool schema that cannot be serialized", async () => {
+    const registry = createPluginRegistry({ host: {} as never, storage: {} as never });
+    const jsonSchema: Record<string, unknown> = { type: "object" };
+    jsonSchema.self = jsonSchema;
+    await expect(
+      registry.activate(
+        { id: "acme.echo", displayName: "Echo", apiVersion: 2, version: "1.0.0" },
+        definePlugin((api) => {
+          api.agents.registerTool({
+            id: "echo",
+            description: "Echo a value.",
+            access: "read",
+            contract: {
+              input: { ...echo.input, jsonSchema: jsonSchema as never },
+              output: echo.output,
+            },
+            execute: ({ value }) => Promise.resolve({ value }),
+          });
+        }),
+      ),
+    ).rejects.toThrow("input schema is invalid");
+  });
+
+  it("passes cancellation to an active plugin tool", async () => {
+    const registry = createPluginRegistry({ host: {} as never, storage: {} as never });
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await registry.activate(
+      { id: "acme.echo", displayName: "Echo", apiVersion: 2, version: "1.0.0" },
+      definePlugin((api) => {
+        api.agents.registerTool({
+          id: "echo",
+          description: "Echo a value.",
+          access: "read",
+          contract: echo,
+          execute: async ({ value }, call) => {
+            await pending;
+            call.signal.throwIfAborted();
+            return { value };
+          },
+        });
+      }),
+    );
+    const controller = new AbortController();
+    const call = registry.callAgentTool({
+      pluginId: "acme.echo",
+      generation: 1,
+      toolId: "echo",
+      input: { value: "old" },
+      signal: controller.signal,
+    });
+    controller.abort();
+    release();
+    await expect(call).rejects.toThrow();
+  });
+
+  it("bounds generation drain when a handler never settles", async () => {
+    const registry = createPluginRegistry({
+      host: {} as never,
+      storage: {} as never,
+      drainTimeoutMs: 10,
+    });
+    await registry.activate(
+      { id: "acme.echo", displayName: "Echo", apiVersion: 1, version: "1.0.0" },
+      definePlugin((api) => {
+        api.rpc.register("echo", echo, () => new Promise(() => undefined));
+      }),
+    );
+    void registry.call({
+      pluginId: "acme.echo",
+      generation: 1,
+      method: "echo",
+      input: { value: "never" },
+    });
+    await Promise.resolve();
+    await registry.activate(
+      { id: "acme.echo", displayName: "Echo", apiVersion: 1, version: "1.0.1" },
+      definePlugin((api) => {
+        api.rpc.register("echo", echo, ({ value }) => Promise.resolve({ value }));
+      }),
+    );
+    expect(registry.list()[0]?.generation).toBe(2);
+  });
 });
