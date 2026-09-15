@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+
+import { resolvePluginSdkSource } from "./sdkSource";
 
 function pluginName(target: string): string {
   const name = path
@@ -41,8 +42,10 @@ function writeLocalPluginSdk(sourceRoot: string): void {
     ["@synara/plugin-sdk", "index.ts"],
     ["@synara/plugin-sdk/app", "app.ts"],
   ] as const) {
-    const entry = fileURLToPath(import.meta.resolve(specifier));
-    write(path.join(sdkSourceRoot, fileName), readFileSync(entry, "utf8"));
+    write(
+      path.join(sdkSourceRoot, fileName),
+      readFileSync(resolvePluginSdkSource(specifier), "utf8"),
+    );
   }
 }
 

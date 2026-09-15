@@ -426,6 +426,19 @@ function verifyDesktopStageLockAuthority(): void {
       throw new Error(`Expected ${manifestPath} to have a matching importer in bun.lock.`);
     }
   }
+  const stagedWorkspacePaths = new Set<string>(
+    RELEASE_WORKSPACE_MANIFEST_PATHS.map((manifestPath) =>
+      manifestPath === "package.json" ? "" : dirname(manifestPath),
+    ),
+  );
+  for (const match of workspaceImporters.matchAll(/^ {4}"([^"]*)": \{/gm)) {
+    const workspacePath = match[1] ?? "";
+    if (!stagedWorkspacePaths.has(workspacePath)) {
+      throw new Error(
+        `Expected bun.lock importer ${JSON.stringify(workspacePath)} to be listed in RELEASE_WORKSPACE_MANIFEST_PATHS.`,
+      );
+    }
+  }
 }
 
 const tempRoot = mkdtempSync(join(tmpdir(), "synara-release-smoke-"));

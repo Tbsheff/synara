@@ -1,11 +1,13 @@
 import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { pathToFileURL } from "node:url";
 
-import { build, type Plugin } from "esbuild";
+import type { Plugin } from "esbuild";
 
 import { readPluginManifest } from "./manifest";
+import { resolvePluginSdkSource } from "./sdkSource";
 
 const RUNTIME_SLOTS = {
   react: "react",
@@ -18,13 +20,30 @@ const RUNTIME_SLOTS = {
 } as const;
 
 const webRequire = createRequire(new URL("../../../web/package.json", import.meta.url));
+const serverRequire = createRequire(import.meta.url);
+
+async function loadEsbuild(): Promise<typeof import("esbuild")> {
+  const asarSegment = `${path.sep}app.asar${path.sep}`;
+  const esbuildEntry = serverRequire.resolve("esbuild");
+  if (!process.env.ESBUILD_BINARY_PATH && esbuildEntry.includes(asarSegment)) {
+    const binarySubpath = process.platform === "win32" ? "esbuild.exe" : "bin/esbuild";
+    const binaryPath = createRequire(esbuildEntry).resolve(
+      `@esbuild/${process.platform}-${process.arch}/${binarySubpath}`,
+    );
+    process.env.ESBUILD_BINARY_PATH = binaryPath.replace(
+      asarSegment,
+      `${path.sep}app.asar.unpacked${path.sep}`,
+    );
+  }
+  return import("esbuild");
+}
 
 const escapeRegex = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 async function runtimeShimSource(specifier: keyof typeof RUNTIME_SLOTS): Promise<string> {
   const resolved =
     specifier === "@synara/plugin-sdk/app" || specifier === "@synara/plugin-sdk"
-      ? import.meta.resolve(specifier)
+      ? pathToFileURL(resolvePluginSdkSource(specifier)).href
       : pathToFileURL(webRequire.resolve(specifier)).href;
   const moduleNamespace = (await import(resolved)) as Record<string, unknown>;
   const names = Object.keys(moduleNamespace)
@@ -59,11 +78,18 @@ function runtimeShimPlugin(): Plugin {
 }
 
 function pluginSdkServerAlias(): Plugin {
-  const sdkEntry = fileURLToPath(import.meta.resolve("@synara/plugin-sdk"));
+  const sdkEntry = resolvePluginSdkSource("@synara/plugin-sdk");
   return {
     name: "synara-plugin-sdk-server",
     setup(pluginBuild) {
-      pluginBuild.onResolve({ filter: /^@synara\/plugin-sdk$/ }, () => ({ path: sdkEntry }));
+      pluginBuild.onResolve({ filter: /^@synara\/plugin-sdk$/ }, () => ({
+        path: sdkEntry,
+        namespace: "synara-plugin-sdk",
+      }));
+      pluginBuild.onLoad({ filter: /.*/, namespace: "synara-plugin-sdk" }, async (args) => ({
+        contents: await readFile(args.path, "utf8"),
+        loader: "ts",
+      }));
     },
   };
 }
@@ -84,6 +110,7 @@ export function pluginBuildOutputRoot(sourceRoot: string, reloadToken: string): 
 
 export async function buildPlugin(sourceRoot: string): Promise<PluginBuildResult> {
   const manifest = readPluginManifest(sourceRoot);
+  const { build } = await loadEsbuild();
   const reloadToken = `${Date.now()}-${crypto.randomUUID()}`;
   const outputRoot = pluginBuildOutputRoot(manifest.sourceRoot, reloadToken);
   mkdirSync(outputRoot, { recursive: true });
