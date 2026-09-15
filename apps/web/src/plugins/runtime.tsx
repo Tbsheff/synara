@@ -5,7 +5,6 @@ import {
   PluginAppRuntimeContext,
   type PluginAppRuntime,
   type PluginNavPanelContribution,
-  type SynaraPluginApp,
   type SynaraPluginAppContext,
 } from "@synara/plugin-sdk/app";
 import reviewQueueApp from "@synara/plugin-review-queue/app";
@@ -33,32 +32,12 @@ import {
 import { ensureNativeApi } from "~/nativeApi";
 import { resolveWsHttpUrl } from "~/lib/wsHttpUrl";
 
-interface RegisteredPluginApp {
-  readonly pluginId: string;
-  readonly appUrl?: string;
-  readonly panels: ReadonlyArray<PluginNavPanelContribution>;
-}
+import {
+  collectPluginAppRegistrations,
+  type RegisteredPluginApp,
+} from "./registrations";
 
-function registerPluginApp(
-  pluginId: string,
-  app: SynaraPluginApp,
-  appUrl?: string,
-): RegisteredPluginApp {
-  const panels: PluginNavPanelContribution[] = [];
-  app({
-    slots: {
-      navPanel(panel) {
-        if (panels.some((candidate) => candidate.id === panel.id)) {
-          throw new Error(`Duplicate plugin panel: ${pluginId}/${panel.id}`);
-        }
-        panels.push(panel);
-      },
-    },
-  });
-  return { pluginId, ...(appUrl ? { appUrl } : {}), panels };
-}
-
-const APP_REGISTRY = [registerPluginApp(reviewQueueManifest.id, reviewQueueApp)];
+const APP_REGISTRY = [collectPluginAppRegistrations(reviewQueueManifest.id, reviewQueueApp)];
 
 Object.assign(globalThis, {
   __synaraPluginRuntime: {
@@ -161,13 +140,10 @@ export function PluginRuntimeProvider({ children }: { readonly children: ReactNo
       loadingUrls.current.set(plugin.id, requestedUrl);
         void import(requestedUrl)
         .then((module: { readonly default?: unknown }) => {
-          if (typeof module.default !== "function") {
-            throw new Error(`Plugin app has no default registration function: ${plugin.id}`);
-          }
           if (desiredUrls.current.get(plugin.id) !== requestedUrl) return;
-          const registered = registerPluginApp(
+          const registered = collectPluginAppRegistrations(
             plugin.id,
-            module.default as SynaraPluginApp,
+            module.default,
             requestedUrl,
           );
           installPluginStyles(plugin);
@@ -191,7 +167,7 @@ export function PluginRuntimeProvider({ children }: { readonly children: ReactNo
       const plugin = activeById.get(registered.pluginId);
       const currentAppUrl = plugin?.appUrl ? resolveWsHttpUrl(plugin.appUrl) : undefined;
       return plugin && registered.appUrl === currentAppUrl
-        ? registered.panels.map((panel) => ({ ...panel, plugin }))
+        ? registered.navPanels.map((panel) => ({ ...panel, plugin }))
         : [];
     });
   }, [appRegistry, pluginsQuery.data]);
