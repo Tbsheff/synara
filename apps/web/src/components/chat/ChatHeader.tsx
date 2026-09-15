@@ -64,6 +64,8 @@ import type { RepoDiffTotals } from "~/hooks/useRepoDiffTotals";
 import { ProviderIcon } from "../ProviderIcon";
 import { ProviderUsageMenuControl } from "../ProviderUsageMenuControl";
 import { EnvironmentToggle, type EnvironmentToggleState } from "./environment/EnvironmentToggle";
+import { usePluginContributions } from "../../plugins/runtime";
+import { PluginThreadHeaderActions } from "./PluginThreadHeaderActions";
 
 /**
  * Width (px) below which collapsible header controls drop their text labels and
@@ -563,6 +565,7 @@ export function ChatHeader({
   const chatLayoutAction = chatLayoutActionProp ?? null;
   const changeThreadAction = changeThreadActionProp ?? null;
   const editorChatControls = editorChatControlsProp ?? null;
+  const threadHeaderActions = usePluginContributions("threadHeaderActions");
   const { isMobile, state } = useSidebar();
   const headerRef = useRef<HTMLDivElement>(null);
   const [compact, setCompact] = useState(false);
@@ -794,6 +797,13 @@ export function ChatHeader({
         </div>
       </div>
       <div className="flex shrink-0 items-center gap-2 [-webkit-app-region:no-drag]">
+        {!minimalChrome ? (
+          <PluginThreadHeaderActions
+            actions={threadHeaderActions}
+            threadId={activeThreadId}
+            projectId={editorChatControls?.projectId ?? null}
+          />
+        ) : null}
         {!minimalChrome && !hideHandoffControls && !environment ? (
           <ProviderUsageMenuControl provider={activeProvider} />
         ) : null}
