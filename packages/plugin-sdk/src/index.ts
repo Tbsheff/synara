@@ -97,6 +97,11 @@ export function object<Shape extends Readonly<Record<string, PluginSchema<unknow
         throw new Error(`${path} must be an object.`);
       }
       const source = input as Record<string, unknown>;
+      for (const key of Object.keys(source)) {
+        if (!Object.hasOwn(shape, key)) {
+          throw new Error(`${path}.${key} is not allowed.`);
+        }
+      }
       return Object.fromEntries(
         Object.entries(shape).map(([key, schema]) => [
           key,
@@ -213,8 +218,10 @@ interface RegisteredAgentTool extends PendingAgentTool, RegisteredPluginAgentToo
 interface ActivePlugin {
   readonly manifest: SynaraPluginManifest;
   readonly generation: number;
+  readonly host: PluginHostApi;
   readonly methods: ReadonlyMap<string, RegisteredMethod>;
   readonly agentTools: ReadonlyMap<string, RegisteredAgentTool>;
+  readonly lifecycle: AbortController;
   accepting: boolean;
   inFlight: number;
   readonly drained: Set<() => void>;
@@ -260,10 +267,10 @@ export function createPluginRegistry(input: {
     invocation?: { readonly host?: PluginHostApi; readonly signal?: AbortSignal },
   ): Promise<JsonValue> => {
     const parsedInput = contract.input.parse(rawInput, "input");
-    const host =
-      invocation?.host ??
-      (typeof input.host === "function" ? input.host(plugin.manifest.id) : input.host);
-    const signal = invocation?.signal ?? new AbortController().signal;
+    const host = invocation?.host ?? plugin.host;
+    const signal = invocation?.signal
+      ? AbortSignal.any([invocation.signal, plugin.lifecycle.signal])
+      : plugin.lifecycle.signal;
     signal.throwIfAborted();
     plugin.inFlight += 1;
     try {
@@ -273,6 +280,7 @@ export function createPluginRegistry(input: {
         host,
         signal,
       });
+      signal.throwIfAborted();
       const parsedOutput = contract.output.parse(output, "output");
       const serialized = JSON.stringify(parsedOutput);
       if (serialized === undefined) throw new Error(`${outputName} must be JSON serializable.`);
@@ -306,6 +314,7 @@ export function createPluginRegistry(input: {
     async activate(manifest, plugin) {
       const methods = new Map<string, RegisteredMethod>();
       const agentTools = new Map<string, PendingAgentTool>();
+      const lifecycle = new AbortController();
       const register: SynaraPluginApi["rpc"]["register"] = (method, contract, handler) => {
         if (methods.has(method)) throw new Error(`Duplicate plugin RPC method: ${method}`);
         methods.set(method, {
@@ -379,22 +388,60 @@ export function createPluginRegistry(input: {
           execute: registration.execute as PluginHandler<unknown, unknown>,
         });
       };
-      const storage =
+      const baseStorage =
         typeof input.storage === "function" ? input.storage(manifest.id) : input.storage;
+      const baseHost = typeof input.host === "function" ? input.host(manifest.id) : input.host;
+      const assertActive = () => lifecycle.signal.throwIfAborted();
+      const storage: PluginKvStorage = {
+        get: async (key) => {
+          assertActive();
+          const value = await baseStorage.get(key);
+          assertActive();
+          return value;
+        },
+        set: async (key, value) => {
+          assertActive();
+          await baseStorage.set(key, value);
+        },
+        delete: async (key) => {
+          assertActive();
+          await baseStorage.delete(key);
+        },
+        update: (key, updateValue) => {
+          assertActive();
+          return baseStorage.update(key, async (current) => {
+            assertActive();
+            const next = await updateValue(current);
+            assertActive();
+            return next;
+          });
+        },
+      };
+      const host: PluginHostApi = {
+        threads: {
+          start: async (threadInput) => {
+            assertActive();
+            return baseHost.threads.start(threadInput);
+          },
+        },
+      };
       plugin({ storage, rpc: { register }, agents: { registerTool } });
       const generation = (nextGeneration += 1);
       const previous = active.get(manifest.id);
       if (previous) {
         previous.accepting = false;
+        previous.lifecycle.abort(new Error(`Plugin generation retired: ${manifest.id}`));
         await waitForDrain(previous);
       }
       active.set(manifest.id, {
         manifest,
         generation,
+        host,
         methods,
         agentTools: new Map(
           [...agentTools].map(([id, tool]) => [id, { ...tool, pluginId: manifest.id, generation }]),
         ),
+        lifecycle,
         accepting: true,
         inFlight: 0,
         drained: new Set(),
@@ -405,6 +452,7 @@ export function createPluginRegistry(input: {
       const plugin = active.get(pluginId);
       if (!plugin) return false;
       plugin.accepting = false;
+      plugin.lifecycle.abort(new Error(`Plugin disabled: ${pluginId}`));
       await waitForDrain(plugin);
       return active.get(pluginId) === plugin && active.delete(pluginId);
     },

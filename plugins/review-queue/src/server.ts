@@ -1,4 +1,4 @@
-import { definePlugin, type JsonValue } from "@synara/plugin-sdk";
+import { definePlugin, type JsonValue, type PluginCall } from "@synara/plugin-sdk";
 
 import { reviewQueueContract, reviewQueueItem, type ReviewQueueItem } from "./contract";
 
@@ -19,7 +19,16 @@ export default definePlugin((synara) => {
     update: (items: ReviewQueueItem[]) => ReviewQueueItem[] | Promise<ReviewQueueItem[]>,
   ) => parseItems(await synara.storage.update(STORAGE_KEY, (value) => update(parseItems(value))));
 
-  synara.rpc.register("list", reviewQueueContract.list, async () => ({ items: await readItems() }));
+  const listReviews = async () => ({ items: await readItems() });
+  synara.rpc.register("list", reviewQueueContract.list, listReviews);
+  synara.agents.registerTool({
+    id: "list-reviews",
+    title: "List reviews",
+    description: "List items in the Synara review queue.",
+    access: "read",
+    contract: reviewQueueContract.list,
+    execute: listReviews,
+  });
 
   const addReview = async (input: ReturnType<typeof reviewQueueContract.add.input.parse>) => {
     const item: ReviewQueueItem = {
@@ -44,7 +53,10 @@ export default definePlugin((synara) => {
     execute: addReview,
   });
 
-  synara.rpc.register("start", reviewQueueContract.start, async ({ itemId }, call) => {
+  const startReview = async (
+    { itemId }: ReturnType<typeof reviewQueueContract.start.input.parse>,
+    call: PluginCall,
+  ) => {
     const items = await updateItems(async (items) => {
       const index = items.findIndex((item) => item.id === itemId);
       if (index < 0) throw new Error(`Review queue item not found: ${itemId}`);
@@ -60,10 +72,30 @@ export default definePlugin((synara) => {
       return items.with(index, { ...current, status: "started", threadId });
     });
     return { item: items.find((item) => item.id === itemId)! };
+  };
+  synara.rpc.register("start", reviewQueueContract.start, startReview);
+  synara.agents.registerTool({
+    id: "start-review",
+    title: "Start review",
+    description: "Start a queued review as a normal Synara thread.",
+    access: "write",
+    contract: reviewQueueContract.start,
+    execute: startReview,
   });
 
-  synara.rpc.register("remove", reviewQueueContract.remove, async ({ itemId }) => {
+  const removeReview = async ({
+    itemId,
+  }: ReturnType<typeof reviewQueueContract.remove.input.parse>) => {
     await updateItems((items) => items.filter((item) => item.id !== itemId));
     return { removed: itemId };
+  };
+  synara.rpc.register("remove", reviewQueueContract.remove, removeReview);
+  synara.agents.registerTool({
+    id: "remove-review",
+    title: "Remove review",
+    description: "Remove an item from the Synara review queue.",
+    access: "write",
+    contract: reviewQueueContract.remove,
+    execute: removeReview,
   });
 });

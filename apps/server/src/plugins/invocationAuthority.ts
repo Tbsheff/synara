@@ -5,6 +5,7 @@ import type { PluginAgentToolAccess } from "@synara/plugin-sdk";
 export interface PluginAgentToolAuthority {
   readonly signal: AbortSignal;
   readonly assertWriteAuthorized: () => Promise<void>;
+  readonly assertThreadStartAuthorized: () => Promise<void>;
 }
 
 interface PluginInvocationAuthority extends PluginAgentToolAuthority {
@@ -20,6 +21,17 @@ export function runWithPluginInvocationAuthority<Value>(
   return invocationAuthority.run(authority, run);
 }
 
+export function bindPluginInvocationAuthority<Value>(
+  run: () => Promise<Value>,
+): () => Promise<Value> {
+  const authority = invocationAuthority.getStore();
+  return authority ? () => invocationAuthority.run(authority, run) : run;
+}
+
+export function hasPluginInvocationAuthority(): boolean {
+  return invocationAuthority.getStore() !== undefined;
+}
+
 export async function assertPluginWriteAuthority(): Promise<void> {
   const authority = invocationAuthority.getStore();
   if (!authority) return;
@@ -28,5 +40,13 @@ export async function assertPluginWriteAuthority(): Promise<void> {
   }
   authority.signal.throwIfAborted();
   await authority.assertWriteAuthorized();
+  authority.signal.throwIfAborted();
+}
+
+export async function assertPluginThreadStartAuthority(): Promise<void> {
+  const authority = invocationAuthority.getStore();
+  if (!authority) return;
+  authority.signal.throwIfAborted();
+  await authority.assertThreadStartAuthorized();
   authority.signal.throwIfAborted();
 }

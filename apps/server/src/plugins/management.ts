@@ -1,4 +1,4 @@
-import { watch } from "node:fs";
+import { realpathSync, watch } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -13,7 +13,7 @@ import {
   updatePluginControl,
 } from "./control";
 import { readPluginManifest } from "./manifest";
-import { removePluginSkills, syncPluginSkills } from "./skills";
+import { removePluginSkills, replacePluginSkills, syncPluginSkills } from "./skills";
 
 export interface PluginManagementRecord {
   readonly id: string;
@@ -124,14 +124,17 @@ export async function installPlugin(
   if (manifest.id === reviewQueueManifest.id) {
     throw new Error("The built-in Review Queue plugin cannot be replaced with plugin install.");
   }
-  const buildResult = await buildPlugin(manifest.sourceRoot);
-  const skills = syncPluginSkills(baseDir, manifest.id, manifest.skillRoots);
-  try {
-    installPluginControl(baseDir, manifest.id, manifest.sourceRoot, buildResult.reloadToken);
-  } catch (cause) {
-    removePluginSkills(baseDir, manifest.id);
-    throw cause;
+  const installedSource = readPluginControl(baseDir).plugins[manifest.id]?.sourceRoot;
+  if (installedSource && realpathSync(installedSource) !== manifest.sourceRoot) {
+    throw new Error(
+      `Plugin ${manifest.id} is already installed from ${installedSource}; uninstall it before installing a different source.`,
+    );
   }
+  const buildResult = await buildPlugin(manifest.sourceRoot);
+  const skills = replacePluginSkills(baseDir, manifest.id, manifest.skillRoots, (installed) => {
+    installPluginControl(baseDir, manifest.id, manifest.sourceRoot, buildResult.reloadToken);
+    return installed;
+  });
   return {
     record: resolvePluginRecord(baseDir, manifest.id),
     build: buildResult,
@@ -149,7 +152,16 @@ export async function reloadPlugin(
   if (record.sourceRoot) {
     buildResult = await buildPlugin(record.sourceRoot);
     const manifest = readPluginManifest(record.sourceRoot);
-    syncPluginSkills(baseDir, record.id, manifest.skillRoots);
+    return replacePluginSkills(baseDir, record.id, manifest.skillRoots, () => {
+      updatePluginControl(baseDir, record.id, (current) => ({
+        ...current,
+        reloadToken: buildResult!.reloadToken,
+      }));
+      return {
+        record: resolvePluginRecord(baseDir, record.id),
+        build: buildResult,
+      };
+    });
   } else if (!record.builtIn) {
     throw new Error(`Plugin source is not available: ${record.id}`);
   }
@@ -231,7 +243,7 @@ export async function watchPlugin(
     if (timer) clearTimeout(timer);
     timer = setTimeout(() => void rebuild(), 150);
   };
-  watch(sourceRoot, { recursive: true }, (_event, fileName) => {
+  const watcher = watch(sourceRoot, { recursive: true }, (_event, fileName) => {
     const relative = fileName?.toString() ?? "";
     const parts = relative.replaceAll("\\", "/").split("/");
     if (
@@ -242,5 +254,6 @@ export async function watchPlugin(
     }
     scheduleRebuild();
   });
+  watcher.on("error", onError);
   return new Promise<never>(() => undefined);
 }

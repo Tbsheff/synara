@@ -14,6 +14,7 @@ import { COMPOSER_FOOTER_ROW_CLASS_NAME } from "./composerPickerStyles";
 interface ChatComposerFooterProps {
   isComposerFooterCompact: boolean;
   leadingControls: ReactNode;
+  pluginControls: ReactNode;
   composerPickerControls: ReactNode;
   contextMeter: ReactNode;
   interactionMode: ProviderInteractionMode;
@@ -53,6 +54,7 @@ interface ChatComposerFooterProps {
 export function ChatComposerFooter({
   isComposerFooterCompact,
   leadingControls,
+  pluginControls,
   composerPickerControls,
   contextMeter,
   interactionMode,
@@ -83,6 +85,7 @@ export function ChatComposerFooter({
         )}
       >
         {leadingControls}
+        {!voice.recording && !voice.transcribing ? pluginControls : null}
 
         {!voice.recording && !voice.transcribing ? (
           <>

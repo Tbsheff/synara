@@ -846,6 +846,17 @@ export const makeAgentGateway = Effect.gen(function* () {
             pluginHost.callAgentTool(input, {
               signal,
               assertWriteAuthorized: () => Effect.runPromise(context.assertCallerTurnActive()),
+              assertThreadStartAuthorized: () =>
+                Effect.runPromise(
+                  Effect.gen(function* () {
+                    const caller = yield* requireThreadShell(context.callerThreadId);
+                    yield* assertCallerMayDriveThread(caller, {
+                      id: "new plugin thread",
+                      runtimeMode: "full-access",
+                      envMode: "local",
+                    });
+                  }),
+                ),
             }),
           );
         }

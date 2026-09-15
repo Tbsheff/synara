@@ -37,7 +37,10 @@ import { pluginBuildOutputRoot } from "./build";
 import { pluginAssetKey, readPluginManifest, type LocalPluginManifest } from "./manifest";
 import { removePluginSkills, syncPluginSkills } from "./skills";
 import {
+  assertPluginThreadStartAuthority,
   assertPluginWriteAuthority,
+  bindPluginInvocationAuthority,
+  hasPluginInvocationAuthority,
   runWithPluginInvocationAuthority,
   type PluginAgentToolAuthority,
 } from "./invocationAuthority";
@@ -153,16 +156,37 @@ export const PluginHostLive = Layer.effect(
     const projections = yield* ProjectionSnapshotQuery;
     const settings = yield* ServerSettingsService;
     const config = yield* ServerConfig;
-    yield* ensurePluginAuthoringSkill(config.baseDir);
+    yield* ensurePluginAuthoringSkill(config.baseDir).pipe(
+      Effect.catch((cause) =>
+        Effect.logWarning("Plugin authoring skill could not be installed; plugins remain usable.", {
+          cause,
+        }),
+      ),
+    );
     let controlChanged = true;
-    let cachedControl = readPluginControl(config.baseDir);
+    let cachedControl = (() => {
+      try {
+        return readPluginControl(config.baseDir);
+      } catch (cause) {
+        console.error("Plugin control file is invalid; starting with built-in plugins only.", cause);
+        return { plugins: {} };
+      }
+    })();
     const controlWatcher = watch(config.baseDir, { persistent: false }, (_event, fileName) => {
       if (!fileName || fileName.toString() === PLUGIN_CONTROL_FILE) controlChanged = true;
+    });
+    controlWatcher.on("error", (cause) => {
+      controlChanged = true;
+      console.error("Plugin control watcher failed; plugin changes require a server restart.", cause);
     });
     yield* Effect.addFinalizer(() => Effect.sync(() => controlWatcher.close()));
     const currentControl = () => {
       if (controlChanged) {
-        cachedControl = readPluginControl(config.baseDir);
+        try {
+          cachedControl = readPluginControl(config.baseDir);
+        } catch (cause) {
+          console.error("Plugin control file is invalid; keeping the last valid state.", cause);
+        }
         controlChanged = false;
       }
       return cachedControl;
@@ -211,23 +235,27 @@ export const PluginHostLive = Layer.effect(
           await deleteRaw(key);
         },
         update: (key, updateValue) =>
-          Effect.runPromise(
-            storageUpdates.withLock(
-              `${pluginId}\0${key}`,
-              Effect.tryPromise(async () => {
-                const result = await updateValue(await get(key));
-                await assertPluginWriteAuthority();
-                if (result === undefined) await deleteRaw(key);
-                else await setRaw(key, result);
-                return result;
-              }),
+          bindPluginInvocationAuthority(() =>
+            Effect.runPromise(
+              storageUpdates.withLock(
+                `${pluginId}\0${key}`,
+                Effect.tryPromise(async () => {
+                  const result = await updateValue(await get(key));
+                  await assertPluginWriteAuthority();
+                  if (result === undefined) await deleteRaw(key);
+                  else await setRaw(key, result);
+                  return result;
+                }),
+              ),
             ),
-          ),
+          )(),
       };
     };
 
     const startThread = async (pluginId: string, input: PluginThreadStartInput) => {
+      const agentInvocation = hasPluginInvocationAuthority();
       await assertPluginWriteAuthority();
+      await assertPluginThreadStartAuthority();
       return Effect.runPromise(
         Effect.gen(function* () {
           const projectId = ProjectId.makeUnsafe(input.projectId);
@@ -271,7 +299,7 @@ export const PluginHostLive = Layer.effect(
               attachments: [],
             },
             dispatchMode: "queue",
-            dispatchOrigin: "user",
+            dispatchOrigin: agentInvocation ? "agent" : "user",
             runtimeMode: "full-access",
             interactionMode: "default",
             createdAt: input.createdAt,
@@ -469,8 +497,10 @@ export const PluginHostLive = Layer.effect(
                 continue;
               }
               const previousSkillRoots = activeSources.get(entry.id)?.skillRoots;
-              if (previousSkillRoots) {
+              if (previousSkillRoots !== undefined) {
                 syncPluginSkills(config.baseDir, entry.id, previousSkillRoots);
+              } else {
+                removePluginSkills(config.baseDir, entry.id);
               }
               console.error(
                 `Plugin reload failed for ${entry.id}; the last active generation remains in use.`,
@@ -540,7 +570,7 @@ export const PluginHostLive = Layer.effect(
                 baseDir: config.baseDir,
               }),
               idempotencyKey: input.operationId,
-              createdAt: new Date().toISOString(),
+              createdAt: input.createdAt,
             });
           },
           catch: (cause) =>
@@ -559,7 +589,8 @@ export const PluginHostLive = Layer.effect(
         }),
       callAgentTool: (input, authority) =>
         Effect.tryPromise({
-          try: () => {
+          try: async () => {
+            await syncControl();
             const tool = registry
               .listAgentTools()
               .find(
@@ -569,7 +600,7 @@ export const PluginHostLive = Layer.effect(
                   candidate.id === input.toolId,
               );
             if (!tool) {
-              return Promise.reject(new Error(`Plugin agent tool is not active: ${input.toolId}`));
+              throw new Error(`Plugin agent tool is not active: ${input.toolId}`);
             }
             return runWithPluginInvocationAuthority({ access: tool.access, ...authority }, () =>
               registry.callAgentTool({ ...input, signal: authority.signal }),

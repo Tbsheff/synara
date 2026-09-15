@@ -68,4 +68,20 @@ describe("plugin management", () => {
     expect(() => setPluginEnabled(baseDir, scaffold.id, true)).toThrow();
     expect(uninstallPlugin(baseDir, scaffold.id).id).toBe(scaffold.id);
   });
+
+  it("rejects a second source with the same plugin id", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "synara-plugin-management-"));
+    const baseDir = path.join(root, "home");
+    const firstSource = path.join(root, "first", "notes");
+    const secondSource = path.join(root, "second", "notes");
+    const first = scaffoldPlugin(firstSource);
+    const second = scaffoldPlugin(secondSource);
+    expect(second.id).toBe(first.id);
+
+    await installPlugin(baseDir, firstSource);
+
+    await expect(installPlugin(baseDir, secondSource)).rejects.toThrow(
+      "uninstall it before installing a different source",
+    );
+  });
 });

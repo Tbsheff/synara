@@ -130,6 +130,17 @@ export type PluginPendingInteractionRegistration =
 
 export type PluginActionContext = PluginComponentProps;
 
+export interface PluginComposerController {
+  readonly text: string;
+  readonly setText: (text: string) => void;
+  readonly focus: () => void;
+  readonly submit: () => void;
+}
+
+export interface PluginComposerActionContext extends PluginActionContext {
+  readonly composer: PluginComposerController;
+}
+
 export interface PluginSidebarFooterActionRegistration {
   readonly id: string;
   readonly title: string;
@@ -204,7 +215,7 @@ export interface PluginComposerActionRegistration {
   readonly id: string;
   readonly title: string;
   readonly icon?: string;
-  readonly run: (context: PluginActionContext) => void | Promise<void>;
+  readonly run: (context: PluginComposerActionContext) => void | Promise<void>;
 }
 
 export interface PluginComposerBannerRegistration

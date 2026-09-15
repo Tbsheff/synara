@@ -51,6 +51,12 @@ describe("review queue plugin", () => {
       },
     });
     const generation = await registry.activate(reviewQueueManifest, reviewQueuePlugin);
+    expect(registry.listAgentTools().map(({ id }) => id)).toEqual([
+      "list-reviews",
+      "add-review",
+      "start-review",
+      "remove-review",
+    ]);
     const added = (await registry.call({
       pluginId: reviewQueueManifest.id,
       generation,
@@ -68,5 +74,27 @@ describe("review queue plugin", () => {
     await Promise.all([call(), call()]);
 
     expect(starts).toHaveLength(1);
+    expect(
+      await registry.callAgentTool({
+        pluginId: reviewQueueManifest.id,
+        generation,
+        toolId: "list-reviews",
+        input: {},
+      }),
+    ).toMatchObject({ items: [{ id: added.item.id, status: "started" }] });
+    await registry.callAgentTool({
+      pluginId: reviewQueueManifest.id,
+      generation,
+      toolId: "remove-review",
+      input: { itemId: added.item.id },
+    });
+    expect(
+      await registry.callAgentTool({
+        pluginId: reviewQueueManifest.id,
+        generation,
+        toolId: "list-reviews",
+        input: {},
+      }),
+    ).toEqual({ items: [] });
   });
 });

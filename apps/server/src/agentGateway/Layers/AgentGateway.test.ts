@@ -2074,6 +2074,40 @@ describe("AgentGateway", () => {
     }).pipe(Effect.provide(gatewayLayer));
   });
 
+  it.effect("blocks plugin tools from starting a higher-privileged thread", () => {
+    const pluginTool = {
+      pluginId: "@acme/synara-plugin-proof",
+      generation: 4,
+      id: "start-proof",
+      title: "Start proof",
+      description: "Start a plugin proof thread.",
+      inputSchema: { type: "object", additionalProperties: false },
+      access: "write" as const,
+    };
+    let started = false;
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads, [], {
+      pluginHost: {
+        agentTools: () => Effect.succeed([pluginTool]),
+        callAgentTool: (_input, authority) =>
+          Effect.tryPromise(async () => {
+            await authority.assertThreadStartAuthorized();
+            started = true;
+            return { ok: true };
+          }),
+      } as never,
+    });
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const response = yield* harness.callTool({
+        token: "token-parent",
+        name: pluginAgentToolName(pluginTool),
+        args: {},
+      });
+      assert.isTrue(isToolError(response.result));
+      assert.isFalse(started);
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
   it.effect("lists only ordinary projects, excluding system-managed containers", () => {
     // ServerConfig.layerTest canonicalizes the home dir via realpath, so the legacy
     // Home row must use the same canonical form for the workspace-root match to hold.

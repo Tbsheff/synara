@@ -28,12 +28,13 @@ describe("RIGHT_DOCK_PANE_KINDS (single source of truth)", () => {
       "sidechat",
       "git",
       "pullRequest",
+      "plugin",
     ]);
   });
 
   it("derives singletons as every kind except the multi-instance ones", () => {
     for (const kind of RIGHT_DOCK_PANE_KINDS) {
-      expect(SINGLETON_PANE_KINDS.has(kind)).toBe(kind !== "file");
+      expect(SINGLETON_PANE_KINDS.has(kind)).toBe(kind !== "file" && kind !== "plugin");
     }
   });
 });
@@ -49,6 +50,7 @@ describe("isRightDockPaneKind", () => {
       "sidechat",
       "git",
       "pullRequest",
+      "plugin",
     ]) {
       expect(isRightDockPaneKind(kind)).toBe(true);
     }
@@ -59,6 +61,119 @@ describe("isRightDockPaneKind", () => {
     expect(isRightDockPaneKind(undefined)).toBe(false);
     expect(isRightDockPaneKind(null)).toBe(false);
     expect(isRightDockPaneKind(42)).toBe(false);
+  });
+});
+
+describe("plugin panes", () => {
+  it("reuses a matching plugin panel while refreshing its title", () => {
+    const first = openPaneInState(createDefaultRightDockState(), {
+      paneId: "plugin:thread:acme.review:details",
+      kind: "plugin",
+      pluginId: "acme.review",
+      pluginContributionId: "details",
+      pluginPanelScope: "thread",
+      pluginTitle: "Review",
+      pluginParams: { reviewId: "one" },
+    });
+    const reopened = openPaneInState(first, {
+      paneId: "ignored",
+      kind: "plugin",
+      pluginId: "acme.review",
+      pluginContributionId: "details",
+      pluginPanelScope: "thread",
+      pluginTitle: "Review two",
+      pluginParams: { reviewId: "one" },
+    });
+
+    expect(reopened.panes).toHaveLength(1);
+    expect(reopened.activePaneId).toBe("plugin:thread:acme.review:details");
+    expect(reopened.panes[0]?.pluginTitle).toBe("Review two");
+    expect(reopened.panes[0]?.pluginParams).toEqual({ reviewId: "one" });
+  });
+
+  it("keeps the same state when the active plugin panel is already open", () => {
+    const open = openPaneInState(createDefaultRightDockState(), {
+      paneId: "plugin:thread:acme.review:details",
+      kind: "plugin",
+      pluginId: "acme.review",
+      pluginContributionId: "details",
+      pluginPanelScope: "thread",
+      pluginTitle: "Review",
+      pluginParams: { reviewId: "one" },
+    });
+
+    expect(
+      openPaneInState(open, {
+        paneId: "ignored",
+        kind: "plugin",
+        pluginId: "acme.review",
+        pluginContributionId: "details",
+        pluginPanelScope: "thread",
+        pluginTitle: "Review",
+        pluginParams: { reviewId: "one" },
+      }),
+    ).toBe(open);
+  });
+
+  it("opens separate tabs for the same panel with different params", () => {
+    const first = openPaneInState(createDefaultRightDockState(), {
+      paneId: "plugin:one",
+      kind: "plugin",
+      pluginId: "acme.review",
+      pluginContributionId: "details",
+      pluginPanelScope: "thread",
+      pluginParams: { reviewId: "one" },
+    });
+    const second = openPaneInState(first, {
+      paneId: "plugin:two",
+      kind: "plugin",
+      pluginId: "acme.review",
+      pluginContributionId: "details",
+      pluginPanelScope: "thread",
+      pluginParams: { reviewId: "two" },
+    });
+
+    expect(second.panes).toHaveLength(2);
+    expect(second.activePaneId).toBe("plugin:two");
+  });
+
+  it("keeps different plugin panels as separate tabs", () => {
+    const first = openPaneInState(createDefaultRightDockState(), {
+      paneId: "plugin:thread:acme.review:details",
+      kind: "plugin",
+      pluginId: "acme.review",
+      pluginContributionId: "details",
+      pluginPanelScope: "thread",
+    });
+    const second = openPaneInState(first, {
+      paneId: "plugin:thread:acme.review:history",
+      kind: "plugin",
+      pluginId: "acme.review",
+      pluginContributionId: "history",
+      pluginPanelScope: "thread",
+    });
+
+    expect(second.panes).toHaveLength(2);
+    expect(second.activePaneId).toBe("plugin:thread:acme.review:history");
+  });
+
+  it("drops non-JSON plugin params from persisted dock state", () => {
+    const state = sanitizeRightDockThreadState({
+      open: true,
+      activePaneId: "plugin",
+      panes: [
+        {
+          id: "plugin",
+          kind: "plugin",
+          pluginId: "acme.review",
+          pluginContributionId: "details",
+          pluginPanelScope: "thread",
+          pluginParams: { invalid: Number.POSITIVE_INFINITY },
+        },
+      ],
+    });
+
+    expect(state.panes[0]?.pluginParams).toBeNull();
   });
 });
 

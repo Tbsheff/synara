@@ -1,12 +1,12 @@
 import { Schema } from "effect";
 
-import { TrimmedNonEmptyString } from "./baseSchemas";
+import { IsoDateTime, TrimmedNonEmptyString } from "./baseSchemas";
 
 export const SynaraPluginDescriptor = Schema.Struct({
   id: TrimmedNonEmptyString,
   displayName: TrimmedNonEmptyString,
   version: TrimmedNonEmptyString,
-  apiVersion: Schema.Literal(1, 2),
+  apiVersion: Schema.Literals([1, 2]),
   generation: Schema.Int.check(Schema.isGreaterThan(0)),
   app: Schema.optional(TrimmedNonEmptyString),
   appUrl: Schema.optional(TrimmedNonEmptyString),
@@ -34,6 +34,7 @@ export const PluginEditInput = Schema.Struct({
   generation: Schema.Int.check(Schema.isGreaterThan(0)),
   projectId: TrimmedNonEmptyString,
   operationId: TrimmedNonEmptyString,
+  createdAt: IsoDateTime,
 });
 export type PluginEditInput = typeof PluginEditInput.Type;
 

@@ -126,6 +126,7 @@ import {
   stripEditorViewSearchParams,
 } from "../../routes/-chatThreadRoute.logic";
 import { cn } from "~/lib/utils";
+import { PluginPanelPane } from "~/plugins/PluginPanelPane";
 
 const PullRequestDockPane = lazy(() => import("../pullRequest/PullRequestDockPane"));
 const EditorWorkspaceView = lazy(() =>
@@ -1038,6 +1039,16 @@ export function SingleChatSurface(props: {
             onToggleBrowser={noopChatSurfaceAction}
             onOpenBrowserUrl={noopChatSurfaceAction}
             onOpenTurnDiff={noopChatSurfaceAction}
+          />
+        );
+      case "plugin":
+        return (
+          <PluginPanelPane
+            context={{ projectId: props.projectId, threadId: props.threadId }}
+            pluginId={pane.pluginId}
+            contributionId={pane.pluginContributionId}
+            scope={pane.pluginPanelScope}
+            params={pane.pluginParams}
           />
         );
       default:

@@ -66,6 +66,7 @@ import { ProviderUsageMenuControl } from "../ProviderUsageMenuControl";
 import { EnvironmentToggle, type EnvironmentToggleState } from "./environment/EnvironmentToggle";
 import { usePluginContributions } from "../../plugins/runtime";
 import { PluginThreadHeaderActions } from "./PluginThreadHeaderActions";
+import { PluginPanelActionButtons } from "../../plugins/PluginPanelActions";
 
 /**
  * Width (px) below which collapsible header controls drop their text labels and
@@ -80,6 +81,7 @@ interface ChatHeaderProps {
   activeThreadEntryPoint: ThreadPrimarySurface;
   activeProvider: ProviderKind;
   activeProjectName: string | undefined;
+  activeProjectId: ProjectId | null;
   threadBreadcrumbs: ReadonlyArray<{
     threadId: ThreadId;
     title: string;
@@ -509,6 +511,7 @@ export function ChatHeader({
   activeThreadEntryPoint,
   activeProvider,
   activeProjectName,
+  activeProjectId,
   threadBreadcrumbs,
   className,
   hideSidebarControls: hideSidebarControlsProp,
@@ -801,7 +804,13 @@ export function ChatHeader({
           <PluginThreadHeaderActions
             actions={threadHeaderActions}
             threadId={activeThreadId}
-            projectId={editorChatControls?.projectId ?? null}
+            projectId={activeProjectId}
+          />
+        ) : null}
+        {!minimalChrome && surfaceMode === "single" ? (
+          <PluginPanelActionButtons
+            context={{ projectId: activeProjectId, threadId: activeThreadId }}
+            scope="thread"
           />
         ) : null}
         {!minimalChrome && !hideHandoffControls && !environment ? (

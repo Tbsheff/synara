@@ -21,6 +21,11 @@ function makePane(
     pullRequestRepository: null,
     pullRequestNumber: null,
     pullRequestInitialTab: null,
+    pluginId: null,
+    pluginContributionId: null,
+    pluginPanelScope: null,
+    pluginTitle: null,
+    pluginParams: null,
     ...input,
   };
 }
@@ -115,6 +120,18 @@ describe("resolveRightDockLauncherItems", () => {
 });
 
 describe("buildRightDockPaneLabelOverrides", () => {
+  it("uses a plugin panel's registered title", () => {
+    const pane = makePane({
+      id: "plugin:thread:acme.review:details",
+      kind: "plugin",
+      pluginTitle: "Review details",
+    });
+
+    const overrides = buildRightDockPaneLabelOverrides([pane], []);
+
+    expect(resolveRightDockPaneLabel(pane, overrides)).toBe("Review details");
+  });
+
   it("uses the embedded sidechat thread title for its hidden-header tab", () => {
     const pane = makePane({
       id: "sidechat:thread-child",

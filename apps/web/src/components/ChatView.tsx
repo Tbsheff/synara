@@ -268,6 +268,12 @@ import { ExpiredSidechatNotice } from "./chat/ExpiredSidechatNotice";
 import type { MessagesTimelineController } from "./chat/MessagesTimeline";
 import { buildTurnDiffSummaryByAssistantMessageId } from "./chat/MessagesTimeline.logic";
 import { ProjectPicker } from "./chat/ProjectPicker";
+import {
+  PluginComposerBanners,
+  PluginComposerControls,
+  type PluginComposerHost,
+} from "../plugins/PluginComposerExtensions";
+import { PluginHomepageSections } from "../plugins/PluginHomepageSections";
 import { ProviderHealthBanner } from "./chat/ProviderHealthBanner";
 import { ProviderModelPicker, resolveProviderModelLabel } from "./chat/ProviderModelPicker";
 import {
@@ -2377,6 +2383,43 @@ export default function ChatView({
       focusComposer();
     });
   }, [pendingComposerFocusRef, focusComposer]);
+  const setPluginComposerText = useCallback(
+    (nextText: string) => {
+      discardPromptHistoryNavigationForComposerMutation();
+      promptRef.current = nextText;
+      setPrompt(nextText);
+      setComposerCursor(collapseExpandedComposerCursor(nextText, nextText.length));
+      setComposerTrigger(detectComposerTrigger(nextText, nextText.length));
+    },
+    [
+      discardPromptHistoryNavigationForComposerMutation,
+      promptRef,
+      setComposerCursor,
+      setComposerTrigger,
+      setPrompt,
+    ],
+  );
+  const submitPluginComposer = useCallback(() => {
+    composerFormRef.current?.requestSubmit();
+  }, [composerFormRef]);
+  const pluginComposerHost: PluginComposerHost = useMemo(
+    () => ({
+      get text() {
+        return promptRef.current;
+      },
+      setText: setPluginComposerText,
+      focus: scheduleComposerFocus,
+      submit: submitPluginComposer,
+    }),
+    [promptRef, scheduleComposerFocus, setPluginComposerText, submitPluginComposer],
+  );
+  const pluginContext = useMemo(
+    () => ({
+      projectId: activeProject?.id ?? null,
+      threadId: activeThread?.id ?? threadId,
+    }),
+    [activeProject?.id, activeThread?.id, threadId],
+  );
   // External panels (diff headers, file explorer, preview) bump this nonce after
   // inserting a reference so the composer visibly receives the text.
   const composerFocusRequestNonce = useComposerFocusRequestStore(
@@ -5085,6 +5128,10 @@ export default function ChatView({
                   composerOverlayOpen && !isComposerApprovalState && "overflow-visible",
                 )}
               >
+                <PluginComposerBanners
+                  context={pluginContext}
+                  text={prompt}
+                />
                 <ComposerInputBanners
                   roundedTopReset={false}
                   planFollowUp={
@@ -5253,6 +5300,12 @@ export default function ChatView({
                         ? null
                         : renderComposerLeadingControls({ iconOnly: false })
                     }
+                    pluginControls={
+                      <PluginComposerControls
+                        context={pluginContext}
+                        composer={pluginComposerHost}
+                      />
+                    }
                     composerPickerControls={composerPickerControls}
                     contextMeter={
                       !isVoiceRecording &&
@@ -5385,6 +5438,7 @@ export default function ChatView({
           activeThreadEntryPoint={terminalState.entryPoint}
           activeProvider={activeThread.session?.provider ?? activeThread.modelSelection.provider}
           activeProjectName={isEditorRail ? undefined : activeProjectDisplayName}
+          activeProjectId={activeProject?.id ?? null}
           threadBreadcrumbs={threadBreadcrumbs}
           {...(isEditorRail
             ? { className: cn(CHAT_SURFACE_HEADER_PADDING_X_CLASS, "h-full") }
@@ -5605,6 +5659,10 @@ export default function ChatView({
                 </div>
                 <div className="w-full shrink-0 pb-3 sm:pb-4">
                   {composerSection}
+                  <PluginHomepageSections
+                    className={cn("mt-3", COMPOSER_COLUMN_FRAME_CLASS_NAME)}
+                    context={pluginContext}
+                  />
                   {relocateComposerLeadingControls ? (
                     <div className={COMPOSER_COLUMN_FRAME_CLASS_NAME}>
                       <div className="flex w-full items-center gap-1">
@@ -5623,6 +5681,7 @@ export default function ChatView({
                 <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
                   <ChatTranscriptPane
                     activeThreadId={activeThread.id}
+                    pluginContext={pluginContext}
                     activeTurnId={activeTurnIdForTranscript}
                     agentActivityDetail={openAgentActivityDetail}
                     hasMessages={timelineEntries.length > 0}
@@ -5898,6 +5957,21 @@ export default function ChatView({
               runtimeMode,
               createThread: handleNewThread,
             })
+          }
+          pluginContext={pluginContext}
+          pluginMessage={
+            pendingTranscriptSelectionAction
+              ? (() => {
+                  const message = timelineMessages.find(
+                    (candidate) =>
+                      candidate.id ===
+                      pendingTranscriptSelectionAction.selection.assistantMessageId,
+                  );
+                  return message?.role === "assistant"
+                    ? { id: message.id, role: "assistant" as const, text: message.text }
+                    : undefined;
+                })()
+              : undefined
           }
         />
       ) : null}

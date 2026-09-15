@@ -4,6 +4,7 @@
 // Depends on: MessagesTimeline and ChatView's list-owned scroll contract.
 
 import { type MessageId, type ThreadId, type TurnId } from "@synara/contracts";
+import type { SynaraPluginAppContext } from "@synara/plugin-sdk/app";
 import { type LegendListRef } from "@legendapp/list/react";
 import {
   useEffect,
@@ -111,6 +112,7 @@ interface ChatTranscriptPaneProps {
   >["worktreeSetupPendingAction"];
   onResolveWorktreeSetup?: ComponentProps<typeof MessagesTimeline>["onResolveWorktreeSetup"];
   findHighlightStore?: ThreadFindHighlightStore | null;
+  pluginContext?: SynaraPluginAppContext;
 }
 
 export function ChatTranscriptPane({
@@ -184,6 +186,7 @@ export function ChatTranscriptPane({
   worktreeSetupPendingAction,
   onResolveWorktreeSetup,
   findHighlightStore: findHighlightStoreProp,
+  pluginContext,
 }: ChatTranscriptPaneProps) {
   // The composer floats over the transcript's bottom edge, so the scroll-to-bottom
   // affordance rides above it on the same inset the transcript content uses.
@@ -302,6 +305,7 @@ export function ChatTranscriptPane({
             contentInsetBottomClearancePx={contentInsetBottomClearancePx}
             {...(onOpenAgentActivity ? { onOpenAgentActivity } : {})}
             findHighlight={findHighlight}
+            pluginContext={pluginContext}
             emptyStateContent={
               emptyStateContent === undefined ? (
                 <ChatEmptyStateHero projectName={emptyStateProjectName} />

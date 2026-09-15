@@ -134,6 +134,7 @@ export function PluginRuntimeProvider({ children }: { readonly children: ReactNo
           generation: plugin.generation,
           projectId,
           operationId: crypto.randomUUID(),
+          createdAt: new Date().toISOString(),
         }),
       call: async ({ plugin, method, contract, input }) => {
         const result = await ensureNativeApi().plugins.call({
@@ -173,7 +174,7 @@ export function PluginRuntimeProvider({ children }: { readonly children: ReactNo
         continue;
       }
       loadingKeys.current.add(target.key);
-      void import(target.appUrl)
+      void import(/* @vite-ignore */ target.appUrl)
         .then((module: { readonly default?: unknown }) => {
           if (desiredTargets.current.get(target.plugin.id)?.key !== target.key) return;
           const registered = collectPluginAppRegistrations(

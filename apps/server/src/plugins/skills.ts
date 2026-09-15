@@ -66,3 +66,25 @@ export function removePluginSkills(baseDir: string, pluginId: string): boolean {
   rmSync(targetRoot, { recursive: true, force: true });
   return true;
 }
+
+export function replacePluginSkills<Value>(
+  baseDir: string,
+  pluginId: string,
+  skillRoots: ReadonlyArray<string>,
+  commit: (installed: ReadonlyArray<string>) => Value,
+): Value {
+  const targetRoot = pluginSkillsInstallRoot(baseDir, pluginId);
+  const backupRoot = `${targetRoot}.${process.pid}.${crypto.randomUUID()}.transaction-backup`;
+  const hadPrevious = existsSync(targetRoot);
+  if (hadPrevious) cpSync(targetRoot, backupRoot, { recursive: true });
+  try {
+    const installed = syncPluginSkills(baseDir, pluginId, skillRoots);
+    const result = commit(installed);
+    rmSync(backupRoot, { recursive: true, force: true });
+    return result;
+  } catch (cause) {
+    rmSync(targetRoot, { recursive: true, force: true });
+    if (hadPrevious) renameSync(backupRoot, targetRoot);
+    throw cause;
+  }
+}

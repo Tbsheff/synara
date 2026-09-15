@@ -71,7 +71,7 @@ describe("plugin registry", () => {
     ).rejects.toThrow("generation");
   });
 
-  it("drains the active generation before replacing it", async () => {
+  it("cancels and drains the active generation before replacing it", async () => {
     const registry = createPluginRegistry({ host: {} as never, storage: {} as never });
     let release!: () => void;
     const pending = new Promise<void>((resolve) => {
@@ -115,7 +115,7 @@ describe("plugin registry", () => {
       }),
     ).rejects.toThrow("generation");
     release();
-    await expect(call).resolves.toEqual({ value: "old" });
+    await expect(call).rejects.toThrow("retired");
     await activation;
     expect(registry.list()[0]?.generation).toBe(2);
   });
@@ -284,5 +284,62 @@ describe("plugin registry", () => {
       }),
     );
     expect(registry.list()[0]?.generation).toBe(2);
+  });
+
+  it("blocks storage writes from a retired generation after the drain timeout", async () => {
+    const values = new Map<string, unknown>();
+    const registry = createPluginRegistry({
+      host: { threads: { start: () => Promise.resolve({ threadId: "thread" }) } },
+      storage: {
+        get: (key) => Promise.resolve(values.get(key) as never),
+        set: (key, value) => {
+          values.set(key, value);
+          return Promise.resolve();
+        },
+        delete: (key) => {
+          values.delete(key);
+          return Promise.resolve();
+        },
+        update: async (key, updateValue) => {
+          const next = await updateValue(values.get(key) as never);
+          if (next === undefined) values.delete(key);
+          else values.set(key, next);
+          return next;
+        },
+      },
+      drainTimeoutMs: 5,
+    });
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await registry.activate(
+      { id: "acme.echo", displayName: "Echo", apiVersion: 1, version: "1.0.0" },
+      definePlugin((api) => {
+        api.rpc.register("echo", echo, async ({ value }) => {
+          await pending;
+          await api.storage.set("late", value);
+          return { value };
+        });
+      }),
+    );
+    const call = registry.call({
+      pluginId: "acme.echo",
+      generation: 1,
+      method: "echo",
+      input: { value: "old" },
+    });
+    await Promise.resolve();
+    await registry.activate(
+      { id: "acme.echo", displayName: "Echo", apiVersion: 1, version: "1.0.1" },
+      definePlugin(() => undefined),
+    );
+    release();
+    await expect(call).rejects.toThrow("retired");
+    expect(values.has("late")).toBe(false);
+  });
+
+  it("rejects object fields that are not declared by the schema", () => {
+    expect(() => echo.input.parse({ value: "ok", extra: true })).toThrow("extra is not allowed");
   });
 });
