@@ -75,6 +75,7 @@ import { createLogger } from "./logger";
 import { transcribeVoiceWithChatGptSession } from "./voiceTranscription.ts";
 import {
   CodexAppServerTransportError,
+  type CodexOversizedJsonlFrame,
   CodexJsonlFramer,
   CodexJsonlWriter,
 } from "./codexAppServerTransport.ts";
@@ -295,6 +296,8 @@ export interface CodexThreadSnapshot {
   turns: CodexThreadTurnSnapshot[];
   cwd?: string | null;
 }
+
+export type CodexThreadStatusType = "notLoaded" | "idle" | "systemError" | "active";
 
 const CODEX_VERSION_CHECK_TIMEOUT_MS = 4_000;
 const CODEX_VERSION_CHECK_MAX_OUTPUT_BYTES = 1024 * 1024;
@@ -630,7 +633,10 @@ type CodexThreadOpenRequest =
     }
   | {
       readonly method: "thread/resume" | "thread/fork";
-      readonly params: CodexThreadSessionOverrides & { readonly threadId: string };
+      readonly params: CodexThreadSessionOverrides & {
+        readonly threadId: string;
+        readonly excludeTurns: true;
+      };
     };
 
 export function buildCodexThreadOpenRequest(input: {
@@ -644,13 +650,17 @@ export function buildCodexThreadOpenRequest(input: {
   if (input.forkSourceThreadId) {
     return {
       method: "thread/fork",
-      params: { ...input.sessionOverrides, threadId: input.forkSourceThreadId },
+      params: {
+        ...input.sessionOverrides,
+        threadId: input.forkSourceThreadId,
+        excludeTurns: true,
+      },
     };
   }
   if (input.resumeThreadId) {
     return {
       method: "thread/resume",
-      params: { ...input.sessionOverrides, threadId: input.resumeThreadId },
+      params: { ...input.sessionOverrides, threadId: input.resumeThreadId, excludeTurns: true },
     };
   }
   return {
@@ -906,6 +916,19 @@ export function classifyCodexStderrLine(rawLine: string): { message: string } | 
   }
 
   return { message: normalizeCodexUserVisibleErrorMessage(line) };
+}
+
+function oversizedFrameLogContext(
+  context: CodexSessionContext,
+  frame: CodexOversizedJsonlFrame,
+): Record<string, unknown> {
+  return {
+    threadId: context.session.threadId,
+    id: frame.id ?? null,
+    method: frame.method ?? null,
+    observedBytes: frame.observedBytes,
+    maxBytes: frame.maxBytes,
+  };
 }
 
 export function isRecoverableThreadResumeError(error: unknown): boolean {
@@ -1852,6 +1875,41 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     return this.parseThreadSnapshot("thread/read", response);
   }
 
+  async readThreadStatus(threadId: ThreadId, timeoutMs?: number): Promise<CodexThreadStatusType> {
+    const context = this.requireSession(threadId);
+    const providerThreadId = readResumeThreadId({
+      threadId: context.session.threadId,
+      runtimeMode: context.session.runtimeMode,
+      resumeCursor: context.session.resumeCursor,
+    });
+    if (!providerThreadId) {
+      throw new Error("Session is missing a provider resume thread id.");
+    }
+
+    const response = await this.sendRequest(
+      context,
+      "thread/read",
+      { threadId: providerThreadId, includeTurns: false },
+      timeoutMs,
+    );
+    const responseRecord = this.readObject(response);
+    const status =
+      this.readObject(this.readObject(responseRecord, "thread"), "status") ??
+      this.readObject(responseRecord, "status");
+    const statusType = this.readString(status, "type");
+    switch (statusType) {
+      case "notLoaded":
+      case "idle":
+      case "systemError":
+      case "active":
+        return statusType;
+      default:
+        throw new Error(
+          `thread/read returned an unrecognized thread status '${statusType ?? "missing"}'.`,
+        );
+    }
+  }
+
   async forkThread(input: ProviderForkThreadInput): Promise<ProviderForkThreadResult> {
     const threadId = input.threadId;
     const now = new Date().toISOString();
@@ -1959,6 +2017,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         ...(serviceTier !== undefined ? { serviceTier } : {}),
         cwd: resolvedCwd,
         ...mapCodexRuntimeMode(input.runtimeMode),
+        excludeTurns: true,
       };
 
       this.emitLifecycleEvent(
@@ -2923,8 +2982,12 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     const onStdoutData = (chunk: Buffer) => {
       if (context.stopping) return;
       try {
-        for (const line of context.stdoutFramer.push(chunk)) {
-          this.handleStdoutLine(context, line);
+        for (const frame of context.stdoutFramer.push(chunk)) {
+          if (typeof frame === "string") {
+            this.handleStdoutLine(context, frame);
+          } else {
+            this.handleOversizedStdoutFrame(context, frame);
+          }
         }
       } catch (cause) {
         this.handleTransportFailure(context, cause);
@@ -2933,7 +2996,13 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     const onStdoutEnd = () => {
       if (context.stopping) return;
       try {
-        context.stdoutFramer.finish();
+        const discardedFrame = context.stdoutFramer.finish();
+        if (discardedFrame) {
+          log.warn(
+            "codex app-server stdout closed while discarding an oversized frame",
+            oversizedFrameLogContext(context, discardedFrame),
+          );
+        }
         this.handleTransportFailure(
           context,
           new CodexAppServerTransportError({
@@ -3010,6 +3079,47 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     this.emitErrorEvent(context, "protocol/transportError", message);
 
     this.stopFailedContext(context);
+  }
+
+  private handleOversizedStdoutFrame(
+    context: CodexSessionContext,
+    frame: CodexOversizedJsonlFrame,
+  ): void {
+    const logContext = oversizedFrameLogContext(context, frame);
+    if (frame.id !== undefined && frame.method !== undefined) {
+      log.warn("codex app-server server request exceeded the stdout frame limit", logContext);
+      void this.writeMessage(context, {
+        id: frame.id,
+        error: {
+          code: -32600,
+          message: `${frame.method} request exceeded the client's ${frame.maxBytes}-byte frame limit.`,
+        },
+      }).catch(() => undefined);
+      return;
+    }
+
+    const isResponse = frame.payloadKey === "result" || frame.payloadKey === "error";
+    const pendingKey = isResponse && frame.id !== undefined ? String(frame.id) : undefined;
+    const pending = pendingKey !== undefined ? context.pending.get(pendingKey) : undefined;
+    if (pendingKey === undefined || !pending) {
+      log.warn("codex app-server dropped an oversized stdout frame", logContext);
+      return;
+    }
+
+    clearTimeout(pending.timeout);
+    context.pending.delete(pendingKey);
+    log.warn("codex app-server response exceeded the stdout frame limit", {
+      ...logContext,
+      method: pending.method,
+    });
+    const transportError = new CodexAppServerTransportError({
+      reason: "frame-too-large",
+      maxBytes: frame.maxBytes,
+      observedBytes: frame.observedBytes,
+    });
+    pending.reject(
+      new Error(`${pending.method} failed: ${transportError.message}`, { cause: transportError }),
+    );
   }
 
   private stopFailedContext(context: CodexSessionContext): void {

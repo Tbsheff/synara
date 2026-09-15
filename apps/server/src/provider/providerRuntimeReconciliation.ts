@@ -16,19 +16,12 @@ import {
 } from "@synara/contracts";
 import { nonEmptyTrimmed } from "@synara/shared/text";
 
+import type { ProjectionThreadProgress } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import type { ProviderRuntimeEventPumpHealth } from "./Services/ProviderService.ts";
 import type { ProviderRuntimeBinding } from "./Services/ProviderSessionDirectory.ts";
 
 export const DEFAULT_RUNTIME_RECONCILIATION_STALE_AFTER_MS = 15_000;
 
-/**
- * Absolute upper bound on a single turn. Past this the turn is settled even
- * when the live runtime still claims to be running, because every other signal
- * this planner trusts (a settled session, a missing session, a failed binding)
- * can be absent when a provider wedges mid-turn. `thread.updatedAt` advances on
- * every appended message, so a legitimately long-running turn keeps resetting
- * this clock and is never affected.
- */
 export const RUNTIME_RECONCILIATION_MAX_TURN_AGE_MS = 45 * 60_000;
 
 export type ProviderRuntimeReconciliationPlan =
@@ -113,7 +106,7 @@ function terminalProjectedSession(
   }
 }
 
-function projectedInFlightTurnId(thread: OrchestrationThreadShell): TurnId | null {
+export function projectedInFlightTurnId(thread: OrchestrationThreadShell): TurnId | null {
   const session = thread.session;
   // A queued start has no provider turn yet. Falling back to latestTurn here
   // can attach the new request to an older terminal (or ingestion-lagged) turn.
@@ -132,25 +125,45 @@ function projectedInFlightTurnId(thread: OrchestrationThreadShell): TurnId | nul
   );
 }
 
-function projectedLifecycleAgeMs(thread: OrchestrationThreadShell, nowMs: number): number {
-  // The later of the session lifecycle timestamp and the thread timestamp:
-  // `thread.updatedAt` advances on every appended message, so a turn that is
-  // actively streaming output never counts as stale even though its session
-  // row only moves on lifecycle transitions.
-  const sessionObservedAt = Date.parse(thread.session?.updatedAt ?? thread.updatedAt);
-  const threadObservedAt = Date.parse(thread.updatedAt);
-  const observedAt = Number.isFinite(sessionObservedAt)
-    ? Number.isFinite(threadObservedAt)
-      ? Math.max(sessionObservedAt, threadObservedAt)
-      : sessionObservedAt
-    : threadObservedAt;
-  return Number.isFinite(observedAt) ? Math.max(0, nowMs - observedAt) : Number.POSITIVE_INFINITY;
+function ageSinceNewestMs(observedAtMs: ReadonlyArray<number>, nowMs: number): number {
+  const finiteObservedAtMs = observedAtMs.filter(Number.isFinite);
+  return finiteObservedAtMs.length === 0
+    ? Number.POSITIVE_INFINITY
+    : Math.max(0, nowMs - Math.max(...finiteObservedAtMs));
 }
 
-/** Time since anything at all was projected onto the thread (messages included). */
-function threadActivityAgeMs(thread: OrchestrationThreadShell, nowMs: number): number {
-  const observedAt = Date.parse(thread.updatedAt);
-  return Number.isFinite(observedAt) ? Math.max(0, nowMs - observedAt) : Number.POSITIVE_INFINITY;
+function lastProgressAtMsByThreadId(
+  threadProgress: ReadonlyArray<ProjectionThreadProgress>,
+): ReadonlyMap<ThreadId, number> {
+  const newestByThreadId = new Map<ThreadId, number>();
+  const credit = (threadId: ThreadId, observedAtMs: number) => {
+    const previous = newestByThreadId.get(threadId);
+    if (previous === undefined || observedAtMs > previous) {
+      newestByThreadId.set(threadId, observedAtMs);
+    }
+  };
+  for (const progress of threadProgress) {
+    const observedAtMs = Date.parse(progress.lastProgressAt);
+    if (!Number.isFinite(observedAtMs)) continue;
+    credit(progress.threadId, observedAtMs);
+    if (progress.parentThreadId !== null) credit(progress.parentThreadId, observedAtMs);
+  }
+  return newestByThreadId;
+}
+
+function projectedLifecycleAgeMs(thread: OrchestrationThreadShell, nowMs: number): number {
+  return ageSinceNewestMs(
+    [Date.parse(thread.session?.updatedAt ?? thread.updatedAt), Date.parse(thread.updatedAt)],
+    nowMs,
+  );
+}
+
+function threadActivityAgeMs(
+  thread: OrchestrationThreadShell,
+  lastProgressAtMs: number,
+  nowMs: number,
+): number {
+  return ageSinceNewestMs([Date.parse(thread.updatedAt), lastProgressAtMs], nowMs);
 }
 
 function pumpDetail(
@@ -192,6 +205,7 @@ export function planProviderRuntimeReconciliation(input: {
   // from a stale one, so settle plans hold off until those rows catch up
   // (abandoned turns excepted).
   readonly runtimeJournalLagging?: boolean;
+  readonly threadProgress?: ReadonlyArray<ProjectionThreadProgress>;
   readonly nowMs: number;
   readonly staleAfterMs?: number;
   readonly maxTurnAgeMs?: number;
@@ -209,9 +223,11 @@ export function planProviderRuntimeReconciliation(input: {
     input.liveSessions.map((session) => [session.threadId, session]),
   );
   const healthByProvider = new Map(input.pumpHealth.map((health) => [health.provider, health]));
+  const progressAtMsByThreadId = lastProgressAtMsByThreadId(input.threadProgress ?? []);
   const plans: ProviderRuntimeReconciliationPlan[] = [];
 
   for (const thread of input.threads) {
+    const lastProgressAtMs = progressAtMsByThreadId.get(thread.id) ?? Number.NaN;
     const lifecycleAgeMs = projectedLifecycleAgeMs(thread, input.nowMs);
     if (lifecycleAgeMs < staleAfterMs) continue;
 
@@ -224,7 +240,8 @@ export function planProviderRuntimeReconciliation(input: {
     const provider = binding?.provider ?? thread.modelSelection.provider;
     const detail = pumpDetail(provider, healthByProvider);
     const abandoned =
-      lifecycleAgeMs >= maxTurnAgeMs && threadActivityAgeMs(thread, input.nowMs) >= maxTurnAgeMs;
+      lifecycleAgeMs >= maxTurnAgeMs &&
+      threadActivityAgeMs(thread, lastProgressAtMs, input.nowMs) >= maxTurnAgeMs;
     const abandonedDetail = ` Nothing has progressed on this thread for over ${Math.round(maxTurnAgeMs / 60_000)} minutes.${detail}`;
 
     // Native child threads share a parent session and intentionally have no

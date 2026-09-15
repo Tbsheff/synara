@@ -36,7 +36,7 @@ import type { Effect, Stream } from "effect";
 
 import type { ProviderServiceError } from "../Errors.ts";
 import type { PersistedProviderRuntimeEvent } from "../../persistence/Services/ProviderRuntimeEvents.ts";
-import type { ProviderAdapterCapabilities } from "./ProviderAdapter.ts";
+import type { ProviderAdapterCapabilities, ProviderThreadActivity } from "./ProviderAdapter.ts";
 
 export type ProviderRuntimeEventPumpStatus = "starting" | "healthy" | "recovering" | "degraded";
 
@@ -190,6 +190,11 @@ export interface ProviderServiceShape {
    * terminates those tasks.
    */
   readonly hasLiveRuntimeTasks?: (input: { readonly threadId: ThreadId }) => Effect.Effect<boolean>;
+
+  readonly readThreadActivity?: (input: {
+    readonly threadId: ThreadId;
+    readonly provider: ProviderKind;
+  }) => Effect.Effect<ProviderThreadActivity | null, ProviderServiceError>;
 
   /**
    * Forget a stale provider-native resume cursor while preserving local routing

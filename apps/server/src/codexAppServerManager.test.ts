@@ -684,6 +684,181 @@ describe("Codex app-server teardown", () => {
   });
 });
 
+describe("Codex app-server oversized stdout frames", () => {
+  function createAttachedSession() {
+    class FakeCodexChild extends EventEmitter {
+      readonly pid = 5353;
+      exitCode: number | null = null;
+      signalCode: NodeJS.Signals | null = null;
+      readonly stdin = new PassThrough();
+      readonly stdout = new PassThrough();
+      readonly stderr = new PassThrough();
+    }
+    const child = new FakeCodexChild();
+    const teardownProcessTree = vi.fn(async () => ({
+      escalated: false,
+      signalErrors: [],
+      capturedBeforeRootExit: false,
+    }));
+    const manager = new CodexAppServerManager(undefined, { teardownProcessTree });
+    const threadId = asThreadId("thread-codex-oversized-frame");
+    const context = {
+      session: {
+        provider: "codex",
+        status: "ready",
+        threadId,
+        runtimeMode: "full-access",
+        createdAt: "2026-07-14T00:00:00.000Z",
+        updatedAt: "2026-07-14T00:00:00.000Z",
+      },
+      account: { type: "unknown", planType: null, sparkEnabled: true },
+      child,
+      stdoutFramer: new CodexJsonlFramer(256, 64),
+      stdinWriter: new CodexJsonlWriter(child.stdin),
+      pending: new Map(),
+      pendingApprovals: new Map(),
+      pendingUserInputs: new Map(),
+      collabReceiverTurns: new Map(),
+      collabReceiverParents: new Map(),
+      reviewTurnIds: new Set(),
+      nextRequestId: 1,
+      stopping: false,
+    };
+    const internals = manager as unknown as {
+      sessions: Map<ThreadId, unknown>;
+      attachProcessListeners: (context: unknown) => void;
+      sendRequest: (context: unknown, method: string, params: unknown) => Promise<unknown>;
+    };
+    internals.sessions.set(threadId, context);
+    internals.attachProcessListeners(context);
+
+    const stdinFrames: unknown[] = [];
+    const stdinFramer = new CodexJsonlFramer();
+    child.stdin.on("data", (chunk: Buffer) => {
+      for (const frame of stdinFramer.push(chunk)) {
+        stdinFrames.push(typeof frame === "string" ? JSON.parse(frame) : frame);
+      }
+    });
+    const emitEvent = vi
+      .spyOn(manager as unknown as { emitEvent: (event: unknown) => void }, "emitEvent")
+      .mockImplementation(() => {});
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    return { manager, threadId, context, child, internals, stdinFrames, emitEvent, warn };
+  }
+
+  const filler = "x".repeat(1024);
+
+  it("rejects only the pending request whose response is oversized", async () => {
+    const { manager, threadId, context, child, internals, stdinFrames, warn } =
+      createAttachedSession();
+    try {
+      const resume = internals.sendRequest(context, "thread/resume", { threadId: "provider" });
+      const list = internals.sendRequest(context, "model/list", {});
+      await vi.waitFor(() => expect(stdinFrames).toHaveLength(2));
+      const resumeRejected = expect(resume).rejects.toMatchObject({
+        message: expect.stringContaining(
+          "thread/resume failed: Codex app-server JSONL frame exceeded its byte limit",
+        ),
+        cause: expect.objectContaining({ reason: "frame-too-large" }),
+      });
+
+      const oversized = `{"id":1,"result":{"thread":{"id":"provider","turns":"${filler}"}}}\n`;
+      child.stdout.write(oversized.slice(0, 300));
+      child.stdout.write(oversized.slice(300));
+      child.stdout.write('{"id":2,"result":{"data":[]}}\n');
+
+      await resumeRejected;
+      await expect(list).resolves.toEqual({ data: [] });
+      expect(context.pending.size).toBe(0);
+      expect(context.stopping).toBe(false);
+      expect(manager.hasSession(threadId)).toBe(true);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('method="thread/resume"'));
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("answers an oversized server request with a JSON-RPC error", async () => {
+    const { manager, threadId, context, child, stdinFrames, emitEvent, warn } =
+      createAttachedSession();
+    try {
+      child.stdout.write(
+        `{"id":"srv-1","method":"item/commandExecution/requestApproval","params":{"command":"${filler}"}}\n`,
+      );
+
+      await vi.waitFor(() =>
+        expect(stdinFrames).toEqual([
+          {
+            id: "srv-1",
+            error: {
+              code: -32600,
+              message: expect.stringContaining("item/commandExecution/requestApproval"),
+            },
+          },
+        ]),
+      );
+      expect(context.pendingApprovals.size).toBe(0);
+      expect(emitEvent).not.toHaveBeenCalled();
+      expect(manager.hasSession(threadId)).toBe(true);
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('method="item/commandExecution/requestApproval"'),
+      );
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("drops an oversized notification and keeps routing later frames", async () => {
+    const { manager, threadId, child, stdinFrames, emitEvent, warn } = createAttachedSession();
+    try {
+      child.stdout.write(
+        `{"method":"item/completed","params":{"item":{"aggregatedOutput":"${filler}"}}}\n` +
+          '{"method":"item/agentMessage/delta","params":{"turnId":"turn-1","itemId":"item-1","delta":"still flowing"}}\n',
+      );
+
+      await vi.waitFor(() =>
+        expect(emitEvent).toHaveBeenCalledWith(
+          expect.objectContaining({
+            method: "item/agentMessage/delta",
+            textDelta: "still flowing",
+          }),
+        ),
+      );
+      expect(emitEvent).not.toHaveBeenCalledWith(
+        expect.objectContaining({ method: "item/completed" }),
+      );
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('method="item/completed"'));
+      expect(stdinFrames).toEqual([]);
+      expect(manager.hasSession(threadId)).toBe(true);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("reports a closed stdout instead of an unterminated frame while discarding", async () => {
+    const { child, emitEvent, warn } = createAttachedSession();
+    try {
+      child.stdout.write(`{"id":1,"result":{"turns":"${filler}`);
+      child.stdout.end();
+
+      await vi.waitFor(() =>
+        expect(emitEvent).toHaveBeenCalledWith(
+          expect.objectContaining({
+            method: "protocol/transportError",
+            message: "Codex app-server stdout closed before process shutdown.",
+          }),
+        ),
+      );
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining("stdout closed while discarding an oversized frame"),
+      );
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+});
+
 describe("classifyCodexStderrLine", () => {
   it("ignores empty lines", () => {
     expect(classifyCodexStderrLine("   ")).toBeNull();
@@ -1467,6 +1642,7 @@ describe("buildCodexThreadOpenRequest", () => {
       params: {
         ...sessionOverrides,
         threadId: "external-thread",
+        excludeTurns: true,
       },
     });
   });
@@ -1482,6 +1658,7 @@ describe("buildCodexThreadOpenRequest", () => {
       params: {
         ...sessionOverrides,
         threadId: "existing-thread",
+        excludeTurns: true,
       },
     });
   });
@@ -2957,6 +3134,42 @@ describe("thread checkpoint control", () => {
     });
   });
 
+  it("reads the provider thread status from a metadata-only thread/read", async () => {
+    const { manager, context, sendRequest } = createThreadControlHarness();
+    for (const statusType of ["notLoaded", "idle", "systemError", "active"] as const) {
+      sendRequest.mockResolvedValueOnce({
+        thread: {
+          id: "thread_1",
+          status:
+            statusType === "active"
+              ? { type: statusType, activeFlags: ["waitingOnApproval"] }
+              : { type: statusType },
+        },
+      });
+      await expect(manager.readThreadStatus(asThreadId("thread_1"), 5_000)).resolves.toBe(
+        statusType,
+      );
+    }
+    expect(sendRequest).toHaveBeenCalledWith(
+      context,
+      "thread/read",
+      { threadId: "thread_1", includeTurns: false },
+      5_000,
+    );
+
+    sendRequest.mockResolvedValueOnce({ status: { type: "idle" } });
+    await expect(manager.readThreadStatus(asThreadId("thread_1"))).resolves.toBe("idle");
+
+    sendRequest.mockResolvedValueOnce({ thread: { id: "thread_1", status: { type: "paused" } } });
+    await expect(manager.readThreadStatus(asThreadId("thread_1"))).rejects.toThrow(
+      "unrecognized thread status 'paused'",
+    );
+    sendRequest.mockResolvedValueOnce({ thread: { id: "thread_1" } });
+    await expect(manager.readThreadStatus(asThreadId("thread_1"))).rejects.toThrow(
+      "unrecognized thread status 'missing'",
+    );
+  });
+
   it("reads thread turns from flat thread/read responses", async () => {
     const { manager, context, sendRequest } = createThreadControlHarness();
     sendRequest.mockResolvedValue({
@@ -3026,6 +3239,7 @@ describe("thread checkpoint control", () => {
         serviceTier: "default",
         approvalPolicy: "never",
         sandbox: "danger-full-access",
+        excludeTurns: true,
       });
       expect(result).toEqual({
         threadId: "thread_2",

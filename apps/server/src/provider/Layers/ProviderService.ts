@@ -2765,6 +2765,13 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
     const hasLiveRuntimeTasks: NonNullable<ProviderServiceShape["hasLiveRuntimeTasks"]> = (input) =>
       Effect.sync(() => (liveRuntimeTaskIds.get(input.threadId)?.size ?? 0) > 0);
 
+    const readThreadActivity: NonNullable<ProviderServiceShape["readThreadActivity"]> = (input) =>
+      Effect.gen(function* () {
+        const adapter = yield* registry.getByProvider(input.provider);
+        if (adapter.readThreadActivity === undefined) return null;
+        return yield* adapter.readThreadActivity(input.threadId);
+      });
+
     stopIdleRuntimeSession = (threadId, generation, cleanupStarted = false) => {
       const stopEffect = Effect.gen(function* () {
         if (!isRuntimeIdleGenerationCurrent(threadId, generation)) {
@@ -3183,6 +3190,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       stopSession,
       stopRuntimeSession,
       hasLiveRuntimeTasks,
+      readThreadActivity,
       clearSessionResumeCursor,
       listSessions,
       getCapabilities,

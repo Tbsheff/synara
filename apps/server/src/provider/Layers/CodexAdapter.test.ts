@@ -21,6 +21,7 @@ import {
   CodexAppServerManager,
   type CodexAppServerStartSessionInput,
   type CodexAppServerSendTurnInput,
+  type CodexThreadStatusType,
 } from "../../codexAppServerManager.ts";
 import { ServerConfig } from "../../config.ts";
 import { CodexSessionStartError } from "../../codexErrorClassification.ts";
@@ -119,6 +120,14 @@ class FakeCodexManager extends CodexAppServerManager {
 
   override readThread(threadId: ThreadId) {
     return this.readThreadImpl(threadId);
+  }
+
+  public readThreadStatusImpl = vi.fn(
+    async (_threadId: ThreadId, _timeoutMs?: number): Promise<CodexThreadStatusType> => "idle",
+  );
+
+  override readThreadStatus(threadId: ThreadId, timeoutMs?: number) {
+    return this.readThreadStatusImpl(threadId, timeoutMs);
   }
 
   override rollbackThread(threadId: ThreadId, numTurns: number) {
@@ -234,6 +243,36 @@ validationLayer("CodexAdapterLive validation", (it) => {
       assert.equal(validationManager.startSessionImpl.mock.calls.length, 0);
     }),
   );
+  it.effect("maps Codex thread status to provider thread activity", () =>
+    Effect.gen(function* () {
+      validationManager.readThreadStatusImpl.mockClear();
+      const adapter = yield* CodexAdapter;
+      const readThreadActivity = adapter.readThreadActivity;
+      assert.ok(readThreadActivity);
+      for (const [status, activity] of [
+        ["active", "active"],
+        ["idle", "idle"],
+        ["notLoaded", "not-loaded"],
+        ["systemError", "error"],
+      ] as const) {
+        validationManager.readThreadStatusImpl.mockResolvedValueOnce(status);
+        assert.equal(yield* readThreadActivity(asThreadId("thread-1")), activity);
+      }
+      assert.deepStrictEqual(validationManager.readThreadStatusImpl.mock.calls[0], [
+        asThreadId("thread-1"),
+        5_000,
+      ]);
+
+      validationManager.readThreadStatusImpl.mockRejectedValueOnce(
+        new Error("Timed out waiting for thread/read."),
+      );
+      const result = yield* readThreadActivity(asThreadId("thread-1")).pipe(Effect.result);
+      assert.equal(result._tag, "Failure");
+      if (result._tag !== "Failure") throw new Error("Expected probe failure");
+      assert.equal(result.failure._tag, "ProviderAdapterRequestError");
+    }),
+  );
+
   it.effect("maps codex model options before starting a session", () =>
     Effect.gen(function* () {
       validationManager.startSessionImpl.mockClear();

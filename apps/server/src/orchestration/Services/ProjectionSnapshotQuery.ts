@@ -38,6 +38,12 @@ export interface ProjectionSnapshotSequence {
   readonly snapshotSequence: number;
 }
 
+export interface ProjectionThreadProgress {
+  readonly threadId: ThreadId;
+  readonly parentThreadId: ThreadId | null;
+  readonly lastProgressAt: string;
+}
+
 export interface ProjectionThreadCheckpointContext {
   readonly threadId: ThreadId;
   readonly projectId: ProjectId;
@@ -132,6 +138,10 @@ export interface ProjectionSnapshotQueryShape {
     readonly updatedBefore: string;
     readonly limit: number;
   }) => Effect.Effect<ReadonlyArray<ThreadId>, ProjectionRepositoryError>;
+
+  readonly listThreadProgressIncludingNativeChildren: (input: {
+    readonly threadIds: ReadonlyArray<ThreadId>;
+  }) => Effect.Effect<ReadonlyArray<ProjectionThreadProgress>, ProjectionRepositoryError>;
 
   /**
    * Read only the columns managed-worktree retention needs, for every thread that

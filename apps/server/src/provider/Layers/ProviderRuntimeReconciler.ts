@@ -12,6 +12,7 @@ import {
   EventId,
   type OrchestrationSession,
   type OrchestrationThreadShell,
+  type ProviderSession,
 } from "@synara/contracts";
 import { Cause, Duration, Effect, Layer, Option, Schedule } from "effect";
 
@@ -26,6 +27,7 @@ import {
   bindingActiveTurnId,
   DEFAULT_RUNTIME_RECONCILIATION_STALE_AFTER_MS,
   planProviderRuntimeReconciliation,
+  projectedInFlightTurnId,
   type ProviderRuntimeReconciliationPlan,
 } from "../providerRuntimeReconciliation.ts";
 import {
@@ -40,11 +42,14 @@ import {
 
 const DEFAULT_RECONCILIATION_INTERVAL_MS = 5_000;
 const DEFAULT_RECONCILIATION_CANDIDATE_LIMIT = 256;
+const DEFAULT_ACTIVITY_PROBE_TIMEOUT_MS = 5_000;
+const ACTIVITY_PROBE_CONCURRENCY = 8;
 
 export interface ProviderRuntimeReconcilerLiveOptions {
   readonly intervalMs?: number;
   readonly staleAfterMs?: number;
   readonly candidateLimit?: number;
+  readonly activityProbeTimeoutMs?: number;
 }
 
 function reconciliationKey(plan: ProviderRuntimeReconciliationPlan): string {
@@ -85,6 +90,41 @@ const make = (options?: ProviderRuntimeReconcilerLiveOptions) =>
         Math.floor(options?.candidateLimit ?? DEFAULT_RECONCILIATION_CANDIDATE_LIMIT),
       ),
     );
+    const activityProbeTimeoutMs = Math.max(
+      1,
+      Math.floor(options?.activityProbeTimeoutMs ?? DEFAULT_ACTIVITY_PROBE_TIMEOUT_MS),
+    );
+
+    const providerReportsThreadActive = Effect.fnUntraced(function* (input: {
+      readonly plan: ProviderRuntimeReconciliationPlan;
+      readonly liveSession: ProviderSession | undefined;
+    }) {
+      const { plan, liveSession } = input;
+      const readThreadActivity = providerService.readThreadActivity;
+      if (
+        plan.action === "align-running-turn" ||
+        readThreadActivity === undefined ||
+        liveSession === undefined ||
+        (liveSession.status !== "running" && liveSession.status !== "connecting")
+      ) {
+        return false;
+      }
+      const provider = liveSession.provider;
+      const activity = yield* readThreadActivity({ threadId: plan.threadId, provider }).pipe(
+        Effect.timeout(Duration.millis(activityProbeTimeoutMs)),
+        Effect.catchCause((cause) =>
+          Cause.hasInterruptsOnly(cause)
+            ? Effect.interrupt
+            : Effect.logWarning("provider.runtime_reconciliation.activity_probe_failed", {
+                threadId: plan.threadId,
+                provider,
+                action: plan.action,
+                cause: Cause.pretty(cause),
+              }).pipe(Effect.as(null)),
+        ),
+      );
+      return activity === "active";
+    });
 
     /** Compares everything that constitutes a repair; `updatedAt` always moves. */
     const isSameProjectedSession = (
@@ -218,18 +258,22 @@ const make = (options?: ProviderRuntimeReconcilerLiveOptions) =>
         limit: candidateLimit,
       });
       if (candidateThreadIds.length === 0) return;
-      const [bindings, liveSessions, pumpHealth, runtimeJournalLagging] = yield* Effect.all(
-        [
-          directory.listBindings(),
-          providerService.listSessions(),
-          providerService.getRuntimeEventPumpHealth?.() ?? Effect.succeed([]),
-          runtimeEvents.hasPendingEventsForThreads({
-            consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
-            threadIds: candidateThreadIds,
-          }),
-        ],
-        { concurrency: 4 },
-      );
+      const [bindings, liveSessions, pumpHealth, runtimeJournalLagging, threadProgress] =
+        yield* Effect.all(
+          [
+            directory.listBindings(),
+            providerService.listSessions(),
+            providerService.getRuntimeEventPumpHealth?.() ?? Effect.succeed([]),
+            runtimeEvents.hasPendingEventsForThreads({
+              consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+              threadIds: candidateThreadIds,
+            }),
+            projectionSnapshotQuery.listThreadProgressIncludingNativeChildren({
+              threadIds: candidateThreadIds,
+            }),
+          ],
+          { concurrency: 5 },
+        );
       const threads = (yield* Effect.forEach(
         candidateThreadIds,
         (threadId) => projectionSnapshotQuery.getThreadShellById(threadId),
@@ -237,32 +281,70 @@ const make = (options?: ProviderRuntimeReconcilerLiveOptions) =>
       )).flatMap(Option.toArray);
       const threadById = new Map(threads.map((thread) => [thread.id, thread]));
       const bindingByThreadId = new Map(bindings.map((binding) => [binding.threadId, binding]));
+      const liveSessionByThreadId = new Map(
+        liveSessions.map((session) => [session.threadId, session]),
+      );
       const plans = planProviderRuntimeReconciliation({
         threads,
         bindings,
         liveSessions,
         pumpHealth,
         runtimeJournalLagging,
+        threadProgress,
         nowMs,
         staleAfterMs,
       });
       if (plans.length === 0) return;
 
-      const now = new Date().toISOString();
       yield* Effect.logWarning("provider.runtime_reconciliation.started", {
         planCount: plans.length,
         threadIds: plans.map((plan) => plan.threadId),
       });
+      const providerActiveByPlan = yield* Effect.forEach(
+        plans,
+        (plan) =>
+          providerReportsThreadActive({
+            plan,
+            liveSession: liveSessionByThreadId.get(plan.threadId),
+          }),
+        { concurrency: ACTIVITY_PROBE_CONCURRENCY },
+      );
       yield* Effect.forEach(
         plans,
-        (plan) => {
-          const thread = threadById.get(plan.threadId);
-          if (!thread) return Effect.void;
-          return applyPlan({
-            plan,
-            thread,
-            binding: bindingByThreadId.get(plan.threadId),
-            now,
+        (plan, index) => {
+          const plannedThread = threadById.get(plan.threadId);
+          if (!plannedThread) return Effect.void;
+          return Effect.gen(function* () {
+            if (providerActiveByPlan[index] === true) {
+              yield* Effect.logInfo(
+                "provider.runtime_reconciliation.skipped_active_provider_thread",
+                {
+                  threadId: plan.threadId,
+                  provider: plan.provider,
+                  action: plan.action,
+                },
+              );
+              return;
+            }
+            const currentThread = yield* projectionSnapshotQuery.getThreadShellById(plan.threadId);
+            if (
+              Option.isNone(currentThread) ||
+              projectedInFlightTurnId(currentThread.value) !== plan.projectedTurnId ||
+              currentThread.value.session?.status !== plannedThread.session?.status
+            ) {
+              yield* Effect.logInfo("provider.runtime_reconciliation.skipped_changed_thread", {
+                threadId: plan.threadId,
+                provider: plan.provider,
+                action: plan.action,
+              });
+              return;
+            }
+            yield* applyPlan({
+              plan,
+              thread: currentThread.value,
+              binding: bindingByThreadId.get(plan.threadId),
+              now: new Date().toISOString(),
+            });
           }).pipe(
             Effect.catchCause((cause) =>
               Effect.logWarning("provider.runtime_reconciliation.plan_failed", {

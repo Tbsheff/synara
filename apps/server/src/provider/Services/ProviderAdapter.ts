@@ -84,6 +84,8 @@ export interface ProviderAdapterCapabilities {
   readonly supportsLiveTurnDiffPatch?: boolean;
 }
 
+export type ProviderThreadActivity = "active" | "idle" | "not-loaded" | "error";
+
 export interface ProviderThreadTurnSnapshot {
   readonly id: TurnId;
   readonly items: ReadonlyArray<unknown>;
@@ -220,6 +222,10 @@ export interface ProviderAdapterShape<TError> {
     readonly externalThreadId: string;
     readonly cwd?: string;
   }) => Effect.Effect<ProviderThreadSnapshot, TError>;
+
+  readonly readThreadActivity?: (
+    threadId: ThreadId,
+  ) => Effect.Effect<ProviderThreadActivity, TError>;
 
   /**
    * Roll back a provider thread by N turns.
