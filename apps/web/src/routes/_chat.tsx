@@ -39,6 +39,7 @@ import { useThreadSelectionStore } from "../threadSelectionStore";
 import { onServerMaintenanceUpdated } from "../wsNativeApi";
 import { useWorkspacePathsStore } from "../workspacePathsStore";
 import { useProviderStatusesForLocalConfig } from "~/hooks/useProviderStatusesForLocalConfig";
+import { PluginRuntimeProvider } from "~/plugins/runtime";
 import { useRefreshProviderStatusesNow } from "~/hooks/useProviderStatusRefresh";
 import { resolveProviderSendAvailabilityWithRefresh } from "~/lib/providerAvailability";
 import { toastManager } from "~/components/ui/toast";
@@ -589,18 +590,20 @@ function ChatRouteLayout() {
   );
 
   return (
-    <SidebarProvider
-      defaultOpen
-      open={resolvedSidebarOpen}
-      onOpenChange={setSidebarOpen}
-      className="bg-[var(--app-shell-background)]"
-      data-sidebar-side="left"
-    >
-      <ThreadRetentionMaintenanceToast />
-      <ChatRouteGlobalShortcuts />
-      {sidebarElement}
-      {mainContentShell}
-    </SidebarProvider>
+    <PluginRuntimeProvider>
+      <SidebarProvider
+        defaultOpen
+        open={resolvedSidebarOpen}
+        onOpenChange={setSidebarOpen}
+        className="bg-[var(--app-shell-background)]"
+        data-sidebar-side="left"
+      >
+        <ThreadRetentionMaintenanceToast />
+        <ChatRouteGlobalShortcuts />
+        {sidebarElement}
+        {mainContentShell}
+      </SidebarProvider>
+    </PluginRuntimeProvider>
   );
 }
 

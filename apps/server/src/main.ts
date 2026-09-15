@@ -7,6 +7,7 @@
  * @module CliConfig
  */
 import OS from "node:os";
+import path from "node:path";
 import {
   Config,
   Data,
@@ -19,7 +20,7 @@ import {
   ServiceMap,
   Stream,
 } from "effect";
-import { Command, Flag } from "effect/unstable/cli";
+import { Argument, Command, Flag } from "effect/unstable/cli";
 import { NetService } from "@synara/shared/Net";
 import {
   MIGRATION_DIVERGENCE_CONSENT_ENV,
@@ -73,6 +74,17 @@ import {
   embeddedMigrationRuntimeSourceDigest,
   verifyMigrationRuntimeIdentity,
 } from "./migrationBundleIdentity";
+import { buildPlugin } from "./plugins/build";
+import {
+  installPlugin,
+  listPluginRecords,
+  reloadPlugin,
+  resolvePluginRecord,
+  setPluginEnabled,
+  uninstallPlugin,
+  watchPlugin,
+} from "./plugins/management";
+import { scaffoldPlugin } from "./plugins/scaffold";
 
 export class StartupError extends Data.TaggedError("StartupError")<{
   readonly message: string;
@@ -721,9 +733,208 @@ const mcpCommand = Command.make("mcp").pipe(
   Command.withSubcommands([mcpServeCommand, mcpPairCommand]),
 );
 
+const pluginIdArgument = Argument.string("plugin").pipe(
+  Argument.withDescription("Plugin package id or short app id."),
+);
+const pluginJsonFlag = Flag.boolean("json").pipe(
+  Flag.withDescription("Print machine-readable JSON."),
+  Flag.withDefault(false),
+);
+const pluginPathArgument = Argument.string("path").pipe(
+  Argument.withDescription("Local plugin package path."),
+);
+
+function pluginCliBaseDir(parent: CliInput): string {
+  return resolveExternalMcpBaseDir(Option.getOrUndefined(parent.synaraHome));
+}
+
+function pluginStartupError(message: string, cause: unknown) {
+  return new StartupError({ message, cause });
+}
+
+const pluginListCommand = Command.make("list", { json: pluginJsonFlag }, ({ json }) =>
+  Effect.gen(function* () {
+    const parent = yield* baseServerCommand;
+    const plugins = listPluginRecords(pluginCliBaseDir(parent));
+    process.stdout.write(
+      json
+        ? `${JSON.stringify({ plugins }, null, 2)}\n`
+        : `${plugins.map((plugin) => `${plugin.enabled ? "enabled" : "disabled"}\t${plugin.id}\t${plugin.version}`).join("\n")}\n`,
+    );
+  }),
+).pipe(Command.withDescription("List installed Synara app plugins."));
+
+const pluginSourceCommand = Command.make(
+  "source",
+  { plugin: pluginIdArgument, json: pluginJsonFlag },
+  ({ plugin, json }) =>
+    Effect.gen(function* () {
+      const parent = yield* baseServerCommand;
+      const record = yield* Effect.try({
+        try: () => resolvePluginRecord(pluginCliBaseDir(parent), plugin),
+        catch: (cause) => pluginStartupError("Plugin source lookup failed.", cause),
+      });
+      process.stdout.write(
+        json
+          ? `${JSON.stringify(record, null, 2)}\n`
+          : record.sourceRoot
+            ? `${record.sourceRoot}\n`
+            : "Plugin source is not present in this checkout.\n",
+      );
+      if (!record.sourceRoot) process.exitCode = 1;
+    }),
+).pipe(Command.withDescription("Show the editable source for a Synara plugin."));
+
+function makePluginEnabledCommand(enabled: boolean) {
+  const verb = enabled ? "enable" : "disable";
+  return Command.make(
+    verb,
+    { plugin: pluginIdArgument, json: pluginJsonFlag },
+    ({ plugin, json }) =>
+      Effect.gen(function* () {
+        const parent = yield* baseServerCommand;
+        const result = yield* Effect.try({
+          try: () => setPluginEnabled(pluginCliBaseDir(parent), plugin, enabled),
+          catch: (cause) => pluginStartupError(`Plugin ${verb} failed.`, cause),
+        });
+        process.stdout.write(
+          json
+            ? `${JSON.stringify(result, null, 2)}\n`
+            : `${result.id} ${enabled ? "enabled" : "disabled"}.\n`,
+        );
+      }),
+  ).pipe(Command.withDescription(`${enabled ? "Enable" : "Disable"} a Synara app plugin.`));
+}
+
+const pluginReloadCommand = Command.make(
+  "reload",
+  { plugin: pluginIdArgument, json: pluginJsonFlag },
+  ({ plugin, json }) =>
+    Effect.gen(function* () {
+      const parent = yield* baseServerCommand;
+      const result = yield* Effect.tryPromise({
+        try: () => reloadPlugin(pluginCliBaseDir(parent), plugin),
+        catch: (cause) => pluginStartupError("Plugin reload failed.", cause),
+      });
+      process.stdout.write(
+        json
+          ? `${JSON.stringify(result, null, 2)}\n`
+          : `${result.record.id} built and reload requested.\n`,
+      );
+    }),
+).pipe(Command.withDescription("Reload a plugin from its editable local source."));
+
+const pluginNewCommand = Command.make(
+  "new",
+  { path: pluginPathArgument, json: pluginJsonFlag },
+  ({ path: sourcePath, json }) =>
+    Effect.gen(function* () {
+      const result = yield* Effect.try({
+        try: () => scaffoldPlugin(sourcePath),
+        catch: (cause) => pluginStartupError("Plugin scaffold failed.", cause),
+      });
+      process.stdout.write(
+        json
+          ? `${JSON.stringify(result, null, 2)}\n`
+          : `Created ${result.id} at ${result.sourceRoot}.\nNext: synara plugin install ${result.sourceRoot}\n`,
+      );
+    }),
+).pipe(Command.withDescription("Create a local Synara plugin package."));
+
+const pluginBuildCommand = Command.make(
+  "build",
+  { path: pluginPathArgument, json: pluginJsonFlag },
+  ({ path: sourcePath, json }) =>
+    Effect.gen(function* () {
+      const result = yield* Effect.tryPromise({
+        try: () => buildPlugin(sourcePath),
+        catch: (cause) => pluginStartupError("Plugin build failed.", cause),
+      });
+      process.stdout.write(
+        json
+          ? `${JSON.stringify(result, null, 2)}\n`
+          : `Built ${result.id} at ${path.dirname(result.serverOutput)}.\n`,
+      );
+    }),
+).pipe(Command.withDescription("Build a local Synara plugin package."));
+
+const pluginInstallCommand = Command.make(
+  "install",
+  { path: pluginPathArgument, json: pluginJsonFlag },
+  ({ path: sourcePath, json }) =>
+    Effect.gen(function* () {
+      const parent = yield* baseServerCommand;
+      const result = yield* Effect.tryPromise({
+        try: () => installPlugin(pluginCliBaseDir(parent), sourcePath),
+        catch: (cause) => pluginStartupError("Plugin install failed.", cause),
+      });
+      process.stdout.write(
+        json
+          ? `${JSON.stringify(result, null, 2)}\n`
+          : `Installed ${result.record.id} from ${result.record.sourceRoot}.\n`,
+      );
+    }),
+).pipe(Command.withDescription("Build and install a trusted local Synara plugin."));
+
+const pluginUninstallCommand = Command.make(
+  "uninstall",
+  { plugin: pluginIdArgument, json: pluginJsonFlag },
+  ({ plugin, json }) =>
+    Effect.gen(function* () {
+      const parent = yield* baseServerCommand;
+      const result = yield* Effect.try({
+        try: () => uninstallPlugin(pluginCliBaseDir(parent), plugin),
+        catch: (cause) => pluginStartupError("Plugin uninstall failed.", cause),
+      });
+      process.stdout.write(
+        json
+          ? `${JSON.stringify(result, null, 2)}\n`
+          : `Uninstalled ${result.id}. Source was not deleted: ${result.sourceRoot ?? "unknown"}\n`,
+      );
+    }),
+).pipe(Command.withDescription("Uninstall a local plugin without deleting its source."));
+
+const pluginDevCommand = Command.make(
+  "dev",
+  { path: pluginPathArgument },
+  ({ path: sourcePath }) =>
+    Effect.gen(function* () {
+      const parent = yield* baseServerCommand;
+      yield* Effect.tryPromise({
+        try: () =>
+          watchPlugin(
+            pluginCliBaseDir(parent),
+            sourcePath,
+            (result) => process.stdout.write(`${result.record.id} built and reload requested.\n`),
+            (cause) =>
+              process.stderr.write(
+                `Plugin rebuild failed: ${cause instanceof Error ? cause.message : String(cause)}\n`,
+              ),
+          ),
+        catch: (cause) => pluginStartupError("Plugin development watcher failed.", cause),
+      });
+    }),
+).pipe(Command.withDescription("Build, install, and watch a local plugin for changes."));
+
+const pluginCommand = Command.make("plugin").pipe(
+  Command.withDescription("Inspect and manage Synara app plugins."),
+  Command.withSubcommands([
+    pluginNewCommand,
+    pluginBuildCommand,
+    pluginInstallCommand,
+    pluginListCommand,
+    pluginSourceCommand,
+    makePluginEnabledCommand(true),
+    makePluginEnabledCommand(false),
+    pluginReloadCommand,
+    pluginDevCommand,
+    pluginUninstallCommand,
+  ]),
+);
+
 const serverCommand = baseServerCommand.pipe(
   Command.withHandler((input) => makeServerProgram(input)),
-  Command.withSubcommands([serverToolsCommand, mcpCommand]),
+  Command.withSubcommands([serverToolsCommand, mcpCommand, pluginCommand]),
 );
 
 export const synaraCli = serverCommand;

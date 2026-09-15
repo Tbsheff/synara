@@ -39,6 +39,7 @@ import { ProjectFaviconResolver } from "./project/Services/ProjectFaviconResolve
 import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
 import { ProviderAdapterRegistry } from "./provider/Services/ProviderAdapterRegistry";
+import { PluginHostService } from "./plugins/PluginHost";
 import { getEnabledProviderAdapter } from "./provider/enabledProviderAdapter";
 import { threadArchiveChunks, threadArchiveFileName } from "./orchestration/exportThreadArchive";
 import type { ServerReadiness } from "./server/readiness";
@@ -206,6 +207,7 @@ export function makeEffectHttpRouteLayer(
     localImageEffectRouteLayer,
     binaryUploadEffectRouteLayer,
     attachmentsEffectRouteLayer,
+    pluginAssetEffectRouteLayer,
     staticAndDevEffectRouteLayer,
   );
 }
@@ -306,6 +308,37 @@ const requireAuthenticatedMutationRequest = Effect.gen(function* () {
   }
   return session;
 });
+
+export const pluginAssetEffectRouteLayer = HttpRouter.add(
+  "GET",
+  "/api/plugin-assets/*",
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const url = HttpServerRequest.toURL(request);
+    if (!url) return HttpServerResponse.text("Bad Request", { status: 400 });
+    const config = yield* ServerConfig;
+    if (!isLegacyTokenAuthorized({ config, url })) yield* requireAuthenticatedRequest;
+    const parts = url.pathname.split("/").filter(Boolean);
+    if (parts.length !== 4 || parts[0] !== "api" || parts[1] !== "plugin-assets") {
+      return HttpServerResponse.text("Not Found", { status: 404 });
+    }
+    const pluginHost = yield* PluginHostService;
+    const asset = yield* pluginHost.resolveAppAsset(parts[2]!, parts[3]!);
+    if (!asset) return HttpServerResponse.text("Not Found", { status: 404 });
+    const fileSystem = yield* FileSystem.FileSystem;
+    const data = yield* fileSystem.readFile(asset.path).pipe(Effect.option);
+    if (Option.isNone(data)) return HttpServerResponse.text("Not Found", { status: 404 });
+    return HttpServerResponse.uint8Array(data.value, {
+      status: 200,
+      contentType: asset.contentType,
+      headers: {
+        "Cache-Control": "private, max-age=31536000, immutable",
+        "X-Content-Type-Options": "nosniff",
+        ...localPreviewCorsHeaders({ config, request, url }),
+      },
+    });
+  }).pipe(Effect.catchTag("AuthError", (error) => Effect.succeed(authErrorResponse(error)))),
+);
 
 function trustedMutationCorsHeaders(input: {
   readonly request: HttpServerRequest.HttpServerRequest;

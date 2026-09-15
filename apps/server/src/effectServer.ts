@@ -31,6 +31,7 @@ import {
 } from "./orchestration/Services/OrchestrationEngine";
 import { OrchestrationReactor } from "./orchestration/Services/OrchestrationReactor";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
+import { PluginHostService } from "./plugins/PluginHost";
 import { ThreadDeletionReactor } from "./orchestration/Services/ThreadDeletionReactor";
 import {
   claimQuitResumeRecordAtStartup,
@@ -72,6 +73,7 @@ export interface ServerShape {
     | OrchestrationEngineService
     | OrchestrationReactor
     | ProjectionSnapshotQuery
+    | PluginHostService
     | ProviderSessionReaper
     | ProviderRuntimeReconciler
     | ProviderService

@@ -144,6 +144,13 @@ import type {
 } from "./project";
 import type { FilesystemBrowseInput, FilesystemBrowseResult } from "./filesystem";
 import type {
+  PluginCallInput,
+  PluginCallResult,
+  PluginEditInput,
+  PluginEditResult,
+  PluginListResult,
+} from "./plugins";
+import type {
   DeviceAttachInput,
   DeviceBootInput,
   DeviceBootResult,
@@ -710,6 +717,11 @@ export interface NativeApi {
       filters?: ReadonlyArray<{ name: string; extensions: ReadonlyArray<string> }>;
     }) => Promise<string | null>;
     confirm: (message: string) => Promise<boolean>;
+  };
+  plugins: {
+    list: () => Promise<PluginListResult>;
+    call: (input: PluginCallInput) => Promise<PluginCallResult>;
+    edit: (input: PluginEditInput) => Promise<PluginEditResult>;
   };
   terminal: {
     open: (input: TerminalOpenInput) => Promise<TerminalSessionSnapshot>;

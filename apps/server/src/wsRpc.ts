@@ -97,6 +97,7 @@ import { ProviderCommandReactor } from "./orchestration/Services/ProviderCommand
 import { SidechatExpiryReactor } from "./orchestration/Services/SidechatExpiryReactor";
 import { ProjectionStateIncompleteError } from "./persistence/Errors";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
+import { PluginHostService } from "./plugins/PluginHost";
 import { shouldPublishThreadShellForEvent } from "./orchestration/threadShellEvents";
 import { ProviderDiscoveryService } from "./provider/Services/ProviderDiscoveryService";
 import { discoverSkillsCatalog, synaraSkillsDir } from "./provider/skillsCatalog";
@@ -360,6 +361,7 @@ const makeWsRpcHandlersLayer = () =>
       const pullRequests = yield* PullRequestService;
       const profileStatsQuery = yield* ProfileStatsQuery;
       const projectionReadModelQuery = yield* ProjectionSnapshotQuery;
+      const pluginHost = yield* PluginHostService;
       const providerAdapterRegistry = yield* ProviderAdapterRegistry;
       const providerDiscoveryService = yield* ProviderDiscoveryService;
       const providerHealth = yield* ProviderHealth;
@@ -871,6 +873,18 @@ const makeWsRpcHandlersLayer = () =>
       });
 
       return AdmittedWsFeatureRpcGroup.of({
+        [WS_METHODS.pluginsList]: () =>
+          pluginHost.list().pipe(
+            Effect.mapError((cause) => toWsRpcError(cause, "Plugin list failed")),
+          ),
+        [WS_METHODS.pluginsCall]: (input) =>
+          pluginHost.call(input).pipe(
+            Effect.mapError((cause) => toWsRpcError(cause, "Plugin call failed")),
+          ),
+        [WS_METHODS.pluginsEdit]: (input) =>
+          pluginHost.edit(input).pipe(
+            Effect.mapError((cause) => toWsRpcError(cause, "Plugin edit chat failed")),
+          ),
         [ORCHESTRATION_WS_METHODS.dispatchCommand]: (command) =>
           rpcEffect(
             Effect.gen(function* () {

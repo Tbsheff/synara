@@ -168,6 +168,10 @@ import {
 // ── WebSocket RPC Method Names ───────────────────────────────────────
 
 export const WS_METHODS = {
+  pluginsList: "plugins.list",
+  pluginsCall: "plugins.call",
+  pluginsEdit: "plugins.edit",
+
   // Project registry methods
   projectsDiscoverScripts: "projects.discoverScripts",
   projectsListDirectories: "projects.listDirectories",

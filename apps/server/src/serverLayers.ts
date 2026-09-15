@@ -56,6 +56,7 @@ import { ManagedAttachmentCleanupLive } from "./managedAttachmentCleanup";
 import { PullRequestServiceLive } from "./pullRequests/Layers/PullRequestService";
 import { ProviderHealthLive } from "./provider/Layers/ProviderHealth";
 import { makeServerProviderLayer } from "./provider/runtimeLayer";
+import { PluginHostLive } from "./plugins/PluginHost";
 
 export { makeServerProviderLayer } from "./provider/runtimeLayer";
 
@@ -217,6 +218,10 @@ export function makeServerRuntimeServicesLayer(
     Layer.provideMerge(ProjectPullRequestPinsLive),
     Layer.provideMerge(OrchestrationLayerLive),
   );
+  const pluginHostLayer = PluginHostLive.pipe(
+    Layer.provideMerge(OrchestrationLayerLive),
+    Layer.provideMerge(ServerSettingsLive),
+  );
 
   return Layer.mergeAll(
     agentGatewayCredentialsLayer,
@@ -253,6 +258,7 @@ export function makeServerRuntimeServicesLayer(
     ServerRuntimeStartupLive,
     WorkspaceLayerLive,
     ProjectFaviconResolverLive,
+    pluginHostLayer,
   ).pipe(Layer.provideMerge(NodeServices.layer));
 }
 

@@ -485,6 +485,11 @@ export function createWsNativeApi(): NativeApi {
     threadStreamFailureListeners.emit(failure);
   });
   const api: NativeApi = {
+    plugins: {
+      list: () => transport.request(WS_METHODS.pluginsList, {}),
+      call: (input) => transport.request(WS_METHODS.pluginsCall, input),
+      edit: (input) => transport.request(WS_METHODS.pluginsEdit, input),
+    },
     dialogs: {
       pickFolder: async () => {
         if (!window.desktopBridge) return null;

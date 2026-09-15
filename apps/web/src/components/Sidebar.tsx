@@ -20,6 +20,7 @@ import {
   BellIcon,
   type LucideIcon,
   NewThreadIcon,
+  PluginIcon,
   PencilIcon,
   PinIcon,
   PlayIcon,
@@ -236,6 +237,7 @@ import { useHandleNewChat } from "../hooks/useHandleNewChat";
 import { useHandleNewStudioChat } from "../hooks/useHandleNewStudioChat";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { useProviderStatusesForLocalConfig } from "../hooks/useProviderStatusesForLocalConfig";
+import { usePluginNavPanels } from "../plugins/runtime";
 import { useThreadHandoff } from "../hooks/useThreadHandoff";
 import { useFeedbackDialogStore } from "../feedbackDialogStore";
 import { openExternalLink } from "~/lib/linkChips";
@@ -1401,6 +1403,7 @@ export default function Sidebar() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const pathname = useLocation({ select: (loc) => loc.pathname });
+  const pluginPanels = usePluginNavPanels();
   const isOnSettings = useLocation({
     select: (loc) => loc.pathname === "/settings",
   });
@@ -6101,22 +6104,41 @@ export default function Sidebar() {
                         onClick={handleCreateStudioChat}
                       />
                     ) : (
-                      visibleSidebarNavIds.map((id) => {
-                        const item = sidebarNavDescriptors[id];
-                        return (
-                          <SidebarPrimaryAction
-                            key={id}
-                            icon={item.icon}
-                            {...(item.iconClassName ? { iconClassName: item.iconClassName } : {})}
-                            label={item.label}
-                            active={item.active}
-                            badge={item.badge}
-                            onClick={item.onClick}
-                            {...(item.onMouseEnter ? { onMouseEnter: item.onMouseEnter } : {})}
-                            {...(item.onFocus ? { onFocus: item.onFocus } : {})}
-                          />
-                        );
-                      })
+                      <>
+                        {visibleSidebarNavIds.map((id) => {
+                          const item = sidebarNavDescriptors[id];
+                          return (
+                            <SidebarPrimaryAction
+                              key={id}
+                              icon={item.icon}
+                              {...(item.iconClassName ? { iconClassName: item.iconClassName } : {})}
+                              label={item.label}
+                              active={item.active}
+                              badge={item.badge}
+                              onClick={item.onClick}
+                              {...(item.onMouseEnter ? { onMouseEnter: item.onMouseEnter } : {})}
+                              {...(item.onFocus ? { onFocus: item.onFocus } : {})}
+                            />
+                          );
+                        })}
+                        {pluginPanels.map((panel) => {
+                          const panelPath = `/extensions/${panel.plugin.app}/${panel.id}`;
+                          return (
+                            <SidebarPrimaryAction
+                              key={`${panel.plugin.id}:${panel.id}`}
+                              icon={PluginIcon}
+                              label={panel.title}
+                              active={pathname === panelPath}
+                              onClick={() => {
+                                void navigate({
+                                  to: "/extensions/$pluginKey/$panelId",
+                                  params: { pluginKey: panel.plugin.app!, panelId: panel.id },
+                                });
+                              }}
+                            />
+                          );
+                        })}
+                      </>
                     )}
                   </SidebarMenu>
                 </SidebarGroup>

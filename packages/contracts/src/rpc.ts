@@ -24,6 +24,13 @@ import {
 } from "./automation";
 import { OpenInEditorInput } from "./editor";
 import {
+  PluginCallInput,
+  PluginCallResult,
+  PluginEditInput,
+  PluginEditResult,
+  PluginListResult,
+} from "./plugins";
+import {
   ExternalMcpCreateIntegrationInput,
   ExternalMcpCreateIntegrationResult,
   ExternalMcpIntegration,
@@ -1271,7 +1278,28 @@ export const WsSubscribeAutomationEventsRpc = Rpc.make(WS_METHODS.subscribeAutom
 
 export const WsBootstrapRpcGroup = RpcGroup.make(WsBootstrapNegotiateRpc);
 
+export const WsPluginsListRpc = Rpc.make(WS_METHODS.pluginsList, {
+  payload: Schema.Struct({}),
+  success: PluginListResult,
+  error: WsRpcError,
+});
+
+export const WsPluginsCallRpc = Rpc.make(WS_METHODS.pluginsCall, {
+  payload: PluginCallInput,
+  success: PluginCallResult,
+  error: WsRpcError,
+});
+
+export const WsPluginsEditRpc = Rpc.make(WS_METHODS.pluginsEdit, {
+  payload: PluginEditInput,
+  success: PluginEditResult,
+  error: WsRpcError,
+});
+
 export const WsFeatureRpcGroup = RpcGroup.make(
+  WsPluginsListRpc,
+  WsPluginsCallRpc,
+  WsPluginsEditRpc,
   WsOrchestrationDispatchCommandRpc,
   WsOrchestrationImportThreadRpc,
   WsOrchestrationRegenerateThreadTitleRpc,
