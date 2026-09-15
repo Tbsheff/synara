@@ -1,11 +1,10 @@
-import type { SynaraPluginDescriptor } from "@synara/contracts";
 import * as PluginSdkNamespace from "@synara/plugin-sdk";
 import type { JsonValue } from "@synara/plugin-sdk";
 import {
   PluginAppRuntimeContext,
   type PluginAppRuntime,
-  type PluginNavPanelContribution,
   type SynaraPluginAppContext,
+  type SynaraPluginDescriptor,
 } from "@synara/plugin-sdk/app";
 import reviewQueueApp from "@synara/plugin-review-queue/app";
 import { reviewQueueManifest } from "@synara/plugin-review-queue/manifest";
@@ -32,12 +31,22 @@ import {
 import { ensureNativeApi } from "~/nativeApi";
 import { resolveWsHttpUrl } from "~/lib/wsHttpUrl";
 
+import { collectPluginAppRegistrations } from "./registrations";
 import {
-  collectPluginAppRegistrations,
-  type RegisteredPluginApp,
-} from "./registrations";
+  collectPluginContributions,
+  ContentScriptHost,
+  createPluginTargetMap,
+  publishLoadedPluginApp,
+  reconcilePluginApps,
+  type ActivePluginApp,
+  type ActivePluginContribution,
+  type PluginContributionKind,
+  type PluginRuntimeTarget,
+} from "./frontendRuntime";
 
-const APP_REGISTRY = [collectPluginAppRegistrations(reviewQueueManifest.id, reviewQueueApp)];
+const BUILT_IN_APP_REGISTRATIONS = [
+  collectPluginAppRegistrations(reviewQueueManifest.id, reviewQueueApp),
+];
 
 Object.assign(globalThis, {
   __synaraPluginRuntime: {
@@ -51,29 +60,65 @@ Object.assign(globalThis, {
   },
 });
 
-function installPluginStyles(plugin: SynaraPluginDescriptor) {
-  const selector = `link[data-synara-plugin=${JSON.stringify(plugin.id)}]`;
-  document.head.querySelector(selector)?.remove();
-  if (!plugin.appCssUrl) return;
-  const link = document.createElement("link");
-  link.rel = "stylesheet";
-  link.href = resolveWsHttpUrl(plugin.appCssUrl);
-  link.dataset.synaraPlugin = plugin.id;
-  document.head.append(link);
+function syncPluginStyles(apps: readonly ActivePluginApp[]): void {
+  const desiredStyles = new Map(
+    apps.flatMap((app) =>
+      app.plugin.appCssUrl
+        ? [
+            [
+              app.key,
+              { pluginId: app.plugin.id, href: resolveWsHttpUrl(app.plugin.appCssUrl) },
+            ] as const,
+          ]
+        : [],
+    ),
+  );
+
+  const installedStyles = new Map<string, HTMLLinkElement>();
+  for (const link of document.head.querySelectorAll<HTMLLinkElement>(
+    "link[data-synara-plugin], link[data-synara-plugin-key]",
+  )) {
+    const key = link.dataset.synaraPluginKey;
+    if (!key) {
+      link.remove();
+      continue;
+    }
+    const desired = desiredStyles.get(key);
+    if (!desired || link.href !== desired.href) {
+      link.remove();
+      continue;
+    }
+    installedStyles.set(key, link);
+  }
+
+  for (const [key, style] of desiredStyles) {
+    if (installedStyles.has(key)) continue;
+    const link = document.createElement("link");
+    link.rel = "stylesheet";
+    link.href = style.href;
+    link.dataset.synaraPlugin = style.pluginId;
+    link.dataset.synaraPluginKey = key;
+    document.head.append(link);
+  }
 }
 
-export interface ActivePluginPanel extends PluginNavPanelContribution {
-  readonly plugin: SynaraPluginDescriptor;
+function clearPluginStyles(): void {
+  for (const link of document.head.querySelectorAll(
+    "link[data-synara-plugin], link[data-synara-plugin-key]",
+  )) {
+    link.remove();
+  }
 }
 
-const ActivePluginPanelsContext = createContext<ReadonlyArray<ActivePluginPanel>>([]);
+const ActivePluginAppsContext = createContext<ReadonlyArray<ActivePluginApp>>([]);
 
 export function PluginRuntimeProvider({ children }: { readonly children: ReactNode }) {
   const navigate = useNavigate();
-  const [appRegistry, setAppRegistry] = useState<ReadonlyArray<RegisteredPluginApp>>(APP_REGISTRY);
-  const loadedUrls = useRef(new Map<string, string>());
-  const loadingUrls = useRef(new Map<string, string>());
-  const desiredUrls = useRef(new Map<string, string>());
+  const [activeApps, setActiveApps] = useState<ReadonlyArray<ActivePluginApp>>([]);
+  const activeAppsRef = useRef<ReadonlyArray<ActivePluginApp>>([]);
+  const loadingKeys = useRef(new Set<string>());
+  const desiredTargets = useRef<ReadonlyMap<string, PluginRuntimeTarget>>(new Map());
+  const contentScriptHost = useMemo(() => new ContentScriptHost(), []);
   const pluginsQuery = useQuery({
     queryKey: ["synara-plugins"],
     queryFn: () => ensureNativeApi().plugins.list(),
@@ -104,109 +149,133 @@ export function PluginRuntimeProvider({ children }: { readonly children: ReactNo
   );
   useEffect(() => {
     if (!pluginsQuery.data) return;
-    const plugins = pluginsQuery.data;
-    const activeIds = new Set(plugins.map((plugin) => plugin.id));
-    const nextDesiredUrls = new Map(
-      plugins.flatMap((plugin) =>
-        plugin.appUrl ? [[plugin.id, resolveWsHttpUrl(plugin.appUrl)] as const] : [],
-      ),
+    const applyActiveApps = (nextApps: readonly ActivePluginApp[]) => {
+      activeAppsRef.current = nextApps;
+      contentScriptHost.sync(nextApps);
+      syncPluginStyles(nextApps);
+      setActiveApps(nextApps);
+    };
+    const targets = createPluginTargetMap(pluginsQuery.data, resolveWsHttpUrl);
+    desiredTargets.current = targets;
+    const currentApps = reconcilePluginApps(
+      activeAppsRef.current,
+      targets.values(),
+      BUILT_IN_APP_REGISTRATIONS,
     );
-    desiredUrls.current = nextDesiredUrls;
-    for (const [pluginId, loadedUrl] of loadedUrls.current) {
-      if (nextDesiredUrls.get(pluginId) === loadedUrl) continue;
-      loadedUrls.current.delete(pluginId);
-      document.head
-        .querySelector(`link[data-synara-plugin=${JSON.stringify(pluginId)}]`)
-        ?.remove();
-    }
-    setAppRegistry((current) => [
-      ...APP_REGISTRY.filter((entry) => activeIds.has(entry.pluginId)),
-      ...current.filter(
-        (entry) =>
-          !APP_REGISTRY.some((builtIn) => builtIn.pluginId === entry.pluginId) &&
-          loadedUrls.current.get(entry.pluginId) === nextDesiredUrls.get(entry.pluginId),
-      ),
-    ]);
+    applyActiveApps(currentApps);
 
-    for (const plugin of plugins) {
+    for (const target of targets.values()) {
       if (
-        !plugin.appUrl ||
-        loadedUrls.current.get(plugin.id) === plugin.appUrl ||
-        loadingUrls.current.get(plugin.id) === plugin.appUrl
+        !target.appUrl ||
+        currentApps.some((app) => app.key === target.key) ||
+        loadingKeys.current.has(target.key)
       ) {
         continue;
       }
-      const requestedUrl = resolveWsHttpUrl(plugin.appUrl);
-      loadingUrls.current.set(plugin.id, requestedUrl);
-        void import(requestedUrl)
+      loadingKeys.current.add(target.key);
+      void import(target.appUrl)
         .then((module: { readonly default?: unknown }) => {
-          if (desiredUrls.current.get(plugin.id) !== requestedUrl) return;
+          if (desiredTargets.current.get(target.plugin.id)?.key !== target.key) return;
           const registered = collectPluginAppRegistrations(
-            plugin.id,
+            target.plugin.id,
             module.default,
-            requestedUrl,
+            target.appUrl,
           );
-          installPluginStyles(plugin);
-          loadedUrls.current.set(plugin.id, requestedUrl);
-          setAppRegistry((current) => [
-            ...current.filter((entry) => entry.pluginId !== plugin.id),
-            registered,
-          ]);
+          const nextApps = publishLoadedPluginApp(
+            activeAppsRef.current,
+            { key: target.key, plugin: target.plugin, registrations: registered },
+            desiredTargets.current,
+          );
+          if (nextApps === activeAppsRef.current) return;
+          applyActiveApps(nextApps);
         })
-        .catch((cause: unknown) => console.error(`Plugin app failed to load: ${plugin.id}`, cause))
+        .catch((cause: unknown) =>
+          console.error(`Plugin app failed to load: ${target.plugin.id}`, cause),
+        )
         .finally(() => {
-          if (loadingUrls.current.get(plugin.id) === requestedUrl) {
-            loadingUrls.current.delete(plugin.id);
-          }
+          loadingKeys.current.delete(target.key);
         });
     }
-  }, [pluginsQuery.data]);
-  const panels = useMemo(() => {
-    const activeById = new Map((pluginsQuery.data ?? []).map((plugin) => [plugin.id, plugin]));
-    return appRegistry.flatMap((registered) => {
-      const plugin = activeById.get(registered.pluginId);
-      const currentAppUrl = plugin?.appUrl ? resolveWsHttpUrl(plugin.appUrl) : undefined;
-      return plugin && registered.appUrl === currentAppUrl
-        ? registered.navPanels.map((panel) => ({ ...panel, plugin }))
-        : [];
-    });
-  }, [appRegistry, pluginsQuery.data]);
+  }, [contentScriptHost, pluginsQuery.data, pluginsQuery.dataUpdatedAt]);
+
+  useEffect(
+    () => () => {
+      activeAppsRef.current = [];
+      desiredTargets.current = new Map();
+      void contentScriptHost.dispose();
+      clearPluginStyles();
+    },
+    [contentScriptHost],
+  );
 
   return (
     <PluginAppRuntimeContext.Provider value={runtime}>
-      <ActivePluginPanelsContext.Provider value={panels}>
+      <ActivePluginAppsContext.Provider value={activeApps}>
         {children}
-      </ActivePluginPanelsContext.Provider>
+      </ActivePluginAppsContext.Provider>
     </PluginAppRuntimeContext.Provider>
   );
 }
 
-export function usePluginNavPanels(): ReadonlyArray<ActivePluginPanel> {
-  return useContext(ActivePluginPanelsContext);
+export function usePluginContributions<Kind extends PluginContributionKind>(
+  kind: Kind,
+): ReadonlyArray<ActivePluginContribution<Kind>> {
+  const apps = useContext(ActivePluginAppsContext);
+  return useMemo(() => collectPluginContributions(apps, kind), [apps, kind]);
 }
 
-class PluginPanelErrorBoundary extends Component<
-  { readonly children: ReactNode; readonly pluginName: string },
+export type ActivePluginPanel = ActivePluginContribution<"navPanels">;
+
+export function usePluginNavPanels(): ReadonlyArray<ActivePluginPanel> {
+  return usePluginContributions("navPanels");
+}
+
+export interface PluginContributionErrorBoundaryProps {
+  readonly children: ReactNode;
+  readonly plugin: SynaraPluginDescriptor;
+  readonly contributionId?: string;
+  readonly fallback?: ReactNode;
+}
+
+export class PluginContributionErrorBoundary extends Component<
+  PluginContributionErrorBoundaryProps,
   { readonly error: Error | null }
 > {
-  state = { error: null };
+  state: { readonly error: Error | null } = { error: null };
 
   static getDerivedStateFromError(error: Error) {
     return { error };
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {
-    console.error(`Plugin panel failed: ${this.props.pluginName}`, error, info);
+    console.error(
+      `Plugin contribution failed: ${this.props.plugin.id}${this.props.contributionId ? `/${this.props.contributionId}` : ""}`,
+      error,
+      info,
+    );
+  }
+
+  componentDidUpdate(previous: Readonly<PluginContributionErrorBoundaryProps>) {
+    if (
+      this.state.error &&
+      (previous.plugin.id !== this.props.plugin.id ||
+        previous.plugin.generation !== this.props.plugin.generation ||
+        previous.contributionId !== this.props.contributionId)
+    ) {
+      this.setState({ error: null });
+    }
   }
 
   render() {
     if (this.state.error) {
+      if (this.props.fallback !== undefined) return this.props.fallback;
       return (
         <main className="chat-content-card flex min-h-0 flex-1 items-center justify-center bg-background p-8">
           <div className="max-w-md rounded-xl border bg-card p-6 text-center">
-            <h1 className="text-base font-semibold">Plugin panel failed</h1>
+            <h1 className="text-base font-semibold">Plugin contribution failed</h1>
             <p className="mt-2 text-sm text-muted-foreground">
-              {this.props.pluginName} stopped in its own error boundary. Synara is still running.
+              {this.props.plugin.displayName} stopped in its own error boundary. Synara is still
+              running.
             </p>
           </div>
         </main>
@@ -238,11 +307,12 @@ export function PluginPanel({
   }
   const Panel = panel.component;
   return (
-    <PluginPanelErrorBoundary
+    <PluginContributionErrorBoundary
       key={`${panel.plugin.id}:${panel.id}:${panel.plugin.generation}`}
-      pluginName={panel.plugin.displayName}
+      plugin={panel.plugin}
+      contributionId={panel.id}
     >
       <Panel context={context} plugin={panel.plugin} />
-    </PluginPanelErrorBoundary>
+    </PluginContributionErrorBoundary>
   );
 }
