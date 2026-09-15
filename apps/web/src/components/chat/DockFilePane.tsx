@@ -5,6 +5,9 @@
 // Layer: Chat right-dock UI
 // Exports: DockFilePane
 
+import { useMemo } from "react";
+
+import { useFocusedChatContext } from "~/focusedChatContext";
 import type { ChatFileReference } from "~/lib/chatReferences";
 import type { FileCommentSelection } from "~/lib/fileComments";
 import { WorkspaceFilePreview } from "../WorkspaceFilePreview";
@@ -18,12 +21,19 @@ export function DockFilePane(props: {
   onAskWhyInChat?: ((reference: ChatFileReference) => void) | undefined;
   onCommentInChat?: ((comment: FileCommentSelection) => void) | undefined;
 }) {
+  const { activeProjectId, focusedThreadId } = useFocusedChatContext();
+  const pluginContext = useMemo(
+    () => ({ projectId: activeProjectId, threadId: focusedThreadId }),
+    [activeProjectId, focusedThreadId],
+  );
+
   return (
     <WorkspaceFilePreview
       workspaceRoot={props.workspaceRoot}
       filePath={props.filePath}
       liveRevalidationEnabled={props.isVisible}
       markdownPreviewDefault
+      pluginContext={pluginContext}
       emptyState={
         <PanelStateMessage density="compact" fill="flex">
           <p>Click a file in the chat to preview it here.</p>

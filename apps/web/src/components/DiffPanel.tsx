@@ -122,6 +122,7 @@ import {
 } from "./ui/menu";
 import { REPO_DIFF_SCOPE_LABELS, resolveRepoDiffScopeLabel } from "../repoDiffScopeStore";
 import { PanelStateMessage } from "./chat/PanelStateMessage";
+import { PluginDiffRenderer } from "../plugins/PluginDiffRenderer";
 import { type SplitViewPanePanelState } from "../splitViewStore";
 import { formatShortTimestamp } from "../timestampFormat";
 import type { TurnDiffSummary } from "../types";
@@ -551,6 +552,10 @@ export default function DiffPanel({
     settings.defaultProvider,
   ]);
   const activeProjectId = activeThreadContext?.projectId ?? draftThread?.projectId ?? null;
+  const pluginContext = useMemo(
+    () => ({ projectId: activeProjectId, threadId: activeThreadId }),
+    [activeProjectId, activeThreadId],
+  );
   const activeProject = useStore(
     useMemo(() => createProjectSelector(activeProjectId), [activeProjectId]),
   );
@@ -1497,36 +1502,44 @@ export default function DiffPanel({
             onMouseUp={diffSelectionAction.onContainerMouseUp}
           >
             {activeReviewTruncated ? <DiffTruncationWarning className="m-2 mb-0" /> : null}
-            <DiffPanelPatchViewport
-              renderablePatch={renderablePatch}
-              renderableFiles={renderableFiles}
-              resolvedTheme={resolvedTheme}
-              diffRenderMode={diffRenderMode}
-              diffWordWrap={diffWordWrap}
-              workspaceRoot={activeCwd ?? null}
-              collapsedFiles={collapsedFiles}
-              onToggleFileCollapsed={toggleFileCollapsed}
-              chatActions={diffFileChatActions}
-              onBlameLine={blameEnabled ? showLineBlame : undefined}
-              isLoading={activeReviewIsLoading}
-              hasNoChanges={activeReviewHasNoChanges}
-              error={activeReviewError}
-              viewKind={diffViewKind}
-              loadingLabel={
-                diffViewKind !== "repo"
-                  ? "Loading checkpoint diff..."
-                  : repoDiffScope === "ref"
-                    ? `Loading diff ${resolveRepoDiffScopeLabel(repoDiffScope, repoDiffCompareRef)}...`
-                    : `Loading ${REPO_DIFF_SCOPE_LABELS[repoDiffScope].toLowerCase()} diff...`
+            <PluginDiffRenderer
+              context={pluginContext}
+              patch={activeReviewPatch ?? null}
+              path={activeFilePath ?? ""}
+              isGitRef={viewSource.kind === "repo" && viewSource.scope === "ref"}
+              original={
+                <DiffPanelPatchViewport
+                  renderablePatch={renderablePatch}
+                  renderableFiles={renderableFiles}
+                  resolvedTheme={resolvedTheme}
+                  diffRenderMode={diffRenderMode}
+                  diffWordWrap={diffWordWrap}
+                  workspaceRoot={activeCwd ?? null}
+                  collapsedFiles={collapsedFiles}
+                  onToggleFileCollapsed={toggleFileCollapsed}
+                  chatActions={diffFileChatActions}
+                  onBlameLine={blameEnabled ? showLineBlame : undefined}
+                  isLoading={activeReviewIsLoading}
+                  hasNoChanges={activeReviewHasNoChanges}
+                  error={activeReviewError}
+                  viewKind={diffViewKind}
+                  loadingLabel={
+                    diffViewKind !== "repo"
+                      ? "Loading checkpoint diff..."
+                      : repoDiffScope === "ref"
+                        ? `Loading diff ${resolveRepoDiffScopeLabel(repoDiffScope, repoDiffCompareRef)}...`
+                        : `Loading ${REPO_DIFF_SCOPE_LABELS[repoDiffScope].toLowerCase()} diff...`
+                  }
+                  emptyLabel={
+                    diffViewKind === "repo"
+                      ? "No changes in the selected diff source."
+                      : orderedTurnDiffSummaries.length === 0
+                        ? "No turn diffs are available yet."
+                        : "No net changes in this selection."
+                  }
+                  unavailableLabel="No repo diff is available right now."
+                />
               }
-              emptyLabel={
-                diffViewKind === "repo"
-                  ? "No changes in the selected diff source."
-                  : orderedTurnDiffSummaries.length === 0
-                    ? "No turn diffs are available yet."
-                    : "No net changes in this selection."
-              }
-              unavailableLabel="No repo diff is available right now."
             />
             {changeMarkersEnabled ? (
               <DiffPanelChangeMarkers

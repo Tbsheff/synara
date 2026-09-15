@@ -6,7 +6,7 @@
 // Note: raw <button>s for autocomplete-suggestion rows and tab-title activate
 // regions are intentional — list-row and tab semantics, not shadcn Buttons.
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
@@ -54,6 +54,9 @@ import {
 } from "~/lib/nativeSurfaceOcclusion";
 import { serverLocalServersQueryOptions } from "~/lib/serverReactQuery";
 import { cn, isMacNavigatorPlatform } from "~/lib/utils";
+import { PluginBrowserToolbarActions } from "~/plugins/PluginBrowserToolbarActions";
+import { useStore } from "~/store";
+import { createThreadProjectIdSelector } from "~/storeSelectors";
 
 import {
   useBrowserStateStore,
@@ -582,6 +585,13 @@ export function BrowserPanel({
   const isFloatingMode = mode === "floating";
   const api = readNativeApi();
   const isLiveRuntime = runtimeMode === "live";
+  const projectId = useStore(
+    useMemo(() => createThreadProjectIdSelector(threadId), [threadId]),
+  );
+  const pluginContext = useMemo(
+    () => ({ projectId, threadId }),
+    [projectId, threadId],
+  );
   const threadBrowserState = useBrowserStateStore(selectThreadBrowserState(threadId));
   const recentHistory = useBrowserStateStore(selectThreadBrowserHistory(threadId));
   const upsertThreadState = useBrowserStateStore((store) => store.upsertThreadState);
@@ -1857,6 +1867,13 @@ export function BrowserPanel({
         ) : null}
       </div>
       <div className="flex shrink-0 items-center gap-1 [-webkit-app-region:no-drag]">
+        {activeTab ? (
+          <PluginBrowserToolbarActions
+            context={pluginContext}
+            tabId={activeTab.id}
+            url={activeTab.url}
+          />
+        ) : null}
         <BrowserVaultButton
           destination={
             activeTab
