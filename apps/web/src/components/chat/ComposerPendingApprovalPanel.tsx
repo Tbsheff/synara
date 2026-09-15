@@ -70,6 +70,14 @@ const APPROVAL_ACTIONS: ReadonlyArray<ApprovalAction> = [
   },
 ];
 
+export function availableApprovalActions(
+  approval: Pick<PendingApproval, "sessionApprovalAvailable">,
+): ReadonlyArray<ApprovalAction> {
+  return approval.sessionApprovalAvailable === false
+    ? APPROVAL_ACTIONS.filter((action) => action.decision !== "acceptForSession")
+    : APPROVAL_ACTIONS;
+}
+
 const KIND_PROMPT: Record<PendingApproval["requestKind"], string> = {
   command: "Approve this command?",
   "file-read": "Approve reading this file?",
@@ -88,10 +96,7 @@ export const ComposerPendingApprovalPanel = function ComposerPendingApprovalPane
   const requestKey = pendingRequestInstanceKey(requestId, approval.lifecycleGeneration);
   const submissionKey = JSON.stringify([requestKey, approval.responseAttemptKey ?? null]);
   const submittedRequestKeyRef = useRef<string | null>(null);
-  const actions =
-    approval.sessionApprovalAvailable === false
-      ? APPROVAL_ACTIONS.filter((action) => action.decision !== "acceptForSession")
-      : APPROVAL_ACTIONS;
+  const actions = availableApprovalActions(approval);
 
   const respondOnce = (decision: ProviderApprovalDecision) => {
     if (isResponding || submittedRequestKeyRef.current === submissionKey) return;

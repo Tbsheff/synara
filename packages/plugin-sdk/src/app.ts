@@ -68,14 +68,6 @@ export interface PluginTimelineRendererProps extends PluginComponentProps {
   readonly payload: JsonValue;
   readonly Original: ComponentType;
 }
-export interface PluginEnvironmentProviderInputsProps extends PluginComponentProps {
-  readonly value: JsonValue | null;
-  readonly onChange: (value: JsonValue | null) => void;
-}
-export interface PluginMachineProviderInputsProps extends PluginComponentProps {
-  readonly value: JsonValue | null;
-  readonly onChange: (value: JsonValue | null) => void;
-}
 
 export interface PluginComponentRegistration<Props extends PluginComponentProps> {
   readonly id: string;
@@ -125,8 +117,10 @@ export interface PluginNewThreadPanelActionRegistration
   readonly run?: (context: PluginPanelActionContext) => void | Promise<void>;
 }
 
-export type PluginPendingInteractionRegistration =
-  PluginComponentRegistration<PluginPendingInteractionProps>;
+export interface PluginPendingInteractionRegistration
+  extends PluginComponentRegistration<PluginPendingInteractionProps> {
+  readonly kind: "approval" | "userInput";
+}
 
 export type PluginActionContext = PluginComponentProps;
 
@@ -201,16 +195,6 @@ export interface PluginTimelineRendererRegistration {
   readonly component: ComponentType<PluginTimelineRendererProps>;
 }
 
-export interface PluginEnvironmentProviderInputsRegistration {
-  readonly environmentProviderId: string;
-  readonly component: ComponentType<PluginEnvironmentProviderInputsProps>;
-}
-
-export interface PluginMachineProviderInputsRegistration {
-  readonly machineProviderId: string;
-  readonly component: ComponentType<PluginMachineProviderInputsProps>;
-}
-
 export interface PluginComposerActionRegistration {
   readonly id: string;
   readonly title: string;
@@ -227,14 +211,7 @@ export interface PluginComposerPlusMenuRegistration extends PluginComposerAction
   readonly description?: string;
 }
 
-export interface PluginComposerRichTextEffect {
-  readonly id: string;
-  readonly match: (text: string) => ReadonlyArray<{ readonly from: number; readonly to: number }>;
-  readonly className: string;
-}
-
 export interface PluginComposerRichTextRegistration {
-  readonly effects?: readonly PluginComposerRichTextEffect[];
   readonly onDraftChange?: (draft: { readonly text: string }) => void;
 }
 
@@ -327,12 +304,6 @@ export interface SynaraPluginAppApi {
     readonly experimental_providerIcon: (registration: PluginProviderIconRegistration) => void;
     readonly experimental_timelineRenderer: (
       registration: PluginTimelineRendererRegistration,
-    ) => void;
-    readonly experimental_environmentProviderInputs: (
-      registration: PluginEnvironmentProviderInputsRegistration,
-    ) => void;
-    readonly experimental_machineProviderInputs: (
-      registration: PluginMachineProviderInputsRegistration,
     ) => void;
   };
   readonly composer: {

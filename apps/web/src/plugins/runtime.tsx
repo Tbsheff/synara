@@ -236,27 +236,29 @@ export interface PluginContributionErrorBoundaryProps {
   readonly plugin: SynaraPluginDescriptor;
   readonly contributionId?: string;
   readonly fallback?: ReactNode;
+  readonly onError?: (error: Error) => void;
 }
 
 export class PluginContributionErrorBoundary extends Component<
   PluginContributionErrorBoundaryProps,
   { readonly error: Error | null }
 > {
-  state: { readonly error: Error | null } = { error: null };
+  override state: { readonly error: Error | null } = { error: null };
 
   static getDerivedStateFromError(error: Error) {
     return { error };
   }
 
-  componentDidCatch(error: Error, info: ErrorInfo) {
+  override componentDidCatch(error: Error, info: ErrorInfo) {
     console.error(
       `Plugin contribution failed: ${this.props.plugin.id}${this.props.contributionId ? `/${this.props.contributionId}` : ""}`,
       error,
       info,
     );
+    this.props.onError?.(error);
   }
 
-  componentDidUpdate(previous: Readonly<PluginContributionErrorBoundaryProps>) {
+  override componentDidUpdate(previous: Readonly<PluginContributionErrorBoundaryProps>) {
     if (
       this.state.error &&
       (previous.plugin.id !== this.props.plugin.id ||
@@ -267,7 +269,7 @@ export class PluginContributionErrorBoundary extends Component<
     }
   }
 
-  render() {
+  override render() {
     if (this.state.error) {
       if (this.props.fallback !== undefined) return this.props.fallback;
       return (

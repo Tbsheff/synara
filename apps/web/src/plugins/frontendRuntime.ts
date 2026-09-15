@@ -24,8 +24,6 @@ export const PLUGIN_CONTRIBUTION_KINDS = [
   "commands",
   "providerIcons",
   "timelineRenderers",
-  "environmentProviderInputs",
-  "machineProviderInputs",
   "composerCustomizations",
   "contentScripts",
   "sidebarFooterItems",
@@ -33,20 +31,27 @@ export const PLUGIN_CONTRIBUTION_KINDS = [
 ] as const satisfies ReadonlyArray<PluginContributionKind>;
 
 export type PluginContributionKind = {
-  [Kind in keyof RegisteredPluginApp]: NonNullable<RegisteredPluginApp[Kind]> extends ReadonlyArray<
-    unknown
-  >
+  [Kind in keyof RegisteredPluginApp]: NonNullable<
+    RegisteredPluginApp[Kind]
+  > extends ReadonlyArray<unknown>
     ? Kind
     : never;
-}[keyof RegisteredPluginApp];
+}[keyof RegisteredPluginApp] &
+  keyof RegisteredPluginApp;
 
 export type PluginRegistration<Kind extends PluginContributionKind> =
-  RegisteredPluginApp[Kind] extends ReadonlyArray<infer Registration> ? Registration : never;
+  RegisteredPluginApp[Kind] extends ReadonlyArray<infer Registration extends object>
+    ? Registration
+    : never;
 
 export type ActivePluginContribution<Kind extends PluginContributionKind> =
   PluginRegistration<Kind> & {
     readonly plugin: SynaraPluginDescriptor;
   };
+
+type PluginContributionLists = {
+  readonly [Kind in PluginContributionKind]: ReadonlyArray<PluginRegistration<Kind>>;
+};
 
 export interface PluginRuntimeTarget {
   readonly key: string;
@@ -134,12 +139,14 @@ export function collectPluginContributions<Kind extends PluginContributionKind>(
   apps: readonly ActivePluginApp[],
   kind: Kind,
 ): ReadonlyArray<ActivePluginContribution<Kind>> {
-  return apps.flatMap((app) =>
-    app.registrations[kind].map((registration) => ({
+  return apps.flatMap((app) => {
+    const lists: PluginContributionLists = app.registrations;
+    const registrations: ReadonlyArray<PluginRegistration<Kind>> = lists[kind];
+    return registrations.map((registration) => ({
       ...registration,
       plugin: app.plugin,
-    })),
-  ) as ReadonlyArray<ActivePluginContribution<Kind>>;
+    }));
+  });
 }
 
 interface ContentScriptScope {

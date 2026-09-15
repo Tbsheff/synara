@@ -13,14 +13,19 @@ describe("collectPluginAppRegistrations", () => {
       api.slots.settingsSection({ id: "settings", component: Component });
       api.slots.experimental_appOverlay({ id: "overlay", component: Component });
       api.slots.navPanel({ id: "nav", title: "Nav", component: Component });
-      api.slots.threadPanelAction({ id: "thread-panel", title: "Panel", component: Component, run });
+      api.slots.threadPanelAction({
+        id: "thread-panel",
+        title: "Panel",
+        component: Component,
+        run,
+      });
       api.slots.experimental_newThreadPanelAction({
         id: "new-panel",
         title: "New panel",
         component: Component,
         run,
       });
-      api.slots.pendingInteraction({ id: "interaction", component: Component });
+      api.slots.pendingInteraction({ id: "interaction", kind: "approval", component: Component });
       api.slots.sidebarFooterAction({ id: "footer-action", title: "Footer", icon: "star", run });
       api.slots.experimental_sidebarNavigation({
         id: "navigation",
@@ -59,21 +64,12 @@ describe("collectPluginAppRegistrations", () => {
         icon: Component,
       });
       api.slots.experimental_timelineRenderer({ kind: "tool", component: Component });
-      api.slots.experimental_environmentProviderInputs({
-        environmentProviderId: "worktree",
-        component: Component,
-      });
-      api.slots.experimental_machineProviderInputs({
-        machineProviderId: "local",
-        component: Component,
-      });
       api.composer.customize({
         id: "composer",
         actions: [{ id: "action", title: "Action", run }],
         banners: [{ id: "banner", component: Component }],
         plusMenu: [{ id: "menu", title: "Menu", run }],
         richText: {
-          effects: [{ id: "mention", match: () => [], className: "mention" }],
           onDraftChange: run,
         },
       });
@@ -98,7 +94,7 @@ describe("collectPluginAppRegistrations", () => {
 
     const registrations = collectPluginAppRegistrations("acme.plugin", app, "/plugin.js");
 
-    expect(Object.values(registrations).filter(Array.isArray)).toHaveLength(26);
+    expect(Object.values(registrations).filter(Array.isArray)).toHaveLength(24);
     expect(registrations.pluginId).toBe("acme.plugin");
     expect(registrations.appUrl).toBe("/plugin.js");
     expect(registrations.navPanels.map(({ id }) => id)).toEqual(["nav"]);
@@ -148,6 +144,20 @@ describe("collectPluginAppRegistrations", () => {
         }),
       ),
     ).toThrow("extension");
+    expect(() =>
+      collectPluginAppRegistrations(
+        "acme.bad-interaction-kind",
+        definePluginApp((api) => {
+          api.slots.pendingInteraction({
+            id: "interaction",
+            kind: "question" as "userInput",
+            component: Component,
+          });
+        }),
+      ),
+    ).toThrow(
+      'slots.pendingInteraction: kind must be "approval" or "userInput", received "question"',
+    );
   });
 
   it("rejects duplicates within a kind but allows ids across kinds", () => {

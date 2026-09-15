@@ -6,11 +6,9 @@ import {
   type PluginComposerCustomization,
   type PluginContentScriptRegistration,
   type PluginDiffRendererRegistration,
-  type PluginEnvironmentProviderInputsRegistration,
   type PluginFileOpenerRegistration,
   type PluginHomepageSectionRegistration,
   type PluginIconRegistration,
-  type PluginMachineProviderInputsRegistration,
   type PluginMessageActionRegistration,
   type PluginMessageDirectiveRegistration,
   type PluginNavPanelContribution,
@@ -57,8 +55,6 @@ export interface RegisteredPluginApp {
   readonly commands: ReadonlyArray<PluginCommandRegistration>;
   readonly providerIcons: ReadonlyArray<PluginProviderIconRegistration>;
   readonly timelineRenderers: ReadonlyArray<PluginTimelineRendererRegistration>;
-  readonly environmentProviderInputs: ReadonlyArray<PluginEnvironmentProviderInputsRegistration>;
-  readonly machineProviderInputs: ReadonlyArray<PluginMachineProviderInputsRegistration>;
   readonly composerCustomizations: ReadonlyArray<PluginComposerCustomization>;
   readonly contentScripts: ReadonlyArray<PluginContentScriptRegistration>;
   readonly sidebarFooterItems: ReadonlyArray<PluginSidebarFooterItem>;
@@ -109,7 +105,6 @@ function validateComposerCustomization(registration: PluginComposerCustomization
     ["composer.actions", registration.actions],
     ["composer.banners", registration.banners],
     ["composer.plusMenu", registration.plusMenu],
-    ["composer.richText.effects", registration.richText?.effects],
   ] as const) {
     const seen = new Set<string>();
     for (const item of items ?? []) {
@@ -153,8 +148,6 @@ export function collectPluginAppRegistrations(
   const commands: PluginCommandRegistration[] = [];
   const providerIcons: PluginProviderIconRegistration[] = [];
   const timelineRenderers: PluginTimelineRendererRegistration[] = [];
-  const environmentProviderInputs: PluginEnvironmentProviderInputsRegistration[] = [];
-  const machineProviderInputs: PluginMachineProviderInputsRegistration[] = [];
   const composerCustomizations: PluginComposerCustomization[] = [];
   const contentScripts: PluginContentScriptRegistration[] = [];
   const sidebarFooterItems: PluginSidebarFooterItem[] = [];
@@ -175,8 +168,10 @@ export function collectPluginAppRegistrations(
 
   const api: SynaraPluginAppApi = {
     slots: {
-      homepageSection: (registration) => add("slots.homepageSection", homepageSections, registration),
-      settingsSection: (registration) => add("slots.settingsSection", settingsSections, registration),
+      homepageSection: (registration) =>
+        add("slots.homepageSection", homepageSections, registration),
+      settingsSection: (registration) =>
+        add("slots.settingsSection", settingsSections, registration),
       experimental_appOverlay: (registration) =>
         add("slots.experimental_appOverlay", appOverlays, registration),
       navPanel: (registration) => add("slots.navPanel", navPanels, registration),
@@ -184,8 +179,20 @@ export function collectPluginAppRegistrations(
         add("slots.threadPanelAction", threadPanelActions, registration),
       experimental_newThreadPanelAction: (registration) =>
         add("slots.experimental_newThreadPanelAction", newThreadPanelActions, registration),
-      pendingInteraction: (registration) =>
-        add("slots.pendingInteraction", pendingInteractions, registration),
+      pendingInteraction(registration) {
+        const kind: string = registration.kind;
+        if (kind !== "approval" && kind !== "userInput") {
+          throw new Error(
+            `slots.pendingInteraction: kind must be "approval" or "userInput", received ${JSON.stringify(kind)}.`,
+          );
+        }
+        requireUnique(
+          "slots.pendingInteraction kind",
+          idsFor("slots.pendingInteraction kind"),
+          registration.kind,
+        );
+        add("slots.pendingInteraction", pendingInteractions, registration);
+      },
       sidebarFooterAction: (registration) =>
         add("slots.sidebarFooterAction", sidebarFooterActions, registration),
       experimental_sidebarNavigation: (registration) =>
@@ -235,30 +242,6 @@ export function collectPluginAppRegistrations(
           registration.kind,
         );
         timelineRenderers.push(registration);
-      },
-      experimental_environmentProviderInputs(registration) {
-        const key = requireLocalId(
-          "slots.experimental_environmentProviderInputs",
-          registration.environmentProviderId,
-        );
-        requireUnique(
-          "slots.experimental_environmentProviderInputs",
-          idsFor("slots.experimental_environmentProviderInputs"),
-          key,
-        );
-        environmentProviderInputs.push(registration);
-      },
-      experimental_machineProviderInputs(registration) {
-        const key = requireLocalId(
-          "slots.experimental_machineProviderInputs",
-          registration.machineProviderId,
-        );
-        requireUnique(
-          "slots.experimental_machineProviderInputs",
-          idsFor("slots.experimental_machineProviderInputs"),
-          key,
-        );
-        machineProviderInputs.push(registration);
       },
     },
     composer: {
@@ -312,8 +295,6 @@ export function collectPluginAppRegistrations(
     commands,
     providerIcons,
     timelineRenderers,
-    environmentProviderInputs,
-    machineProviderInputs,
     composerCustomizations,
     contentScripts,
     sidebarFooterItems,

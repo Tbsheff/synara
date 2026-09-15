@@ -16,6 +16,48 @@ import { PluginContributionErrorBoundary, usePluginContributions } from "./runti
 
 export type PluginComposerHost = PluginComposerController;
 
+class LivePluginComposerHost implements PluginComposerHost {
+  readonly setText: (text: string) => void;
+  readonly focus: () => void;
+  readonly submit: () => void;
+  readonly #readText: () => string;
+
+  constructor(input: {
+    readonly readText: () => string;
+    readonly setText: (text: string) => void;
+    readonly focus: () => void;
+    readonly submit: () => void;
+  }) {
+    this.#readText = input.readText;
+    this.setText = input.setText;
+    this.focus = input.focus;
+    this.submit = input.submit;
+  }
+
+  get text(): string {
+    return this.#readText();
+  }
+}
+
+export function usePluginComposerHost(input: {
+  readonly promptRef: { readonly current: string };
+  readonly setText: (text: string) => void;
+  readonly focus: () => void;
+  readonly submit: () => void;
+}): PluginComposerHost {
+  const { promptRef, setText, focus, submit } = input;
+  return useMemo(
+    () =>
+      new LivePluginComposerHost({
+        readText: () => promptRef.current,
+        setText,
+        focus,
+        submit,
+      }),
+    [promptRef, setText, focus, submit],
+  );
+}
+
 function usePluginComposerObservers(text: string) {
   const customizations = usePluginContributions("composerCustomizations");
   useEffect(() => {
@@ -202,10 +244,7 @@ export function PluginComposerControls(props: {
               />
             }
           >
-            <PluginGlyph
-              pluginId={menuPluginId}
-              className="size-3.5"
-            />
+            <PluginGlyph pluginId={menuPluginId} className="size-3.5" />
           </MenuTrigger>
           <ComposerPickerMenuPopup align="start" side="top" className="w-64 min-w-64">
             {plusItems.map((entry) => {
