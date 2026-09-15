@@ -5,6 +5,7 @@
 
 import { CheckIcon, CopyIcon, TextWrapIcon } from "~/lib/icons";
 import type { ProviderMentionReference } from "@synara/contracts";
+import type { SynaraPluginAppContext } from "@synara/plugin-sdk/app";
 import { isLocalAbsolutePath } from "@synara/shared/path";
 import "katex/dist/katex.min.css";
 import { matchWikiLinkAt, remarkWikiLinks } from "../lib/remarkWikiLinks";
@@ -83,6 +84,18 @@ import {
   FindAwareMarkdownText,
   FindAwareShikiHtml,
 } from "./ChatMarkdownFind";
+import {
+  buildPluginMessageDirectiveRegistry,
+  createPluginMessageDirectiveRemarkPlugin,
+  PLUGIN_MESSAGE_DIRECTIVE_ATTRIBUTES_ATTRIBUTE,
+  PLUGIN_MESSAGE_DIRECTIVE_NAME_ATTRIBUTE,
+  PLUGIN_MESSAGE_DIRECTIVE_SOURCE_ATTRIBUTE,
+  PLUGIN_MESSAGE_DIRECTIVE_TAG_NAME,
+  PluginMessageDirectiveMount,
+  readPluginMessageDirectiveElement,
+  type PluginMessageDirectiveRegistry,
+} from "../plugins/PluginMessageDirective";
+import { usePluginContributions } from "../plugins/runtime";
 
 const EXTERNAL_HTTP_HREF_PATTERN = /^https?:\/\//i;
 // Trailing `:line` / `:line:col` position suffix on a resolved file link. Kept on
@@ -152,6 +165,7 @@ interface ChatMarkdownProps {
    * inline-code chip uses one of these when the match is unique.
    */
   knownAbsoluteFilePaths?: ReadonlyArray<string> | undefined;
+  pluginContext?: SynaraPluginAppContext | undefined;
 }
 
 // Source line of the enclosing task-list item, provided by the `li` override.
@@ -1045,6 +1059,8 @@ interface MarkdownRenderContextValue {
   resolvedTheme: ReturnType<typeof useTheme>["resolvedTheme"];
   terminalContexts: ChatMarkdownProps["terminalContexts"];
   sourceText: string;
+  pluginContext: SynaraPluginAppContext | undefined;
+  pluginDirectiveRegistry: PluginMessageDirectiveRegistry;
 }
 
 const MarkdownRenderContext = createContext<MarkdownRenderContextValue | null>(null);
@@ -1259,6 +1275,32 @@ const MARKDOWN_COMPONENTS: Components = {
       }
       return <FindAwareMarkdownText text={text} sourceOffset={sourceOffset} />;
     },
+    [PLUGIN_MESSAGE_DIRECTIVE_TAG_NAME]: function MarkdownPluginMessageDirective(props: {
+      [PLUGIN_MESSAGE_DIRECTIVE_NAME_ATTRIBUTE]?: string | undefined;
+      [PLUGIN_MESSAGE_DIRECTIVE_ATTRIBUTES_ATTRIBUTE]?: string | undefined;
+      [PLUGIN_MESSAGE_DIRECTIVE_SOURCE_ATTRIBUTE]?: string | undefined;
+    }) {
+      const { pluginContext, pluginDirectiveRegistry } = useContext(MarkdownRenderContext)!;
+      if (!pluginContext) return null;
+      const parsed = readPluginMessageDirectiveElement(props);
+      if (!parsed) return null;
+      return (
+        <PluginMessageDirectiveMount
+          directive={{
+            ...parsed,
+            source: restoreLiteralDollarPlaceholders(parsed.source),
+            attributes: Object.fromEntries(
+              Object.entries(parsed.attributes).map(([key, value]) => [
+                key,
+                restoreLiteralDollarPlaceholders(value),
+              ]),
+            ),
+          }}
+          registry={pluginDirectiveRegistry}
+          context={pluginContext}
+        />
+      );
+    },
   } as unknown as Components),
 };
 
@@ -1277,6 +1319,7 @@ function ChatMarkdown({
   variant: variantProp,
   mentionReferences,
   terminalContexts,
+  pluginContext,
 }: ChatMarkdownProps) {
   // Defaults applied with ?? in the body, not in the destructuring: default
   // values in parameter destructuring make React Compiler 1.0.0 bail on the
@@ -1337,16 +1380,32 @@ function ChatMarkdown({
         : null,
     [isUserVariant, mentionReferences, terminalContexts],
   );
+  const pluginMessageDirectiveContributions = usePluginContributions("messageDirectives");
+  const pluginDirectiveRegistry = useMemo(
+    () => buildPluginMessageDirectiveRegistry(pluginMessageDirectiveContributions),
+    [pluginMessageDirectiveContributions],
+  );
+  const pluginMessageDirectiveRemarkPlugin = useMemo(
+    () =>
+      !isUserVariant && pluginContext
+        ? createPluginMessageDirectiveRemarkPlugin(pluginDirectiveRegistry)
+        : null,
+    [isUserVariant, pluginContext, pluginDirectiveRegistry],
+  );
   const remarkPlugins = useMemo<MarkdownRemarkPlugins>(() => {
     if (composerChipsRemarkPlugin) {
       return [...USER_MARKDOWN_REMARK_PLUGINS, composerChipsRemarkPlugin, remarkFindableText];
     }
-    return [
+    const assistantPlugins: MarkdownRemarkPlugins = [
       ...MARKDOWN_REMARK_PLUGINS,
       [remarkWikiLinks, { root: wikiLinkRoot ?? cwd }],
-      remarkFindableText,
     ];
-  }, [composerChipsRemarkPlugin, wikiLinkRoot, cwd]);
+    if (pluginMessageDirectiveRemarkPlugin) {
+      assistantPlugins.push(pluginMessageDirectiveRemarkPlugin);
+    }
+    assistantPlugins.push(remarkFindableText);
+    return assistantPlugins;
+  }, [composerChipsRemarkPlugin, wikiLinkRoot, cwd, pluginMessageDirectiveRemarkPlugin]);
   const rehypePlugins = isUserVariant ? USER_MARKDOWN_REHYPE_PLUGINS : MARKDOWN_REHYPE_PLUGINS;
   const rootRef = useRef<HTMLDivElement | null>(null);
   useLayoutEffect(() => {
@@ -1365,6 +1424,8 @@ function ChatMarkdown({
       resolvedTheme,
       terminalContexts,
       sourceText,
+      pluginContext,
+      pluginDirectiveRegistry,
     }),
     [
       cwd,
@@ -1378,6 +1439,8 @@ function ChatMarkdown({
       resolvedTheme,
       terminalContexts,
       sourceText,
+      pluginContext,
+      pluginDirectiveRegistry,
     ],
   );
 

@@ -12,6 +12,7 @@ import {
   type ThreadGoalAchievement,
   type TurnId,
 } from "@synara/contracts";
+import type { SynaraPluginAppContext } from "@synara/plugin-sdk/app";
 import { isLocalAbsolutePath } from "@synara/shared/path";
 import { pluralize } from "@synara/shared/text";
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
@@ -176,6 +177,8 @@ import {
   type ThreadFindHighlight,
   type ThreadFindMatch,
 } from "./threadFind.logic";
+import { PluginMessageActionItems } from "~/plugins/PluginMessageAction";
+import { usePluginContributions } from "~/plugins/runtime";
 
 const MAX_VISIBLE_INLINE_TOOL_ENTRIES = 4;
 const EMPTY_EDITOR_KEYBINDINGS: ResolvedKeybindingsConfig = [];
@@ -201,6 +204,10 @@ const TRAIL_VIEWABILITY_CONFIG = { itemVisiblePercentThreshold: 0 } as const;
 const EMPTY_GOAL_ACHIEVEMENTS: readonly ThreadGoalAchievement[] = [];
 const EMPTY_GOAL_ACHIEVEMENTS_BY_TURN_ID = new Map<TurnId, ThreadGoalAchievement>();
 const EMPTY_MESSAGE_ID_SET: ReadonlySet<MessageId> = new Set();
+const EMPTY_PLUGIN_APP_CONTEXT: SynaraPluginAppContext = {
+  projectId: null,
+  threadId: null,
+};
 
 // Imperative LegendList access goes through these module-level helpers instead of
 // inline `ref.current` reads. The timeline's list ref is `listRef ?? fallbackListRef`,
@@ -506,6 +513,7 @@ interface MessagesTimelineProps {
   contentInsetBottomClearancePx?: number | undefined;
   /** In-thread find highlight; matching itself lives on projected messages, not the DOM. */
   findHighlight?: ThreadFindHighlight | null;
+  pluginContext?: SynaraPluginAppContext;
 }
 
 export const MessagesTimeline = memo(function MessagesTimeline({
@@ -574,6 +582,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   contentInsetBottomPx,
   contentInsetBottomClearancePx,
   findHighlight: findHighlightProp,
+  pluginContext: pluginContextProp,
 }: MessagesTimelineProps) {
   // Prop defaults are resolved in the body rather than in the destructuring pattern:
   // an `AssignmentPattern` in the parameter list makes React Compiler bail out on the
@@ -588,6 +597,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   const forkSource = forkSourceProp ?? null;
   const isTemporaryThread = isTemporaryThreadProp ?? false;
   const findHighlight = findHighlightProp ?? null;
+  const pluginContext = pluginContextProp ?? EMPTY_PLUGIN_APP_CONTEXT;
+  const pluginMessageActions = usePluginContributions("messageActions");
   const editorKeybindings = keybindings ?? EMPTY_EDITOR_KEYBINDINGS;
   const installedEditors = availableEditors ?? EMPTY_AVAILABLE_EDITORS;
   const userMessageBubbleBorderClass = userMessageBubbleBorderClassName(isTemporaryThread);
@@ -1725,6 +1736,16 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                             className={MESSAGE_HOVER_REVEAL_CLASS_NAME}
                           />
                         )}
+                        <PluginMessageActionItems
+                          context={pluginContext}
+                          message={{
+                            id: row.message.id,
+                            role: "user",
+                            text: row.message.text,
+                          }}
+                          presentation="footer"
+                          className={MESSAGE_HOVER_REVEAL_CLASS_NAME}
+                        />
                         {showEditUserMessage && (
                           <MessageActionButton
                             label="Edit message"
@@ -2184,6 +2205,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                       style={chatTypographyStyle}
                       onImageExpand={onImageExpand}
                       knownAbsoluteFilePaths={knownAbsoluteFilePaths}
+                      pluginContext={pluginContext}
                       {...threadFindMarkdownProps(findHighlight, row.message.id)}
                     />
                   </div>
@@ -2400,7 +2422,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   showForkAction ||
                   assistantCopyState.visible ||
                   assistantMeta.length > 0 ||
-                  goalAchievement !== null) && (
+                  goalAchievement !== null ||
+                  pluginMessageActions.length > 0) && (
                   // Turn-end actions read Copy → Fork → Pin → time and stay visible at
                   // rest: they belong to a settled turn, so hiding them behind hover made
                   // the whole row feel undiscoverable. The leading button pulls left by
@@ -2435,6 +2458,15 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                         <PinIcon className={MESSAGE_ACTION_ICON_CLASS_NAME} />
                       </MessageActionButton>
                     ) : null}
+                    <PluginMessageActionItems
+                      context={pluginContext}
+                      message={{
+                        id: row.message.id,
+                        role: "assistant",
+                        text: row.message.text,
+                      }}
+                      presentation="footer"
+                    />
                     {assistantMeta.length > 0 ? (
                       <p className="tabular-nums">{assistantMeta}</p>
                     ) : null}

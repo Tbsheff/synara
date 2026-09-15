@@ -3,6 +3,7 @@
 // Layer: Chat transcript interaction UI
 
 import type { ThreadEnvironmentMode } from "@synara/contracts";
+import type { SynaraPluginAppContext } from "@synara/plugin-sdk/app";
 import { useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
@@ -12,6 +13,10 @@ import { SelectionNewChatComposer } from "./SelectionNewChatComposer";
 
 import { type PendingTranscriptSelectionAction } from "./useTranscriptAssistantSelectionAction";
 import { TranscriptSelectionAction } from "./TranscriptSelectionAction";
+import {
+  PluginMessageActionItems,
+  type PluginMessageReference,
+} from "~/plugins/PluginMessageAction";
 
 interface TranscriptSelectionActionLayerProps {
   action: PendingTranscriptSelectionAction | null;
@@ -27,6 +32,8 @@ interface TranscriptSelectionActionLayerProps {
     envMode: ThreadEnvironmentMode,
     intent: "send" | "compose",
   ) => Promise<void>;
+  pluginMessage?: PluginMessageReference;
+  pluginContext?: SynaraPluginAppContext;
 }
 
 export function TranscriptSelectionActionLayer(props: TranscriptSelectionActionLayerProps) {
@@ -55,6 +62,11 @@ export function TranscriptSelectionActionLayer(props: TranscriptSelectionActionL
   }
   const action = props.action;
   if (!action) return null;
+  const pluginMessage =
+    props.pluginMessage?.role === "assistant" &&
+    props.pluginMessage.id === action.selection.assistantMessageId
+      ? props.pluginMessage
+      : null;
 
   return createPortal(
     <TranscriptSelectionAction
@@ -91,6 +103,16 @@ export function TranscriptSelectionActionLayer(props: TranscriptSelectionActionL
         props.onDismiss();
         window.getSelection()?.removeAllRanges();
       }}
+      pluginActions={
+        pluginMessage && props.pluginContext ? (
+          <PluginMessageActionItems
+            context={props.pluginContext}
+            message={pluginMessage}
+            selectedText={action.selection.text}
+            presentation="selection"
+          />
+        ) : null
+      }
     />,
     document.body,
   );
