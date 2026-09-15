@@ -89,6 +89,7 @@ import { SidebarHeaderNavigationControls } from "../components/SidebarHeaderNavi
 import { useDesktopCustomTitleBarState } from "../hooks/useDesktopCustomTitleBar";
 import { useDesktopTopBarTrafficLightGutterClassName } from "../hooks/useDesktopTopBarGutter";
 import { useTheme } from "../hooks/useTheme";
+import { useLatestProjectStore } from "../latestProjectStore";
 import { isUiDensity } from "../lib/appDensity";
 import { isChatWidthMode, type ChatWidthMode } from "../lib/chatWidth";
 import { isElectron } from "../env";
@@ -109,6 +110,7 @@ import {
   settingRowAnchorId,
 } from "../settingsNavigation";
 import { SETTINGS_PAGE_BACKGROUND_CLASS_NAME } from "../settingsPanelStyles";
+import { PluginSettingsSections } from "../plugins/PluginSettingsSections";
 
 // ── Settings taxonomy ──────────────────────────────────────────────────────
 
@@ -201,6 +203,11 @@ function SettingsRouteView() {
   const activeSection = normalizeSettingsSection(routeSearch.section);
   const settingsTarget = typeof routeSearch.target === "string" ? routeSearch.target : null;
   const activeSectionItem = SETTINGS_NAV_ITEMS.find((item) => item.id === activeSection)!;
+  const latestProjectId = useLatestProjectStore((state) => state.latestProjectId);
+  const pluginSettingsContext = useMemo(
+    () => ({ projectId: latestProjectId, threadId: null }),
+    [latestProjectId],
+  );
 
   const {
     isDefaultActiveTheme,
@@ -1241,6 +1248,8 @@ function SettingsRouteView() {
         return <SkillsSettingsPanel />;
       case "usage":
         return <ProviderUsageSettingsPanel />;
+      case "extensions":
+        return <PluginSettingsSections context={pluginSettingsContext} />;
       default:
         return null;
     }
@@ -1295,16 +1304,18 @@ function SettingsRouteView() {
                       {activeSectionItem.description}
                     </p>
                   </div>
-                  <Button
-                    size="xs"
-                    variant="outline"
-                    className="shrink-0"
-                    disabled={changedSettingLabels.length === 0}
-                    onClick={() => void restoreDefaults()}
-                  >
-                    <ResetIcon className="size-3.5" />
-                    Restore defaults
-                  </Button>
+                  {activeSection !== "extensions" ? (
+                    <Button
+                      size="xs"
+                      variant="outline"
+                      className="shrink-0"
+                      disabled={changedSettingLabels.length === 0}
+                      onClick={() => void restoreDefaults()}
+                    >
+                      <ResetIcon className="size-3.5" />
+                      Restore defaults
+                    </Button>
+                  ) : null}
                 </div>
               ) : null}
 
