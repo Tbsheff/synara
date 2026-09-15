@@ -32,7 +32,7 @@ interface TranscriptSelectionActionLayerProps {
     envMode: ThreadEnvironmentMode,
     intent: "send" | "compose",
   ) => Promise<void>;
-  pluginMessage?: PluginMessageReference;
+  pluginMessage?: PluginMessageReference | undefined;
   pluginContext?: SynaraPluginAppContext;
 }
 

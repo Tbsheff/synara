@@ -1,6 +1,15 @@
+import type { SynaraPluginDescriptor } from "@synara/contracts";
 import { describe, expect, it, vi } from "vitest";
 
 import { invokePluginMessageAction } from "./PluginMessageAction";
+
+const plugin: SynaraPluginDescriptor = {
+  id: "example",
+  displayName: "Example",
+  version: "1.0.0",
+  apiVersion: 1,
+  generation: 1,
+};
 
 describe("PluginMessageActionItems", () => {
   it("passes a narrow message reference and only includes selectedText for selections", async () => {
@@ -9,15 +18,7 @@ describe("PluginMessageActionItems", () => {
       id: "review",
       title: "Review",
       run,
-      plugin: {
-        id: "example",
-        displayName: "Example",
-        version: "1.0.0",
-        apiVersion: 1,
-        generation: 1,
-        enabled: true,
-        source: "local" as const,
-      },
+      plugin,
     };
     await invokePluginMessageAction({
       action,
@@ -48,15 +49,7 @@ describe("PluginMessageActionItems", () => {
         id: "fail",
         title: "Fail",
         run: () => Promise.reject(new Error("failed")),
-        plugin: {
-          id: "example",
-          displayName: "Example",
-          version: "1.0.0",
-          apiVersion: 1,
-          generation: 1,
-          enabled: true,
-          source: "local" as const,
-        },
+        plugin,
       },
       context: { projectId: null, threadId: null },
       message: { id: "message-1", role: "user", text: "Prompt" },

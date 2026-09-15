@@ -1,3 +1,4 @@
+import type { SynaraPluginDescriptor } from "@synara/contracts";
 import type { ComponentType } from "react";
 import { describe, expect, it } from "vitest";
 
@@ -6,9 +7,18 @@ import type { PluginMessageDirectiveProps } from "@synara/plugin-sdk/app";
 import {
   buildPluginMessageDirectiveRegistry,
   createPluginMessageDirectiveRemarkPlugin,
+  type MarkdownNode,
   parsePluginMessageDirective,
   PLUGIN_MESSAGE_DIRECTIVE_TAG_NAME,
 } from "./PluginMessageDirective";
+
+const examplePlugin: SynaraPluginDescriptor = {
+  id: "example",
+  displayName: "Example",
+  version: "1.0.0",
+  apiVersion: 1,
+  generation: 1,
+};
 
 describe("parsePluginMessageDirective", () => {
   it("parses a lower-kebab leaf directive without treating attributes as DOM props", () => {
@@ -38,15 +48,7 @@ describe("buildPluginMessageDirectiveRegistry", () => {
     const contribution = {
       id: "review-card",
       component: Component,
-      plugin: {
-        id: "example",
-        displayName: "Example",
-        version: "1.0.0",
-        apiVersion: 1,
-        generation: 1,
-        enabled: true,
-        source: "local" as const,
-      },
+      plugin: examplePlugin,
     };
     const registry = buildPluginMessageDirectiveRegistry([contribution]);
     expect(registry.get("review-card")).toEqual(contribution);
@@ -54,17 +56,9 @@ describe("buildPluginMessageDirectiveRegistry", () => {
 
   it("does not choose a winner when plugins claim the same directive", () => {
     const Component = (() => <div>mounted</div>) as ComponentType<PluginMessageDirectiveProps>;
-    const descriptor = {
-      displayName: "Plugin",
-      version: "1.0.0",
-      apiVersion: 1,
-      generation: 1,
-      enabled: true,
-      source: "local" as const,
-    };
     const registry = buildPluginMessageDirectiveRegistry([
-      { id: "review-card", component: Component, plugin: { ...descriptor, id: "one" } },
-      { id: "review-card", component: Component, plugin: { ...descriptor, id: "two" } },
+      { id: "review-card", component: Component, plugin: { ...examplePlugin, id: "one" } },
+      { id: "review-card", component: Component, plugin: { ...examplePlugin, id: "two" } },
     ]);
 
     expect(registry.get("review-card")).toBeNull();
@@ -78,18 +72,10 @@ describe("createPluginMessageDirectiveRemarkPlugin", () => {
       {
         id: "review-card",
         component: Component,
-        plugin: {
-          id: "example",
-          displayName: "Example",
-          version: "1.0.0",
-          apiVersion: 1,
-          generation: 1,
-          enabled: true,
-          source: "local",
-        },
+        plugin: examplePlugin,
       },
     ]);
-    const tree = {
+    const tree: MarkdownNode = {
       type: "root",
       children: [
         {
@@ -110,9 +96,9 @@ describe("createPluginMessageDirectiveRemarkPlugin", () => {
 
     createPluginMessageDirectiveRemarkPlugin(registry)()(tree);
 
-    expect(tree.children[0]?.data?.hName).toBe(PLUGIN_MESSAGE_DIRECTIVE_TAG_NAME);
-    expect(tree.children[1]?.children?.[0]?.value).toContain("inline.html");
-    expect(tree.children[2]?.value).toContain("fenced.html");
-    expect(tree.children[3]?.children?.[0]?.value).toContain("plain.html");
+    expect(tree.children?.[0]?.data?.hName).toBe(PLUGIN_MESSAGE_DIRECTIVE_TAG_NAME);
+    expect(tree.children?.[1]?.children?.[0]?.value).toContain("inline.html");
+    expect(tree.children?.[2]?.value).toContain("fenced.html");
+    expect(tree.children?.[3]?.children?.[0]?.value).toContain("plain.html");
   });
 });

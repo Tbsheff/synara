@@ -117,7 +117,7 @@ export const PluginMessageDirectiveMount = memo(function PluginMessageDirectiveM
   );
 });
 
-type MarkdownNode = {
+export type MarkdownNode = {
   type?: string;
   value?: string;
   children?: MarkdownNode[];
@@ -148,16 +148,16 @@ function transformDirectiveParagraphs(
   };
 }
 
-export function createPluginMessageDirectiveRemarkPlugin(
-  registry: PluginMessageDirectiveRegistry,
-) {
-  return () => (tree: MarkdownNode): void => transformDirectiveParagraphs(tree, registry);
+export function createPluginMessageDirectiveRemarkPlugin(registry: PluginMessageDirectiveRegistry) {
+  return () =>
+    (tree: MarkdownNode): void =>
+      transformDirectiveParagraphs(tree, registry);
 }
 
 export function readPluginMessageDirectiveElement(props: {
-  readonly [PLUGIN_MESSAGE_DIRECTIVE_NAME_ATTRIBUTE]?: string;
-  readonly [PLUGIN_MESSAGE_DIRECTIVE_ATTRIBUTES_ATTRIBUTE]?: string;
-  readonly [PLUGIN_MESSAGE_DIRECTIVE_SOURCE_ATTRIBUTE]?: string;
+  readonly [PLUGIN_MESSAGE_DIRECTIVE_NAME_ATTRIBUTE]?: string | undefined;
+  readonly [PLUGIN_MESSAGE_DIRECTIVE_ATTRIBUTES_ATTRIBUTE]?: string | undefined;
+  readonly [PLUGIN_MESSAGE_DIRECTIVE_SOURCE_ATTRIBUTE]?: string | undefined;
 }): ParsedPluginMessageDirective | null {
   const name = props[PLUGIN_MESSAGE_DIRECTIVE_NAME_ATTRIBUTE];
   const source = props[PLUGIN_MESSAGE_DIRECTIVE_SOURCE_ATTRIBUTE];

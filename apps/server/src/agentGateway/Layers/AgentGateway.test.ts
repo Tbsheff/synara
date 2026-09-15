@@ -395,7 +395,7 @@ function makeHarnessLayer(
     readonly providerRuntimeEvents?: ReadonlyArray<PersistedProviderRuntimeEvent>;
     readonly operationalDiagnostics?: ReadonlyArray<OperationalDiagnostic>;
     readonly providerDeliveryBlockers?: ReadonlyArray<ProviderBlockingDeliveryEvidence>;
-    readonly pluginHost?: PluginHostShape;
+    readonly pluginHost?: Pick<PluginHostShape, "agentTools" | "callAgentTool">;
     readonly automationRuns?: ReadonlyArray<{
       readonly id: string;
       readonly automationId: AutomationDefinition["id"];
@@ -1250,10 +1250,9 @@ function makeHarnessLayer(
     Layer.provide(
       Layer.succeed(
         PluginHostService,
-        options.pluginHost ??
-          ({
-            agentTools: () => Effect.succeed([]),
-          } as never),
+        (options.pluginHost ?? {
+          agentTools: () => Effect.succeed([]),
+        }) as never,
       ),
     ),
     Layer.provide(NodeServices.layer),
@@ -2045,7 +2044,7 @@ describe("AgentGateway", () => {
             calls += 1;
             return { ok: true };
           }),
-      } as never,
+      },
     });
     return Effect.gen(function* () {
       const harness = yield* makeHarness;
@@ -2060,9 +2059,10 @@ describe("AgentGateway", () => {
       assert.notEqual(first.result?.isError, true);
       assert.equal(calls, 1);
 
+      const parent = makeThreadDetail(baseThreads[0]!);
       harness.setThreadDetail({
-        ...baseThreads[0]!,
-        latestTurn: { ...baseThreads[0]!.latestTurn!, state: "completed" },
+        ...parent,
+        latestTurn: { ...parent.latestTurn!, state: "completed" },
       });
       const stopped = yield* harness.callTool({
         token: "token-parent",
@@ -2094,7 +2094,7 @@ describe("AgentGateway", () => {
             started = true;
             return { ok: true };
           }),
-      } as never,
+      },
     });
     return Effect.gen(function* () {
       const harness = yield* makeHarness;

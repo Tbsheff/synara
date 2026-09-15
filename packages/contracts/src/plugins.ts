@@ -8,10 +8,10 @@ export const SynaraPluginDescriptor = Schema.Struct({
   version: TrimmedNonEmptyString,
   apiVersion: Schema.Literals([1, 2]),
   generation: Schema.Int.check(Schema.isGreaterThan(0)),
-  app: Schema.optional(TrimmedNonEmptyString),
-  appUrl: Schema.optional(TrimmedNonEmptyString),
-  appCssUrl: Schema.optional(TrimmedNonEmptyString),
-  editable: Schema.optional(Schema.Boolean),
+  app: Schema.optionalKey(TrimmedNonEmptyString),
+  appUrl: Schema.optionalKey(TrimmedNonEmptyString),
+  appCssUrl: Schema.optionalKey(TrimmedNonEmptyString),
+  editable: Schema.optionalKey(Schema.Boolean),
 });
 export type SynaraPluginDescriptor = typeof SynaraPluginDescriptor.Type;
 

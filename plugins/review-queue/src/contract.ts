@@ -1,16 +1,6 @@
 import { array, nonEmptyString, object, optional, schema, string } from "@synara/plugin-sdk";
 
-export interface ReviewQueueItem {
-  readonly id: string;
-  readonly projectId: string;
-  readonly title: string;
-  readonly prompt: string;
-  readonly status: "queued" | "started";
-  readonly createdAt: string;
-  readonly threadId?: string;
-}
-
-const status = schema<ReviewQueueItem["status"]>((input, path = "value") => {
+const status = schema<"queued" | "started">((input, path = "value") => {
   if (input !== "queued" && input !== "started") {
     throw new Error(`${path} must be queued or started.`);
   }
@@ -26,6 +16,7 @@ export const reviewQueueItem = object({
   createdAt: string(),
   threadId: optional(string()),
 });
+export type ReviewQueueItem = Readonly<ReturnType<typeof reviewQueueItem.parse>>;
 
 export const reviewQueueContract = {
   list: {

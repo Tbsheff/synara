@@ -305,7 +305,7 @@ export function ChatTranscriptPane({
             contentInsetBottomClearancePx={contentInsetBottomClearancePx}
             {...(onOpenAgentActivity ? { onOpenAgentActivity } : {})}
             findHighlight={findHighlight}
-            pluginContext={pluginContext}
+            {...(pluginContext ? { pluginContext } : {})}
             emptyStateContent={
               emptyStateContent === undefined ? (
                 <ChatEmptyStateHero projectName={emptyStateProjectName} />

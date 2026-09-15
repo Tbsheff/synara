@@ -148,14 +148,13 @@ export async function reloadPlugin(
 ): Promise<{ readonly record: PluginManagementRecord; readonly build?: PluginBuildResult }> {
   const record = resolvePluginRecord(baseDir, input);
   if (record.error) throw new Error(record.error);
-  let buildResult: PluginBuildResult | undefined;
   if (record.sourceRoot) {
-    buildResult = await buildPlugin(record.sourceRoot);
+    const buildResult = await buildPlugin(record.sourceRoot);
     const manifest = readPluginManifest(record.sourceRoot);
     return replacePluginSkills(baseDir, record.id, manifest.skillRoots, () => {
       updatePluginControl(baseDir, record.id, (current) => ({
         ...current,
-        reloadToken: buildResult!.reloadToken,
+        reloadToken: buildResult.reloadToken,
       }));
       return {
         record: resolvePluginRecord(baseDir, record.id),
@@ -167,12 +166,9 @@ export async function reloadPlugin(
   }
   updatePluginControl(baseDir, record.id, (current) => ({
     ...current,
-    reloadToken: buildResult?.reloadToken ?? `${Date.now()}-${crypto.randomUUID()}`,
+    reloadToken: `${Date.now()}-${crypto.randomUUID()}`,
   }));
-  return {
-    record: resolvePluginRecord(baseDir, record.id),
-    ...(buildResult ? { build: buildResult } : {}),
-  };
+  return { record: resolvePluginRecord(baseDir, record.id) };
 }
 
 export function setPluginEnabled(

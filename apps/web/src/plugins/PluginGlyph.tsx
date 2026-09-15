@@ -7,15 +7,14 @@ import { PluginContributionErrorBoundary, usePluginContributions } from "./runti
 
 export function PluginGlyph(props: {
   readonly pluginId: string;
-  readonly name?: string;
-  readonly className?: string;
-  readonly fallback?: ComponentType<{ readonly className?: string }>;
+  readonly name?: string | undefined;
+  readonly className?: string | undefined;
+  readonly fallback?: ComponentType<{ readonly className?: string | undefined }>;
 }) {
   const icons = usePluginContributions("icons");
   const registration = props.name
     ? icons.find(
-        (candidate) =>
-          candidate.plugin.id === props.pluginId && candidate.name === props.name,
+        (candidate) => candidate.plugin.id === props.pluginId && candidate.name === props.name,
       )
     : undefined;
   const Fallback = props.fallback ?? PluginIcon;

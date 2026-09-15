@@ -22,6 +22,11 @@ it("maximizes and restores without remounting or resetting document state", asyn
         pullRequestRepository: null,
         pullRequestNumber: null,
         pullRequestInitialTab: null,
+        pluginId: null,
+        pluginContributionId: null,
+        pluginPanelScope: null,
+        pluginTitle: null,
+        pluginParams: null,
       },
     ],
   };
@@ -85,6 +90,11 @@ it("keeps the whole dock maximized across selecting, opening and closing documen
     pullRequestRepository: null,
     pullRequestNumber: null,
     pullRequestInitialTab: null,
+    pluginId: null,
+    pluginContributionId: null,
+    pluginPanelScope: null,
+    pluginTitle: null,
+    pluginParams: null,
   });
   function Harness() {
     const [state, setState] = useState<RightDockThreadState>({

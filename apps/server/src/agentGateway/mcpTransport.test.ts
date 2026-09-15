@@ -142,7 +142,7 @@ function makeTransport(input: {
     credentials,
     snapshotQuery,
     tools: [input.tool, ...(input.extraTools ?? [])],
-    dynamicTools: input.dynamicTools,
+    ...(input.dynamicTools ? { dynamicTools: input.dynamicTools } : {}),
     instructions: "test",
     requireThreadShell: (threadId) => {
       const thread = threads.get(threadId);
@@ -502,7 +502,7 @@ describe("makeAgentGatewayMcpTransport dynamic plugin tools", () => {
       const generation = yield* Effect.promise(() =>
         registry.activate(reviewQueueManifest, reviewQueuePlugin),
       );
-      const registeredTool = registry.listAgentTools()[0];
+      const registeredTool = registry.listAgentTools().find((tool) => tool.id === "add-review");
       if (!registeredTool) throw new Error("Expected Review Queue to register an agent tool.");
       const toolName = pluginAgentToolName(registeredTool);
       const transport = makeTransport({

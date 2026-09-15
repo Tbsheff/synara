@@ -46,7 +46,11 @@ export function nonEmptyString(
   };
 }
 
-export function optional<Value>(schema: PluginSchema<Value>): PluginSchema<Value | undefined> {
+export interface PluginOptionalSchema<Value> extends PluginSchema<Value | undefined> {
+  readonly isOptional: true;
+}
+
+export function optional<Value>(schema: PluginSchema<Value>): PluginOptionalSchema<Value> {
   return {
     jsonSchema: schema.jsonSchema,
     isOptional: true,
@@ -76,11 +80,26 @@ export function array<Value>(schema: PluginSchema<Value>): PluginSchema<Value[]>
   };
 }
 
-export function object<Shape extends Readonly<Record<string, PluginSchema<unknown>>>>(
+type PluginSchemaShape = Readonly<Record<string, PluginSchema<unknown>>>;
+
+type PluginSchemaValue<Schema> = Schema extends PluginSchema<infer Value> ? Value : never;
+
+type PluginObjectValue<Shape extends PluginSchemaShape> = {
+  [Key in keyof Shape as Shape[Key] extends PluginOptionalSchema<unknown>
+    ? never
+    : Key]: PluginSchemaValue<Shape[Key]>;
+} & {
+  [Key in keyof Shape as Shape[Key] extends PluginOptionalSchema<unknown> ? Key : never]?: Exclude<
+    PluginSchemaValue<Shape[Key]>,
+    undefined
+  >;
+};
+
+type Simplify<Value> = { [Key in keyof Value]: Value[Key] } & {};
+
+export function object<Shape extends PluginSchemaShape>(
   shape: Shape,
-): PluginSchema<{
-  [Key in keyof Shape]: Shape[Key] extends PluginSchema<infer Value> ? Value : never;
-}> {
+): PluginSchema<Simplify<PluginObjectValue<Shape>>> {
   return {
     jsonSchema: {
       type: "object",
@@ -103,11 +122,11 @@ export function object<Shape extends Readonly<Record<string, PluginSchema<unknow
         }
       }
       return Object.fromEntries(
-        Object.entries(shape).map(([key, schema]) => [
-          key,
-          schema.parse(source[key], `${path}.${key}`),
-        ]),
-      ) as { [Key in keyof Shape]: Shape[Key] extends PluginSchema<infer Value> ? Value : never };
+        Object.entries(shape).flatMap(([key, schema]) => {
+          const value = schema.parse(source[key], `${path}.${key}`);
+          return value === undefined && schema.isOptional === true ? [] : [[key, value]];
+        }),
+      ) as Simplify<PluginObjectValue<Shape>>;
     },
   };
 }
@@ -211,9 +230,10 @@ interface RegisteredMethod {
   readonly handler: PluginHandler<unknown, unknown>;
 }
 
-type PendingAgentTool = PluginAgentToolRegistration<unknown, unknown>;
+interface RegisteredAgentTool
+  extends PluginAgentToolRegistration<unknown, unknown>, RegisteredPluginAgentTool {}
 
-interface RegisteredAgentTool extends PendingAgentTool, RegisteredPluginAgentTool {}
+type PendingAgentTool = Omit<RegisteredAgentTool, "pluginId" | "generation">;
 
 interface ActivePlugin {
   readonly manifest: SynaraPluginManifest;

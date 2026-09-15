@@ -48,9 +48,9 @@ describe("frontend plugin runtime state", () => {
 
     expect(first?.appUrl).toBe("http://127.0.0.1:58090/api/plugin-assets/acme/app.js?v=one");
     expect(second?.key).toBe(first?.key);
-    expect(reconcilePluginApps([activePluginApp(descriptor)], second ? [second] : [], [])).toHaveLength(
-      1,
-    );
+    expect(
+      reconcilePluginApps([activePluginApp(descriptor)], second ? [second] : [], []),
+    ).toHaveLength(1);
   });
 
   it("exposes every registration collection and attaches its plugin", () => {
@@ -94,14 +94,18 @@ describe("ContentScriptHost", () => {
         id: "first",
         mount: ({ pluginId, generation, signal }) => {
           events.push(`mount:first:${pluginId}:${generation}:${signal.aborted}`);
-          return () => events.push(`dispose:first:${signal.aborted}`);
+          return () => {
+            events.push(`dispose:first:${signal.aborted}`);
+          };
         },
       },
       {
         id: "second",
         mount: ({ signal }) => {
           events.push(`mount:second:${signal.aborted}`);
-          return () => events.push(`dispose:second:${signal.aborted}`);
+          return () => {
+            events.push(`dispose:second:${signal.aborted}`);
+          };
         },
       },
     ];

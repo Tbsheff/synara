@@ -1,7 +1,5 @@
-import type {
-  PluginPanelActionContext,
-  SynaraPluginAppContext,
-} from "@synara/plugin-sdk/app";
+import { ThreadId } from "@synara/contracts";
+import type { PluginPanelActionContext, SynaraPluginAppContext } from "@synara/plugin-sdk/app";
 import { useCallback, useRef, useState } from "react";
 
 import { ChatHeaderButton } from "~/components/chat/chatHeaderControls";
@@ -32,7 +30,7 @@ function PluginPanelActionButton(props: {
     setPending(true);
     const openPanel: PluginPanelActionContext["openPanel"] = (options) => {
       if (!props.context.threadId) return false;
-      openPane(props.context.threadId, {
+      openPane(ThreadId.makeUnsafe(props.context.threadId), {
         kind: "plugin",
         paneId: `plugin:${props.scope}:${props.action.plugin.id}:${props.action.id}:${randomUUID()}`,
         pluginId: props.action.plugin.id,
@@ -86,9 +84,7 @@ function PluginPanelActionButton(props: {
   );
 }
 
-export function usePluginPanelActions(
-  scope: PluginPanelScope,
-): readonly ActivePluginPanelAction[] {
+export function usePluginPanelActions(scope: PluginPanelScope): readonly ActivePluginPanelAction[] {
   const kind = scope === "thread" ? "threadPanelActions" : "newThreadPanelActions";
   return usePluginContributions(kind);
 }

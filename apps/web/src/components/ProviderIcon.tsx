@@ -125,7 +125,7 @@ export function ProviderIcon({
         <Icon
           context={{ projectId: null, threadId: null }}
           plugin={pluginIcon.plugin}
-          className={className}
+          {...(className === undefined ? {} : { className })}
         />
       </PluginContributionErrorBoundary>
     );

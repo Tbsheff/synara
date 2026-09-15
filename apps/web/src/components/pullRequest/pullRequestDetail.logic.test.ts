@@ -144,6 +144,11 @@ describe("pullRequestDetailInputFromPane", () => {
     pullRequestRepository: "acme/widgets",
     pullRequestNumber: 350,
     pullRequestInitialTab: null,
+    pluginId: null,
+    pluginContributionId: null,
+    pluginPanelScope: null,
+    pluginTitle: null,
+    pluginParams: null,
   };
 
   it("builds the detail input from a fully-populated pull request pane", () => {
