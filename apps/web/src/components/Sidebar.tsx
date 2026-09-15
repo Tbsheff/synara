@@ -238,6 +238,12 @@ import { useHandleNewStudioChat } from "../hooks/useHandleNewStudioChat";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { useProviderStatusesForLocalConfig } from "../hooks/useProviderStatusesForLocalConfig";
 import { usePluginNavPanels } from "../plugins/runtime";
+import {
+  PluginSidebarFooterExtensions,
+  PluginSidebarNavigationSurface,
+  PluginThreadListSurface,
+  usePluginSidebarPreferences,
+} from "../plugins/PluginSidebar";
 import { useThreadHandoff } from "../hooks/useThreadHandoff";
 import { useFeedbackDialogStore } from "../feedbackDialogStore";
 import { openExternalLink } from "~/lib/linkChips";
@@ -1404,6 +1410,8 @@ export default function Sidebar() {
   const queryClient = useQueryClient();
   const pathname = useLocation({ select: (loc) => loc.pathname });
   const pluginPanels = usePluginNavPanels();
+  const [pluginSidebarPreferences, updatePluginSidebarPreferences] =
+    usePluginSidebarPreferences();
   const isOnSettings = useLocation({
     select: (loc) => loc.pathname === "/settings",
   });
@@ -1476,6 +1484,10 @@ export default function Sidebar() {
     select: (params) =>
       typeof params.projectId === "string" ? ProjectId.makeUnsafe(params.projectId) : null,
   });
+  const pluginSidebarContext = useMemo(
+    () => ({ projectId: routeProjectId, threadId: routeThreadId }),
+    [routeProjectId, routeThreadId],
+  );
   const routeSearch = useDiffRouteSearch();
   const settingsSectionSearch = useSearch({ strict: false }) as Record<string, unknown>;
   const activeSettingsSection = normalizeSettingsSection(settingsSectionSearch.section);
@@ -6095,17 +6107,20 @@ export default function Sidebar() {
                   className="px-1.5 pt-1 pb-1.5"
                   onContextMenu={isOnStudio ? undefined : handleNavContextMenu}
                 >
-                  <SidebarMenu className="gap-0.5">
-                    {isOnStudio ? (
-                      <SidebarPrimaryAction
-                        icon={NewThreadIcon}
-                        iconClassName="size-3.5"
-                        label="New studio chat"
-                        onClick={handleCreateStudioChat}
-                      />
-                    ) : (
-                      <>
-                        {visibleSidebarNavIds.map((id) => {
+                  <PluginSidebarNavigationSurface
+                    context={pluginSidebarContext}
+                    selectedProvider={pluginSidebarPreferences.navigationProvider}
+                  >
+                    <SidebarMenu className="gap-0.5">
+                      {isOnStudio ? (
+                        <SidebarPrimaryAction
+                          icon={NewThreadIcon}
+                          iconClassName="size-3.5"
+                          label="New studio chat"
+                          onClick={handleCreateStudioChat}
+                        />
+                      ) : (
+                        visibleSidebarNavIds.map((id) => {
                           const item = sidebarNavDescriptors[id];
                           return (
                             <SidebarPrimaryAction
@@ -6120,7 +6135,12 @@ export default function Sidebar() {
                               {...(item.onFocus ? { onFocus: item.onFocus } : {})}
                             />
                           );
-                        })}
+                        })
+                      )}
+                    </SidebarMenu>
+                  </PluginSidebarNavigationSurface>
+                  {!isOnStudio && pluginPanels.length > 0 ? (
+                    <SidebarMenu className="gap-0.5">
                         {pluginPanels.map((panel) => {
                           const panelPath = `/extensions/${panel.plugin.app}/${panel.id}`;
                           return (
@@ -6138,13 +6158,17 @@ export default function Sidebar() {
                             />
                           );
                         })}
-                      </>
-                    )}
-                  </SidebarMenu>
+                    </SidebarMenu>
+                  ) : null}
                 </SidebarGroup>
               )}
 
-              {isOnStudio ? (
+              <PluginThreadListSurface
+                context={pluginSidebarContext}
+                selectedProvider={pluginSidebarPreferences.threadListProvider}
+              >
+                <>
+                  {isOnStudio ? (
                 // Studio is "just chats": a labeled Studio block holding a flat list of threads
                 // rooted at the Studio workspace (no project-folder chrome).
                 <SidebarGroup className="px-1.5 py-1.5">
@@ -6341,10 +6365,7 @@ export default function Sidebar() {
                   )}
                 </SidebarGroup>
               )}
-            </div>
-          </>
-        )}
-        {!isOnSettings && !isOnStudio && !activityViewEnabled && chatsSectionVisible ? (
+                  {!isOnSettings && !isOnStudio && !activityViewEnabled && chatsSectionVisible ? (
           // sidebar-surface-enter: mounts on the Studio -> Projects switch, so it
           // animates in step with the keyed surface wrapper above.
           <SidebarGroup className="sidebar-surface-enter px-1.5 pt-1 pb-2">
@@ -6461,13 +6482,29 @@ export default function Sidebar() {
               </div>
             </div>
           </SidebarGroup>
-        ) : null}
+                  ) : null}
+                </>
+              </PluginThreadListSurface>
+            </div>
+          </>
+        )}
       </SidebarContent>
 
       <SidebarFooter className="gap-2 border-sidebar-border border-t p-2 font-system-ui">
         <SidebarMenu>
           <SidebarMenuItem>
             <div className="flex flex-col gap-1">
+              <PluginSidebarFooterExtensions
+                context={pluginSidebarContext}
+                preferences={pluginSidebarPreferences}
+                updatePreferences={updatePluginSidebarPreferences}
+                onManageExtensions={() => {
+                  void navigate({
+                    to: "/settings",
+                    search: (previous) => ({ ...previous, section: "extensions" }),
+                  });
+                }}
+              />
               {DebugFeatureFlagsMenu && showDebugFeatureFlagsMenu && !isOnSettings ? (
                 <Suspense fallback={null}>
                   <DebugFeatureFlagsMenu />
