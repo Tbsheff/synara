@@ -97,11 +97,7 @@ export function PluginSidebarNavigationSurface({
         contributionId={selected.id}
         fallback={children}
       >
-        <Navigation
-          context={context}
-          plugin={selected.plugin}
-          Original={OriginalSidebarSurface}
-        />
+        <Navigation context={context} plugin={selected.plugin} Original={OriginalSidebarSurface} />
       </PluginContributionErrorBoundary>
     </OriginalSidebarSurfaceContext.Provider>
   );
@@ -129,11 +125,7 @@ export function PluginThreadListSurface({
         contributionId={selected.id}
         fallback={children}
       >
-        <ThreadList
-          context={context}
-          plugin={selected.plugin}
-          Original={OriginalSidebarSurface}
-        />
+        <ThreadList context={context} plugin={selected.plugin} Original={OriginalSidebarSurface} />
       </PluginContributionErrorBoundary>
     </OriginalSidebarSurfaceContext.Provider>
   );
@@ -141,7 +133,9 @@ export function PluginThreadListSurface({
 
 type ActiveFooterAction = ActivePluginContribution<"sidebarFooterActions">;
 type ActiveFooterItem = ActivePluginContribution<"sidebarFooterItems">;
-type RunnableFooterContribution = ActiveFooterAction | Extract<ActiveFooterItem, { kind: "action" }>;
+type RunnableFooterContribution =
+  | ActiveFooterAction
+  | Extract<ActiveFooterItem, { kind: "action" }>;
 
 function footerContributionKey(
   kind: "action" | "item",
@@ -203,7 +197,9 @@ function PluginFooterDisclosure({
         key={`${item.plugin.id}:${item.id}:${item.plugin.generation}`}
         plugin={item.plugin}
         contributionId={item.id}
-        fallback={<p className="px-2 py-1.5 text-xs text-destructive">This plugin panel failed.</p>}
+        fallback={
+          <p className="px-2 py-1.5 text-ui-xs text-destructive">This plugin panel failed.</p>
+        }
       >
         <Disclosure context={context} plugin={item.plugin} />
       </PluginContributionErrorBoundary>
@@ -282,12 +278,10 @@ export function PluginSidebarFooterExtensions({
   const itemSplit = splitPluginSidebarFooterContributions(footerItems, MAX_VISIBLE_FOOTER_ITEMS);
   const hasProviderChoices = sidebarNavigations.length > 0 || threadLists.length > 0;
   const hasOverflow = actionSplit.overflow.length > 0 || itemSplit.overflow.length > 0;
-  const hasContributions =
-    footerActions.length > 0 || footerItems.length > 0 || hasProviderChoices;
+  const hasContributions = footerActions.length > 0 || footerItems.length > 0 || hasProviderChoices;
   const activeDisclosure = footerItems.find(
     (item): item is Extract<ActiveFooterItem, { kind: "disclosure" }> =>
-      item.kind === "disclosure" &&
-      footerContributionKey("item", item) === openDisclosureKey,
+      item.kind === "disclosure" && footerContributionKey("item", item) === openDisclosureKey,
   );
 
   const runContribution = useCallback(

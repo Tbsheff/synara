@@ -58,11 +58,7 @@ export function PluginSettingsSectionList({
   );
 }
 
-export function PluginSettingsSections({
-  context,
-}: {
-  readonly context: SynaraPluginAppContext;
-}) {
+export function PluginSettingsSections({ context }: { readonly context: SynaraPluginAppContext }) {
   const contributions = usePluginContributions("settingsSections");
   return <PluginSettingsSectionList context={context} contributions={contributions} />;
 }

@@ -1,12 +1,12 @@
-import type {
-  PluginMessageActionContext,
-  SynaraPluginAppContext,
-} from "@synara/plugin-sdk/app";
+import type { PluginMessageActionContext, SynaraPluginAppContext } from "@synara/plugin-sdk/app";
 import { memo, useCallback, useRef, useState } from "react";
 
 import { ZapIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
-import { MessageActionButton, MESSAGE_ACTION_ICON_CLASS_NAME } from "~/components/chat/MessageActionButton";
+import {
+  MessageActionButton,
+  MESSAGE_ACTION_ICON_CLASS_NAME,
+} from "~/components/chat/MessageActionButton";
 import { toastManager } from "~/components/ui/toast";
 
 import type { ActivePluginContribution } from "./frontendRuntime";
@@ -94,7 +94,7 @@ const PluginMessageActionButton = memo(function PluginMessageActionButton(
         aria-label={props.action.title}
         title={props.action.title}
         disabled={pending}
-        className="pointer-events-auto inline-flex h-7 flex-none items-center justify-center whitespace-nowrap px-2.5 text-xs text-[var(--color-text-foreground)] outline-none hover:bg-accent focus-visible:bg-accent disabled:pointer-events-none disabled:opacity-40"
+        className="pointer-events-auto inline-flex h-7 flex-none items-center justify-center whitespace-nowrap px-2.5 text-ui-xs text-[var(--color-text-foreground)] outline-none hover:bg-accent focus-visible:bg-accent disabled:pointer-events-none disabled:opacity-40"
         onMouseDown={(event) => {
           event.preventDefault();
           event.stopPropagation();

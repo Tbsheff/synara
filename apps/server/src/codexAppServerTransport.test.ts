@@ -4,10 +4,25 @@ import type { Writable } from "node:stream";
 import { describe, expect, it } from "vitest";
 
 import {
+  CODEX_APP_SERVER_MAX_FRAME_BYTES,
   CodexAppServerTransportError,
   CodexJsonlFramer,
   CodexJsonlWriter,
 } from "./codexAppServerTransport.ts";
+
+function buildCompleteJsonlFrame(frameBytes: number): Buffer {
+  const prefix = Buffer.from('{"payload":"', "utf8");
+  const suffix = Buffer.from('"}', "utf8");
+  return Buffer.concat(
+    [
+      prefix,
+      Buffer.alloc(frameBytes - prefix.length - suffix.length, 0x78),
+      suffix,
+      Buffer.from("\n"),
+    ],
+    frameBytes + 1,
+  );
+}
 
 describe("Codex app-server transport", () => {
   it("frames split UTF-8 and rejects invalid or unterminated input", () => {
@@ -118,6 +133,35 @@ describe("Codex app-server transport", () => {
     );
   });
 
+  it("accepts the frame limit, reports larger frames, and releases retained input", () => {
+    expect(new CodexJsonlFramer().maxFrameBytes).toBe(CODEX_APP_SERVER_MAX_FRAME_BYTES);
+
+    const atLimit = new CodexJsonlFramer(64, 32);
+    const frames = atLimit.push(buildCompleteJsonlFrame(64));
+    expect(frames).toHaveLength(1);
+    const frame = frames[0];
+    expect(typeof frame).toBe("string");
+    expect(Buffer.byteLength(typeof frame === "string" ? frame : "", "utf8")).toBe(64);
+    expect(atLimit.bufferedBytes).toBe(0);
+
+    const oneByteOver = new CodexJsonlFramer(64, 32);
+    expect(oneByteOver.push(buildCompleteJsonlFrame(65))).toEqual([
+      expect.objectContaining({
+        kind: "oversized",
+        observedBytes: 65,
+        maxBytes: 64,
+      }),
+    ]);
+    expect(oneByteOver.bufferedBytes).toBe(0);
+
+    const observedFailure = new CodexJsonlFramer(64, 32);
+    expect(observedFailure.push(Buffer.alloc(16, 0x78))).toEqual([]);
+    expect(
+      observedFailure.push(Buffer.concat([Buffer.alloc(49, 0x78), Buffer.from("\n")])),
+    ).toEqual([expect.objectContaining({ kind: "oversized", observedBytes: 65, maxBytes: 64 })]);
+    expect(observedFailure.bufferedBytes).toBe(0);
+  });
+
   it("serializes slow stdin writes within one retained-byte budget", async () => {
     class ControlledWritable extends EventEmitter {
       writable = true;
@@ -179,5 +223,16 @@ describe("Codex app-server transport", () => {
     await expect(writer.write({ payload: "x".repeat(32) })).rejects.toBeInstanceOf(
       CodexAppServerTransportError,
     );
+  });
+
+  it("uses the Codex-specific message in the error stack header", () => {
+    const error = new CodexAppServerTransportError({
+      reason: "frame-too-large",
+      maxBytes: 16,
+      observedBytes: 17,
+    });
+
+    expect(error.message).toBe("Codex app-server JSONL frame exceeded its byte limit (17/16).");
+    expect(error.stack?.split("\n", 1)[0]).toContain(error.message);
   });
 });

@@ -13,14 +13,9 @@ const AUTHORING_SKILL_NAME = "synara-plugin-authoring";
 function authoringSkillSourceCandidates(): ReadonlyArray<string> {
   return [
     fileURLToPath(
-      new URL(
-        `../../../../.claude/skills/${AUTHORING_SKILL_NAME}/SKILL.md`,
-        import.meta.url,
-      ),
+      new URL(`../../../../.claude/skills/${AUTHORING_SKILL_NAME}/SKILL.md`, import.meta.url),
     ),
-    fileURLToPath(
-      new URL(`./builtin-skills/${AUTHORING_SKILL_NAME}/SKILL.md`, import.meta.url),
-    ),
+    fileURLToPath(new URL(`./builtin-skills/${AUTHORING_SKILL_NAME}/SKILL.md`, import.meta.url)),
   ];
 }
 
@@ -55,7 +50,8 @@ export const ensurePluginAuthoringSkill = (baseDir: string) =>
     });
     const currentContents = yield* Effect.tryPromise({
       try: () => readFile(targetPath, "utf8").catch(() => undefined),
-      catch: (cause) => new Error("Failed to inspect the installed plugin authoring skill.", { cause }),
+      catch: (cause) =>
+        new Error("Failed to inspect the installed plugin authoring skill.", { cause }),
     });
     if (currentContents !== contents) {
       yield* writeFileStringAtomically({ filePath: targetPath, contents });

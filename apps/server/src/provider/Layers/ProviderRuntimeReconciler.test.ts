@@ -108,6 +108,7 @@ describe("ProviderRuntimeReconcilerLive", () => {
       listThreadProgressIncludingNativeChildren: () => Effect.succeed([]),
       getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 1 }),
       getThreadShellById: () => Effect.succeed(Option.some(staleShellSnapshot().threads[0]!)),
+      getThreadShellsByIds: () => Effect.succeed([staleShellSnapshot().threads[0]!]),
       getShellSnapshot: () => Effect.die("full shell snapshot should not be loaded"),
     } as unknown as ProjectionSnapshotQueryShape;
     const directory = {
@@ -265,6 +266,7 @@ describe("ProviderRuntimeReconcilerLive", () => {
             return threadProgress;
           }),
         getThreadShellById: () => Effect.succeed(Option.some(runningQuietThread)),
+        getThreadShellsByIds: () => Effect.succeed([runningQuietThread]),
       } as unknown as ProjectionSnapshotQueryShape;
       const directory = {
         listBindings: () =>
@@ -353,6 +355,7 @@ describe("ProviderRuntimeReconcilerLive provider activity probe", () => {
       listStaleInFlightThreadIds: () => Effect.succeed([THREAD_ID]),
       listThreadProgressIncludingNativeChildren: () => Effect.succeed([]),
       getThreadShellById: () => Effect.succeed(Option.some(runningThread)),
+      getThreadShellsByIds: () => Effect.succeed([runningThread]),
     } as unknown as ProjectionSnapshotQueryShape;
     const directory = {
       listBindings: () =>
@@ -510,6 +513,8 @@ describe("ProviderRuntimeReconcilerLive plan application", () => {
       listThreadProgressIncludingNativeChildren: () => Effect.succeed([]),
       getThreadShellById: (threadId: ThreadId) =>
         Effect.sync(() => Option.some(input.getThreadShellById(threadId))),
+      getThreadShellsByIds: (threadIds: ReadonlyArray<ThreadId>) =>
+        Effect.sync(() => threadIds.map(input.getThreadShellById)),
     } as unknown as ProjectionSnapshotQueryShape;
     const directory = {
       listBindings: () =>

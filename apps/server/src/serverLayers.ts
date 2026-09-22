@@ -25,6 +25,7 @@ import { OrchestrationLayerLive } from "./orchestration/runtimeLayer";
 import { DevServerManagerLive } from "./devServerManager";
 import { DeviceServiceLive } from "./device/Layers/DeviceService";
 import type { DeviceService } from "./device/Services/DeviceService";
+import { ComputerServiceLive } from "./computer/Layers/ComputerService";
 import { KeybindingsLive } from "./keybindings";
 import { GitCoreLive } from "./git/Layers/GitCore";
 import { GitLayerLive, TextGenerationLayerLive } from "./git/runtimeLayer";
@@ -100,6 +101,7 @@ export function makeServerRuntimeServicesLayer(
   );
   const runtimeIngestionLayer = ProviderRuntimeIngestionLive.pipe(
     Layer.provideMerge(runtimeServicesLayer),
+    Layer.provideMerge(ComputerServiceLive),
   );
   const studioOutputReactorLayer = StudioOutputReactorLive.pipe(
     Layer.provideMerge(runtimeServicesLayer),
@@ -217,6 +219,7 @@ export function makeServerRuntimeServicesLayer(
     // resolves the service on every platform to make that decision.
     Layer.provideMerge(DeviceServiceLive),
     Layer.provideMerge(pluginHostLayer),
+    Layer.provideMerge(ComputerServiceLive),
   );
   const pullRequestServiceLayer = PullRequestServiceLive.pipe(
     Layer.provideMerge(GitLayerLive),
@@ -246,6 +249,7 @@ export function makeServerRuntimeServicesLayer(
     threadDeletionReactorLayer,
     devServerManagerLayer,
     DeviceServiceLive,
+    ComputerServiceLive,
     GitLayerLive,
     TextGenerationLayerLive,
     TerminalLayerLive,

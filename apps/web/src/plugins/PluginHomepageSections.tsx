@@ -17,11 +17,7 @@ export function PluginHomepageSections(props: {
     <div className={cn("flex w-full flex-col gap-3", props.className)}>
       {actions.length > 0 ? (
         <div className="flex justify-center">
-          <PluginPanelActionList
-            actions={actions}
-            context={props.context}
-            scope="new-thread"
-          />
+          <PluginPanelActionList actions={actions} context={props.context} scope="new-thread" />
         </div>
       ) : null}
       {sections.map((section) => {
@@ -34,9 +30,9 @@ export function PluginHomepageSections(props: {
             fallback={null}
           >
             <section className="rounded-xl border bg-card p-4 text-left">
-              <h3 className="text-sm font-medium">{section.title}</h3>
+              <h3 className="text-ui-sm font-medium">{section.title}</h3>
               {section.description ? (
-                <p className="mt-1 text-xs text-muted-foreground">{section.description}</p>
+                <p className="mt-1 text-ui-xs text-muted-foreground">{section.description}</p>
               ) : null}
               <div className="mt-3">
                 <Section context={props.context} plugin={section.plugin} />

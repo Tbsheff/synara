@@ -15,7 +15,9 @@ export function pluginSkillsInstallRoot(baseDir: string, pluginId: string): stri
 function skillDirectories(skillRoot: string): string[] {
   if (existsSync(path.join(skillRoot, "SKILL.md"))) return [skillRoot];
   return readdirSync(skillRoot, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory() && existsSync(path.join(skillRoot, entry.name, "SKILL.md")))
+    .filter(
+      (entry) => entry.isDirectory() && existsSync(path.join(skillRoot, entry.name, "SKILL.md")),
+    )
     .map((entry) => path.join(skillRoot, entry.name));
 }
 

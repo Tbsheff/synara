@@ -372,7 +372,6 @@ const LayerLive = (input: CliInput) => {
     Layer.provideMerge(runtimeServicesLayer),
     Layer.provideMerge(providerLayer),
   );
-
   return Layer.empty.pipe(
     Layer.provideMerge(runtimeServicesLayer),
     Layer.provideMerge(providerLayer),
@@ -894,26 +893,23 @@ const pluginUninstallCommand = Command.make(
     }),
 ).pipe(Command.withDescription("Uninstall a local plugin without deleting its source."));
 
-const pluginDevCommand = Command.make(
-  "dev",
-  { path: pluginPathArgument },
-  ({ path: sourcePath }) =>
-    Effect.gen(function* () {
-      const parent = yield* baseServerCommand;
-      yield* Effect.tryPromise({
-        try: () =>
-          watchPlugin(
-            pluginCliBaseDir(parent),
-            sourcePath,
-            (result) => process.stdout.write(`${result.record.id} built and reload requested.\n`),
-            (cause) =>
-              process.stderr.write(
-                `Plugin rebuild failed: ${cause instanceof Error ? cause.message : String(cause)}\n`,
-              ),
-          ),
-        catch: (cause) => pluginStartupError("Plugin development watcher failed.", cause),
-      });
-    }),
+const pluginDevCommand = Command.make("dev", { path: pluginPathArgument }, ({ path: sourcePath }) =>
+  Effect.gen(function* () {
+    const parent = yield* baseServerCommand;
+    yield* Effect.tryPromise({
+      try: () =>
+        watchPlugin(
+          pluginCliBaseDir(parent),
+          sourcePath,
+          (result) => process.stdout.write(`${result.record.id} built and reload requested.\n`),
+          (cause) =>
+            process.stderr.write(
+              `Plugin rebuild failed: ${cause instanceof Error ? cause.message : String(cause)}\n`,
+            ),
+        ),
+      catch: (cause) => pluginStartupError("Plugin development watcher failed.", cause),
+    });
+  }),
 ).pipe(Command.withDescription("Build, install, and watch a local plugin for changes."));
 
 const pluginCommand = Command.make("plugin").pipe(

@@ -6,7 +6,9 @@ import { PluginPanel } from "~/plugins/runtime";
 function PluginPanelRoute() {
   const { pluginKey, panelId } = Route.useParams();
   const projectId = useLatestProjectStore((state) => state.latestProjectId);
-  return <PluginPanel pluginKey={pluginKey} panelId={panelId} context={{ projectId, threadId: null }} />;
+  return (
+    <PluginPanel pluginKey={pluginKey} panelId={panelId} context={{ projectId, threadId: null }} />
+  );
 }
 
 export const Route = createFileRoute("/_chat/extensions/$pluginKey/$panelId")({

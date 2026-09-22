@@ -217,7 +217,7 @@ export function PluginComposerControls(props: {
             type="button"
             size="sm"
             variant="ghost"
-            className="shrink-0 gap-1.5 px-2 text-xs"
+            className="shrink-0 gap-1.5 px-2 text-ui-xs"
             disabled={pendingKey === key}
             onClick={() => run(entry)}
           >
@@ -259,7 +259,7 @@ export function PluginComposerControls(props: {
                   <span className="min-w-0 flex-1">
                     <span className="block truncate">{entry.action.title}</span>
                     {entry.action.description ? (
-                      <span className="block truncate text-xs text-muted-foreground">
+                      <span className="block truncate text-ui-xs text-muted-foreground">
                         {entry.action.description}
                       </span>
                     ) : null}

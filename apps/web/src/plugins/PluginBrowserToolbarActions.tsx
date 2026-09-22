@@ -1,4 +1,7 @@
-import type { PluginBrowserToolbarActionProps, SynaraPluginAppContext } from "@synara/plugin-sdk/app";
+import type {
+  PluginBrowserToolbarActionProps,
+  SynaraPluginAppContext,
+} from "@synara/plugin-sdk/app";
 
 import { PluginContributionErrorBoundary, usePluginContributions } from "./runtime";
 

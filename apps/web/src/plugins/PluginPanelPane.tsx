@@ -14,12 +14,11 @@ export function PluginPanelPane(props: {
 }) {
   const panels = usePluginPanelActions(props.scope ?? "thread");
   const panel = panels.find(
-    (candidate) =>
-      candidate.plugin.id === props.pluginId && candidate.id === props.contributionId,
+    (candidate) => candidate.plugin.id === props.pluginId && candidate.id === props.contributionId,
   );
   if (!panel) {
     return (
-      <div className="flex h-full items-center justify-center p-6 text-sm text-muted-foreground">
+      <div className="flex h-full items-center justify-center p-6 text-ui-sm text-muted-foreground">
         This extension panel is not available.
       </div>
     );
@@ -31,7 +30,7 @@ export function PluginPanelPane(props: {
       plugin={panel.plugin}
       contributionId={panel.id}
       fallback={
-        <div className="flex h-full items-center justify-center p-6 text-sm text-destructive">
+        <div className="flex h-full items-center justify-center p-6 text-ui-sm text-destructive">
           This extension panel failed.
         </div>
       }

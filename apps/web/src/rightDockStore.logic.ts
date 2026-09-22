@@ -106,9 +106,7 @@ function jsonValuesEqual(left: JsonValue | null, right: JsonValue | null): boole
   return (
     leftKeys.length === rightKeys.length &&
     leftKeys.every(
-      (key) =>
-        Object.hasOwn(right, key) &&
-        jsonValuesEqual(left[key] ?? null, right[key] ?? null),
+      (key) => Object.hasOwn(right, key) && jsonValuesEqual(left[key] ?? null, right[key] ?? null),
     )
   );
 }

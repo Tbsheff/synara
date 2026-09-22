@@ -275,8 +275,8 @@ export class PluginContributionErrorBoundary extends Component<
       return (
         <main className="chat-content-card flex min-h-0 flex-1 items-center justify-center bg-background p-8">
           <div className="max-w-md rounded-xl border bg-card p-6 text-center">
-            <h1 className="text-base font-semibold">Plugin contribution failed</h1>
-            <p className="mt-2 text-sm text-muted-foreground">
+            <h1 className="text-ui font-semibold">Plugin contribution failed</h1>
+            <p className="mt-2 text-ui-sm text-muted-foreground">
               {this.props.plugin.displayName} stopped in its own error boundary. Synara is still
               running.
             </p>
@@ -304,7 +304,7 @@ export function PluginPanel({
   if (!panel) {
     return (
       <main className="chat-content-card flex min-h-0 flex-1 items-center justify-center bg-background p-8">
-        <p className="text-sm text-muted-foreground">Plugin panel not found.</p>
+        <p className="text-ui-sm text-muted-foreground">Plugin panel not found.</p>
       </main>
     );
   }

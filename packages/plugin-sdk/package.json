@@ -17,13 +17,13 @@
     "test": "vitest run",
     "typecheck": "node ../../node_modules/@typescript/native/bin/tsc --noEmit"
   },
-  "peerDependencies": {
-    "react": "^19.0.0"
-  },
   "devDependencies": {
     "@types/react": "^19.0.0",
     "react": "^19.0.0",
     "typescript": "catalog:",
     "vitest": "catalog:"
+  },
+  "peerDependencies": {
+    "react": "^19.0.0"
   }
 }

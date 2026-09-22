@@ -11,10 +11,7 @@ vi.mock("./runtime", () => ({
   PluginContributionErrorBoundary: ({ children }: { children: ReactNode }) => children,
 }));
 
-import {
-  PluginSidebarNavigationSurface,
-  PluginThreadListSurface,
-} from "./PluginSidebar";
+import { PluginSidebarNavigationSurface, PluginThreadListSurface } from "./PluginSidebar";
 import { pluginSidebarContributionKey } from "./PluginSidebar.logic";
 
 const context = { projectId: "project-1", threadId: "thread-1" };

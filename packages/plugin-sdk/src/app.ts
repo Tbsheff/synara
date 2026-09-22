@@ -74,8 +74,9 @@ export interface PluginComponentRegistration<Props extends PluginComponentProps>
   readonly component: ComponentType<Props>;
 }
 
-export interface PluginTitledComponentRegistration<Props extends PluginComponentProps>
-  extends PluginComponentRegistration<Props> {
+export interface PluginTitledComponentRegistration<
+  Props extends PluginComponentProps,
+> extends PluginComponentRegistration<Props> {
   readonly title: string;
   readonly description?: string;
 }
@@ -85,15 +86,13 @@ export type PluginReplacementRegistration<Props extends PluginComponentProps> =
 
 export type PluginHomepageSectionRegistration =
   PluginTitledComponentRegistration<PluginHomepageSectionProps>;
-export interface PluginSettingsSectionRegistration
-  extends PluginComponentRegistration<PluginSettingsSectionProps> {
+export interface PluginSettingsSectionRegistration extends PluginComponentRegistration<PluginSettingsSectionProps> {
   readonly title?: string;
   readonly description?: string;
 }
 export type PluginAppOverlayRegistration = PluginComponentRegistration<PluginAppOverlayProps>;
 
-export interface PluginNavPanelContribution
-  extends PluginTitledComponentRegistration<PluginNavPanelProps> {
+export interface PluginNavPanelContribution extends PluginTitledComponentRegistration<PluginNavPanelProps> {
   readonly icon?: string;
   readonly path?: string;
 }
@@ -105,20 +104,17 @@ export interface PluginPanelActionContext extends PluginComponentProps {
   }) => boolean;
 }
 
-export interface PluginThreadPanelActionRegistration
-  extends PluginTitledComponentRegistration<PluginThreadPanelProps> {
+export interface PluginThreadPanelActionRegistration extends PluginTitledComponentRegistration<PluginThreadPanelProps> {
   readonly icon?: string;
   readonly run?: (context: PluginPanelActionContext) => void | Promise<void>;
 }
 
-export interface PluginNewThreadPanelActionRegistration
-  extends PluginTitledComponentRegistration<PluginNewThreadPanelProps> {
+export interface PluginNewThreadPanelActionRegistration extends PluginTitledComponentRegistration<PluginNewThreadPanelProps> {
   readonly icon?: string;
   readonly run?: (context: PluginPanelActionContext) => void | Promise<void>;
 }
 
-export interface PluginPendingInteractionRegistration
-  extends PluginComponentRegistration<PluginPendingInteractionProps> {
+export interface PluginPendingInteractionRegistration extends PluginComponentRegistration<PluginPendingInteractionProps> {
   readonly kind: "approval" | "userInput";
 }
 
@@ -150,8 +146,7 @@ export type PluginThreadHeaderActionRegistration =
 export type PluginBrowserToolbarActionRegistration =
   PluginTitledComponentRegistration<PluginBrowserToolbarActionProps>;
 
-export interface PluginFileOpenerRegistration
-  extends PluginTitledComponentRegistration<PluginFileOpenerProps> {
+export interface PluginFileOpenerRegistration extends PluginTitledComponentRegistration<PluginFileOpenerProps> {
   readonly extensions: readonly string[];
 }
 
@@ -202,8 +197,7 @@ export interface PluginComposerActionRegistration {
   readonly run: (context: PluginComposerActionContext) => void | Promise<void>;
 }
 
-export interface PluginComposerBannerRegistration
-  extends PluginComponentRegistration<PluginComponentProps> {
+export interface PluginComposerBannerRegistration extends PluginComponentRegistration<PluginComponentProps> {
   readonly chrome?: "card" | "bare";
 }
 
@@ -235,10 +229,7 @@ export interface PluginContentScriptRegistration {
   readonly id: string;
   readonly mount: (
     context: PluginContentScriptContext,
-  ) =>
-    | void
-    | PluginContentScriptDisposer
-    | Promise<void | PluginContentScriptDisposer>;
+  ) => void | PluginContentScriptDisposer | Promise<void | PluginContentScriptDisposer>;
 }
 
 export interface PluginSidebarFooterItemBase {
@@ -368,11 +359,8 @@ export function usePluginRuntime(): PluginAppRuntime {
 export function usePluginRpc(plugin: SynaraPluginDescriptor) {
   const runtime = usePluginRuntime();
   return useCallback(
-    <Input, Output>(
-      method: string,
-      contract: PluginRpcContract<Input, Output>,
-      input: Input,
-    ) => runtime.call({ plugin, method, contract, input }),
+    <Input, Output>(method: string, contract: PluginRpcContract<Input, Output>, input: Input) =>
+      runtime.call({ plugin, method, contract, input }),
     [plugin.generation, plugin.id, runtime],
   );
 }

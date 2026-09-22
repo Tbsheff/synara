@@ -43,10 +43,7 @@ describe("PluginAppOverlayList", () => {
 
   it("renders nothing without overlays", () => {
     const markup = renderToStaticMarkup(
-      <PluginAppOverlayList
-        context={{ projectId: null, threadId: null }}
-        contributions={[]}
-      />,
+      <PluginAppOverlayList context={{ projectId: null, threadId: null }} contributions={[]} />,
     );
 
     expect(markup).toBe("");

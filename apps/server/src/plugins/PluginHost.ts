@@ -168,7 +168,10 @@ export const PluginHostLive = Layer.effect(
       try {
         return readPluginControl(config.baseDir);
       } catch (cause) {
-        console.error("Plugin control file is invalid; starting with built-in plugins only.", cause);
+        console.error(
+          "Plugin control file is invalid; starting with built-in plugins only.",
+          cause,
+        );
         return { plugins: {} };
       }
     })();
@@ -177,7 +180,10 @@ export const PluginHostLive = Layer.effect(
     });
     controlWatcher.on("error", (cause) => {
       controlChanged = true;
-      console.error("Plugin control watcher failed; plugin changes require a server restart.", cause);
+      console.error(
+        "Plugin control watcher failed; plugin changes require a server restart.",
+        cause,
+      );
     });
     yield* Effect.addFinalizer(() => Effect.sync(() => controlWatcher.close()));
     const currentControl = () => {

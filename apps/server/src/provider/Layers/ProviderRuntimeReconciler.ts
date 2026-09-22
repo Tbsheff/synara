@@ -274,11 +274,9 @@ const make = (options?: ProviderRuntimeReconcilerLiveOptions) =>
           ],
           { concurrency: 5 },
         );
-      const threads = (yield* Effect.forEach(
-        candidateThreadIds,
-        (threadId) => projectionSnapshotQuery.getThreadShellById(threadId),
-        { concurrency: 8 },
-      )).flatMap(Option.toArray);
+      // One batched read instead of up to `candidateLimit` point reads
+      // contending on the single SQLite handle every reconciliation tick.
+      const threads = yield* projectionSnapshotQuery.getThreadShellsByIds(candidateThreadIds);
       const threadById = new Map(threads.map((thread) => [thread.id, thread]));
       const bindingByThreadId = new Map(bindings.map((binding) => [binding.threadId, binding]));
       const liveSessionByThreadId = new Map(

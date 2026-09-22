@@ -3,10 +3,7 @@ import type { ReactNode } from "react";
 
 import type { ActivePluginContribution } from "./frontendRuntime";
 import { PluginContributionErrorBoundary, usePluginContributions } from "./runtime";
-import {
-  PluginOriginalRenderer,
-  PluginOriginalRendererProvider,
-} from "./PluginSourceCodeRenderer";
+import { PluginOriginalRenderer, PluginOriginalRendererProvider } from "./PluginSourceCodeRenderer";
 
 export function selectPluginDiffRenderer(
   renderers: readonly ActivePluginContribution<"diffRenderers">[],

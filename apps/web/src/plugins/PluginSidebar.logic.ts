@@ -15,10 +15,7 @@ export function pluginSidebarContributionKey(
 
 export function resolvePluginSidebarContribution<
   Contribution extends PluginSidebarContributionIdentity,
->(
-  contributions: readonly Contribution[],
-  selectedProvider: string,
-): Contribution | null {
+>(contributions: readonly Contribution[], selectedProvider: string): Contribution | null {
   if (selectedProvider === ORIGINAL_PLUGIN_SIDEBAR_PROVIDER) return null;
   return (
     contributions.find(

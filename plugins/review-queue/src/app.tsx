@@ -61,9 +61,7 @@ function ReviewQueueSettings({ plugin }: PluginComponentProps) {
 
 function ReviewQueueThreadPanel({ context, params }: PluginThreadPanelProps) {
   const selectedId =
-    typeof params === "object" && params !== null && !Array.isArray(params)
-      ? params.itemId
-      : null;
+    typeof params === "object" && params !== null && !Array.isArray(params) ? params.itemId : null;
   return (
     <div className="h-full overflow-y-auto p-4">
       <div className="rounded-xl border bg-card p-4">
@@ -203,7 +201,10 @@ function ReviewQueuePanel({ context, plugin }: PluginNavPanelProps) {
             </div>
           ) : (
             items.map((item) => (
-              <article key={item.id} className="flex items-start gap-4 rounded-xl border bg-card p-4">
+              <article
+                key={item.id}
+                className="flex items-start gap-4 rounded-xl border bg-card p-4"
+              >
                 <div className="min-w-0 flex-1">
                   <h2 className="truncate text-sm font-medium">{item.title}</h2>
                   <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{item.prompt}</p>
@@ -223,7 +224,14 @@ function ReviewQueuePanel({ context, plugin }: PluginNavPanelProps) {
                       type="button"
                       disabled={busy}
                       className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground disabled:opacity-50"
-                      onClick={() => void run(async () => void (await call("start", reviewQueueContract.start, { itemId: item.id })))}
+                      onClick={() =>
+                        void run(
+                          async () =>
+                            void (await call("start", reviewQueueContract.start, {
+                              itemId: item.id,
+                            })),
+                        )
+                      }
                     >
                       Start
                     </button>
@@ -232,7 +240,14 @@ function ReviewQueuePanel({ context, plugin }: PluginNavPanelProps) {
                     type="button"
                     disabled={busy}
                     className="rounded-md border px-3 py-1.5 text-xs text-muted-foreground disabled:opacity-50"
-                    onClick={() => void run(async () => void (await call("remove", reviewQueueContract.remove, { itemId: item.id })))}
+                    onClick={() =>
+                      void run(
+                        async () =>
+                          void (await call("remove", reviewQueueContract.remove, {
+                            itemId: item.id,
+                          })),
+                      )
+                    }
                   >
                     Remove
                   </button>
@@ -285,7 +300,9 @@ export default definePluginApp((app) => {
         title: "Review",
         icon: "review-queue",
         run: ({ composer }) => {
-          composer.setText("Review the current branch for correctness, regressions, and test gaps.");
+          composer.setText(
+            "Review the current branch for correctness, regressions, and test gaps.",
+          );
           composer.focus();
         },
       },
@@ -297,7 +314,9 @@ export default definePluginApp((app) => {
         description: "Insert a focused security review request.",
         icon: "review-queue",
         run: ({ composer }) => {
-          composer.setText("Review the current branch for security risks and unsafe trust boundaries.");
+          composer.setText(
+            "Review the current branch for security risks and unsafe trust boundaries.",
+          );
           composer.focus();
         },
       },

@@ -13,9 +13,7 @@ export const DEFAULT_PLUGIN_SIDEBAR_PREFERENCES: PluginSidebarPreferences = Obje
 });
 
 function sanitizeProvider(value: unknown): string {
-  return typeof value === "string" && value.length > 0
-    ? value
-    : ORIGINAL_PLUGIN_SIDEBAR_PROVIDER;
+  return typeof value === "string" && value.length > 0 ? value : ORIGINAL_PLUGIN_SIDEBAR_PROVIDER;
 }
 
 export function readPluginSidebarPreferences(): PluginSidebarPreferences {

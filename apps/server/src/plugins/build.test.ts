@@ -42,9 +42,7 @@ describe("plugin build", () => {
     const result = await buildPlugin(root);
     const realRoot = realpathSync(root);
 
-    expect(result.outputRoot).toBe(
-      path.join(realRoot, "dist", "generations", result.reloadToken),
-    );
+    expect(result.outputRoot).toBe(path.join(realRoot, "dist", "generations", result.reloadToken));
     expect(result.serverOutput).toBe(path.join(result.outputRoot, "server.js"));
     expect(result.appOutput).toBe(path.join(result.outputRoot, "app.js"));
     expect(existsSync(result.serverOutput)).toBe(true);
