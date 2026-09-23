@@ -9,6 +9,7 @@ import {
 
 import type { ActivePluginContribution } from "./frontendRuntime";
 import { PluginContributionErrorBoundary, usePluginContributions } from "./runtime";
+import { SynaraPluginCatalog } from "./SynaraPluginCatalog";
 
 type ActivePluginSettingsSection = ActivePluginContribution<"settingsSections">;
 
@@ -60,5 +61,10 @@ export function PluginSettingsSectionList({
 
 export function PluginSettingsSections({ context }: { readonly context: SynaraPluginAppContext }) {
   const contributions = usePluginContributions("settingsSections");
-  return <PluginSettingsSectionList context={context} contributions={contributions} />;
+  return (
+    <div className="space-y-6">
+      <SynaraPluginCatalog context={context} />
+      <PluginSettingsSectionList context={context} contributions={contributions} />
+    </div>
+  );
 }

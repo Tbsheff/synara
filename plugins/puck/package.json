@@ -1,0 +1,32 @@
+{
+  "name": "@synara/plugin-puck",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./manifest": "./src/manifest.ts",
+    "./contract": "./src/contract.ts",
+    "./server": "./src/server.ts",
+    "./app": "./src/app.tsx"
+  },
+  "scripts": {
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "node ../../node_modules/@typescript/native/bin/tsc --noEmit"
+  },
+  "dependencies": {
+    "@synara/plugin-sdk": "workspace:*",
+    "react": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  },
+  "synara": {
+    "id": "@synara/plugin-puck",
+    "displayName": "Puck",
+    "apiVersion": 2,
+    "server": "./src/server.ts",
+    "app": "./src/app.tsx"
+  }
+}

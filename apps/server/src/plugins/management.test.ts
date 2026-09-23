@@ -14,6 +14,15 @@ import {
 import { scaffoldPlugin } from "./scaffold";
 
 describe("plugin management", () => {
+  it("lists Review Queue and Puck as built-in plugins", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "synara-plugin-management-"));
+    expect(
+      listPluginRecords(path.join(root, "home"))
+        .filter((plugin) => plugin.builtIn)
+        .map((plugin) => plugin.id),
+    ).toEqual(["@synara/plugin-puck", "@synara/plugin-review-queue"]);
+  });
+
   it("installs, reloads, disables, enables, and uninstalls a local plugin", async () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "synara-plugin-management-"));
     const baseDir = path.join(root, "home");

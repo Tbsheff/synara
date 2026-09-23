@@ -51,6 +51,7 @@
     "@effect/language-service": "catalog:",
     "@effect/vitest": "catalog:",
     "@synara/contracts": "workspace:*",
+    "@synara/plugin-puck": "workspace:*",
     "@synara/plugin-review-queue": "workspace:*",
     "@synara/plugin-sdk": "workspace:*",
     "@synara/shared": "workspace:*",

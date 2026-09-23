@@ -6,6 +6,8 @@ import {
   type SynaraPluginAppContext,
   type SynaraPluginDescriptor,
 } from "@synara/plugin-sdk/app";
+import puckApp from "@synara/plugin-puck/app";
+import { puckManifest } from "@synara/plugin-puck/manifest";
 import reviewQueueApp from "@synara/plugin-review-queue/app";
 import { reviewQueueManifest } from "@synara/plugin-review-queue/manifest";
 import { useQuery } from "@tanstack/react-query";
@@ -46,6 +48,7 @@ import {
 
 const BUILT_IN_APP_REGISTRATIONS = [
   collectPluginAppRegistrations(reviewQueueManifest.id, reviewQueueApp),
+  collectPluginAppRegistrations(puckManifest.id, puckApp),
 ];
 
 Object.assign(globalThis, {
@@ -110,6 +113,8 @@ function clearPluginStyles(): void {
   }
 }
 
+export const SYNARA_PLUGINS_QUERY_KEY = ["synara-plugins"] as const;
+
 const ActivePluginAppsContext = createContext<ReadonlyArray<ActivePluginApp>>([]);
 
 export function PluginRuntimeProvider({ children }: { readonly children: ReactNode }) {
@@ -120,7 +125,7 @@ export function PluginRuntimeProvider({ children }: { readonly children: ReactNo
   const desiredTargets = useRef<ReadonlyMap<string, PluginRuntimeTarget>>(new Map());
   const contentScriptHost = useMemo(() => new ContentScriptHost(), []);
   const pluginsQuery = useQuery({
-    queryKey: ["synara-plugins"],
+    queryKey: SYNARA_PLUGINS_QUERY_KEY,
     queryFn: () => ensureNativeApi().plugins.list(),
     refetchInterval: 5_000,
     refetchIntervalInBackground: false,

@@ -1432,6 +1432,7 @@ export default function Sidebar() {
   const isOnKanban = pathname.startsWith("/kanban");
   const isOnAutomations = pathname.startsWith("/automations");
   const isOnPullRequests = pathname.startsWith("/pull-requests");
+  const isOnPlugins = pathname === "/plugins" || pathname.startsWith("/extensions/");
   // Lightweight read of automations to drive the sidebar attention badge. Shares the
   // ["automations"] query cache with the Automations route (and its live stream updates).
   const automationListQuery = useQuery({
@@ -3831,12 +3832,22 @@ export default function Sidebar() {
           void navigate({ to: "/automations" });
         },
       },
+      plugins: {
+        icon: PluginIcon,
+        label: "Plugins",
+        active: isOnPlugins,
+        badge: null,
+        onClick: () => {
+          void navigate({ to: "/plugins" });
+        },
+      },
     }),
     [
       automationAttentionBadge,
       handlePrimaryNewThread,
       isOnAutomations,
       isOnKanban,
+      isOnPlugins,
       isOnPullRequests,
       navigate,
       prefetchModelsForPrimaryNewThread,
@@ -5650,6 +5661,16 @@ export default function Sidebar() {
         keywords: ["feedback", "bug", "issue", "problem", "report", "support", "synara"],
       },
       {
+        id: "plugins",
+        label: "Plugins",
+        description: "Browse Synara plugins and provider marketplaces.",
+        keywords: ["extensions", "puck", "orbs", "marketplace", "review"],
+        run: () => {
+          void navigate({ to: "/plugins" });
+        },
+        icon: PluginIcon,
+      },
+      {
         id: "settings",
         label: "Settings",
         description: "Open app settings.",
@@ -5709,6 +5730,7 @@ export default function Sidebar() {
       handleSelectSpace,
       handleStartAddProject,
       importThreadShortcutLabel,
+      navigate,
       newChatShortcutLabel,
       newThreadShortcutLabel,
       openSpaceCreator,

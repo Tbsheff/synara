@@ -2,9 +2,8 @@ import { realpathSync, watch } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { reviewQueueManifest } from "@synara/plugin-review-queue/manifest";
-
 import { buildPlugin, type PluginBuildResult } from "./build";
+import { builtInPluginManifests, isBuiltInPluginId } from "./builtInManifests";
 import {
   findPluginSource,
   installPluginControl,
@@ -28,37 +27,34 @@ export interface PluginManagementRecord {
   readonly error?: string;
 }
 
-function reviewQueueSourceRoot(cwd: string): string | null {
-  if (!reviewQueueManifest.sourcePath) return null;
+function builtInSourceRoot(sourcePath: string | undefined, cwd: string): string | null {
+  if (!sourcePath) return null;
   return (
-    findPluginSource(cwd, reviewQueueManifest.sourcePath) ??
-    findPluginSource(
-      path.dirname(fileURLToPath(import.meta.url)),
-      reviewQueueManifest.sourcePath,
-    ) ??
+    findPluginSource(cwd, sourcePath) ??
+    findPluginSource(path.dirname(fileURLToPath(import.meta.url)), sourcePath) ??
     null
   );
 }
 
 export function listPluginRecords(baseDir: string, cwd = process.cwd()): PluginManagementRecord[] {
   const control = readPluginControl(baseDir);
-  const builtInControl = control.plugins[reviewQueueManifest.id];
-  const records: PluginManagementRecord[] = [
-    {
-      id: reviewQueueManifest.id,
-      name: reviewQueueManifest.displayName,
-      version: reviewQueueManifest.version,
-      apiVersion: reviewQueueManifest.apiVersion,
-      app: reviewQueueManifest.app ?? null,
+  const records: PluginManagementRecord[] = builtInPluginManifests.map((manifest) => {
+    const builtInControl = control.plugins[manifest.id];
+    return {
+      id: manifest.id,
+      name: manifest.displayName,
+      version: manifest.version,
+      apiVersion: manifest.apiVersion,
+      app: manifest.app ?? null,
       enabled: builtInControl?.enabled ?? true,
       reloadToken: builtInControl?.reloadToken ?? "",
-      sourceRoot: reviewQueueSourceRoot(cwd),
+      sourceRoot: builtInSourceRoot(manifest.sourcePath, cwd),
       builtIn: true,
-    },
-  ];
+    };
+  });
 
   for (const [id, entry] of Object.entries(control.plugins)) {
-    if (id === reviewQueueManifest.id || !entry.sourceRoot) continue;
+    if (isBuiltInPluginId(id) || !entry.sourceRoot) continue;
     try {
       const manifest = readPluginManifest(entry.sourceRoot);
       records.push({
@@ -121,8 +117,8 @@ export async function installPlugin(
   readonly skills: ReadonlyArray<string>;
 }> {
   const manifest = readPluginManifest(path.resolve(sourcePath));
-  if (manifest.id === reviewQueueManifest.id) {
-    throw new Error("The built-in Review Queue plugin cannot be replaced with plugin install.");
+  if (isBuiltInPluginId(manifest.id)) {
+    throw new Error("Built-in Synara plugins cannot be replaced with plugin install.");
   }
   const installedSource = readPluginControl(baseDir).plugins[manifest.id]?.sourceRoot;
   if (installedSource && realpathSync(installedSource) !== manifest.sourceRoot) {

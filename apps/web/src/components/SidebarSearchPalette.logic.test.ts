@@ -201,6 +201,13 @@ describe("SidebarSearchPalette.logic", () => {
     assert.equal(typed[0]?.id, "switch-space-work");
   });
 
+  it("matches Plugins by label", () => {
+    assert.deepEqual(
+      matchSidebarSearchActions(actions, "plugins").map((action) => action.id),
+      ["plugins"],
+    );
+  });
+
   it("matches usage settings by keyword", () => {
     const result = matchSidebarSearchActions(actions, "quota");
 

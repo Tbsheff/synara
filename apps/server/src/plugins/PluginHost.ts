@@ -17,12 +17,18 @@ import {
   type JsonValue,
   type PluginKvStorage,
   type PluginRegistry,
+  type PluginThreadListItem,
+  type PluginThreadStartInput,
+  type PluginThreadStatus,
   type RegisteredPluginAgentTool,
   type SynaraPlugin,
-  type PluginThreadStartInput,
+  type SynaraPluginManifest,
 } from "@synara/plugin-sdk";
+import { puckManifest } from "@synara/plugin-puck/manifest";
+import puckPlugin from "@synara/plugin-puck/server";
 import { reviewQueueManifest } from "@synara/plugin-review-queue/manifest";
 import reviewQueuePlugin from "@synara/plugin-review-queue/server";
+import { isBuiltInPluginId } from "./builtInManifests";
 import { Effect, Layer, Option, ServiceMap } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
@@ -140,12 +146,26 @@ function pluginActivationAssets(
   };
 }
 
-function reviewQueueSourceRoot(): string | undefined {
-  if (!reviewQueueManifest.sourcePath) return undefined;
+const builtInPlugins: ReadonlyArray<{
+  readonly manifest: SynaraPluginManifest;
+  readonly plugin: SynaraPlugin;
+}> = [
+  { manifest: reviewQueueManifest, plugin: reviewQueuePlugin },
+  { manifest: puckManifest, plugin: puckPlugin },
+];
+
+function builtInSourceRoot(manifest: SynaraPluginManifest): string | undefined {
+  if (!manifest.sourcePath) return undefined;
   return (
-    findPluginSource(process.cwd(), reviewQueueManifest.sourcePath) ??
-    findPluginSource(path.dirname(fileURLToPath(import.meta.url)), reviewQueueManifest.sourcePath)
+    findPluginSource(process.cwd(), manifest.sourcePath) ??
+    findPluginSource(path.dirname(fileURLToPath(import.meta.url)), manifest.sourcePath)
   );
+}
+
+function pluginThreadStatus(
+  state: "running" | "interrupted" | "completed" | "error" | undefined,
+): PluginThreadStatus {
+  return state ?? "idle";
 }
 
 export const PluginHostLive = Layer.effect(
@@ -288,10 +308,13 @@ export const PluginHostLive = Layer.effect(
             modelSelection,
             runtimeMode: "full-access",
             interactionMode: "default",
-            envMode: "local",
+            envMode: input.environment === "worktree" ? "worktree" : "local",
             branch: null,
             worktreePath: null,
             createdAt: input.createdAt,
+            ...(input.parentThreadId
+              ? { parentThreadId: ThreadId.makeUnsafe(input.parentThreadId) }
+              : {}),
           });
           yield* Effect.tryPromise(() => assertPluginWriteAuthority());
           yield* orchestration.dispatch({
@@ -315,11 +338,39 @@ export const PluginHostLive = Layer.effect(
       ).then(({ threadId }) => ({ threadId }));
     };
 
+    const listThreads = async (input: { readonly projectId: string }) => {
+      return Effect.runPromise(
+        Effect.gen(function* () {
+          const projectId = ProjectId.makeUnsafe(input.projectId);
+          yield* projections.getProjectShellById(projectId).pipe(
+            Effect.flatMap(
+              Option.match({
+                onNone: () => Effect.fail(new Error(`Project not found: ${input.projectId}`)),
+                onSome: Effect.succeed,
+              }),
+            ),
+          );
+          const snapshot = yield* projections.getShellSnapshot();
+          const threads: PluginThreadListItem[] = snapshot.threads
+            .filter((thread) => thread.projectId === projectId && thread.archivedAt == null)
+            .map((thread) => ({
+              threadId: thread.id,
+              title: thread.title,
+              envMode: thread.envMode === "worktree" ? "worktree" : "local",
+              status: pluginThreadStatus(thread.latestTurn?.state),
+              createdAt: thread.createdAt,
+            }));
+          return { threads };
+        }),
+      );
+    };
+
     const registry = createPluginRegistry({
       storage: makeStorage,
       host: (pluginId) => ({
         threads: {
           start: (input) => startThread(pluginId, input),
+          list: (input) => listThreads(input),
         },
       }),
     });
@@ -339,17 +390,21 @@ export const PluginHostLive = Layer.effect(
       const operation = (async () => {
         do {
           const control = currentControl();
-          const configuredReviewQueue = control.plugins[reviewQueueManifest.id];
           const desired = [
-            {
-              id: reviewQueueManifest.id,
-              enabled: configuredReviewQueue?.enabled ?? true,
-              reloadToken: configuredReviewQueue?.reloadToken ?? "",
-              sourceRoot: reviewQueueSourceRoot(),
-              builtIn: true as const,
-            },
+            ...builtInPlugins.map(({ manifest, plugin }) => {
+              const configured = control.plugins[manifest.id];
+              return {
+                id: manifest.id,
+                enabled: configured?.enabled ?? true,
+                reloadToken: configured?.reloadToken ?? "",
+                sourceRoot: builtInSourceRoot(manifest),
+                builtIn: true as const,
+                manifest,
+                plugin,
+              };
+            }),
             ...Object.entries(control.plugins)
-              .filter(([id, entry]) => id !== reviewQueueManifest.id && entry.sourceRoot)
+              .filter(([id, entry]) => !isBuiltInPluginId(id) && entry.sourceRoot)
               .map(([id, entry]) => ({
                 id,
                 enabled: entry.enabled,
@@ -429,13 +484,13 @@ export const PluginHostLive = Layer.effect(
                   });
                 } else {
                   await registry.activate(
-                    { ...reviewQueueManifest, editable: entry.sourceRoot !== undefined },
-                    reviewQueuePlugin,
+                    { ...entry.manifest, editable: entry.sourceRoot !== undefined },
+                    entry.plugin,
                   );
                   if (entry.sourceRoot) {
                     activeSources.set(entry.id, {
                       id: entry.id,
-                      displayName: reviewQueueManifest.displayName,
+                      displayName: entry.manifest.displayName,
                       sourceRoot: entry.sourceRoot,
                     });
                   }

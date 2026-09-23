@@ -148,17 +148,38 @@ export interface PluginKvStorage {
   ) => Promise<JsonValue | undefined>;
 }
 
+export type PluginThreadEnvironment = "local" | "worktree";
+
+export type PluginThreadStatus = "idle" | "running" | "interrupted" | "completed" | "error";
+
 export interface PluginThreadStartInput {
   readonly projectId: string;
   readonly title: string;
   readonly prompt: string;
   readonly idempotencyKey: string;
   readonly createdAt: string;
+  readonly environment?: PluginThreadEnvironment;
+  readonly parentThreadId?: string;
+}
+
+export interface PluginThreadListInput {
+  readonly projectId: string;
+}
+
+export interface PluginThreadListItem {
+  readonly threadId: string;
+  readonly title: string;
+  readonly envMode: PluginThreadEnvironment;
+  readonly status: PluginThreadStatus;
+  readonly createdAt: string;
 }
 
 export interface PluginHostApi {
   readonly threads: {
     readonly start: (input: PluginThreadStartInput) => Promise<{ readonly threadId: string }>;
+    readonly list: (
+      input: PluginThreadListInput,
+    ) => Promise<{ readonly threads: ReadonlyArray<PluginThreadListItem> }>;
   };
 }
 
@@ -442,6 +463,12 @@ export function createPluginRegistry(input: {
           start: async (threadInput) => {
             assertActive();
             return baseHost.threads.start(threadInput);
+          },
+          list: async (listInput) => {
+            assertActive();
+            const result = await baseHost.threads.list(listInput);
+            assertActive();
+            return result;
           },
         },
       };

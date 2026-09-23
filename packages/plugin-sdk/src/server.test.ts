@@ -289,7 +289,12 @@ describe("plugin registry", () => {
   it("blocks storage writes from a retired generation after the drain timeout", async () => {
     const values = new Map<string, unknown>();
     const registry = createPluginRegistry({
-      host: { threads: { start: () => Promise.resolve({ threadId: "thread" }) } },
+      host: {
+        threads: {
+          start: () => Promise.resolve({ threadId: "thread" }),
+          list: () => Promise.resolve({ threads: [] }),
+        },
+      },
       storage: {
         get: (key) => Promise.resolve(values.get(key) as never),
         set: (key, value) => {
@@ -341,5 +346,92 @@ describe("plugin registry", () => {
 
   it("rejects object fields that are not declared by the schema", () => {
     expect(() => echo.input.parse({ value: "ok", extra: true })).toThrow("extra is not allowed");
+  });
+
+  it("forwards worktree thread starts and project thread lists through the host", async () => {
+    const starts: unknown[] = [];
+    const lists: unknown[] = [];
+    const start = {
+      input: object({ projectId: string() }),
+      output: object({ threadId: string() }),
+    };
+    const list = {
+      input: object({ projectId: string() }),
+      output: object({ count: string() }),
+    };
+    const registry = createPluginRegistry({
+      storage: {} as never,
+      host: {
+        threads: {
+          start: (input) => {
+            starts.push(input);
+            return Promise.resolve({ threadId: "orb-1" });
+          },
+          list: (input) => {
+            lists.push(input);
+            return Promise.resolve({
+              threads: [
+                {
+                  threadId: "orb-1",
+                  title: "Fix flaky test",
+                  envMode: "worktree",
+                  status: "running",
+                  createdAt: "2026-09-17T00:00:00.000Z",
+                },
+              ],
+            });
+          },
+        },
+      },
+    });
+    await registry.activate(
+      { id: "acme.orbs", displayName: "Orbs", apiVersion: 2, version: "1.0.0" },
+      definePlugin((api) => {
+        api.rpc.register("start", start, async ({ projectId }, call) =>
+          call.host.threads.start({
+            projectId,
+            title: "Fix flaky test",
+            prompt: "Fix the flaky test.",
+            idempotencyKey: "orb-1",
+            createdAt: "2026-09-17T00:00:00.000Z",
+            environment: "worktree",
+            parentThreadId: "thread-parent",
+          }),
+        );
+        api.rpc.register("list", list, async ({ projectId }, call) => {
+          const result = await call.host.threads.list({ projectId });
+          return { count: String(result.threads.length) };
+        });
+      }),
+    );
+
+    await expect(
+      registry.call({
+        pluginId: "acme.orbs",
+        generation: 1,
+        method: "start",
+        input: { projectId: "project-1" },
+      }),
+    ).resolves.toEqual({ threadId: "orb-1" });
+    await expect(
+      registry.call({
+        pluginId: "acme.orbs",
+        generation: 1,
+        method: "list",
+        input: { projectId: "project-1" },
+      }),
+    ).resolves.toEqual({ count: "1" });
+    expect(starts).toEqual([
+      {
+        projectId: "project-1",
+        title: "Fix flaky test",
+        prompt: "Fix the flaky test.",
+        idempotencyKey: "orb-1",
+        createdAt: "2026-09-17T00:00:00.000Z",
+        environment: "worktree",
+        parentThreadId: "thread-parent",
+      },
+    ]);
+    expect(lists).toEqual([{ projectId: "project-1" }]);
   });
 });

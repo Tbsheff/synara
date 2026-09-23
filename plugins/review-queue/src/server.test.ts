@@ -47,6 +47,7 @@ describe("review queue plugin", () => {
             starts.push(input);
             return Promise.resolve({ threadId: "thread-review" });
           },
+          list: () => Promise.resolve({ threads: [] }),
         },
       },
     });
