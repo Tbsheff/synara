@@ -325,6 +325,7 @@ export function useChatPendingInteractions({
       setRespondingUserInputRequestKeys((existing) =>
         existing.includes(requestKey) ? existing : [...existing, requestKey],
       );
+      let dispatched = false;
       await Promise.resolve()
         .then(async () => {
           await api.orchestration.dispatchCommand({
@@ -336,6 +337,7 @@ export function useChatPendingInteractions({
             ...(lifecycleGeneration !== undefined ? { lifecycleGeneration } : {}),
             createdAt: new Date().toISOString(),
           });
+          dispatched = true;
           // Refresh identities and settlement after command acceptance; acceptance
           // alone does not mean Claude received the answer.
           clearThreadDetailResumeCursor(activeThreadId);
@@ -349,6 +351,7 @@ export function useChatPendingInteractions({
               "Could not submit or refresh the answer. Your answers are saved.",
             ),
           );
+          if (!dispatched) throw err;
         })
         .finally(() => {
           userInputSubmissionsRef.current.delete(submissionKey);
@@ -360,7 +363,7 @@ export function useChatPendingInteractions({
     [activeThreadId, setStoreThreadError],
   );
 
-  const onCancelActivePendingUserInput = useCallback(() => {
+  const onCancelActivePendingUserInput = useCallback(async () => {
     if (!activePendingUserInput || activePendingIsResponding) {
       return;
     }
@@ -368,7 +371,7 @@ export function useChatPendingInteractions({
     setPrompt("");
     setComposerCursor(0);
     setComposerTrigger(null);
-    void onRespondToUserInput(
+    await onRespondToUserInput(
       activePendingUserInput.requestId,
       {},
       activePendingUserInput.lifecycleGeneration,
@@ -514,7 +517,7 @@ export function useChatPendingInteractions({
             activePendingUserInput.requestId,
             resolvedAnswers,
             activePendingUserInput.lifecycleGeneration,
-          );
+          ).catch(() => undefined);
           return true;
         }
         return false;
@@ -564,6 +567,7 @@ export function useChatPendingInteractions({
     activePendingIsResponding,
     activePendingApproval,
     onRespondToApproval,
+    onRespondToUserInput,
     userInputSubmissionVersion,
     onCancelActivePendingUserInput,
     onToggleActivePendingUserInputOption,

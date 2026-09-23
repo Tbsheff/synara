@@ -8,6 +8,7 @@ import {
   SpaceId,
   ThreadId,
   TurnId,
+  type PendingClaudeCacheReview,
 } from "@synara/contracts";
 import { assert, it } from "@effect/vitest";
 import { Effect, Layer, Option } from "effect";
@@ -30,6 +31,77 @@ const projectionSnapshotLayer = it.layer(
 );
 
 projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
+  it.effect("rehydrates pending cache decisions in snapshots and thread detail after restart", () =>
+    Effect.gen(function* () {
+      const query = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+      const now = "2026-09-16T10:00:00.000Z";
+      const threadId = asThreadId("cache-review-thread");
+      const review: PendingClaudeCacheReview = {
+        reviewId: "cache-review-1",
+        messageId: asMessageId("cache-review-message"),
+        sourceEventSequence: 42,
+        assessment: {
+          observedAt: now,
+          contextTokens: 850_000,
+          state: "likely-expired",
+          source: "local-estimate",
+        },
+        status: "uncertain",
+        error: "Delivery needs reconciliation.",
+        createdAt: now,
+      };
+      yield* sql`DELETE FROM projection_projects`;
+      yield* sql`DELETE FROM projection_threads`;
+      yield* sql`DELETE FROM projection_state`;
+      yield* sql`
+        INSERT INTO projection_projects (
+          project_id, title, workspace_root, scripts_json, created_at, updated_at
+        ) VALUES ('cache-review-project', 'Cache review', '/tmp/cache-review', '[]', ${now}, ${now})
+      `;
+      yield* sql`
+        INSERT INTO projection_threads (
+          thread_id, project_id, title, model_selection_json,
+          claude_cache_review_json, created_at, updated_at
+        ) VALUES (
+          ${threadId}, 'cache-review-project', 'Pending cache review',
+          '{"provider":"claudeAgent","model":"claude-opus-4-6"}',
+          ${JSON.stringify(review)}, ${now}, ${now}
+        ), (
+          'legacy-cache-review-thread', 'cache-review-project', 'Existing thread',
+          '{"provider":"claudeAgent","model":"claude-opus-4-6"}', NULL, ${now}, ${now}
+        )
+      `;
+
+      for (const snapshot of [
+        yield* query.getSnapshot(),
+        yield* query.getShellSnapshot(),
+        yield* query.getCommandReadModel(),
+      ]) {
+        assert.deepStrictEqual(
+          snapshot.threads.find((thread) => thread.id === threadId)?.claudeCacheReview,
+          review,
+        );
+        assert.isUndefined(
+          snapshot.threads.find((thread) => thread.id === "legacy-cache-review-thread")
+            ?.claudeCacheReview,
+        );
+      }
+      assert.deepStrictEqual(
+        Option.getOrNull(yield* query.getThreadDetailById(threadId))?.claudeCacheReview,
+        review,
+      );
+      assert.deepStrictEqual(
+        Option.getOrNull(yield* query.getThreadShellById(threadId))?.claudeCacheReview,
+        review,
+      );
+      assert.deepStrictEqual(
+        Option.getOrNull(yield* query.getThreadDetailForExportById(threadId))?.claudeCacheReview,
+        review,
+      );
+    }),
+  );
+
   it.effect(
     "selects the latest turn per thread with stable ties and preserves historical update time",
     () =>
@@ -498,6 +570,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           sidechatExpiredAt: null,
           lastKnownPr: null,
           latestUserMessageAt: "2026-02-24T00:00:03.500Z",
+          latestHumanMessageAt: null,
           // A present empty pending-interaction projection is authoritative;
           // historical activity rows alone must not resurrect stale prompts.
           hasPendingApprovals: false,
@@ -1078,6 +1151,8 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         )
       `;
 
+      const humanAt = "2026-02-24T00:00:00.000Z";
+      yield* sql`UPDATE projection_threads SET latest_human_message_at = ${humanAt} WHERE thread_id = ${threadId}`;
       for (let index = 0; index < messageCount; index += 1) {
         const createdAt = new Date(Date.UTC(2026, 1, 24, 0, 0, index)).toISOString();
         yield* sql`
@@ -1095,7 +1170,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
             ${`message-${index}`},
             'thread-export-message-cap',
             NULL,
-            'assistant',
+            ${index === 0 ? "user" : "assistant"},
             ${`message ${index}`},
             0,
             ${createdAt},
@@ -1134,6 +1209,9 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       assert.isTrue(Option.isSome(exportDetail));
       const cappedMessages = Option.isSome(cappedDetail) ? cappedDetail.value.messages : [];
       const exportMessages = Option.isSome(exportDetail) ? exportDetail.value.messages : [];
+      assert.equal(Option.getOrThrow(cappedDetail).latestHumanMessageAt, humanAt);
+      assert.equal(Option.getOrThrow(exportDetail).latestHumanMessageAt, humanAt);
+      assert.equal(bulk.threads[0]?.latestHumanMessageAt, humanAt);
       assert.equal(cappedMessages.length, 2_000);
       assert.equal(cappedMessages[0]?.text, "message 5");
       assert.equal(cappedMessages.at(-1)?.text, "message 2004");
@@ -1952,6 +2030,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
             assistantMessageId: null,
           },
           latestUserMessageAt: "2026-03-03T00:00:02.500Z",
+          latestHumanMessageAt: null,
           hasPendingApprovals: true,
           hasPendingUserInput: true,
           hasActionableProposedPlan: true,
@@ -2519,6 +2598,158 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         limit: 1,
       });
       assert.deepEqual(oldestCandidate, [ThreadId.makeUnsafe("thread-unbound-oldest")]);
+    }),
+  );
+
+  it.effect("reads the newest provider progress for threads and their native children", () =>
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+
+      yield* sql`DELETE FROM orchestration_events`;
+      yield* sql`DELETE FROM provider_runtime_events`;
+      yield* sql`DELETE FROM projection_threads`;
+      yield* sql`DELETE FROM projection_projects`;
+      yield* sql`
+        INSERT INTO projection_projects (
+          project_id, title, workspace_root, default_model_selection_json,
+          scripts_json, created_at, updated_at, deleted_at
+        ) VALUES (
+          'project-progress', 'Progress', '/tmp/progress',
+          '{"provider":"codex","model":"gpt-5-codex"}', '[]',
+          '2026-07-23T00:00:00.000Z', '2026-07-23T00:00:00.000Z', NULL
+        )
+      `;
+      yield* sql`
+        INSERT INTO projection_threads (
+          thread_id, project_id, title, model_selection_json, branch, worktree_path,
+          latest_turn_id, created_at, updated_at, archived_at, deleted_at, parent_thread_id
+        ) VALUES
+          (
+            'thread-progress-parent', 'project-progress', 'Parent',
+            '{"provider":"codex","model":"gpt-5-codex"}', NULL, NULL, NULL,
+            '2026-07-23T00:00:00.000Z', '2026-07-23T00:00:00.000Z', NULL, NULL, NULL
+          ),
+          (
+            'subagent:thread-progress-parent:child', 'project-progress', 'Child',
+            '{"provider":"codex","model":"gpt-5-codex"}', NULL, NULL, NULL,
+            '2026-07-23T00:00:00.000Z', '2026-07-23T00:00:00.000Z', NULL, NULL,
+            'thread-progress-parent'
+          ),
+          (
+            'subagent:thread-progress-parent:deleted', 'project-progress', 'Deleted child',
+            '{"provider":"codex","model":"gpt-5-codex"}', NULL, NULL, NULL,
+            '2026-07-23T00:00:00.000Z', '2026-07-23T00:00:00.000Z', NULL,
+            '2026-07-23T00:00:00.000Z', 'thread-progress-parent'
+          ),
+          (
+            'thread-progress-quiet', 'project-progress', 'Quiet',
+            '{"provider":"codex","model":"gpt-5-codex"}', NULL, NULL, NULL,
+            '2026-07-23T00:00:00.000Z', '2026-07-23T00:00:00.000Z', NULL, NULL, NULL
+          ),
+          (
+            'thread-progress-journal', 'project-progress', 'Journal',
+            '{"provider":"codex","model":"gpt-5-codex"}', NULL, NULL, NULL,
+            '2026-07-23T00:00:00.000Z', '2026-07-23T00:00:00.000Z', NULL, NULL, NULL
+          )
+      `;
+      yield* sql`
+        INSERT INTO orchestration_events (
+          event_id, aggregate_kind, stream_id, stream_version, event_type,
+          occurred_at, command_id, causation_event_id, correlation_id,
+          actor_kind, payload_json, metadata_json
+        ) VALUES
+          (
+            'event-parent-message', 'thread', 'thread-progress-parent', 0,
+            'thread.message-sent', '2026-07-23T09:00:00.000Z', NULL, NULL, NULL,
+            'provider', '{}', '{}'
+          ),
+          (
+            'event-parent-reconciled', 'thread', 'thread-progress-parent', 1,
+            'thread.activity-appended', '2026-07-23T09:59:00.000Z', NULL, NULL, NULL,
+            'server', '{"activity":{"kind":"provider.runtime.reconciled"}}', '{}'
+          ),
+          (
+            'event-parent-meta', 'thread', 'thread-progress-parent', 2,
+            'thread.meta-updated', '2026-07-23T09:59:30.000Z', NULL, NULL, NULL,
+            'user', '{}', '{}'
+          ),
+          (
+            'event-parent-rate-limits', 'thread', 'thread-progress-parent', 3,
+            'thread.activity-appended', '2026-07-23T09:59:40.000Z', NULL, NULL, NULL,
+            'provider', '{"activity":{"kind":"account.rate-limits.updated"}}', '{}'
+          ),
+          (
+            'event-parent-client-activity', 'thread', 'thread-progress-parent', 4,
+            'thread.activity-appended', '2026-07-23T09:59:50.000Z', NULL, NULL, NULL,
+            'client', '{"activity":{"kind":"automation.proposal"}}', '{}'
+          ),
+          (
+            'event-child-tool', 'thread', 'subagent:thread-progress-parent:child', 0,
+            'thread.activity-appended', '2026-07-23T09:30:00.000Z', NULL, NULL, NULL,
+            'provider', '{"activity":{"kind":"tool.started"}}', '{}'
+          ),
+          (
+            'event-child-warning', 'thread', 'subagent:thread-progress-parent:child', 1,
+            'thread.activity-appended', '2026-07-23T09:58:30.000Z', NULL, NULL, NULL,
+            'provider', '{"activity":{"kind":"runtime.warning"}}', '{}'
+          ),
+          (
+            'event-deleted-child-message', 'thread', 'subagent:thread-progress-parent:deleted', 0,
+            'thread.message-sent', '2026-07-23T09:58:00.000Z', NULL, NULL, NULL,
+            'provider', '{}', '{}'
+          )
+      `;
+      yield* sql`
+        INSERT INTO provider_runtime_events (
+          event_id, thread_id, turn_id, lifecycle_generation, event_type, event_json, persisted_at
+        ) VALUES
+          (
+            'runtime-journal-progress', 'thread-progress-journal', 'turn-journal', NULL,
+            'content.delta', '{}', '2026-07-23T09:45:00.000Z'
+          ),
+          (
+            'runtime-journal-rate-limits', 'thread-progress-journal', NULL, NULL,
+            'account.rate-limits.updated', '{}', '2026-07-23T09:59:59.000Z'
+          ),
+          (
+            'runtime-quiet-rate-limits', 'thread-progress-quiet', NULL, NULL,
+            'account.rate-limits.updated', '{}', '2026-07-23T09:59:59.000Z'
+          )
+      `;
+
+      const progress = yield* snapshotQuery.listThreadProgressIncludingNativeChildren({
+        threadIds: [
+          ThreadId.makeUnsafe("thread-progress-parent"),
+          ThreadId.makeUnsafe("thread-progress-quiet"),
+          ThreadId.makeUnsafe("thread-progress-journal"),
+        ],
+      });
+
+      assert.sameDeepMembers(
+        [...progress],
+        [
+          {
+            threadId: ThreadId.makeUnsafe("thread-progress-parent"),
+            parentThreadId: null,
+            lastProgressAt: "2026-07-23T09:00:00.000Z",
+          },
+          {
+            threadId: ThreadId.makeUnsafe("subagent:thread-progress-parent:child"),
+            parentThreadId: ThreadId.makeUnsafe("thread-progress-parent"),
+            lastProgressAt: "2026-07-23T09:30:00.000Z",
+          },
+          {
+            threadId: ThreadId.makeUnsafe("thread-progress-journal"),
+            parentThreadId: null,
+            lastProgressAt: "2026-07-23T09:45:00.000Z",
+          },
+        ],
+      );
+      assert.deepEqual(
+        yield* snapshotQuery.listThreadProgressIncludingNativeChildren({ threadIds: [] }),
+        [],
+      );
     }),
   );
 

@@ -39,6 +39,7 @@ import { ProjectFaviconResolver } from "./project/Services/ProjectFaviconResolve
 import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
 import { ProviderAdapterRegistry } from "./provider/Services/ProviderAdapterRegistry";
+import { PluginHostService } from "./plugins/PluginHost";
 import { getEnabledProviderAdapter } from "./provider/enabledProviderAdapter";
 import { threadArchiveChunks, threadArchiveFileName } from "./orchestration/exportThreadArchive";
 import type { ServerReadiness } from "./server/readiness";
@@ -53,8 +54,10 @@ import {
   reserveManagedAttachmentUpload,
 } from "./managedAttachmentStore";
 import { ManagedAttachmentRepository } from "./persistence/Services/ManagedAttachments";
+import { ComputerService } from "./computer/Services/ComputerService";
 import {
   authorizeDesktopShutdown,
+  DESKTOP_COMPUTER_EMERGENCY_STOP_ROUTE_PATH,
   DESKTOP_SHUTDOWN_ROUTE_PATH,
   type ServerShutdownController,
 } from "./serverShutdown";
@@ -198,6 +201,7 @@ export function makeEffectHttpRouteLayer(
   return Layer.mergeAll(
     makeHealthEffectRouteLayer(readiness),
     makeDesktopShutdownEffectRouteLayer(shutdownController),
+    makeDesktopComputerEmergencyStopRouteLayer(),
     authEffectRouteLayer,
     projectFaviconEffectRouteLayer,
     threadExportEffectRouteLayer,
@@ -206,6 +210,7 @@ export function makeEffectHttpRouteLayer(
     localImageEffectRouteLayer,
     binaryUploadEffectRouteLayer,
     attachmentsEffectRouteLayer,
+    pluginAssetEffectRouteLayer,
     staticAndDevEffectRouteLayer,
   );
 }
@@ -236,6 +241,52 @@ export function makeDesktopShutdownEffectRouteLayer(shutdownController: ServerSh
       }
 
       yield* shutdownController.requestStop;
+      return HttpServerResponse.jsonUnsafe({ accepted: true }, { status: 202 });
+    }),
+  );
+}
+
+/**
+ * The desktop relays physical Escape presses here after its local host latch
+ * has already engaged. The manager-side latch is what keeps queued work from
+ * dispatching once the desktop side is dead or restarting; both sides fail
+ * closed independently rather than trusting a single transport.
+ */
+export function makeDesktopComputerEmergencyStopRouteLayer() {
+  return HttpRouter.add(
+    "POST",
+    DESKTOP_COMPUTER_EMERGENCY_STOP_ROUTE_PATH,
+    Effect.gen(function* () {
+      const request = yield* HttpServerRequest.HttpServerRequest;
+      const config = yield* ServerConfig;
+      const authorization = authorizeDesktopShutdown({
+        config,
+        remoteAddress: request.remoteAddress,
+        authorization: request.headers.authorization,
+      });
+
+      if (!authorization.authorized) {
+        return HttpServerResponse.jsonUnsafe(
+          { error: authorization.reason === "unavailable" ? "Not Found" : "Unauthorized" },
+          {
+            status: authorization.status,
+            ...(authorization.status === 401
+              ? { headers: { "WWW-Authenticate": 'Bearer realm="synara-desktop-emergency-stop"' } }
+              : {}),
+          },
+        );
+      }
+
+      const computerService = Option.getOrUndefined(yield* Effect.serviceOption(ComputerService));
+      if (!computerService) {
+        return HttpServerResponse.jsonUnsafe({ accepted: false }, { status: 404 });
+      }
+
+      yield* Effect.promise(() => computerService.manager.emergencyStopInput()).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("desktop computer emergency stop failed", Cause.pretty(cause)),
+        ),
+      );
       return HttpServerResponse.jsonUnsafe({ accepted: true }, { status: 202 });
     }),
   );
@@ -306,6 +357,37 @@ const requireAuthenticatedMutationRequest = Effect.gen(function* () {
   }
   return session;
 });
+
+export const pluginAssetEffectRouteLayer = HttpRouter.add(
+  "GET",
+  "/api/plugin-assets/*",
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const url = HttpServerRequest.toURL(request);
+    if (!url) return HttpServerResponse.text("Bad Request", { status: 400 });
+    const config = yield* ServerConfig;
+    if (!isLegacyTokenAuthorized({ config, url })) yield* requireAuthenticatedRequest;
+    const parts = url.pathname.split("/").filter(Boolean);
+    if (parts.length !== 4 || parts[0] !== "api" || parts[1] !== "plugin-assets") {
+      return HttpServerResponse.text("Not Found", { status: 404 });
+    }
+    const pluginHost = yield* PluginHostService;
+    const asset = yield* pluginHost.resolveAppAsset(parts[2]!, parts[3]!).pipe(Effect.orDie);
+    if (!asset) return HttpServerResponse.text("Not Found", { status: 404 });
+    const fileSystem = yield* FileSystem.FileSystem;
+    const data = yield* fileSystem.readFile(asset.path).pipe(Effect.option);
+    if (Option.isNone(data)) return HttpServerResponse.text("Not Found", { status: 404 });
+    return HttpServerResponse.uint8Array(data.value, {
+      status: 200,
+      contentType: asset.contentType,
+      headers: {
+        "Cache-Control": "private, max-age=31536000, immutable",
+        "X-Content-Type-Options": "nosniff",
+        ...localPreviewCorsHeaders({ config, request, url }),
+      },
+    });
+  }).pipe(Effect.catchTag("AuthError", (error) => Effect.succeed(authErrorResponse(error)))),
+);
 
 function trustedMutationCorsHeaders(input: {
   readonly request: HttpServerRequest.HttpServerRequest;

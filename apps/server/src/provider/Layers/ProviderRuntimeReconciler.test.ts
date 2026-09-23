@@ -4,6 +4,7 @@ import {
   TurnId,
   type OrchestrationCommand,
   type OrchestrationShellSnapshot,
+  type OrchestrationThreadShell,
   type ProviderSession,
 } from "@synara/contracts";
 import { Effect, Layer, Option } from "effect";
@@ -25,6 +26,8 @@ import {
   ProviderRuntimeEventRepository,
   type ProviderRuntimeEventRepositoryShape,
 } from "../../persistence/Services/ProviderRuntimeEvents.ts";
+import { ProviderAdapterRequestError } from "../Errors.ts";
+import type { ProviderThreadActivity } from "../Services/ProviderAdapter.ts";
 import { ProviderRuntimeReconciler } from "../Services/ProviderRuntimeReconciler.ts";
 import { ProviderService, type ProviderServiceShape } from "../Services/ProviderService.ts";
 import {
@@ -102,8 +105,10 @@ describe("ProviderRuntimeReconcilerLive", () => {
     } satisfies OrchestrationReactorShape;
     const snapshotQuery = {
       listStaleInFlightThreadIds: () => Effect.succeed([THREAD_ID]),
+      listThreadProgressIncludingNativeChildren: () => Effect.succeed([]),
       getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 1 }),
       getThreadShellById: () => Effect.succeed(Option.some(staleShellSnapshot().threads[0]!)),
+      getThreadShellsByIds: () => Effect.succeed([staleShellSnapshot().threads[0]!]),
       getShellSnapshot: () => Effect.die("full shell snapshot should not be loaded"),
     } as unknown as ProjectionSnapshotQueryShape;
     const directory = {
@@ -223,5 +228,404 @@ describe("ProviderRuntimeReconcilerLive", () => {
     expect(sessionCommands[0]?.commandId).not.toBe(sessionCommands[1]?.commandId);
     expect(sessionCommands[1]?.commandId).not.toBe(sessionCommands[2]?.commandId);
     expect(reconcileSettledOpenTurns).toHaveBeenCalledTimes(3);
+  });
+
+  it("loads candidate progress and leaves a quiet-looking running turn alone while a native child progresses", async () => {
+    const runReconcile = async (
+      threadProgress: ReadonlyArray<{
+        readonly threadId: ThreadId;
+        readonly parentThreadId: ThreadId | null;
+        readonly lastProgressAt: string;
+      }>,
+    ) => {
+      const commands: OrchestrationCommand[] = [];
+      const progressRequests: Array<ReadonlyArray<ThreadId>> = [];
+      const quietThread = staleShellSnapshot().threads[0]!;
+      const runningQuietThread = {
+        ...quietThread,
+        session: { ...quietThread.session!, status: "running" as const },
+      };
+      const engine = {
+        dispatch: (command: OrchestrationCommand) =>
+          Effect.sync(() => {
+            commands.push(command);
+            return { sequence: commands.length };
+          }),
+      } as unknown as OrchestrationEngineShape;
+      const reactor = {
+        start: Effect.void,
+        reconcileSettledOpenTurns: Effect.void,
+      } satisfies OrchestrationReactorShape;
+      const snapshotQuery = {
+        listStaleInFlightThreadIds: () => Effect.succeed([THREAD_ID]),
+        listThreadProgressIncludingNativeChildren: (input: {
+          readonly threadIds: ReadonlyArray<ThreadId>;
+        }) =>
+          Effect.sync(() => {
+            progressRequests.push(input.threadIds);
+            return threadProgress;
+          }),
+        getThreadShellById: () => Effect.succeed(Option.some(runningQuietThread)),
+        getThreadShellsByIds: () => Effect.succeed([runningQuietThread]),
+      } as unknown as ProjectionSnapshotQueryShape;
+      const directory = {
+        listBindings: () =>
+          Effect.succeed([
+            {
+              threadId: THREAD_ID,
+              provider: "codex" as const,
+              status: "running" as const,
+              runtimePayload: { activeTurnId: TURN_ID },
+            },
+          ]),
+      } as unknown as ProviderSessionDirectoryShape;
+      const provider = {
+        listSessions: () => Effect.succeed([{ ...readyProviderSession(), status: "running" }]),
+        getRuntimeEventPumpHealth: () => Effect.succeed([]),
+      } as unknown as ProviderServiceShape;
+      const runtimeEvents = {
+        hasPendingEventsForThreads: () => Effect.succeed(false),
+      } as unknown as ProviderRuntimeEventRepositoryShape;
+
+      const layer = makeProviderRuntimeReconcilerLive({ staleAfterMs: 15_000 }).pipe(
+        Layer.provide(Layer.succeed(OrchestrationEngineService, engine)),
+        Layer.provide(Layer.succeed(OrchestrationReactor, reactor)),
+        Layer.provide(Layer.succeed(ProjectionSnapshotQuery, snapshotQuery)),
+        Layer.provide(Layer.succeed(ProviderSessionDirectory, directory)),
+        Layer.provide(Layer.succeed(ProviderService, provider)),
+        Layer.provide(Layer.succeed(ProviderRuntimeEventRepository, runtimeEvents)),
+      );
+      await Effect.gen(function* () {
+        const reconciler = yield* ProviderRuntimeReconciler;
+        yield* reconciler.reconcileNow;
+      }).pipe(Effect.provide(layer), Effect.runPromise);
+      return { commands, progressRequests };
+    };
+
+    const childProgressAt = (minutes: number) => [
+      {
+        threadId: ThreadId.makeUnsafe(`subagent:${THREAD_ID}:child`),
+        parentThreadId: THREAD_ID,
+        lastProgressAt: new Date(Date.now() - minutes * 60_000).toISOString(),
+      },
+    ];
+
+    const childProgressing = await runReconcile(childProgressAt(44));
+    expect(childProgressing.progressRequests).toEqual([[THREAD_ID]]);
+    expect(childProgressing.commands).toEqual([]);
+
+    const childAbandoned = await runReconcile(childProgressAt(46));
+    expect(childAbandoned.commands.map((command) => command.type)).toEqual([
+      "thread.session.set",
+      "thread.activity.append",
+    ]);
+  });
+});
+
+describe("ProviderRuntimeReconcilerLive provider activity probe", () => {
+  const SETTLED = ["thread.session.set", "thread.activity.append"];
+
+  const liveSession = (status: ProviderSession["status"]): ProviderSession => ({
+    ...readyProviderSession(),
+    status,
+  });
+
+  const runAbandonedRunningTurn = async (input: {
+    readonly liveSessions: ReadonlyArray<ProviderSession>;
+    readonly readThreadActivity?: ProviderServiceShape["readThreadActivity"];
+  }) => {
+    const commands: OrchestrationCommand[] = [];
+    const quietThread = staleShellSnapshot().threads[0]!;
+    const runningThread = {
+      ...quietThread,
+      session: { ...quietThread.session!, status: "running" as const, activeTurnId: TURN_ID },
+    };
+    const engine = {
+      dispatch: (command: OrchestrationCommand) =>
+        Effect.sync(() => {
+          commands.push(command);
+          return { sequence: commands.length };
+        }),
+    } as unknown as OrchestrationEngineShape;
+    const reactor = {
+      start: Effect.void,
+      reconcileSettledOpenTurns: Effect.void,
+    } satisfies OrchestrationReactorShape;
+    const snapshotQuery = {
+      listStaleInFlightThreadIds: () => Effect.succeed([THREAD_ID]),
+      listThreadProgressIncludingNativeChildren: () => Effect.succeed([]),
+      getThreadShellById: () => Effect.succeed(Option.some(runningThread)),
+      getThreadShellsByIds: () => Effect.succeed([runningThread]),
+    } as unknown as ProjectionSnapshotQueryShape;
+    const directory = {
+      listBindings: () =>
+        Effect.succeed([
+          {
+            threadId: THREAD_ID,
+            provider: "codex" as const,
+            status: "running" as const,
+            runtimePayload: { activeTurnId: TURN_ID },
+          },
+        ]),
+      upsert: () => Effect.void,
+    } as unknown as ProviderSessionDirectoryShape;
+    const provider = {
+      listSessions: () => Effect.succeed(input.liveSessions),
+      getRuntimeEventPumpHealth: () => Effect.succeed([]),
+      ...(input.readThreadActivity !== undefined
+        ? { readThreadActivity: input.readThreadActivity }
+        : {}),
+    } as unknown as ProviderServiceShape;
+    const runtimeEvents = {
+      hasPendingEventsForThreads: () => Effect.succeed(false),
+    } as unknown as ProviderRuntimeEventRepositoryShape;
+
+    const layer = makeProviderRuntimeReconcilerLive({
+      staleAfterMs: 1,
+      activityProbeTimeoutMs: 20,
+    }).pipe(
+      Layer.provide(Layer.succeed(OrchestrationEngineService, engine)),
+      Layer.provide(Layer.succeed(OrchestrationReactor, reactor)),
+      Layer.provide(Layer.succeed(ProjectionSnapshotQuery, snapshotQuery)),
+      Layer.provide(Layer.succeed(ProviderSessionDirectory, directory)),
+      Layer.provide(Layer.succeed(ProviderService, provider)),
+      Layer.provide(Layer.succeed(ProviderRuntimeEventRepository, runtimeEvents)),
+    );
+    await Effect.gen(function* () {
+      const reconciler = yield* ProviderRuntimeReconciler;
+      yield* reconciler.reconcileNow;
+    }).pipe(Effect.provide(layer), Effect.runPromise);
+    return commands.map((command) => command.type);
+  };
+
+  it("leaves the turn running while the provider reports the thread active", async () => {
+    for (const status of ["running", "connecting"] as const) {
+      const probe = vi.fn((_input: { readonly threadId: ThreadId; readonly provider: string }) =>
+        Effect.succeed<ProviderThreadActivity>("active"),
+      );
+      const commands = await runAbandonedRunningTurn({
+        liveSessions: [liveSession(status)],
+        readThreadActivity: probe,
+      });
+      expect(commands).toEqual([]);
+      expect(probe).toHaveBeenCalledWith({ threadId: THREAD_ID, provider: "codex" });
+    }
+  });
+
+  it("settles when the provider reports the thread idle, not loaded, or errored", async () => {
+    for (const activity of ["idle", "not-loaded", "error"] as const) {
+      const probe = vi.fn(() => Effect.succeed<ProviderThreadActivity>(activity));
+      const commands = await runAbandonedRunningTurn({
+        liveSessions: [liveSession("running")],
+        readThreadActivity: probe,
+      });
+      expect(commands).toEqual(SETTLED);
+      expect(probe).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it("settles when the activity probe fails or times out", async () => {
+    const failing = vi.fn(() =>
+      Effect.fail(
+        new ProviderAdapterRequestError({
+          provider: "codex",
+          method: "thread/read",
+          detail: "Codex app-server is unresponsive.",
+        }),
+      ),
+    );
+    expect(
+      await runAbandonedRunningTurn({
+        liveSessions: [liveSession("running")],
+        readThreadActivity: failing,
+      }),
+    ).toEqual(SETTLED);
+    expect(failing).toHaveBeenCalledTimes(1);
+
+    const hanging = vi.fn(() => Effect.never);
+    expect(
+      await runAbandonedRunningTurn({
+        liveSessions: [liveSession("running")],
+        readThreadActivity: hanging,
+      }),
+    ).toEqual(SETTLED);
+    expect(hanging).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not probe when the live session is missing or already settled", async () => {
+    for (const liveSessions of [[], [liveSession("ready")]]) {
+      const probe = vi.fn(() => Effect.succeed<ProviderThreadActivity>("active"));
+      expect(await runAbandonedRunningTurn({ liveSessions, readThreadActivity: probe })).toEqual(
+        SETTLED,
+      );
+      expect(probe).not.toHaveBeenCalled();
+    }
+  });
+
+  it("keeps settling for providers that cannot report thread activity", async () => {
+    expect(await runAbandonedRunningTurn({ liveSessions: [liveSession("running")] })).toEqual(
+      SETTLED,
+    );
+  });
+});
+
+describe("ProviderRuntimeReconcilerLive plan application", () => {
+  const threadIdAt = (index: number) => ThreadId.makeUnsafe(`thread-runtime-reconciler-${index}`);
+
+  const runningShell = (threadId: ThreadId, turnId: TurnId = TURN_ID): OrchestrationThreadShell => {
+    const quietThread = staleShellSnapshot().threads[0]!;
+    return {
+      ...quietThread,
+      id: threadId,
+      latestTurn: { ...quietThread.latestTurn!, turnId },
+      session: {
+        ...quietThread.session!,
+        threadId,
+        status: "running",
+        activeTurnId: turnId,
+      },
+    };
+  };
+
+  const runReconcile = async (input: {
+    readonly threadIds: ReadonlyArray<ThreadId>;
+    readonly getThreadShellById: (threadId: ThreadId) => OrchestrationThreadShell;
+    readonly readThreadActivity?: (input: {
+      readonly threadId: ThreadId;
+      readonly provider: string;
+    }) => Effect.Effect<ProviderThreadActivity>;
+    readonly activityProbeTimeoutMs?: number;
+  }) => {
+    const commands: OrchestrationCommand[] = [];
+    const engine = {
+      dispatch: (command: OrchestrationCommand) =>
+        Effect.sync(() => {
+          commands.push(command);
+          return { sequence: commands.length };
+        }),
+    } as unknown as OrchestrationEngineShape;
+    const reactor = {
+      start: Effect.void,
+      reconcileSettledOpenTurns: Effect.void,
+    } satisfies OrchestrationReactorShape;
+    const snapshotQuery = {
+      listStaleInFlightThreadIds: () => Effect.succeed(input.threadIds),
+      listThreadProgressIncludingNativeChildren: () => Effect.succeed([]),
+      getThreadShellById: (threadId: ThreadId) =>
+        Effect.sync(() => Option.some(input.getThreadShellById(threadId))),
+      getThreadShellsByIds: (threadIds: ReadonlyArray<ThreadId>) =>
+        Effect.sync(() => threadIds.map(input.getThreadShellById)),
+    } as unknown as ProjectionSnapshotQueryShape;
+    const directory = {
+      listBindings: () =>
+        Effect.succeed(
+          input.threadIds.map((threadId) => ({
+            threadId,
+            provider: "codex" as const,
+            status: "running" as const,
+            runtimePayload: { activeTurnId: TURN_ID },
+          })),
+        ),
+      upsert: () => Effect.void,
+    } as unknown as ProviderSessionDirectoryShape;
+    const provider = {
+      listSessions: () =>
+        Effect.succeed(
+          input.threadIds.map((threadId) => ({
+            ...readyProviderSession(),
+            threadId,
+            status: "running" as const,
+          })),
+        ),
+      getRuntimeEventPumpHealth: () => Effect.succeed([]),
+      ...(input.readThreadActivity !== undefined
+        ? { readThreadActivity: input.readThreadActivity }
+        : {}),
+    } as unknown as ProviderServiceShape;
+    const runtimeEvents = {
+      hasPendingEventsForThreads: () => Effect.succeed(false),
+    } as unknown as ProviderRuntimeEventRepositoryShape;
+
+    const layer = makeProviderRuntimeReconcilerLive({
+      staleAfterMs: 1,
+      ...(input.activityProbeTimeoutMs !== undefined
+        ? { activityProbeTimeoutMs: input.activityProbeTimeoutMs }
+        : {}),
+    }).pipe(
+      Layer.provide(Layer.succeed(OrchestrationEngineService, engine)),
+      Layer.provide(Layer.succeed(OrchestrationReactor, reactor)),
+      Layer.provide(Layer.succeed(ProjectionSnapshotQuery, snapshotQuery)),
+      Layer.provide(Layer.succeed(ProviderSessionDirectory, directory)),
+      Layer.provide(Layer.succeed(ProviderService, provider)),
+      Layer.provide(Layer.succeed(ProviderRuntimeEventRepository, runtimeEvents)),
+    );
+    await Effect.gen(function* () {
+      const reconciler = yield* ProviderRuntimeReconciler;
+      yield* reconciler.reconcileNow;
+    }).pipe(Effect.provide(layer), Effect.runPromise);
+    return commands;
+  };
+
+  it("runs slow activity probes concurrently before applying plans", async () => {
+    const probeTimeoutMs = 1_000;
+    const threadIds = [0, 1, 2, 3].map(threadIdAt);
+    let inFlight = 0;
+    let maxInFlight = 0;
+    let releaseProbes: (() => void) | undefined;
+    const probesReleased = new Promise<void>((resolve) => {
+      releaseProbes = resolve;
+    });
+    const probe = vi.fn(() =>
+      Effect.gen(function* () {
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        if (inFlight === threadIds.length) releaseProbes?.();
+        yield* Effect.promise(() => probesReleased).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              inFlight -= 1;
+            }),
+          ),
+        );
+        return "idle" as const;
+      }),
+    );
+
+    const startedAt = Date.now();
+    const commands = await runReconcile({
+      threadIds,
+      getThreadShellById: (threadId) => runningShell(threadId),
+      readThreadActivity: probe,
+      activityProbeTimeoutMs: probeTimeoutMs,
+    });
+
+    expect(maxInFlight).toBe(threadIds.length);
+    expect(probe).toHaveBeenCalledTimes(threadIds.length);
+    expect(Date.now() - startedAt).toBeLessThan(threadIds.length * probeTimeoutMs);
+    expect(
+      commands
+        .filter((command) => command.type === "thread.session.set")
+        .map((command) => command.threadId),
+    ).toEqual(threadIds);
+  });
+
+  it("does not settle a thread whose projected turn or session status changed after planning", async () => {
+    const plannedShell = runningShell(THREAD_ID);
+    const changedShells = [
+      runningShell(THREAD_ID, TurnId.makeUnsafe("turn-runtime-reconciler-new")),
+      { ...plannedShell, session: { ...plannedShell.session!, status: "ready" as const } },
+    ];
+    for (const changedShell of changedShells) {
+      let reads = 0;
+      const commands = await runReconcile({
+        threadIds: [THREAD_ID],
+        getThreadShellById: () => {
+          reads += 1;
+          return reads === 1 ? plannedShell : changedShell;
+        },
+      });
+      expect(reads).toBe(2);
+      expect(commands).toEqual([]);
+    }
   });
 });

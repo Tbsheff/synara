@@ -51,6 +51,11 @@ interface RightDockStore {
         | "pullRequestRepository"
         | "pullRequestNumber"
         | "pullRequestInitialTab"
+        | "pluginId"
+        | "pluginContributionId"
+        | "pluginPanelScope"
+        | "pluginTitle"
+        | "pluginParams"
       >
     >,
   ) => void;

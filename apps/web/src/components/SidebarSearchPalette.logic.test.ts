@@ -1,6 +1,7 @@
 import { assert, describe, it } from "vitest";
 
 import {
+  areSidebarSearchThreadListsEqual,
   matchSidebarSearchActions,
   matchSidebarSearchProjects,
   matchSidebarSearchThemes,
@@ -200,6 +201,13 @@ describe("SidebarSearchPalette.logic", () => {
     assert.equal(typed[0]?.id, "switch-space-work");
   });
 
+  it("matches Plugins by label", () => {
+    assert.deepEqual(
+      matchSidebarSearchActions(actions, "plugins").map((action) => action.id),
+      ["plugins"],
+    );
+  });
+
   it("matches usage settings by keyword", () => {
     const result = matchSidebarSearchActions(actions, "quota");
 
@@ -308,5 +316,43 @@ describe("SidebarSearchPalette.logic", () => {
     assert.equal(result[0]?.thread.id, "thread-alpha-compose-prompt");
     assert.equal(result[0]?.matchKind, "title");
     assert.equal(result[0]?.messageMatchCount, 2);
+  });
+});
+
+describe("areSidebarSearchThreadListsEqual", () => {
+  const thread = (overrides: Partial<SidebarSearchThread> = {}): SidebarSearchThread => ({
+    id: "thread-1",
+    title: "Title",
+    projectId: "project-1",
+    projectName: "Project",
+    projectRemoteName: "org/project",
+    spaceName: "Global",
+    provider: "codex",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: undefined,
+    messages: [],
+    ...overrides,
+  });
+
+  it("treats rebuilt lists with identical fields and message references as equal", () => {
+    const messages = [{ text: "hello" }];
+    assert.isTrue(areSidebarSearchThreadListsEqual([thread({ messages })], [thread({ messages })]));
+  });
+
+  it("detects a changed field, a changed message array, or a different length", () => {
+    const messages = [{ text: "hello" }];
+    assert.isFalse(
+      areSidebarSearchThreadListsEqual(
+        [thread({ messages })],
+        [thread({ messages, title: "Renamed" })],
+      ),
+    );
+    assert.isFalse(
+      areSidebarSearchThreadListsEqual(
+        [thread({ messages })],
+        [thread({ messages: [{ text: "hello" }] })],
+      ),
+    );
+    assert.isFalse(areSidebarSearchThreadListsEqual([thread()], [thread(), thread()]));
   });
 });

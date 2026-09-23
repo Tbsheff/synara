@@ -25,6 +25,7 @@ import { OrchestrationLayerLive } from "./orchestration/runtimeLayer";
 import { DevServerManagerLive } from "./devServerManager";
 import { DeviceServiceLive } from "./device/Layers/DeviceService";
 import type { DeviceService } from "./device/Services/DeviceService";
+import { ComputerServiceLive } from "./computer/Layers/ComputerService";
 import { KeybindingsLive } from "./keybindings";
 import { GitCoreLive } from "./git/Layers/GitCore";
 import { GitLayerLive, TextGenerationLayerLive } from "./git/runtimeLayer";
@@ -56,6 +57,7 @@ import { ManagedAttachmentCleanupLive } from "./managedAttachmentCleanup";
 import { PullRequestServiceLive } from "./pullRequests/Layers/PullRequestService";
 import { ProviderHealthLive } from "./provider/Layers/ProviderHealth";
 import { makeServerProviderLayer } from "./provider/runtimeLayer";
+import { PluginHostLive } from "./plugins/PluginHost";
 
 export { makeServerProviderLayer } from "./provider/runtimeLayer";
 
@@ -99,6 +101,7 @@ export function makeServerRuntimeServicesLayer(
   );
   const runtimeIngestionLayer = ProviderRuntimeIngestionLive.pipe(
     Layer.provideMerge(runtimeServicesLayer),
+    Layer.provideMerge(ComputerServiceLive),
   );
   const studioOutputReactorLayer = StudioOutputReactorLive.pipe(
     Layer.provideMerge(runtimeServicesLayer),
@@ -195,6 +198,10 @@ export function makeServerRuntimeServicesLayer(
     Layer.provideMerge(ServerSettingsLive),
     Layer.provideMerge(providerHealthLayer),
   );
+  const pluginHostLayer = PluginHostLive.pipe(
+    Layer.provideMerge(OrchestrationLayerLive),
+    Layer.provideMerge(ServerSettingsLive),
+  );
   const agentGatewayLayer = AgentGatewayLive.pipe(
     Layer.provideMerge(agentGatewayCredentialsLayer),
     Layer.provideMerge(automationServiceLayer),
@@ -211,13 +218,14 @@ export function makeServerRuntimeServicesLayer(
     // The gateway exposes device_* tools only where a backend can exist, but it
     // resolves the service on every platform to make that decision.
     Layer.provideMerge(DeviceServiceLive),
+    Layer.provideMerge(pluginHostLayer),
+    Layer.provideMerge(ComputerServiceLive),
   );
   const pullRequestServiceLayer = PullRequestServiceLive.pipe(
     Layer.provideMerge(GitLayerLive),
     Layer.provideMerge(ProjectPullRequestPinsLive),
     Layer.provideMerge(OrchestrationLayerLive),
   );
-
   return Layer.mergeAll(
     agentGatewayCredentialsLayer,
     agentGatewayLayer,
@@ -241,6 +249,7 @@ export function makeServerRuntimeServicesLayer(
     threadDeletionReactorLayer,
     devServerManagerLayer,
     DeviceServiceLive,
+    ComputerServiceLive,
     GitLayerLive,
     TextGenerationLayerLive,
     TerminalLayerLive,
@@ -253,6 +262,7 @@ export function makeServerRuntimeServicesLayer(
     ServerRuntimeStartupLive,
     WorkspaceLayerLive,
     ProjectFaviconResolverLive,
+    pluginHostLayer,
   ).pipe(Layer.provideMerge(NodeServices.layer));
 }
 

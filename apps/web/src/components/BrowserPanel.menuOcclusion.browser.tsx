@@ -105,6 +105,11 @@ function DockFixture({ onAdd }: { onAdd: (kind: string) => void }) {
               pullRequestRepository: null,
               pullRequestNumber: null,
               pullRequestInitialTab: null,
+              pluginId: null,
+              pluginContributionId: null,
+              pluginPanelScope: null,
+              pluginTitle: null,
+              pluginParams: null,
             },
           ],
         }}

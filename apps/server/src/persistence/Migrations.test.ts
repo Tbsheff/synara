@@ -305,6 +305,12 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         [101, "RemoveTranscriptMarkers"],
         [102, "ProjectionThreadMessagesTurnBoundary"],
         [103, "ClaudeTokenAccounting"],
+        [104, "ProjectionThreadsClaudeCacheReview"],
+        [105, "AsyncUserInput"],
+        [106, "ProjectImportOrigins"],
+        [107, "ProjectionThreadsHumanMessage"],
+        [108, "GatewayCompletions"],
+        [109, "PluginStorage"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -360,6 +366,12 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
           { migration_id: 101, name: "RemoveTranscriptMarkers" },
           { migration_id: 102, name: "ProjectionThreadMessagesTurnBoundary" },
           { migration_id: 103, name: "ClaudeTokenAccounting" },
+          { migration_id: 104, name: "ProjectionThreadsClaudeCacheReview" },
+          { migration_id: 105, name: "AsyncUserInput" },
+          { migration_id: 106, name: "ProjectImportOrigins" },
+          { migration_id: 107, name: "ProjectionThreadsHumanMessage" },
+          { migration_id: 108, name: "GatewayCompletions" },
+          { migration_id: 109, name: "PluginStorage" },
         ],
       );
       const preserved = yield* sql<{ readonly count: number }>`
@@ -456,6 +468,12 @@ agentGatewayRetentionLegacyLayer(
           [101, "RemoveTranscriptMarkers"],
           [102, "ProjectionThreadMessagesTurnBoundary"],
           [103, "ClaudeTokenAccounting"],
+          [104, "ProjectionThreadsClaudeCacheReview"],
+          [105, "AsyncUserInput"],
+          [106, "ProjectImportOrigins"],
+          [107, "ProjectionThreadsHumanMessage"],
+          [108, "GatewayCompletions"],
+          [109, "PluginStorage"],
         ]);
 
         const columns = yield* sql<{ readonly name: string }>`
@@ -554,6 +572,12 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [101, "RemoveTranscriptMarkers"],
         [102, "ProjectionThreadMessagesTurnBoundary"],
         [103, "ClaudeTokenAccounting"],
+        [104, "ProjectionThreadsClaudeCacheReview"],
+        [105, "AsyncUserInput"],
+        [106, "ProjectImportOrigins"],
+        [107, "ProjectionThreadsHumanMessage"],
+        [108, "GatewayCompletions"],
+        [109, "PluginStorage"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -593,6 +617,12 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [101, "RemoveTranscriptMarkers"],
           [102, "ProjectionThreadMessagesTurnBoundary"],
           [103, "ClaudeTokenAccounting"],
+          [104, "ProjectionThreadsClaudeCacheReview"],
+          [105, "AsyncUserInput"],
+          [106, "ProjectImportOrigins"],
+          [107, "ProjectionThreadsHumanMessage"],
+          [108, "GatewayCompletions"],
+          [109, "PluginStorage"],
         ],
       );
 
@@ -686,6 +716,12 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [101, "RemoveTranscriptMarkers"],
         [102, "ProjectionThreadMessagesTurnBoundary"],
         [103, "ClaudeTokenAccounting"],
+        [104, "ProjectionThreadsClaudeCacheReview"],
+        [105, "AsyncUserInput"],
+        [106, "ProjectImportOrigins"],
+        [107, "ProjectionThreadsHumanMessage"],
+        [108, "GatewayCompletions"],
+        [109, "PluginStorage"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -721,6 +757,12 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [101, "RemoveTranscriptMarkers"],
           [102, "ProjectionThreadMessagesTurnBoundary"],
           [103, "ClaudeTokenAccounting"],
+          [104, "ProjectionThreadsClaudeCacheReview"],
+          [105, "AsyncUserInput"],
+          [106, "ProjectImportOrigins"],
+          [107, "ProjectionThreadsHumanMessage"],
+          [108, "GatewayCompletions"],
+          [109, "PluginStorage"],
         ],
       );
       const preservedSpaces = yield* sql<{ readonly spaceId: string }>`
@@ -921,6 +963,15 @@ describe("migration lineage aliases", () => {
 
     assert.deepStrictEqual(planMigrationLineageAliasRepairs(recorded), [
       { kind: "rename", migrationId: 54, name: "DurableProviderCommandDelivery" },
+    ]);
+  });
+
+  it("repairs the private plugin-storage migration recorded at 104", () => {
+    const recorded = canonicalTrackerThrough(103);
+    recorded.set(104, "PluginStorage");
+
+    assert.deepStrictEqual(planMigrationLineageAliasRepairs(recorded), [
+      { kind: "remove", migrationId: 104 },
     ]);
   });
 

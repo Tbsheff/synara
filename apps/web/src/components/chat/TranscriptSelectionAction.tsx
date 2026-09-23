@@ -3,6 +3,7 @@
 // Layer: Chat transcript interaction UI
 
 import { cn } from "~/lib/utils";
+import type { ReactNode } from "react";
 import { ELEVATED_HOVER_SURFACE_CLASS_NAME } from "~/surfaceStyles";
 import { TRANSCRIPT_SELECTION_ACTION_WIDTH_PX } from "./chatSelectionActions";
 
@@ -15,6 +16,7 @@ interface TranscriptSelectionActionProps {
   onAddToNewChat?: (() => void) | undefined;
   sideDisabled?: boolean | undefined;
   disabled?: boolean | undefined;
+  pluginActions?: ReactNode;
 }
 
 function TranscriptSelectionToolbarButton({
@@ -33,7 +35,7 @@ function TranscriptSelectionToolbarButton({
       title={label}
       disabled={disabled}
       className={cn(
-        "pointer-events-auto inline-flex h-7 flex-none items-center justify-center whitespace-nowrap px-2.5 text-xs text-[var(--color-text-foreground)] outline-none focus-visible:bg-accent disabled:pointer-events-none disabled:opacity-40",
+        "pointer-events-auto inline-flex h-7 flex-none items-center justify-center whitespace-nowrap px-2.5 text-ui leading-snug text-[var(--color-text-foreground)] outline-none focus-visible:bg-accent disabled:pointer-events-none disabled:opacity-40",
         ELEVATED_HOVER_SURFACE_CLASS_NAME,
       )}
       onMouseDown={(event) => {
@@ -82,6 +84,7 @@ export function TranscriptSelectionAction(props: TranscriptSelectionActionProps)
             disabled={props.disabled}
           />
         ) : null}
+        {props.pluginActions}
       </div>
     </div>
   );

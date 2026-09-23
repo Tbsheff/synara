@@ -9,6 +9,7 @@ import type { ReactNode, SVGProps } from "react";
 
 import { CentralIcon } from "~/lib/central-icons";
 import { cn } from "~/lib/utils";
+import { PluginContributionErrorBoundary, usePluginContributions } from "~/plugins/runtime";
 import {
   AntigravityIcon,
   ClaudeAI,
@@ -102,11 +103,32 @@ export function ProviderIcon({
   "aria-hidden": ariaHiddenProp,
   ...svgProps
 }: ProviderIconProps) {
+  const providerIcons = usePluginContributions("providerIcons");
   const fallback = fallbackProp ?? null;
   const tone = toneProp ?? "default";
   const ariaHidden = ariaHiddenProp ?? true;
   if (provider === null || provider === undefined) {
     return fallback;
+  }
+
+  const pluginIcon = providerIcons.find(
+    (candidate) => candidate.providerKind === "agent" && candidate.providerId === provider,
+  );
+  if (pluginIcon) {
+    const Icon = pluginIcon.icon;
+    return (
+      <PluginContributionErrorBoundary
+        plugin={pluginIcon.plugin}
+        contributionId={`provider-icon:${provider}`}
+        fallback={fallback}
+      >
+        <Icon
+          context={{ projectId: null, threadId: null }}
+          plugin={pluginIcon.plugin}
+          {...(className === undefined ? {} : { className })}
+        />
+      </PluginContributionErrorBoundary>
+    );
   }
 
   const Icon = PROVIDER_ICON_COMPONENT_BY_PROVIDER[provider];

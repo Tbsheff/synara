@@ -118,7 +118,13 @@ import Migration0099 from "./Migrations/099_InvalidateProjectionThreadsCursor.ts
 import Migration0100 from "./Migrations/100_MessageTextChunks.ts";
 import Migration0101 from "./Migrations/101_RemoveTranscriptMarkers.ts";
 import Migration0102 from "./Migrations/102_ProjectionThreadMessagesTurnBoundary.ts";
+import AsyncUserInputMigration from "./Migrations/105_AsyncUserInput.ts";
 import ClaudeTokenAccountingMigration from "./Migrations/103_ClaudeTokenAccounting.ts";
+import Migration0104 from "./Migrations/104_ProjectionThreadsClaudeCacheReview.ts";
+import ProjectImportOriginsMigration from "./Migrations/106_ProjectImportOrigins.ts";
+import Migration0108 from "./Migrations/108_GatewayCompletions.ts";
+import Migration0107 from "./Migrations/107_ProjectionThreadsHumanMessage.ts";
+import PluginStorageMigration from "./Migrations/109_PluginStorage.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -238,6 +244,12 @@ export const migrationEntries = [
   [102, "ProjectionThreadMessagesTurnBoundary", Migration0102],
   // Keep this ID literal: scripts/check-migration-lineage.ts parses this list.
   [103, "ClaudeTokenAccounting", ClaudeTokenAccountingMigration],
+  [104, "ProjectionThreadsClaudeCacheReview", Migration0104],
+  [105, "AsyncUserInput", AsyncUserInputMigration],
+  [106, "ProjectImportOrigins", ProjectImportOriginsMigration],
+  [107, "ProjectionThreadsHumanMessage", Migration0107],
+  [108, "GatewayCompletions", Migration0108],
+  [109, "PluginStorage", PluginStorageMigration],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>
@@ -303,7 +315,7 @@ export const findFirstMigrationLineageDivergence = (
   migrationEntries.find(([id, name]) => id <= highWaterMark && recordedNamesById.get(id) !== name);
 
 /**
- * A tracker identity that a *released* Synara build wrote for a migration whose
+ * A tracker identity that a known Synara build wrote for a migration whose
  * canonical ID later changed.
  *
  * v0.5.5 shipped `[54, "ProjectPullRequestPins"]`; v0.6.0 reserved 54 for the
@@ -341,6 +353,12 @@ export const MIGRATION_LINEAGE_ALIASES: readonly MigrationLineageAlias[] = [
     historicalName: "ProjectPullRequestPins",
     currentId: 69,
     historicalSlotRequiresRerun: false,
+  },
+  {
+    historicalId: 104,
+    historicalName: "PluginStorage",
+    currentId: 109,
+    historicalSlotRequiresRerun: true,
   },
 ];
 

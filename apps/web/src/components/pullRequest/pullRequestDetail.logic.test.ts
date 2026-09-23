@@ -99,6 +99,20 @@ describe("buildPullRequestTimelineEvents", () => {
     expect(titles).toContain("reviewer commented");
   });
 
+  it("surfaces preserved commit author names in the timeline", () => {
+    const events = buildPullRequestTimelineEvents({
+      ...makeTimelineSource(),
+      commits: [
+        makeCommit({
+          authors: [{ login: null, name: "Local author", avatarUrl: null, url: null }],
+        }),
+      ],
+    });
+    expect(events.find((event) => event.id === "abcdef1234567890")?.title).toBe(
+      "Commit abcdef1 by Local author",
+    );
+  });
+
   it("falls back to placeholders for missing authors and empty commit messages", () => {
     const events = buildPullRequestTimelineEvents({
       ...makeTimelineSource(),
@@ -144,6 +158,11 @@ describe("pullRequestDetailInputFromPane", () => {
     pullRequestRepository: "acme/widgets",
     pullRequestNumber: 350,
     pullRequestInitialTab: null,
+    pluginId: null,
+    pluginContributionId: null,
+    pluginPanelScope: null,
+    pluginTitle: null,
+    pluginParams: null,
   };
 
   it("builds the detail input from a fully-populated pull request pane", () => {

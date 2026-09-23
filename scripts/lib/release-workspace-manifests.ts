@@ -10,6 +10,9 @@ export const RELEASE_WORKSPACE_MANIFEST_PATHS = [
   "apps/marketing/package.json",
   "packages/contracts/package.json",
   "packages/shared/package.json",
+  "packages/plugin-sdk/package.json",
+  "plugins/puck/package.json",
+  "plugins/review-queue/package.json",
   "scripts/package.json",
 ] as const;
 

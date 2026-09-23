@@ -39,6 +39,9 @@ import { useThreadSelectionStore } from "../threadSelectionStore";
 import { onServerMaintenanceUpdated } from "../wsNativeApi";
 import { useWorkspacePathsStore } from "../workspacePathsStore";
 import { useProviderStatusesForLocalConfig } from "~/hooks/useProviderStatusesForLocalConfig";
+import { PluginRuntimeProvider } from "~/plugins/runtime";
+import { PluginAppOverlays } from "~/plugins/PluginAppOverlays";
+import { useFocusedChatContext } from "~/focusedChatContext";
 import { useRefreshProviderStatusesNow } from "~/hooks/useProviderStatusRefresh";
 import { resolveProviderSendAvailabilityWithRefresh } from "~/lib/providerAvailability";
 import { toastManager } from "~/components/ui/toast";
@@ -553,6 +556,11 @@ function ChatRouteLayout() {
   });
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const resolvedSidebarOpen = isEditorView ? false : sidebarOpen;
+  const { activeProjectId, focusedThreadId } = useFocusedChatContext();
+  const pluginContext = useMemo(
+    () => ({ projectId: activeProjectId, threadId: focusedThreadId }),
+    [activeProjectId, focusedThreadId],
+  );
 
   // The thread sidebar always lives on the left; the right dock is a separate surface.
   const sidebarElement = (
@@ -589,18 +597,21 @@ function ChatRouteLayout() {
   );
 
   return (
-    <SidebarProvider
-      defaultOpen
-      open={resolvedSidebarOpen}
-      onOpenChange={setSidebarOpen}
-      className="bg-[var(--app-shell-background)]"
-      data-sidebar-side="left"
-    >
-      <ThreadRetentionMaintenanceToast />
-      <ChatRouteGlobalShortcuts />
-      {sidebarElement}
-      {mainContentShell}
-    </SidebarProvider>
+    <PluginRuntimeProvider>
+      <SidebarProvider
+        defaultOpen
+        open={resolvedSidebarOpen}
+        onOpenChange={setSidebarOpen}
+        className="bg-[var(--app-shell-background)]"
+        data-sidebar-side="left"
+      >
+        <ThreadRetentionMaintenanceToast />
+        <ChatRouteGlobalShortcuts />
+        {sidebarElement}
+        {mainContentShell}
+        <PluginAppOverlays context={pluginContext} />
+      </SidebarProvider>
+    </PluginRuntimeProvider>
   );
 }
 

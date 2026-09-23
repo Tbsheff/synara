@@ -64,10 +64,11 @@ import {
   useDesktopTopBarWindowControlsGutterClassName,
 } from "~/hooks/useDesktopTopBarGutter";
 import { Skeleton } from "./ui/skeleton";
+import { SynaraPluginCatalog } from "~/plugins/SynaraPluginCatalog";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
-type DiscoveryTab = "plugins" | "skills";
+type DiscoveryTab = "synara" | "plugins" | "skills";
 type ProviderCapabilities = { plugins: boolean; skills: boolean };
 type PluginEntry = {
   marketplaceName: string;
@@ -240,7 +241,7 @@ function TabButton({
     <button
       type="button"
       className={cn(
-        "inline-flex h-10 items-center border-b-2 px-1 text-[13px] font-medium transition-colors",
+        "inline-flex h-10 items-center border-b-2 px-1 text-ui-lg font-medium transition-colors",
         active
           ? "border-foreground text-foreground"
           : "border-transparent text-muted-foreground hover:text-foreground/80",
@@ -271,7 +272,7 @@ function ProviderToggleButton({
     <button
       type="button"
       className={cn(
-        "inline-flex h-7 items-center gap-1.5 rounded-full px-2.5 text-[12px] font-medium transition-colors",
+        "inline-flex h-7 items-center gap-1.5 rounded-full px-2.5 text-ui font-medium transition-colors",
         active
           ? "bg-[var(--color-text-foreground)] text-[var(--color-background-surface)] shadow-xs"
           : "text-muted-foreground hover:bg-[var(--sidebar-accent)] hover:text-foreground",
@@ -291,8 +292,8 @@ function EmptyPanel({ title, description }: { title: string; description: string
   return (
     <div className="flex min-h-40 items-center justify-center rounded-xl border border-dashed border-border/60 bg-background/40 px-5 py-6 text-center">
       <div className="max-w-sm space-y-1">
-        <p className="text-sm font-medium text-foreground">{title}</p>
-        <p className="text-xs text-muted-foreground">{description}</p>
+        <p className="text-ui-lg leading-snug font-medium text-foreground">{title}</p>
+        <p className="text-ui leading-snug text-muted-foreground">{description}</p>
       </div>
     </div>
   );
@@ -300,7 +301,7 @@ function EmptyPanel({ title, description }: { title: string; description: string
 
 function InlineWarning({ children }: { children: ReactNode }) {
   return (
-    <div className="flex items-start gap-2 rounded-xl border border-amber-500/20 bg-amber-500/6 px-3 py-2.5 text-xs text-muted-foreground">
+    <div className="flex items-start gap-2 rounded-xl border border-amber-500/20 bg-amber-500/6 px-3 py-2.5 text-ui leading-snug text-muted-foreground">
       <CircleAlertIcon className="mt-0.5 size-3.5 shrink-0 text-amber-500" />
       <div>{children}</div>
     </div>
@@ -328,10 +329,10 @@ function PluginGridItem({ entry }: { entry: PluginEntry }) {
     <div className="flex items-center gap-3 rounded-xl px-3 py-3 transition-colors hover:bg-[var(--sidebar-accent)]">
       <PluginGlyph plugin={entry.plugin} />
       <div className="min-w-0 flex-1">
-        <p className="text-[13px] font-semibold leading-snug text-foreground">
+        <p className="text-ui-lg font-semibold leading-snug text-foreground">
           {entry.plugin.interface?.displayName ?? entry.plugin.name}
         </p>
-        <p className="mt-0.5 truncate text-[12px] text-muted-foreground">{description}</p>
+        <p className="mt-0.5 truncate text-ui text-muted-foreground">{description}</p>
       </div>
       <InstalledStatus installed={isInstalledProviderPlugin(entry.plugin)} />
     </div>
@@ -346,10 +347,10 @@ function SkillGridItem({ skill }: { skill: ProviderSkillDescriptor }) {
     <div className="flex items-center gap-3 rounded-xl px-3 py-3 transition-colors hover:bg-[var(--sidebar-accent)]">
       <SkillGlyph skill={skill} />
       <div className="min-w-0 flex-1">
-        <p className="text-[13px] font-semibold leading-snug text-foreground">
+        <p className="text-ui-lg font-semibold leading-snug text-foreground">
           {skill.interface?.displayName ?? skill.name}
         </p>
-        <p className="mt-0.5 truncate text-[12px] text-muted-foreground">{description}</p>
+        <p className="mt-0.5 truncate text-ui text-muted-foreground">{description}</p>
       </div>
       <InstalledStatus installed={skill.enabled} />
     </div>
@@ -376,7 +377,7 @@ export function PluginLibrary() {
     "codex";
 
   const [selectedProvider, setSelectedProvider] = useState<ProviderKind>(preferredProvider);
-  const [selectedTab, setSelectedTab] = useState<DiscoveryTab>("plugins");
+  const [selectedTab, setSelectedTab] = useState<DiscoveryTab>("synara");
   const [pluginSearch, setPluginSearch] = useState("");
   const [skillSearch, setSkillSearch] = useState("");
   const deferredPluginSearch = useDeferredValue(pluginSearch);
@@ -440,9 +441,11 @@ export function PluginLibrary() {
   // tabs never renders an unsupported frame, and the user's own selection
   // resurfaces if its provider becomes capable again.
   const supportsSelectedTab =
-    selectedTab === "plugins"
-      ? providerCapabilities[selectedProvider].plugins
-      : providerCapabilities[selectedProvider].skills;
+    selectedTab === "synara"
+      ? true
+      : selectedTab === "plugins"
+        ? providerCapabilities[selectedProvider].plugins
+        : providerCapabilities[selectedProvider].skills;
   const providerFallbackOrder =
     selectedTab === "plugins"
       ? DEFAULT_PROVIDER_ORDER
@@ -545,6 +548,11 @@ export function PluginLibrary() {
           <SidebarHeaderNavigationControls />
           <div className="flex items-end gap-3">
             <TabButton
+              label="Synara"
+              active={selectedTab === "synara"}
+              onClick={() => setSelectedTab("synara")}
+            />
+            <TabButton
               label="Plugins"
               active={selectedTab === "plugins"}
               onClick={() => setSelectedTab("plugins")}
@@ -556,30 +564,40 @@ export function PluginLibrary() {
             />
           </div>
           <div className="flex-1" />
-          <div className="inline-flex rounded-full border border-border/60 bg-background/60 p-0.5">
-            {DEFAULT_PROVIDER_ORDER.map((provider) => {
-              const capabilities = providerCapabilities[provider];
-              const label = PROVIDER_DISPLAY_NAMES[provider];
-              return (
-                <ProviderToggleButton
-                  key={provider}
-                  label={label}
-                  provider={provider}
-                  active={effectiveProvider === provider}
-                  disabled={!capabilities.plugins && !capabilities.skills}
-                  onClick={() => {
-                    setSelectedProvider(provider);
-                    if (selectedTab === "plugins" && !capabilities.plugins && capabilities.skills) {
-                      setSelectedTab("skills");
-                    }
-                    if (selectedTab === "skills" && !capabilities.skills && capabilities.plugins) {
-                      setSelectedTab("plugins");
-                    }
-                  }}
-                />
-              );
-            })}
-          </div>
+          {selectedTab === "synara" ? null : (
+            <div className="inline-flex rounded-full border border-border/60 bg-background/60 p-0.5">
+              {DEFAULT_PROVIDER_ORDER.map((provider) => {
+                const capabilities = providerCapabilities[provider];
+                const label = PROVIDER_DISPLAY_NAMES[provider];
+                return (
+                  <ProviderToggleButton
+                    key={provider}
+                    label={label}
+                    provider={provider}
+                    active={effectiveProvider === provider}
+                    disabled={!capabilities.plugins && !capabilities.skills}
+                    onClick={() => {
+                      setSelectedProvider(provider);
+                      if (
+                        selectedTab === "plugins" &&
+                        !capabilities.plugins &&
+                        capabilities.skills
+                      ) {
+                        setSelectedTab("skills");
+                      }
+                      if (
+                        selectedTab === "skills" &&
+                        !capabilities.skills &&
+                        capabilities.plugins
+                      ) {
+                        setSelectedTab("plugins");
+                      }
+                    }}
+                  />
+                );
+              })}
+            </div>
+          )}
         </div>
 
         {/* ── Scrollable body ───────────────────────────────────────────── */}
@@ -587,29 +605,33 @@ export function PluginLibrary() {
           {/* Hero */}
           <div className="px-6 py-10 text-center">
             <h1 className="text-[28px] font-semibold text-foreground">
-              Make {providerLabel} work your way
+              {selectedTab === "synara"
+                ? "Plugins installed in Synara"
+                : `Make ${providerLabel} work your way`}
             </h1>
           </div>
 
           {/* Search */}
-          <div className="mx-auto max-w-2xl px-6 pb-6">
-            <InputGroup className="rounded-xl bg-background/70 shadow-xs">
-              <InputGroupAddon>
-                <InputGroupText>
-                  <SearchIcon className="size-4 text-muted-foreground/60" />
-                </InputGroupText>
-              </InputGroupAddon>
-              <InputGroupInput
-                value={selectedTab === "plugins" ? pluginSearch : skillSearch}
-                onChange={(e) => {
-                  if (selectedTab === "plugins") setPluginSearch(e.target.value);
-                  else setSkillSearch(e.target.value);
-                }}
-                placeholder={selectedTab === "plugins" ? "Search plugins" : "Search skills"}
-                className="text-sm"
-              />
-            </InputGroup>
-          </div>
+          {selectedTab === "synara" ? null : (
+            <div className="mx-auto max-w-2xl px-6 pb-6">
+              <InputGroup className="rounded-xl bg-background/70 shadow-xs">
+                <InputGroupAddon>
+                  <InputGroupText>
+                    <SearchIcon className="size-4 text-muted-foreground/60" />
+                  </InputGroupText>
+                </InputGroupAddon>
+                <InputGroupInput
+                  value={selectedTab === "plugins" ? pluginSearch : skillSearch}
+                  onChange={(e) => {
+                    if (selectedTab === "plugins") setPluginSearch(e.target.value);
+                    else setSkillSearch(e.target.value);
+                  }}
+                  placeholder={selectedTab === "plugins" ? "Search plugins" : "Search skills"}
+                  className="text-ui leading-snug"
+                />
+              </InputGroup>
+            </div>
+          )}
 
           {/* Warnings */}
           {((!discoveryCwd && selectedTab === "skills") ||
@@ -638,7 +660,17 @@ export function PluginLibrary() {
 
           {/* Grid content */}
           <div className="px-3 pb-10 sm:px-5">
-            {selectedTab === "plugins" ? (
+            {selectedTab === "synara" ? (
+              <div className="mx-auto max-w-3xl">
+                <SynaraPluginCatalog
+                  context={{
+                    projectId: activeProject?.id ?? null,
+                    threadId: focusedThreadId ?? null,
+                  }}
+                  layout="library"
+                />
+              </div>
+            ) : selectedTab === "plugins" ? (
               <>
                 {!canListPlugins ? (
                   <div className="mx-auto max-w-2xl">

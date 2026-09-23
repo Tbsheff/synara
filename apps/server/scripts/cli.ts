@@ -152,6 +152,27 @@ const buildCmd = Command.make(
       yield* fs.chmod(path.join(deviceHelperTarget, "build.sh"), 0o755);
       yield* Effect.log("[cli] Bundled iOS Simulator helper sources into dist/device-helper");
 
+      const pluginAuthoringSkillSource = path.join(
+        repoRoot,
+        ".claude/skills/synara-plugin-authoring",
+      );
+      const pluginAuthoringSkillTarget = path.join(
+        serverDir,
+        "dist/builtin-skills/synara-plugin-authoring",
+      );
+      yield* fs.copy(pluginAuthoringSkillSource, pluginAuthoringSkillTarget);
+      yield* Effect.log("[cli] Bundled the Synara plugin authoring skill");
+
+      const pluginSdkTarget = path.join(serverDir, "dist/plugin-sdk");
+      yield* fs.makeDirectory(pluginSdkTarget, { recursive: true });
+      for (const fileName of ["index.ts", "app.ts"]) {
+        yield* fs.copyFile(
+          path.join(repoRoot, "packages/plugin-sdk/src", fileName),
+          path.join(pluginSdkTarget, fileName),
+        );
+      }
+      yield* Effect.log("[cli] Bundled the Synara plugin SDK sources");
+
       const webDist = path.join(repoRoot, "apps/web/dist");
       const clientTarget = path.join(serverDir, "dist/client");
 

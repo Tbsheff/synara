@@ -12,6 +12,7 @@ import {
   type ThreadGoalAchievement,
   type TurnId,
 } from "@synara/contracts";
+import type { SynaraPluginAppContext } from "@synara/plugin-sdk/app";
 import { isLocalAbsolutePath } from "@synara/shared/path";
 import { pluralize } from "@synara/shared/text";
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
@@ -45,6 +46,7 @@ import {
   type WorktreeSetupSnapshot,
   type WorktreeSetupStep,
 } from "../../types";
+import { AsyncUserInputCard } from "./AsyncUserInputCard";
 import ChatMarkdown from "../ChatMarkdown";
 import type { WorkingLabel } from "../ChatView.logic";
 import { InlineLinkChip } from "../InlineLinkChip";
@@ -102,6 +104,8 @@ import {
 import {
   canSubmitUserMessageEdit,
   capOpenWorkEntryRenderChunks,
+  isFoldedWorkEntryChunk,
+  resolveWorkEntryChunkFold,
   chunkCollapsedTurnItems,
   computeStableMessagesTimelineRows,
   deriveMessagesTimelineRows,
@@ -176,6 +180,8 @@ import {
   type ThreadFindHighlight,
   type ThreadFindMatch,
 } from "./threadFind.logic";
+import { PluginMessageActionItems } from "~/plugins/PluginMessageAction";
+import { usePluginContributions } from "~/plugins/runtime";
 
 const MAX_VISIBLE_INLINE_TOOL_ENTRIES = 4;
 const EMPTY_EDITOR_KEYBINDINGS: ResolvedKeybindingsConfig = [];
@@ -201,6 +207,10 @@ const TRAIL_VIEWABILITY_CONFIG = { itemVisiblePercentThreshold: 0 } as const;
 const EMPTY_GOAL_ACHIEVEMENTS: readonly ThreadGoalAchievement[] = [];
 const EMPTY_GOAL_ACHIEVEMENTS_BY_TURN_ID = new Map<TurnId, ThreadGoalAchievement>();
 const EMPTY_MESSAGE_ID_SET: ReadonlySet<MessageId> = new Set();
+const EMPTY_PLUGIN_APP_CONTEXT: SynaraPluginAppContext = {
+  projectId: null,
+  threadId: null,
+};
 
 // Imperative LegendList access goes through these module-level helpers instead of
 // inline `ref.current` reads. The timeline's list ref is `listRef ?? fallbackListRef`,
@@ -267,7 +277,7 @@ function UserDispatchModeChip({
   return (
     <div
       className={cn(
-        "inline-flex items-center gap-1.5 self-end px-0 text-[11px] font-normal tracking-[0.01em] text-muted-foreground/78",
+        "inline-flex items-center gap-1.5 self-end px-0 text-ui-sm font-normal tracking-[0.01em] text-muted-foreground/78",
         hasLeadingMedia ? "mb-3" : "mb-1.5",
       )}
     >
@@ -330,7 +340,7 @@ function WorktreeSetupCard({
         <WorktreeIcon className="size-3.5 shrink-0 text-[var(--color-text-foreground-tertiary)]" />
         <span
           ref={syncAnimationsToTimelineOrigin}
-          className="shimmer text-[13px] font-medium text-[var(--color-text-foreground-secondary)]"
+          className="shimmer text-ui-lg font-medium text-[var(--color-text-foreground-secondary)]"
         >
           Preparing worktree...
         </span>
@@ -356,7 +366,7 @@ function WorktreeSetupCard({
               </span>
               <span
                 className={cn(
-                  "text-[13px] leading-5",
+                  "text-ui-lg leading-5",
                   step.status === "active" || step.status === "done"
                     ? "text-[var(--color-text-foreground)]"
                     : step.status === "error"
@@ -453,9 +463,14 @@ interface MessagesTimelineProps {
   onOpenThread?: (threadId: ThreadId) => void;
   /** Open an automation's detail page from a "created automation" transcript card. */
   onOpenAutomation?: (automationId: string) => void;
+  /** Whether the composer currently has computer control on; flips denial cards to their confirmed state. */
+  computerControlEnabled?: boolean;
+  /** Switch computer control on from a "computer control denied" transcript card. */
+  onEnableComputerControl?: () => void;
   revertTurnCountByUserMessageId: Map<MessageId, number>;
   onRevertUserMessage: (messageId: MessageId) => void;
   onUndoTurnFiles?: (turnCounts: readonly number[]) => void;
+  onRespondToAsyncUserInput?: (messageId: MessageId, answers: readonly string[]) => Promise<void>;
   onEditUserMessage?: (messageId: MessageId, text: string) => boolean | Promise<boolean>;
   /**
    * The user message the edit affordance may target, resolved by the owner from
@@ -506,6 +521,7 @@ interface MessagesTimelineProps {
   contentInsetBottomClearancePx?: number | undefined;
   /** In-thread find highlight; matching itself lives on projected messages, not the DOM. */
   findHighlight?: ThreadFindHighlight | null;
+  pluginContext?: SynaraPluginAppContext;
 }
 
 export const MessagesTimeline = memo(function MessagesTimeline({
@@ -541,10 +557,13 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onOpenTurnDiff,
   onOpenThread,
   onOpenAutomation,
+  computerControlEnabled,
+  onEnableComputerControl,
   revertTurnCountByUserMessageId,
   onRevertUserMessage,
   onUndoTurnFiles,
   onEditUserMessage,
+  onRespondToAsyncUserInput,
   editableUserMessageId,
   activeTurnId,
   isRevertingCheckpoint,
@@ -574,6 +593,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   contentInsetBottomPx,
   contentInsetBottomClearancePx,
   findHighlight: findHighlightProp,
+  pluginContext: pluginContextProp,
 }: MessagesTimelineProps) {
   // Prop defaults are resolved in the body rather than in the destructuring pattern:
   // an `AssignmentPattern` in the parameter list makes React Compiler bail out on the
@@ -588,6 +608,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   const forkSource = forkSourceProp ?? null;
   const isTemporaryThread = isTemporaryThreadProp ?? false;
   const findHighlight = findHighlightProp ?? null;
+  const pluginContext = pluginContextProp ?? EMPTY_PLUGIN_APP_CONTEXT;
+  const pluginMessageActions = usePluginContributions("messageActions");
   const editorKeybindings = keybindings ?? EMPTY_EDITOR_KEYBINDINGS;
   const installedEditors = availableEditors ?? EMPTY_AVAILABLE_EDITORS;
   const userMessageBubbleBorderClass = userMessageBubbleBorderClassName(isTemporaryThread);
@@ -1383,6 +1405,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               timestampFormat={timestampFormat}
               {...(onOpenAgentActivity ? { onOpenAgentActivity } : {})}
               {...(onOpenAutomation ? { onOpenAutomation } : {})}
+              {...(computerControlEnabled !== undefined ? { computerControlEnabled } : {})}
+              {...(onEnableComputerControl ? { onEnableComputerControl } : {})}
             />
           );
           const isLiveGroup =
@@ -1395,27 +1419,32 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             expanded: isExpanded,
             maxVisibleEntries: MAX_VISIBLE_WORK_LOG_ENTRIES,
             keep: "last",
+            // The capability-denied card carries the only affordance to unblock
+            // the agent, so it must never disappear behind the "Show more" cap.
+            shouldCapEntry: (workEntry) =>
+              !workEntry.computerControlDenied && !workEntry.computerSetupRequired,
           });
           const renderChunks = cappedRenderPlan.chunks;
-          const hasCollapsedChunk = renderChunks.some((chunk) => chunk.summary !== null);
+          const hasCollapsedChunk = renderChunks.some(isFoldedWorkEntryChunk);
           if (hasCollapsedChunk) {
             return (
               <div>
                 <div className="space-y-0.5">
                   {renderChunks.map((chunk) => {
-                    if (!chunk.summary) return chunk.entries.map(renderEntryRow);
-                    const summary = chunk.summary;
-                    const summaryKey = `${groupId}:${chunk.id}`;
+                    const fold = resolveWorkEntryChunkFold(chunk);
+                    if (!fold) return chunk.entries.map(renderEntryRow);
+                    const summaryKey = `${groupId}:${chunk.id}${fold.keySuffix}`;
                     return (
                       <ToolCallGroupSummaryRow
-                        key={`tool-summary:${summaryKey}`}
-                        summary={summary}
+                        key={`tool-summary:${groupId}:${chunk.id}`}
+                        summary={fold.summary}
+                        liveEntry={chunk.liveEntry}
                         open={toolGroupSummaryOverrides[summaryKey] ?? false}
                         onToggle={(open) => setToolGroupSummaryOpen(summaryKey, open)}
                         fontSizePx={normalizedChatFontSizePx}
                         renderChildren={() => (
                           <div className="space-y-0.5 pt-0.5">
-                            {chunk.entries.map(renderEntryRow)}
+                            {fold.entries.map(renderEntryRow)}
                           </div>
                         )}
                       />
@@ -1725,6 +1754,16 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                             className={MESSAGE_HOVER_REVEAL_CLASS_NAME}
                           />
                         )}
+                        <PluginMessageActionItems
+                          context={pluginContext}
+                          message={{
+                            id: row.message.id,
+                            role: "user",
+                            text: row.message.text,
+                          }}
+                          presentation="footer"
+                          className={MESSAGE_HOVER_REVEAL_CLASS_NAME}
+                        />
                         {showEditUserMessage && (
                           <MessageActionButton
                             label="Edit message"
@@ -1880,8 +1919,27 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               ),
             ).values(),
           ];
+          // Computer setup/denied cards carry the only affordance to unblock the
+          // agent, so a settled turn shows the latest of each after the answer
+          // instead of burying it inside the closed "Worked for" disclosure.
+          const collapsedComputerActionEntries = [
+            ...new Map(
+              (row.collapsedTurnItems ?? []).flatMap((item) =>
+                item.kind === "work" &&
+                (item.entry.computerSetupRequired || item.entry.computerControlDenied)
+                  ? [[item.entry.computerSetupRequired ? "setup" : "denied", item.entry] as const]
+                  : [],
+              ),
+            ).values(),
+          ];
           const collapsedTurnItems = row.collapsedTurnItems?.filter(
-            (item) => item.kind !== "work" || !item.entry.synaraThreadCreation,
+            (item) =>
+              item.kind !== "work" ||
+              !(
+                item.entry.synaraThreadCreation ||
+                item.entry.computerSetupRequired ||
+                item.entry.computerControlDenied
+              ),
           );
           const hasCollapsedWork = Boolean(collapsedTurnItems && collapsedTurnItems.length > 0);
           const isCollapsedWorkExpanded = hasCollapsedWork
@@ -1909,6 +1967,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                 timestampFormat={timestampFormat}
                 {...(onOpenAgentActivity ? { onOpenAgentActivity } : {})}
                 {...(onOpenAutomation ? { onOpenAutomation } : {})}
+                {...(computerControlEnabled !== undefined ? { computerControlEnabled } : {})}
+                {...(onEnableComputerControl ? { onEnableComputerControl } : {})}
                 {...(turnSummary?.turnId ? { turnId: turnSummary.turnId } : {})}
               />
             );
@@ -1931,7 +1991,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               shouldCapEntry: (workEntry) => workEntry.tone === "tool",
             });
             const renderChunks = cappedRenderPlan.chunks;
-            const collapseAsSummary = renderChunks.some((chunk) => chunk.summary !== null);
+            const collapseAsSummary = renderChunks.some(isFoldedWorkEntryChunk);
             return (
               <>
                 {!hasCollapsedWork &&
@@ -1940,26 +2000,28 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     <div className={placement === "leading" ? "mb-1.5" : "mt-1.5"}>
                       <div className="space-y-px">
                         {renderChunks.map((chunk) => {
-                          if (!chunk.summary) {
+                          const fold = resolveWorkEntryChunkFold(chunk);
+                          if (!fold) {
                             // Narration-tone entries render in the status block
                             // below; here they only serve as run boundaries.
                             return chunk.entries
                               .filter((workEntry) => workEntry.tone === "tool")
                               .map(renderInlineToolRow);
                           }
-                          const summary = chunk.summary;
                           // Message ids stay stable while a live group's first-entry id can drift.
-                          const summaryOverrideKey = `${placement}:${row.message.id}:${chunk.id}`;
+                          const summaryRowKey = `${placement}:${row.message.id}:${chunk.id}`;
+                          const summaryOverrideKey = `${summaryRowKey}${fold.keySuffix}`;
                           return (
                             <ToolCallGroupSummaryRow
-                              key={`inline-tool-summary:${summaryOverrideKey}`}
-                              summary={summary}
+                              key={`inline-tool-summary:${summaryRowKey}`}
+                              summary={fold.summary}
+                              liveEntry={chunk.liveEntry}
                               open={toolGroupSummaryOverrides[summaryOverrideKey] ?? false}
                               onToggle={(open) => setToolGroupSummaryOpen(summaryOverrideKey, open)}
                               fontSizePx={normalizedChatFontSizePx}
                               renderChildren={() => (
                                 <div className="space-y-px pt-0.5">
-                                  {chunk.entries.map(renderInlineToolRow)}
+                                  {fold.entries.map(renderInlineToolRow)}
                                 </div>
                               )}
                             />
@@ -2035,6 +2097,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                         timestampFormat={timestampFormat}
                         {...(onOpenAgentActivity ? { onOpenAgentActivity } : {})}
                         {...(onOpenAutomation ? { onOpenAutomation } : {})}
+                        {...(computerControlEnabled !== undefined
+                          ? { computerControlEnabled }
+                          : {})}
+                        {...(onEnableComputerControl ? { onEnableComputerControl } : {})}
                       />
                     ))}
                   </div>
@@ -2055,6 +2121,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                 timestampFormat={timestampFormat}
                 {...(onOpenAgentActivity ? { onOpenAgentActivity } : {})}
                 {...(onOpenAutomation ? { onOpenAutomation } : {})}
+                {...(computerControlEnabled !== undefined ? { computerControlEnabled } : {})}
+                {...(onEnableComputerControl ? { onEnableComputerControl } : {})}
               />
             ) : (
               <div
@@ -2172,7 +2240,14 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               )}
               <div className="group min-w-0 py-0.5">
                 {renderWorkDisplay(leadingWorkDisplay, "leading")}
-                {messageText !== null ? (
+                {row.message.asyncUserInput ? (
+                  <AsyncUserInputCard
+                    key={row.message.id}
+                    messageId={row.message.id}
+                    input={row.message.asyncUserInput}
+                    onRespond={onRespondToAsyncUserInput}
+                  />
+                ) : messageText !== null ? (
                   <div
                     data-assistant-message-id={row.message.id}
                     data-chat-find-document-id={row.message.id}
@@ -2184,6 +2259,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                       style={chatTypographyStyle}
                       onImageExpand={onImageExpand}
                       knownAbsoluteFilePaths={knownAbsoluteFilePaths}
+                      pluginContext={pluginContext}
                       {...threadFindMarkdownProps(findHighlight, row.message.id)}
                     />
                   </div>
@@ -2210,6 +2286,21 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     ))}
                   </div>
                 )}
+                {collapsedComputerActionEntries.map((workEntry) => (
+                  <div key={`computer-action:${row.message.id}:${workEntry.id}`} className="mt-2">
+                    <TimelineWorkEntryRow
+                      workEntry={workEntry}
+                      chatMetaFontSizePx={appTypographyScale.chatMetaPx}
+                      textFontSizePx={normalizedChatFontSizePx}
+                      density="compact"
+                      markdownCwd={markdownCwd}
+                      onImageExpand={onImageExpand}
+                      timestampFormat={timestampFormat}
+                      {...(computerControlEnabled !== undefined ? { computerControlEnabled } : {})}
+                      {...(onEnableComputerControl ? { onEnableComputerControl } : {})}
+                    />
+                  </div>
+                ))}
                 {!row.assistantTurnInProgress && row.showAssistantCopyButton
                   ? synaraThreadCreationRecaps.map((creation) => (
                       <div key={creation.operationId} className="mt-2 mb-4">
@@ -2400,7 +2491,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   showForkAction ||
                   assistantCopyState.visible ||
                   assistantMeta.length > 0 ||
-                  goalAchievement !== null) && (
+                  goalAchievement !== null ||
+                  pluginMessageActions.length > 0) && (
                   // Turn-end actions read Copy → Fork → Pin → time and stay visible at
                   // rest: they belong to a settled turn, so hiding them behind hover made
                   // the whole row feel undiscoverable. The leading button pulls left by
@@ -2435,6 +2527,15 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                         <PinIcon className={MESSAGE_ACTION_ICON_CLASS_NAME} />
                       </MessageActionButton>
                     ) : null}
+                    <PluginMessageActionItems
+                      context={pluginContext}
+                      message={{
+                        id: row.message.id,
+                        role: "assistant",
+                        text: row.message.text,
+                      }}
+                      presentation="footer"
+                    />
                     {assistantMeta.length > 0 ? (
                       <p className="tabular-nums">{assistantMeta}</p>
                     ) : null}
@@ -2528,7 +2629,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     }
     return (
       <div className="flex h-full items-center justify-center">
-        <p className="text-sm text-muted-foreground/30">
+        <p className="text-ui leading-snug text-muted-foreground/30">
           Send a message to start the conversation.
         </p>
       </div>

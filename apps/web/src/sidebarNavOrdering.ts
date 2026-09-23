@@ -4,7 +4,13 @@
 // Layer: Web settings utility
 // Exports: nav item ids, default order, and normalization helpers.
 
-export const SIDEBAR_NAV_ITEM_IDS = ["newThread", "kanban", "pullRequests", "automations"] as const;
+export const SIDEBAR_NAV_ITEM_IDS = [
+  "newThread",
+  "kanban",
+  "pullRequests",
+  "automations",
+  "plugins",
+] as const;
 
 export type SidebarNavItemId = (typeof SIDEBAR_NAV_ITEM_IDS)[number];
 

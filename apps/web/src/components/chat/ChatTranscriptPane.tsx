@@ -4,6 +4,7 @@
 // Depends on: MessagesTimeline and ChatView's list-owned scroll contract.
 
 import { type MessageId, type ThreadId, type TurnId } from "@synara/contracts";
+import type { SynaraPluginAppContext } from "@synara/plugin-sdk/app";
 import { type LegendListRef } from "@legendapp/list/react";
 import {
   useEffect,
@@ -88,8 +89,11 @@ interface ChatTranscriptPaneProps {
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
   onOpenThread: (threadId: ThreadId) => void;
   onOpenAutomation?: ComponentProps<typeof MessagesTimeline>["onOpenAutomation"];
+  computerControlEnabled?: ComponentProps<typeof MessagesTimeline>["computerControlEnabled"];
+  onEnableComputerControl?: ComponentProps<typeof MessagesTimeline>["onEnableComputerControl"];
   onRevertUserMessage: (messageId: MessageId) => void;
   onUndoTurnFiles?: ComponentProps<typeof MessagesTimeline>["onUndoTurnFiles"];
+  onRespondToAsyncUserInput?: ComponentProps<typeof MessagesTimeline>["onRespondToAsyncUserInput"];
   onEditUserMessage?: (messageId: MessageId, text: string) => boolean | Promise<boolean>;
   editableUserMessageId?: MessageId | null;
   onScrollToBottom: () => void;
@@ -111,6 +115,7 @@ interface ChatTranscriptPaneProps {
   >["worktreeSetupPendingAction"];
   onResolveWorktreeSetup?: ComponentProps<typeof MessagesTimeline>["onResolveWorktreeSetup"];
   findHighlightStore?: ThreadFindHighlightStore | null;
+  pluginContext?: SynaraPluginAppContext;
 }
 
 export function ChatTranscriptPane({
@@ -163,9 +168,12 @@ export function ChatTranscriptPane({
   onOpenTurnDiff,
   onOpenThread,
   onOpenAutomation,
+  computerControlEnabled,
+  onEnableComputerControl,
   onRevertUserMessage,
   onUndoTurnFiles,
   onEditUserMessage,
+  onRespondToAsyncUserInput,
   editableUserMessageId,
   onScrollToBottom,
   onToggleWorkGroup,
@@ -184,6 +192,7 @@ export function ChatTranscriptPane({
   worktreeSetupPendingAction,
   onResolveWorktreeSetup,
   findHighlightStore: findHighlightStoreProp,
+  pluginContext,
 }: ChatTranscriptPaneProps) {
   // The composer floats over the transcript's bottom edge, so the scroll-to-bottom
   // affordance rides above it on the same inset the transcript content uses.
@@ -269,10 +278,13 @@ export function ChatTranscriptPane({
             onOpenTurnDiff={onOpenTurnDiff}
             onOpenThread={onOpenThread}
             {...(onOpenAutomation ? { onOpenAutomation } : {})}
+            {...(computerControlEnabled !== undefined ? { computerControlEnabled } : {})}
+            {...(onEnableComputerControl ? { onEnableComputerControl } : {})}
             revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
             onRevertUserMessage={onRevertUserMessage}
             {...(onUndoTurnFiles ? { onUndoTurnFiles } : {})}
             {...(onEditUserMessage ? { onEditUserMessage } : {})}
+            {...(onRespondToAsyncUserInput ? { onRespondToAsyncUserInput } : {})}
             editableUserMessageId={editableUserMessageId ?? null}
             isRevertingCheckpoint={isRevertingCheckpoint}
             onImageExpand={onExpandTimelineImage}
@@ -302,6 +314,7 @@ export function ChatTranscriptPane({
             contentInsetBottomClearancePx={contentInsetBottomClearancePx}
             {...(onOpenAgentActivity ? { onOpenAgentActivity } : {})}
             findHighlight={findHighlight}
+            {...(pluginContext ? { pluginContext } : {})}
             emptyStateContent={
               emptyStateContent === undefined ? (
                 <ChatEmptyStateHero projectName={emptyStateProjectName} />

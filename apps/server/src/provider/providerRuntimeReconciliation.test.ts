@@ -769,9 +769,6 @@ describe("planProviderRuntimeReconciliation", () => {
   });
 
   it("does not treat an actively streaming turn as stale when only the session row is quiet", () => {
-    // thread.updatedAt advances on every appended message. A turn that is
-    // streaming output must never become a settle candidate just because the
-    // session lifecycle row has not moved since the turn started.
     const plans = planProviderRuntimeReconciliation({
       threads: [threadShell({ updatedAt: "2026-07-23T20:00:28.000Z" })],
       bindings: [binding(null)],
@@ -782,5 +779,146 @@ describe("planProviderRuntimeReconciliation", () => {
     });
 
     expect(plans).toEqual([]);
+  });
+
+  describe("provider progress keeps a running turn alive", () => {
+    const LONG_QUIET_AT = "2026-07-23T19:14:00.000Z";
+    const CHILD_THREAD_ID = ThreadId.makeUnsafe(`subagent:${THREAD_ID}:child-1`);
+
+    const quietRunningThread = () =>
+      threadShell({
+        updatedAt: LONG_QUIET_AT,
+        session: { ...threadShell().session!, activeTurnId: null, updatedAt: LONG_QUIET_AT },
+      });
+
+    const planQuietRunningThread = (
+      threadProgress: Parameters<typeof planProviderRuntimeReconciliation>[0]["threadProgress"],
+    ) =>
+      planProviderRuntimeReconciliation({
+        threads: [quietRunningThread()],
+        bindings: [binding()],
+        liveSessions: [liveSession({ status: "running" })],
+        pumpHealth: [],
+        ...(threadProgress !== undefined ? { threadProgress } : {}),
+        nowMs: NOW,
+        staleAfterMs: 15_000,
+      });
+
+    const minutesBeforeNow = (minutes: number) => new Date(NOW - minutes * 60_000).toISOString();
+
+    it("does not settle a live running session without an active turn id while progress is under the max turn age", () => {
+      expect(
+        planQuietRunningThread([
+          { threadId: THREAD_ID, parentThreadId: null, lastProgressAt: minutesBeforeNow(44) },
+        ]),
+      ).toEqual([]);
+    });
+
+    it("settles a live running session without an active turn id once progress is past the max turn age", () => {
+      expect(
+        planQuietRunningThread([
+          { threadId: THREAD_ID, parentThreadId: null, lastProgressAt: minutesBeforeNow(46) },
+        ]),
+      ).toEqual([
+        expect.objectContaining({
+          action: "settle-interrupted",
+          threadId: THREAD_ID,
+          projectedTurnId: OLD_TURN_ID,
+        }),
+      ]);
+    });
+
+    it("credits native child thread progress under the max turn age to the parent", () => {
+      expect(
+        planQuietRunningThread([
+          { threadId: THREAD_ID, parentThreadId: null, lastProgressAt: LONG_QUIET_AT },
+          {
+            threadId: CHILD_THREAD_ID,
+            parentThreadId: THREAD_ID,
+            lastProgressAt: minutesBeforeNow(44),
+          },
+        ]),
+      ).toEqual([]);
+    });
+
+    const FIVE_SECONDS_AGO = new Date(NOW - 5_000).toISOString();
+
+    it("still realigns a split live turn while the thread is progressing", () => {
+      expect(
+        planProviderRuntimeReconciliation({
+          threads: [threadShell()],
+          bindings: [binding(LIVE_TURN_ID)],
+          liveSessions: [liveSession({ status: "running", activeTurnId: LIVE_TURN_ID })],
+          pumpHealth: [],
+          threadProgress: [
+            { threadId: THREAD_ID, parentThreadId: null, lastProgressAt: FIVE_SECONDS_AGO },
+          ],
+          nowMs: NOW,
+          staleAfterMs: 10_000,
+        }),
+      ).toEqual([
+        expect.objectContaining({
+          action: "align-running-turn",
+          threadId: THREAD_ID,
+          projectedTurnId: OLD_TURN_ID,
+          runtimeTurnId: LIVE_TURN_ID,
+        }),
+      ]);
+    });
+
+    it.each([
+      { name: "ready", liveSessions: [liveSession({ status: "ready" })], bindingTurn: null },
+      { name: "closed", liveSessions: [liveSession({ status: "closed" })], bindingTurn: null },
+      {
+        name: "error",
+        liveSessions: [
+          liveSession({ status: "error", activeTurnId: OLD_TURN_ID, lastError: "Exited." }),
+        ],
+        bindingTurn: OLD_TURN_ID,
+      },
+      { name: "missing", liveSessions: [], bindingTurn: null },
+    ])(
+      "settles a $name live session the same way with or without recent progress",
+      ({ liveSessions, bindingTurn }) => {
+        const planWith = (
+          threadProgress: Parameters<typeof planProviderRuntimeReconciliation>[0]["threadProgress"],
+        ) =>
+          planProviderRuntimeReconciliation({
+            threads: [threadShell()],
+            bindings: [binding(bindingTurn)],
+            liveSessions,
+            pumpHealth: [],
+            ...(threadProgress !== undefined ? { threadProgress } : {}),
+            nowMs: NOW,
+            staleAfterMs: 10_000,
+          });
+        const withoutProgress = planWith(undefined);
+        expect(withoutProgress).toHaveLength(1);
+        expect(
+          planWith([
+            { threadId: THREAD_ID, parentThreadId: null, lastProgressAt: FIVE_SECONDS_AGO },
+          ]),
+        ).toEqual(withoutProgress);
+      },
+    );
+
+    it("still settles as abandoned when no progress exists anywhere past the max turn age", () => {
+      expect(
+        planQuietRunningThread([
+          { threadId: THREAD_ID, parentThreadId: null, lastProgressAt: LONG_QUIET_AT },
+          { threadId: CHILD_THREAD_ID, parentThreadId: THREAD_ID, lastProgressAt: LONG_QUIET_AT },
+        ]),
+      ).toEqual([
+        expect.objectContaining({
+          action: "settle-interrupted",
+          threadId: THREAD_ID,
+          projectedTurnId: OLD_TURN_ID,
+          reason: expect.stringContaining(
+            "Nothing has progressed on this thread for over 45 minutes",
+          ),
+        }),
+      ]);
+      expect(planQuietRunningThread(undefined)).toHaveLength(1);
+    });
   });
 });
