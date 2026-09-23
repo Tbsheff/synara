@@ -315,7 +315,7 @@ export const findFirstMigrationLineageDivergence = (
   migrationEntries.find(([id, name]) => id <= highWaterMark && recordedNamesById.get(id) !== name);
 
 /**
- * A tracker identity that a *released* Synara build wrote for a migration whose
+ * A tracker identity that a known Synara build wrote for a migration whose
  * canonical ID later changed.
  *
  * v0.5.5 shipped `[54, "ProjectPullRequestPins"]`; v0.6.0 reserved 54 for the
@@ -353,6 +353,12 @@ export const MIGRATION_LINEAGE_ALIASES: readonly MigrationLineageAlias[] = [
     historicalName: "ProjectPullRequestPins",
     currentId: 69,
     historicalSlotRequiresRerun: false,
+  },
+  {
+    historicalId: 104,
+    historicalName: "PluginStorage",
+    currentId: 109,
+    historicalSlotRequiresRerun: true,
   },
 ];
 

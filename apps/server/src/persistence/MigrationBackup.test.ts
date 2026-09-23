@@ -35,6 +35,7 @@ import {
 import { migrationEntries, runMigrations } from "./Migrations.ts";
 import * as NodeSqliteClient from "./NodeSqliteClient.ts";
 import { makeSqlitePersistenceLive } from "./Layers/Sqlite.ts";
+import PluginStorageMigration from "./Migrations/109_PluginStorage.ts";
 
 vi.mock("node:fs/promises", async () => {
   const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
@@ -841,6 +842,52 @@ describe("migration backups", () => {
           SELECT name FROM effect_sql_migrations WHERE migration_id = 54
         `;
         expect(repaired[0]?.name).toBe("DurableProviderCommandDelivery");
+      }),
+    );
+
+    const provenance = JSON.parse(
+      await fs.readFile(migrationBackupProvenancePath(dbPath), "utf8"),
+    ) as { readonly lineageDivergence: unknown };
+    expect(provenance.lineageDivergence).toBeNull();
+  });
+
+  it("keeps the private plugin-storage migration on the automatic upgrade path", async () => {
+    const dbPath = await makeDbPath();
+
+    await runWithDatabase(
+      dbPath,
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* runMigrations({ toMigrationInclusive: 103 });
+        yield* PluginStorageMigration;
+        yield* sql`
+          INSERT INTO plugin_storage (plugin_id, key, value_json, updated_at)
+          VALUES ('review-queue', 'settings', '{"enabled":true}', '2026-09-22T00:00:00Z')
+        `;
+        yield* sql`
+          INSERT INTO effect_sql_migrations (migration_id, name)
+          VALUES (104, 'PluginStorage')
+        `;
+
+        yield* runWithPreMigrationBackup(dbPath, runMigrations());
+
+        const tracker = yield* sql<{ readonly migrationId: number; readonly name: string }>`
+          SELECT migration_id AS "migrationId", name
+          FROM effect_sql_migrations
+          WHERE migration_id >= 104
+          ORDER BY migration_id
+        `;
+        expect(tracker).toEqual(
+          migrationEntries
+            .filter(([id]) => id >= 104)
+            .map(([migrationId, name]) => ({ migrationId, name })),
+        );
+        const stored = yield* sql<{ readonly valueJson: string }>`
+          SELECT value_json AS "valueJson"
+          FROM plugin_storage
+          WHERE plugin_id = 'review-queue' AND key = 'settings'
+        `;
+        expect(stored).toEqual([{ valueJson: '{"enabled":true}' }]);
       }),
     );
 

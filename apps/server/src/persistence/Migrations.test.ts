@@ -966,6 +966,15 @@ describe("migration lineage aliases", () => {
     ]);
   });
 
+  it("repairs the private plugin-storage migration recorded at 104", () => {
+    const recorded = canonicalTrackerThrough(103);
+    recorded.set(104, "PluginStorage");
+
+    assert.deepStrictEqual(planMigrationLineageAliasRepairs(recorded), [
+      { kind: "remove", migrationId: 104 },
+    ]);
+  });
+
   it("declines when the tracker also diverges outside the alias", () => {
     const recorded = canonicalTrackerThrough(53);
     recorded.set(54, "ProjectPullRequestPins");
