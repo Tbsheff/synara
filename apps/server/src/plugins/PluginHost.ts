@@ -24,10 +24,6 @@ import {
   type SynaraPlugin,
   type SynaraPluginManifest,
 } from "@synara/plugin-sdk";
-import { puckManifest } from "@synara/plugin-puck/manifest";
-import puckPlugin from "@synara/plugin-puck/server";
-import { reviewQueueManifest } from "@synara/plugin-review-queue/manifest";
-import reviewQueuePlugin from "@synara/plugin-review-queue/server";
 import { isBuiltInPluginId } from "./builtInManifests";
 import { Effect, Layer, Option, ServiceMap } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -149,10 +145,7 @@ function pluginActivationAssets(
 const builtInPlugins: ReadonlyArray<{
   readonly manifest: SynaraPluginManifest;
   readonly plugin: SynaraPlugin;
-}> = [
-  { manifest: reviewQueueManifest, plugin: reviewQueuePlugin },
-  { manifest: puckManifest, plugin: puckPlugin },
-];
+}> = [];
 
 function builtInSourceRoot(manifest: SynaraPluginManifest): string | undefined {
   if (!manifest.sourcePath) return undefined;

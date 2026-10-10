@@ -6,10 +6,6 @@ import {
   type SynaraPluginAppContext,
   type SynaraPluginDescriptor,
 } from "@synara/plugin-sdk/app";
-import puckApp from "@synara/plugin-puck/app";
-import { puckManifest } from "@synara/plugin-puck/manifest";
-import reviewQueueApp from "@synara/plugin-review-queue/app";
-import { reviewQueueManifest } from "@synara/plugin-review-queue/manifest";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import * as ReactNamespace from "react";
@@ -33,7 +29,7 @@ import {
 import { ensureNativeApi } from "~/nativeApi";
 import { resolveWsHttpUrl } from "~/lib/wsHttpUrl";
 
-import { collectPluginAppRegistrations } from "./registrations";
+import { collectPluginAppRegistrations, type RegisteredPluginApp } from "./registrations";
 import {
   collectPluginContributions,
   ContentScriptHost,
@@ -46,10 +42,7 @@ import {
   type PluginRuntimeTarget,
 } from "./frontendRuntime";
 
-const BUILT_IN_APP_REGISTRATIONS = [
-  collectPluginAppRegistrations(reviewQueueManifest.id, reviewQueueApp),
-  collectPluginAppRegistrations(puckManifest.id, puckApp),
-];
+const BUILT_IN_APP_REGISTRATIONS: readonly RegisteredPluginApp[] = [];
 
 Object.assign(globalThis, {
   __synaraPluginRuntime: {

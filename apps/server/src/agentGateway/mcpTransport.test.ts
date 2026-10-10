@@ -1,9 +1,16 @@
 import { assert, describe, it } from "@effect/vitest";
 import { ProjectId, ThreadId, TurnId, type OrchestrationThreadShell } from "@synara/contracts";
-import { createPluginRegistry, type JsonValue } from "@synara/plugin-sdk";
-import { reviewQueueContract } from "@synara/plugin-review-queue/contract";
-import { reviewQueueManifest } from "@synara/plugin-review-queue/manifest";
-import reviewQueuePlugin from "@synara/plugin-review-queue/server";
+import {
+  array,
+  createPluginRegistry,
+  definePlugin,
+  nonEmptyString,
+  object,
+  schema,
+  string,
+  type JsonValue,
+  type SynaraPluginManifest,
+} from "@synara/plugin-sdk";
 import { Deferred, Effect, Fiber, Option } from "effect";
 
 import type { ProjectionSnapshotQueryShape } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
@@ -555,8 +562,54 @@ const findToolOrThrow = (tools: ReadonlyArray<unknown>, name: string): Record<st
   return found;
 };
 
+const notesFixtureItem = object({ projectId: string(), title: string(), body: string() });
+
+const notesFixtureContract = {
+  list: {
+    input: schema(() => ({})),
+    output: object({ items: array(notesFixtureItem) }),
+  },
+  add: {
+    input: object({
+      projectId: nonEmptyString(),
+      title: nonEmptyString(),
+      body: nonEmptyString(),
+    }),
+    output: object({ item: notesFixtureItem }),
+  },
+} as const;
+
+const notesFixtureManifest = {
+  id: "acme.notes",
+  displayName: "Notes",
+  version: "0.1.0",
+  apiVersion: 2,
+} as const satisfies SynaraPluginManifest;
+
+const notesFixturePlugin = definePlugin((synara) => {
+  const readItems = async () => {
+    const value = await synara.storage.get("items");
+    return Array.isArray(value) ? value.map((item) => notesFixtureItem.parse(item)) : [];
+  };
+  synara.rpc.register("list", notesFixtureContract.list, async () => ({
+    items: await readItems(),
+  }));
+  synara.agents.registerTool({
+    id: "add-note",
+    title: "Add note",
+    description: "Add a note.",
+    access: "write",
+    contract: notesFixtureContract.add,
+    execute: async (input) => {
+      const item = { projectId: input.projectId, title: input.title, body: input.body };
+      await synara.storage.set("items", [...(await readItems()), item]);
+      return { item };
+    },
+  });
+});
+
 describe("makeAgentGatewayMcpTransport dynamic plugin tools", () => {
-  it.effect("loads and invokes the Review Queue plugin tool through a thread credential", () =>
+  it.effect("loads and invokes a plugin agent tool through a thread credential", () =>
     Effect.gen(function* () {
       const values = new Map<string, JsonValue>();
       const registry = createPluginRegistry({
@@ -580,13 +633,13 @@ describe("makeAgentGatewayMcpTransport dynamic plugin tools", () => {
         },
       });
       const generation = yield* Effect.promise(() =>
-        registry.activate(reviewQueueManifest, reviewQueuePlugin),
+        registry.activate(notesFixtureManifest, notesFixturePlugin),
       );
-      const registeredTool = registry.listAgentTools().find((tool) => tool.id === "add-review");
-      if (!registeredTool) throw new Error("Expected Review Queue to register an agent tool.");
+      const registeredTool = registry.listAgentTools().find((tool) => tool.id === "add-note");
+      if (!registeredTool) throw new Error("Expected the notes fixture to register an agent tool.");
       const toolName = pluginAgentToolName(registeredTool);
       const transport = makeTransport({
-        threads: [makeThread("thread-review-queue")],
+        threads: [makeThread("thread-plugin-notes")],
         tool: {
           definition: {
             name: "built_in",
@@ -606,53 +659,53 @@ describe("makeAgentGatewayMcpTransport dynamic plugin tools", () => {
 
       const listed = yield* post(transport, "token-1", {
         jsonrpc: "2.0",
-        id: "list-review-queue",
+        id: "list-plugin-notes",
         method: "tools/list",
       });
       if (!isJsonRecord(listed.body) || !isJsonRecord(listed.body.result)) {
-        throw new Error("Expected Review Queue tools/list result.");
+        throw new Error("Expected plugin tools/list result.");
       }
       findToolOrThrow(listed.body.result.tools as ReadonlyArray<unknown>, toolName);
 
       const invalid = yield* post(transport, "token-1", {
         jsonrpc: "2.0",
-        id: "invalid-review",
+        id: "invalid-note",
         method: "tools/call",
         params: { name: toolName, arguments: { title: 42 } },
       });
       if (!isJsonRecord(invalid.body) || !isJsonRecord(invalid.body.result)) {
-        throw new Error("Expected invalid Review Queue call result.");
+        throw new Error("Expected invalid plugin tool call result.");
       }
       assert.equal(invalid.body.result.isError, true);
       assert.equal(values.has("items"), false);
 
       const called = yield* post(transport, "token-1", {
         jsonrpc: "2.0",
-        id: "add-review",
+        id: "add-note",
         method: "tools/call",
         params: {
           name: toolName,
           arguments: {
-            projectId: "project-review",
-            title: "Proof review",
-            prompt: "Review the plugin tool path.",
+            projectId: "project-notes",
+            title: "Proof note",
+            body: "Exercise the plugin tool path.",
           },
         },
       });
       assert.equal(called.status, 200);
 
-      const queue = yield* Effect.promise(() =>
+      const notes = yield* Effect.promise(() =>
         registry.call({
-          pluginId: reviewQueueManifest.id,
+          pluginId: notesFixtureManifest.id,
           generation,
           method: "list",
           input: {},
         }),
       );
-      const parsedQueue = reviewQueueContract.list.output.parse(queue);
-      assert.equal(parsedQueue.items.length, 1);
-      assert.equal(parsedQueue.items[0]?.title, "Proof review");
-      assert.equal(parsedQueue.items[0]?.status, "queued");
+      const parsedNotes = notesFixtureContract.list.output.parse(notes);
+      assert.equal(parsedNotes.items.length, 1);
+      assert.equal(parsedNotes.items[0]?.title, "Proof note");
+      assert.equal(parsedNotes.items[0]?.projectId, "project-notes");
     }),
   );
 

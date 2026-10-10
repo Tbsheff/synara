@@ -840,7 +840,7 @@ describe("migration backups", () => {
           yield* PluginStorageMigration;
           yield* sql`
           INSERT INTO plugin_storage (plugin_id, key, value_json, updated_at)
-          VALUES ('review-queue', 'settings', '{"enabled":true}', '2026-09-22T00:00:00Z')
+          VALUES ('acme.notes', 'settings', '{"enabled":true}', '2026-09-22T00:00:00Z')
         `;
           yield* sql`
           INSERT INTO effect_sql_migrations (migration_id, name)
@@ -863,7 +863,7 @@ describe("migration backups", () => {
           const stored = yield* sql<{ readonly valueJson: string }>`
           SELECT value_json AS "valueJson"
           FROM plugin_storage
-          WHERE plugin_id = 'review-queue' AND key = 'settings'
+          WHERE plugin_id = 'acme.notes' AND key = 'settings'
         `;
           expect(stored).toEqual([{ valueJson: '{"enabled":true}' }]);
         }),

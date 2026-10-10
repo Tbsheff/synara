@@ -5,11 +5,11 @@ import type { ToolContext } from "./toolRuntime";
 import { makePluginAgentToolEntries, pluginAgentToolName } from "./pluginTools";
 
 const tool = {
-  pluginId: "@synara/plugin-review-queue",
+  pluginId: "@acme/plugin-notes",
   generation: 3,
-  id: "add-review",
-  title: "Add review",
-  description: "Add an item to the review queue.",
+  id: "add-note",
+  title: "Add note",
+  description: "Add a note.",
   inputSchema: { type: "object" },
   access: "write" as const,
 };
@@ -17,7 +17,7 @@ const tool = {
 describe("plugin agent tools", () => {
   it("creates a stable namespaced MCP name", () => {
     expect(pluginAgentToolName(tool)).toMatch(
-      /^plugin_synara_plugin_review_queue_84e9a0b4_add_review_[a-f0-9]{8}$/,
+      /^plugin_acme_plugin_notes_5e91a66b_add_note_[a-f0-9]{8}$/,
     );
   });
 
@@ -35,7 +35,7 @@ describe("plugin agent tools", () => {
     const context = {} as ToolContext;
     const [entry] = makePluginAgentToolEntries([tool], (input, receivedContext, signal) => {
       calls.push({ input, receivedContext, aborted: signal.aborted });
-      return Effect.succeed({ itemId: "review-1" });
+      return Effect.succeed({ itemId: "note-1" });
     });
     expect(entry?.requiredCapability).toBe("thread:write");
     expect(entry?.requiresActiveTurn).toBe(true);
@@ -46,7 +46,7 @@ describe("plugin agent tools", () => {
         input: {
           pluginId: tool.pluginId,
           generation: 3,
-          toolId: "add-review",
+          toolId: "add-note",
           input: { title: "Check it" },
         },
         receivedContext: context,
@@ -55,7 +55,7 @@ describe("plugin agent tools", () => {
     ]);
     expect(result.content[0]).toEqual({
       type: "text",
-      text: JSON.stringify({ itemId: "review-1" }, null, 2),
+      text: JSON.stringify({ itemId: "note-1" }, null, 2),
     });
   });
 

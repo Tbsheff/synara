@@ -39,8 +39,7 @@ export function SynaraPluginList({
       <p className="px-4 py-3 text-sm text-muted-foreground">Loading plugins…</p>
     ) : plugins.length === 0 ? (
       <SettingsEmptyState>
-        No Synara plugins are loaded. Built-in plugins such as Puck and Review Queue appear here
-        after the app starts.
+        No Synara plugins are loaded. Installed plugins appear here after the app starts.
       </SettingsEmptyState>
     ) : (
       <ul className={layout === "library" ? "grid grid-cols-1 sm:grid-cols-2" : "grid"}>

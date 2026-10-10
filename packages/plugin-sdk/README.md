@@ -2,9 +2,9 @@
 
 This package defines the public boundary for trusted Synara app plugins. A plugin can register validated server RPC methods and chat tools, store namespaced JSON data, add host-owned UI panels, and start threads through Synara's normal orchestration path.
 
-The built-in example is `@synara/plugin-review-queue`. Synara can also build and load trusted plugin packages from local directories. A package can ship a server entry, a web app entry, and one or more skills. Synara keeps React and the plugin SDK shared, so a plugin app does not load its own React copy.
+Synara builds and loads trusted plugin packages from local directories. A package can ship a server entry, a web app entry, and one or more skills. Synara keeps React and the plugin SDK shared, so a plugin app does not load its own React copy.
 
-The Review Queue also proves the authoring loop: its **Edit in chat** action starts a normal Synara thread in the active Synara project, loads the `synara-plugin-authoring` skill, and points the agent at `plugins/review-queue`. The chat edits source files with its usual workspace tools; the plugin SDK does not grant a second file-write path.
+The scaffolded plugin app also proves the authoring loop: its **Edit in chat** action starts a normal Synara thread in the active Synara project, loads the `synara-plugin-authoring` skill, and points the agent at the plugin's source root. The chat edits source files with its usual workspace tools; the plugin SDK does not grant a second file-write path.
 
 Use the CLI for the full local loop:
 

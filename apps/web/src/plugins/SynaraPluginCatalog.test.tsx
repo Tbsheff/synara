@@ -11,21 +11,21 @@ describe("SynaraPluginList", () => {
         projectId="project-1"
         plugins={[
           {
-            id: "@synara/plugin-puck",
-            displayName: "Puck",
+            id: "acme.notes",
+            displayName: "Notes",
             version: "0.1.0",
             apiVersion: 2,
             generation: 1,
-            app: "puck",
+            app: "notes",
           },
         ]}
-        panelByPluginId={{ "@synara/plugin-puck": "orbs" }}
+        panelByPluginId={{ "acme.notes": "main" }}
         onOpen={() => undefined}
         onEdit={() => undefined}
       />,
     );
-    expect(markup).toContain("Puck");
-    expect(markup).toContain("@synara/plugin-puck");
+    expect(markup).toContain("Notes");
+    expect(markup).toContain("acme.notes");
     expect(markup).toContain("Open");
   });
 

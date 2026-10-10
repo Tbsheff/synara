@@ -164,7 +164,7 @@ describe("railItemForPathname", () => {
     expect(railItemForPathname("/pull-requests/42")).toBe("pullRequests");
     expect(railItemForPathname("/automations")).toBe("automations");
     expect(railItemForPathname("/plugins")).toBe("plugins");
-    expect(railItemForPathname("/extensions/review-queue/panel")).toBe("plugins");
+    expect(railItemForPathname("/extensions/notes/panel")).toBe("plugins");
     expect(railItemForPathname("/studio/abc")).toBe("studio");
     expect(railItemForPathname("/groups")).toBe("studio");
     expect(railItemForPathname("/hubs")).toBe("studio");

@@ -6396,7 +6396,7 @@ export default function Sidebar() {
         id: "plugins",
         label: "Plugins",
         description: "Browse Synara plugins and provider marketplaces.",
-        keywords: ["extensions", "puck", "orbs", "marketplace", "review"],
+        keywords: ["extensions", "marketplace"],
         run: () => {
           void navigate({ to: "/plugins" });
         },
