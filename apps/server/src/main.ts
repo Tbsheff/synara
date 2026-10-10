@@ -21,6 +21,7 @@ import {
   Stream,
 } from "effect";
 import { Argument, Command, Flag } from "effect/unstable/cli";
+import type { ServerSettings } from "@synara/contracts";
 import { NetService } from "@synara/shared/Net";
 import {
   MIGRATION_DIVERGENCE_CONSENT_ENV,
@@ -44,6 +45,13 @@ import {
   type RuntimeMode,
   type ServerConfigShape,
 } from "./config";
+import {
+  SYNARA_BETA_BUNDLE_ID,
+  SYNARA_DESKTOP_BUNDLE_ID_ENV,
+} from "@synara/shared/desktopIdentity";
+import { runBetaImportIfRequested } from "./betaImport";
+import { startBetaUsageSnapshotJob } from "./betaUsageSnapshot";
+import { LATEST_MIGRATION_ID } from "./persistence/Migrations";
 import { fixPath, resolveBaseDir } from "./os-jank";
 import { Open } from "./open";
 import { ServerAuth } from "./auth/Services/ServerAuth";
@@ -51,7 +59,10 @@ import * as SqlitePersistence from "./persistence/Layers/Sqlite";
 import { ProviderRuntimeEventRepositoryLive } from "./persistence/Layers/ProviderRuntimeEvents";
 import { makeServerApplicationLayers } from "./serverLayers";
 import { startServerMemoryDiagnostics } from "./memoryDiagnostics";
-import { createClaudeCredentialKeepaliveController } from "./provider/claudeCredentialKeepalive";
+import {
+  claudeCredentialKeepaliveTargets,
+  createClaudeCredentialKeepaliveController,
+} from "./provider/claudeCredentialKeepalive";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
 import { ProviderSessionReaperLive } from "./provider/Layers/ProviderSessionReaper";
 import { ProviderRuntimeReconcilerLive } from "./provider/Layers/ProviderRuntimeReconciler";
@@ -202,6 +213,10 @@ const CliEnvConfig = Config.all({
   autoBootstrapProjectFromCwd: optionalBooleanEnvironmentConfig(
     "SYNARA_AUTO_BOOTSTRAP_PROJECT_FROM_CWD",
   ),
+  trashDir: Config.string("SYNARA_TRASH_DIR").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
   logProviderEvents: optionalBooleanEnvironmentConfig("SYNARA_LOG_PROVIDER_EVENTS"),
   logWebSocketEvents: optionalBooleanEnvironmentConfig("SYNARA_LOG_WS_EVENTS"),
 });
@@ -282,6 +297,28 @@ const ServerConfigLive = (input: CliInput) =>
       const baseDir = yield* resolveBaseDir(configuredHome);
       const userHomeDir = OS.homedir();
       const derivedPaths = yield* deriveServerPaths(baseDir, devUrl);
+      // A "Copy my data to Beta" request from a stable install lands as a
+      // marker in this home; it must be consumed before the private state
+      // directory (and its database) is created or repaired.
+      // Only Synara Beta consumes the marker, so a stray file in any other
+      // home can never replace that install's database.
+      if (process.env[SYNARA_DESKTOP_BUNDLE_ID_ENV] === SYNARA_BETA_BUNDLE_ID) {
+        const importResult = yield* Effect.tryPromise({
+          try: () =>
+            runBetaImportIfRequested({
+              betaHomeDir: baseDir,
+              stateDir: derivedPaths.stateDir,
+              latestMigrationId: LATEST_MIGRATION_ID,
+            }),
+          catch: (cause) =>
+            new StartupError({ message: "Failed to complete the stable→beta data import", cause }),
+        });
+        if (importResult.consumed) {
+          yield* Effect.logInfo("stable→beta data import finished").pipe(
+            Effect.annotateLogs({ ok: importResult.ok, error: importResult.error ?? null }),
+          );
+        }
+      }
       yield* Effect.try({
         try: () => preparePrivateServerPaths(derivedPaths),
         catch: (cause) =>
@@ -329,7 +366,7 @@ const ServerConfigLive = (input: CliInput) =>
         });
       }
 
-      const { homeDir, chatWorkspaceRoot, studioWorkspaceRoot } =
+      const { homeDir, chatWorkspaceRoot, studioWorkspaceRoot, groupsWorkspaceRoot } =
         yield* resolveCanonicalWorkspaceRoots({ homeDir: userHomeDir });
 
       const config: ServerConfigShape = {
@@ -339,6 +376,7 @@ const ServerConfigLive = (input: CliInput) =>
         homeDir,
         chatWorkspaceRoot,
         studioWorkspaceRoot,
+        groupsWorkspaceRoot,
         host,
         baseDir,
         ...derivedPaths,
@@ -351,6 +389,7 @@ const ServerConfigLive = (input: CliInput) =>
         desktopShutdownToken,
         migrationDivergenceConsent,
         autoBootstrapProjectFromCwd,
+        trashDir: env.trashDir,
         logProviderEvents,
         logWebSocketEvents,
       } satisfies ServerConfigShape;
@@ -444,6 +483,11 @@ const makeServerProgram = (input: CliInput) =>
     // Start the retention loop after the server is live so startup can serve
     // existing history first, then hide inactive threads from the app in the background.
     yield* startThreadRetentionJob(orchestrationEngine, projectionSnapshotQuery);
+    // Beta only: anonymous 24h usage snapshot for diagnostics. Same gate as the
+    // stable→beta import; failures are logged inside and never break startup.
+    if (process.env[SYNARA_DESKTOP_BUNDLE_ID_ENV] === SYNARA_BETA_BUNDLE_ID) {
+      yield* startBetaUsageSnapshotJob(config.baseDir);
+    }
     // Optional Claude OAuth keepalive. Disabled by default because it touches
     // Claude Code auth data in the background; users can opt in with
     // SYNARA_CLAUDE_KEEPALIVE=1.
@@ -451,18 +495,14 @@ const makeServerProgram = (input: CliInput) =>
       homeDir: config.homeDir,
       log: (message) => Effect.runFork(Effect.logInfo(message)),
     });
-    const reconcileClaudeKeepalive = (settings: {
-      readonly providers: {
-        readonly claudeAgent: { readonly enabled: boolean; readonly binaryPath?: string };
-      };
-    }) =>
+    const reconcileClaudeKeepalive = (settings: ServerSettings) =>
       Effect.promise(() =>
-        claudeKeepalive.reconcile({
-          enabled: settings.providers.claudeAgent.enabled,
-          ...(settings.providers.claudeAgent.binaryPath !== undefined
-            ? { binaryPath: settings.providers.claudeAgent.binaryPath }
-            : {}),
-        }),
+        claudeKeepalive.reconcile(
+          claudeCredentialKeepaliveTargets(settings, {
+            homeDir: config.homeDir,
+            stateDir: config.stateDir,
+          }),
+        ),
       );
     // Attach before reading the initial snapshot. The settings PubSub does not
     // replay, so reading first could miss a disable/path update in the small

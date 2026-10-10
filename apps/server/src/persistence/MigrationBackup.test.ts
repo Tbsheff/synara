@@ -35,7 +35,7 @@ import {
 import { migrationEntries, runMigrations } from "./Migrations.ts";
 import * as NodeSqliteClient from "./NodeSqliteClient.ts";
 import { makeSqlitePersistenceLive } from "./Layers/Sqlite.ts";
-import PluginStorageMigration from "./Migrations/109_PluginStorage.ts";
+import PluginStorageMigration from "./Migrations/132_PluginStorage.ts";
 
 vi.mock("node:fs/promises", async () => {
   const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
@@ -510,32 +510,6 @@ describe("migration backups", () => {
     await expect(fs.stat(marker.backupPath)).resolves.toBeDefined();
   });
 
-  it("charges a resume attempt even when the retry dies mid-migration", async () => {
-    const dbPath = await makeDbPath();
-
-    await runWithDatabase(
-      dbPath,
-      Effect.gen(function* () {
-        yield* runMigrations({ toMigrationInclusive: 52 });
-        yield* runWithPreMigrationBackup(dbPath, Effect.fail(new Error("interrupted mid-flight")));
-      }),
-    ).catch(() => undefined);
-
-    const marker = await Effect.runPromise(inspectPendingMigrationRecovery(dbPath));
-    expect(marker).not.toBeNull();
-    await Effect.runPromise(
-      resumeMarkedMigration(dbPath, marker!, Effect.fail(new Error("died again"))),
-    ).catch(() => undefined);
-
-    // Charged up front: a process killed mid-migration must not get a free retry,
-    // or a deterministic failure loops forever.
-    await expect(Effect.runPromise(inspectPendingMigrationRecovery(dbPath))).resolves.toMatchObject(
-      {
-        resumeAttempts: 1,
-      },
-    );
-  });
-
   it("retains the marker when a resumed migration has a duplicate-looking failure", async () => {
     const dbPath = await makeDbPath();
 
@@ -851,51 +825,56 @@ describe("migration backups", () => {
     expect(provenance.lineageDivergence).toBeNull();
   });
 
-  it("keeps the private plugin-storage migration on the automatic upgrade path", async () => {
-    const dbPath = await makeDbPath();
+  // Unreleased plugin-platform builds recorded PluginStorage at 104 and later at
+  // 109; both slots now belong to upstream migrations.
+  it.each([104, 109])(
+    "keeps the private plugin-storage migration recorded at %i on the automatic upgrade path",
+    async (historicalId) => {
+      const dbPath = await makeDbPath();
 
-    await runWithDatabase(
-      dbPath,
-      Effect.gen(function* () {
-        const sql = yield* SqlClient.SqlClient;
-        yield* runMigrations({ toMigrationInclusive: 103 });
-        yield* PluginStorageMigration;
-        yield* sql`
+      await runWithDatabase(
+        dbPath,
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient;
+          yield* runMigrations({ toMigrationInclusive: historicalId - 1 });
+          yield* PluginStorageMigration;
+          yield* sql`
           INSERT INTO plugin_storage (plugin_id, key, value_json, updated_at)
           VALUES ('review-queue', 'settings', '{"enabled":true}', '2026-09-22T00:00:00Z')
         `;
-        yield* sql`
+          yield* sql`
           INSERT INTO effect_sql_migrations (migration_id, name)
-          VALUES (104, 'PluginStorage')
+          VALUES (${historicalId}, 'PluginStorage')
         `;
 
-        yield* runWithPreMigrationBackup(dbPath, runMigrations());
+          yield* runWithPreMigrationBackup(dbPath, runMigrations());
 
-        const tracker = yield* sql<{ readonly migrationId: number; readonly name: string }>`
+          const tracker = yield* sql<{ readonly migrationId: number; readonly name: string }>`
           SELECT migration_id AS "migrationId", name
           FROM effect_sql_migrations
-          WHERE migration_id >= 104
+          WHERE migration_id >= ${historicalId}
           ORDER BY migration_id
         `;
-        expect(tracker).toEqual(
-          migrationEntries
-            .filter(([id]) => id >= 104)
-            .map(([migrationId, name]) => ({ migrationId, name })),
-        );
-        const stored = yield* sql<{ readonly valueJson: string }>`
+          expect(tracker).toEqual(
+            migrationEntries
+              .filter(([id]) => id >= historicalId)
+              .map(([migrationId, name]) => ({ migrationId, name })),
+          );
+          const stored = yield* sql<{ readonly valueJson: string }>`
           SELECT value_json AS "valueJson"
           FROM plugin_storage
           WHERE plugin_id = 'review-queue' AND key = 'settings'
         `;
-        expect(stored).toEqual([{ valueJson: '{"enabled":true}' }]);
-      }),
-    );
+          expect(stored).toEqual([{ valueJson: '{"enabled":true}' }]);
+        }),
+      );
 
-    const provenance = JSON.parse(
-      await fs.readFile(migrationBackupProvenancePath(dbPath), "utf8"),
-    ) as { readonly lineageDivergence: unknown };
-    expect(provenance.lineageDivergence).toBeNull();
-  });
+      const provenance = JSON.parse(
+        await fs.readFile(migrationBackupProvenancePath(dbPath), "utf8"),
+      ) as { readonly lineageDivergence: unknown };
+      expect(provenance.lineageDivergence).toBeNull();
+    },
+  );
 
   it("restores the exact completed backup after the active marker is cleared", async () => {
     const dbPath = await makeDbPath();

@@ -117,6 +117,7 @@ describe("ProviderRuntimeReconcilerLive", () => {
           {
             threadId: THREAD_ID,
             provider: "codex" as const,
+            providerInstanceId: "codex" as const,
             status: bindingStatus,
             runtimePayload: { activeTurnId: null },
           },
@@ -274,6 +275,7 @@ describe("ProviderRuntimeReconcilerLive", () => {
             {
               threadId: THREAD_ID,
               provider: "codex" as const,
+              providerInstanceId: "codex" as const,
               status: "running" as const,
               runtimePayload: { activeTurnId: TURN_ID },
             },
@@ -363,6 +365,7 @@ describe("ProviderRuntimeReconcilerLive provider activity probe", () => {
           {
             threadId: THREAD_ID,
             provider: "codex" as const,
+            providerInstanceId: "codex" as const,
             status: "running" as const,
             runtimePayload: { activeTurnId: TURN_ID },
           },
@@ -522,6 +525,7 @@ describe("ProviderRuntimeReconcilerLive plan application", () => {
           input.threadIds.map((threadId) => ({
             threadId,
             provider: "codex" as const,
+            providerInstanceId: "codex" as const,
             status: "running" as const,
             runtimePayload: { activeTurnId: TURN_ID },
           })),

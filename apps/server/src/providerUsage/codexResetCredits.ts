@@ -9,11 +9,7 @@ import type {
 } from "@synara/contracts";
 import { spawnProcess } from "@synara/shared/processRuntime";
 
-import {
-  CodexAppServerTransportError,
-  CodexJsonlFramer,
-  CodexJsonlWriter,
-} from "../codexAppServerTransport";
+import { CodexJsonlFramer, CodexJsonlWriter } from "../codexAppServerTransport";
 import { createLogger } from "../logger";
 import { signalOwnedChildProcess } from "../platform/processTreeController";
 import { asRecord, asString, isoFromUnixMillis, isoFromUnixSeconds } from "./parse";
@@ -144,16 +140,6 @@ async function withAppServer<T>(
     if (stopped) return;
     try {
       for (const line of framer.push(chunk)) {
-        if (typeof line !== "string") {
-          fail(
-            new CodexAppServerTransportError({
-              reason: "frame-too-large",
-              maxBytes: line.maxBytes,
-              observedBytes: line.observedBytes,
-            }),
-          );
-          continue;
-        }
         if (!line.trim()) continue;
         const message = asRecord(JSON.parse(line));
         if (!message) continue;

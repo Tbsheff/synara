@@ -4,6 +4,7 @@ import {
   DEFAULT_MODEL_BY_PROVIDER,
   DROID_REASONING_EFFORT_OPTIONS,
   GROK_REASONING_EFFORT_OPTIONS,
+  OMP_THINKING_LEVEL_OPTIONS,
   PI_THINKING_LEVEL_OPTIONS,
   type ModelSelection,
   type ProviderKind,
@@ -12,6 +13,7 @@ import {
   type ServerProviderAuthStatus,
 } from "@synara/contracts";
 import { getClaudeContextWindowSuffix, stripClaudeContextWindowSuffix } from "@synara/shared/model";
+import { defaultInstanceIdForProvider } from "@synara/shared/providerInstances";
 import { Effect } from "effect";
 
 import type { ProviderDiscoveryServiceShape } from "../provider/Services/ProviderDiscoveryService.ts";
@@ -73,6 +75,7 @@ export interface AgentGatewayTargetOptionGuidance {
   readonly optionsByModel: Readonly<Record<string, ReadonlyArray<AgentGatewayTargetOptionRule>>>;
   readonly exampleTarget: {
     readonly provider: ProviderKind;
+    readonly instanceId: string;
     readonly model: string;
     readonly options: Readonly<Record<string, AgentGatewayTargetOptionValue>>;
   } | null;
@@ -213,6 +216,10 @@ const PROVIDER_TARGET_OPTION_RULES = {
     primaryOptionKey: "thinkingLevel",
     options: { thinkingLevel: providerOptionRule("string", PI_THINKING_LEVEL_OPTIONS) },
   }),
+  omp: defineProviderOptionConfig<"omp">({
+    primaryOptionKey: "thinkingLevel",
+    options: { thinkingLevel: providerOptionRule("string", OMP_THINKING_LEVEL_OPTIONS) },
+  }),
   antigravity: defineProviderOptionConfig<"antigravity">({
     primaryOptionKey: "reasoningEffort",
     options: { reasoningEffort: providerOptionRule("string", [], "model-discovery") },
@@ -258,7 +265,7 @@ function providerTargetOptionConfig(provider: ProviderKind): ProviderTargetOptio
 }
 
 function providerDefaultModel(provider: ProviderKind): string | null {
-  return provider === "pi" ? null : DEFAULT_MODEL_BY_PROVIDER[provider];
+  return provider === "pi" || provider === "omp" ? null : DEFAULT_MODEL_BY_PROVIDER[provider];
 }
 
 export function loadAgentGatewayProviderCatalog(input: {
@@ -464,6 +471,7 @@ export function agentGatewayTargetOptionGuidance(
       catalog.available && exampleModel
         ? {
             provider: catalog.provider,
+            instanceId: defaultInstanceIdForProvider(catalog.provider),
             model: exampleModel,
             options: exampleOptionsForRules(primaryOptionKey, exampleRules),
           }
@@ -697,6 +705,9 @@ export function resolveAgentGatewayTarget(input: {
       input.target.provider === "claudeAgent"
         ? {
             provider: input.target.provider,
+            ...(input.target.instanceId !== undefined
+              ? { instanceId: input.target.instanceId }
+              : {}),
             model: input.target.model,
             ...(input.target.options !== undefined ? { options: input.target.options } : {}),
             ...(descriptor?.supportsAutoMode !== undefined
