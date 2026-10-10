@@ -1,8 +1,13 @@
-import { assert, it } from "@effect/vitest";
+import { assert, describe, it } from "@effect/vitest";
 import { Effect, Layer } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
-import { migrationEntries, runMigrations } from "./Migrations.ts";
+import {
+  MIGRATION_LINEAGE_ALIASES,
+  migrationEntries,
+  planMigrationLineageAliasRepairs,
+  runMigrations,
+} from "./Migrations.ts";
 import { MigrationSchemaTooNewError } from "./Errors.ts";
 import * as NodeSqliteClient from "./NodeSqliteClient.ts";
 import DurableProviderCommandDeliveryMigration from "./Migrations/064_DurableProviderCommandDelivery.ts";
@@ -630,6 +635,7 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         [129, "ProjectionThreadsSnooze"],
         [130, "PullRequestAutoFix"],
         [131, "ProjectSourceFolders"],
+        [132, "PluginStorage"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -713,6 +719,7 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
           { migration_id: 129, name: "ProjectionThreadsSnooze" },
           { migration_id: 130, name: "PullRequestAutoFix" },
           { migration_id: 131, name: "ProjectSourceFolders" },
+          { migration_id: 132, name: "PluginStorage" },
         ],
       );
       const groupConfigColumns = yield* sql<{ readonly name: string }>`
@@ -876,6 +883,7 @@ agentGatewayRetentionLegacyLayer(
           [129, "ProjectionThreadsSnooze"],
           [130, "PullRequestAutoFix"],
           [131, "ProjectSourceFolders"],
+          [132, "PluginStorage"],
         ]);
 
         const columns = yield* sql<{ readonly name: string }>`
@@ -1002,6 +1010,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [129, "ProjectionThreadsSnooze"],
         [130, "PullRequestAutoFix"],
         [131, "ProjectSourceFolders"],
+        [132, "PluginStorage"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -1069,6 +1078,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [129, "ProjectionThreadsSnooze"],
           [130, "PullRequestAutoFix"],
           [131, "ProjectSourceFolders"],
+          [132, "PluginStorage"],
         ],
       );
 
@@ -1190,6 +1200,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [129, "ProjectionThreadsSnooze"],
         [130, "PullRequestAutoFix"],
         [131, "ProjectSourceFolders"],
+        [132, "PluginStorage"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -1253,6 +1264,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [129, "ProjectionThreadsSnooze"],
           [130, "PullRequestAutoFix"],
           [131, "ProjectSourceFolders"],
+          [132, "PluginStorage"],
         ],
       );
       const preservedSpaces = yield* sql<{ readonly spaceId: string }>`
@@ -1417,6 +1429,71 @@ const trackerCreatedAtById = (sql: SqlClient.SqlClient) =>
   sql<{ readonly migration_id: number; readonly created_at: string }>`
     SELECT migration_id, created_at FROM effect_sql_migrations ORDER BY migration_id ASC
   `.pipe(Effect.map((rows) => new Map(rows.map((row) => [row.migration_id, row.created_at]))));
+
+describe("migration lineage aliases", () => {
+  it("keeps every declared alias consistent with the current lineage", () => {
+    for (const alias of MIGRATION_LINEAGE_ALIASES) {
+      // The migration must still live at `currentId` under the historical name,
+      // otherwise the alias silently stops repairing the databases it names.
+      assert.strictEqual(
+        canonicalNamesById.get(alias.currentId),
+        alias.historicalName,
+        `alias for ${alias.historicalName} no longer resolves to migration ${alias.currentId}`,
+      );
+      // The historical slot must still be a real divergence, and must still be
+      // occupied — the repair renames the row to whatever lives there now.
+      assert.isDefined(canonicalNamesById.get(alias.historicalId));
+      assert.notStrictEqual(canonicalNamesById.get(alias.historicalId), alias.historicalName);
+    }
+  });
+
+  it("repairs a released v0.5.5 tracker in place", () => {
+    const recorded = canonicalTrackerThrough(53);
+    recorded.set(54, "ProjectPullRequestPins");
+
+    assert.deepStrictEqual(planMigrationLineageAliasRepairs(recorded), [
+      { kind: "rename", migrationId: 54, name: "DurableProviderCommandDelivery" },
+    ]);
+  });
+
+  it("repairs the private plugin-storage migration recorded at 104", () => {
+    const recorded = canonicalTrackerThrough(103);
+    recorded.set(104, "PluginStorage");
+
+    assert.deepStrictEqual(planMigrationLineageAliasRepairs(recorded), [
+      { kind: "remove", migrationId: 104 },
+    ]);
+  });
+
+  it("repairs the private plugin-storage migration recorded at 109", () => {
+    const recorded = canonicalTrackerThrough(108);
+    recorded.set(109, "PluginStorage");
+
+    assert.deepStrictEqual(planMigrationLineageAliasRepairs(recorded), [
+      { kind: "remove", migrationId: 109 },
+    ]);
+  });
+
+  it("declines when the tracker also diverges outside the alias", () => {
+    const recorded = canonicalTrackerThrough(53);
+    recorded.set(54, "ProjectPullRequestPins");
+    // Development builds between v0.5.5 and v0.6.0 also claimed migration 55.
+    recorded.set(55, "AgentGatewayOperations");
+
+    assert.deepStrictEqual(planMigrationLineageAliasRepairs(recorded), []);
+  });
+
+  it("declines for a healthy tracker and for a foreign lineage", () => {
+    assert.deepStrictEqual(
+      planMigrationLineageAliasRepairs(canonicalTrackerThrough(latestMigrationId)),
+      [],
+    );
+
+    const foreign = canonicalTrackerThrough(16);
+    for (let id = 17; id <= 60; id++) foreign.set(id, `ForeignMigration${id}`);
+    assert.deepStrictEqual(planMigrationLineageAliasRepairs(foreign), []);
+  });
+});
 
 const releasedV055Layer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
 

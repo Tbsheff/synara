@@ -91,6 +91,8 @@ import { makeComputerServiceLayer } from "../../computer/Layers/ComputerService.
 import { FakeComputerBackend } from "../../computer/FakeComputerBackend.ts";
 import { recordCreatedWorktreeInPlan } from "../operationPlan.ts";
 import { makeAgentGatewayInFlightRequestRegistry } from "../inFlightRequestRegistry.ts";
+import { PluginHostService, type PluginHostShape } from "../../plugins/PluginHost.ts";
+import { pluginAgentToolName } from "../pluginTools.ts";
 
 const NOW = "2026-03-01T10:00:00.000Z";
 const PROJECT_ID = ProjectId.makeUnsafe("project-1");
@@ -427,6 +429,7 @@ function makeHarnessLayer(
     readonly providerRuntimeEvents?: ReadonlyArray<PersistedProviderRuntimeEvent>;
     readonly operationalDiagnostics?: ReadonlyArray<OperationalDiagnostic>;
     readonly providerDeliveryBlockers?: ReadonlyArray<ProviderBlockingDeliveryEvidence>;
+    readonly pluginHost?: Pick<PluginHostShape, "agentTools" | "callAgentTool">;
     readonly automationRuns?: ReadonlyArray<{
       readonly id: string;
       readonly automationId: AutomationDefinition["id"];
@@ -1351,7 +1354,17 @@ function makeHarnessLayer(
     Layer.provide(eventDeliveriesLayer),
     Layer.provide(providerRuntimeEventsLayer),
     Layer.provide(ServerConfig.layerTest(process.cwd(), process.cwd())),
+    Layer.provide(
+      Layer.succeed(
+        PluginHostService,
+        (options.pluginHost ?? {
+          agentTools: () => Effect.succeed([]),
+        }) as never,
+      ),
+    ),
     Layer.provide(NodeServices.layer),
+    // `pipe` accepts at most 20 operators; the remaining providers chain below.
+  ).pipe(
     Layer.provide(
       Layer.mergeAll(
         options.computerService ?? Layer.empty,
@@ -2390,6 +2403,91 @@ describe("AgentGateway", () => {
       );
       assert.property(updateAutomationProperties, "stopAfterConsecutiveFailures");
       assert.property(updateAutomationProperties, "target");
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("lists and invokes plugin tools through AgentGatewayLive", () => {
+    const pluginTool = {
+      pluginId: "@acme/synara-plugin-proof",
+      generation: 4,
+      id: "run-proof",
+      title: "Run proof",
+      description: "Run the plugin gateway proof.",
+      inputSchema: { type: "object", additionalProperties: false },
+      access: "write" as const,
+    };
+    let calls = 0;
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads, [], {
+      pluginHost: {
+        agentTools: () => Effect.succeed([pluginTool]),
+        callAgentTool: (_input, authority) =>
+          Effect.tryPromise(async () => {
+            await authority.assertWriteAuthorized();
+            authority.signal.throwIfAborted();
+            calls += 1;
+            return { ok: true };
+          }),
+      },
+    });
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const toolName = pluginAgentToolName(pluginTool);
+      const listed = yield* harness.postRaw({
+        authorizationHeader: "Bearer token-parent",
+        body: { jsonrpc: "2.0", id: 1, method: "tools/list" },
+      });
+      assert.include(JSON.stringify(listed.body), toolName);
+
+      const first = yield* harness.callTool({ token: "token-parent", name: toolName, args: {} });
+      assert.notEqual(first.result?.isError, true);
+      assert.equal(calls, 1);
+
+      const parent = makeThreadDetail(baseThreads[0]!);
+      harness.setThreadDetail({
+        ...parent,
+        latestTurn: { ...parent.latestTurn!, state: "completed" },
+      });
+      const stopped = yield* harness.callTool({
+        token: "token-parent",
+        name: toolName,
+        args: {},
+      });
+      assert.equal(stopped.result?.isError, true);
+      assert.equal(calls, 1);
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("blocks plugin tools from starting a higher-privileged thread", () => {
+    const pluginTool = {
+      pluginId: "@acme/synara-plugin-proof",
+      generation: 4,
+      id: "start-proof",
+      title: "Start proof",
+      description: "Start a plugin proof thread.",
+      inputSchema: { type: "object", additionalProperties: false },
+      access: "write" as const,
+    };
+    let started = false;
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads, [], {
+      pluginHost: {
+        agentTools: () => Effect.succeed([pluginTool]),
+        callAgentTool: (_input, authority) =>
+          Effect.tryPromise(async () => {
+            await authority.assertThreadStartAuthorized();
+            started = true;
+            return { ok: true };
+          }),
+      },
+    });
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const response = yield* harness.callTool({
+        token: "token-parent",
+        name: pluginAgentToolName(pluginTool),
+        args: {},
+      });
+      assert.isTrue(isToolError(response.result));
+      assert.isFalse(started);
     }).pipe(Effect.provide(gatewayLayer));
   });
 

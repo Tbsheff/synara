@@ -40,6 +40,7 @@ import {
   type TurnDispatchMode,
 } from "@synara/contracts";
 import { runtimeModeEscalatesPrivilege } from "@synara/shared/runtimeMode";
+import type { RegisteredPluginAgentTool } from "@synara/plugin-sdk";
 import { isProviderKind } from "@synara/shared/providerInstances";
 import { Effect, Layer, Option } from "effect";
 
@@ -83,6 +84,7 @@ import {
 } from "../toolInput.ts";
 import { WRITE_TOOL_ANNOTATIONS, type ToolContext, type ToolEntry } from "../toolRuntime.ts";
 import { makeAgentGatewayMcpTransport } from "../mcpTransport.ts";
+import { makePluginAgentToolEntries } from "../pluginTools.ts";
 import { deliverGatewayCompletions } from "../completionDelivery.ts";
 import { recoverInterruptedAgentGatewayOperations } from "../startupRecovery.ts";
 import { makeCreateThreadsHandler } from "../creationCoordinator.ts";
@@ -120,6 +122,7 @@ import { makeThreadDiagnosticTools } from "../threadDiagnosticTools.ts";
 import { makeAgentGatewayKanbanTools } from "../kanbanTools.ts";
 import { pruneProjectedArchivedManagedWorktrees } from "../../managedWorktrees.ts";
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
+import { PluginHostService } from "../../plugins/PluginHost.ts";
 
 // Providers already receive the versioned host policy exactly once in their
 // private prompt. MCP clients prepend initialize.instructions to every exposed
@@ -166,6 +169,7 @@ export const makeAgentGateway = Effect.gen(function* () {
   const providerRuntimeEvents = yield* ProviderRuntimeEventRepository;
   const diagnostics = yield* ThreadDiagnosticsQuery;
   const serverConfig = yield* ServerConfig;
+  const pluginHost = yield* PluginHostService;
   const browserAutomationHost = Option.getOrElse(
     yield* Effect.serviceOption(BrowserAutomationHost),
     () => makeBrowserAutomationHost({}),
@@ -1571,6 +1575,39 @@ export const makeAgentGateway = Effect.gen(function* () {
     // Group tools are Beta-only: Stable does not offer them to agents at all.
     ...(isServerGroupsEnabled() ? [...projectAgentTools, ...(hubGateway?.tools ?? [])] : []),
   ];
+  let cachedPluginDescriptors: ReadonlyArray<RegisteredPluginAgentTool> | undefined;
+  let cachedPluginTools: ReadonlyArray<ToolEntry> = [];
+  const dynamicTools = () =>
+    pluginHost.agentTools().pipe(
+      Effect.map((descriptors) => {
+        if (descriptors !== cachedPluginDescriptors) {
+          cachedPluginDescriptors = descriptors;
+          cachedPluginTools = makePluginAgentToolEntries(descriptors, (input, context, signal) =>
+            pluginHost.callAgentTool(input, {
+              signal,
+              assertWriteAuthorized: () => Effect.runPromise(context.assertCallerTurnActive()),
+              assertThreadStartAuthorized: () =>
+                Effect.runPromise(
+                  Effect.gen(function* () {
+                    const caller = yield* requireThreadShell(context.callerThreadId);
+                    yield* assertCallerMayDriveThread(caller, {
+                      id: "new plugin thread",
+                      runtimeMode: "full-access",
+                      envMode: "local",
+                    });
+                  }),
+                ),
+            }),
+          );
+        }
+        return cachedPluginTools;
+      }),
+      Effect.catch(() =>
+        Effect.logWarning("Plugin tool catalog refresh failed; using the last known catalog.").pipe(
+          Effect.as(cachedPluginTools),
+        ),
+      ),
+    );
 
   // The computer family by name, read off the unfiltered catalog above: a
   // caller whose session was never granted computer control still gets a
@@ -1581,12 +1618,12 @@ export const makeAgentGateway = Effect.gen(function* () {
       .filter((tool) => tool.requiredCapability === COMPUTER_CONTROL_CAPABILITY)
       .map((tool) => tool.definition.name),
   );
-
   return {
     handleMcpPost: makeAgentGatewayMcpTransport({
       credentials,
       snapshotQuery,
       tools,
+      dynamicTools,
       onCapabilityDenied: surfaceCapabilityDenial,
       // Namespace-insensitive: a session that never saw the catalog reaches
       // for prefixed spellings (synara_computer_click,

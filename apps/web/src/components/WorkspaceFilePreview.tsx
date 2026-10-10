@@ -6,6 +6,7 @@
 // Exports: WorkspaceFilePreview, isMarkdownPreviewablePath
 
 import type { ProjectFileChangeEvent, ProjectReadFileResult } from "@synara/contracts";
+import type { SynaraPluginAppContext } from "@synara/plugin-sdk/app";
 import type { FileContents as PierreFileContents } from "@pierre/diffs";
 import {
   Editor as PierreEditor,
@@ -80,6 +81,8 @@ import {
 import { cn } from "~/lib/utils";
 import { resolveWorkspaceFileEditorReadOnlyReason } from "~/lib/workspaceFileEditor";
 import { readNativeApi } from "~/nativeApi";
+import { PluginFileOpener, resolvePluginFileSource } from "~/plugins/PluginFileOpener";
+import { PluginSourceCodeRenderer } from "~/plugins/PluginSourceCodeRenderer";
 import ChatMarkdown from "./ChatMarkdown";
 import { DiffTruncationWarning } from "./DiffTruncationWarning";
 import { FileLineCommentBox } from "./chat/FileLineCommentBox";
@@ -93,6 +96,10 @@ import { PdfFilePreview } from "./PdfFilePreview";
 import { Skeleton } from "./ui/skeleton";
 
 const MARKDOWN_PREVIEW_EXTENSIONS = new Set([".markdown", ".md", ".mdx"]);
+const EMPTY_PLUGIN_APP_CONTEXT: SynaraPluginAppContext = {
+  projectId: null,
+  threadId: null,
+};
 
 export function isMarkdownPreviewablePath(filePath: string): boolean {
   const extension = lowerCaseExtensionOf(filePath);
@@ -555,6 +562,7 @@ export interface WorkspaceFilePreviewProps {
   onAskWhyInChat?: ((reference: ChatFileReference) => void) | undefined;
   onCommentInChat?: ((comment: FileCommentSelection) => void) | undefined;
   onEditFile?: ((filePath: string) => void) | undefined;
+  pluginContext?: SynaraPluginAppContext;
 }
 
 export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
@@ -1037,7 +1045,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
       props.workspaceRoot && isWorkspaceRelativePathSafe(filePath)
         ? joinWorkspaceRelativePath(props.workspaceRoot, filePath)
         : filePath;
-    return (
+    const originalPdfPreview = (
       <PdfFilePreview
         key={binaryPreviewKey}
         filePath={filePath}
@@ -1050,6 +1058,15 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
         onPreviewError={handleBinaryPreviewError}
       />
     );
+    return (
+      <PluginFileOpener
+        context={props.pluginContext ?? EMPTY_PLUGIN_APP_CONTEXT}
+        path={filePath}
+        source={resolvePluginFileSource(filePath)}
+        original={originalPdfPreview}
+        enabled
+      />
+    );
   }
 
   const hoveredCommentLine = lineCommenting.hoveredLine;
@@ -1060,7 +1077,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
   const showFileReadErrorIndicator =
     hasFileContents && fileReadError !== null && !activeEditBuffer?.error;
 
-  return (
+  const originalFilePreview = (
     <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col app-content-surface">
       <WorkspaceFilePreviewHeader
         workspaceRoot={props.workspaceRoot}
@@ -1218,10 +1235,18 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
                   />
                 </div>
               ) : (
-                <FileContentsView
+                <PluginSourceCodeRenderer
+                  context={props.pluginContext ?? EMPTY_PLUGIN_APP_CONTEXT}
+                  content={displayedFileContents}
                   path={filePath}
-                  contents={fileContents}
-                  themeName={diffThemeName}
+                  enabled={editableDocument === null}
+                  original={
+                    <FileContentsView
+                      path={filePath}
+                      contents={fileContents}
+                      themeName={diffThemeName}
+                    />
+                  }
                 />
               )}
               {!showMarkdownPreview && changeRanges.length > 0 ? (
@@ -1296,5 +1321,14 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
         </>
       )}
     </div>
+  );
+  return (
+    <PluginFileOpener
+      context={props.pluginContext ?? EMPTY_PLUGIN_APP_CONTEXT}
+      path={filePath}
+      source={resolvePluginFileSource(filePath)}
+      original={originalFilePreview}
+      enabled={editableDocument === null && !editBufferDirty}
+    />
   );
 }

@@ -1,5 +1,16 @@
 import { assert, describe, it } from "@effect/vitest";
 import { ProjectId, ThreadId, TurnId, type OrchestrationThreadShell } from "@synara/contracts";
+import {
+  array,
+  createPluginRegistry,
+  definePlugin,
+  nonEmptyString,
+  object,
+  schema,
+  string,
+  type JsonValue,
+  type SynaraPluginManifest,
+} from "@synara/plugin-sdk";
 import { Deferred, Effect, Fiber, Option } from "effect";
 
 import type { ProjectionSnapshotQueryShape } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
@@ -20,6 +31,7 @@ import {
   type AgentGatewaySessionLeaseOptions,
 } from "./sessionLease.ts";
 import type { ToolEntry } from "./toolRuntime.ts";
+import { makePluginAgentToolEntries, pluginAgentToolName } from "./pluginTools.ts";
 
 const NOW = "2026-07-22T03:00:00.000Z";
 
@@ -109,7 +121,10 @@ export interface McpTransportTestDenial {
 }
 
 function makeTransport(input: {
-  readonly tools: ReadonlyArray<ToolEntry>;
+  readonly tool?: ToolEntry;
+  readonly extraTools?: ReadonlyArray<ToolEntry>;
+  readonly dynamicTools?: () => Effect.Effect<ReadonlyArray<ToolEntry>, Error>;
+  readonly tools?: ReadonlyArray<ToolEntry>;
   readonly threads: ReadonlyArray<OrchestrationThreadShell>;
   readonly leaseCapabilities?: AgentGatewayCapabilityInput;
   /** Thread ids that hold a session lease but no longer exist in the snapshot. */
@@ -200,7 +215,8 @@ function makeTransport(input: {
   const transport = makeAgentGatewayMcpTransport({
     credentials,
     snapshotQuery,
-    tools: input.tools,
+    tools: input.tools ?? (input.tool ? [input.tool, ...(input.extraTools ?? [])] : []),
+    ...(input.dynamicTools ? { dynamicTools: input.dynamicTools } : {}),
     instructions: "test",
     requireThreadShell: (threadId) => {
       const thread = threads.get(threadId);
@@ -545,6 +561,292 @@ const findToolOrThrow = (tools: ReadonlyArray<unknown>, name: string): Record<st
   }
   return found;
 };
+
+const notesFixtureItem = object({ projectId: string(), title: string(), body: string() });
+
+const notesFixtureContract = {
+  list: {
+    input: schema(() => ({})),
+    output: object({ items: array(notesFixtureItem) }),
+  },
+  add: {
+    input: object({
+      projectId: nonEmptyString(),
+      title: nonEmptyString(),
+      body: nonEmptyString(),
+    }),
+    output: object({ item: notesFixtureItem }),
+  },
+} as const;
+
+const notesFixtureManifest = {
+  id: "acme.notes",
+  displayName: "Notes",
+  version: "0.1.0",
+  apiVersion: 2,
+} as const satisfies SynaraPluginManifest;
+
+const notesFixturePlugin = definePlugin((synara) => {
+  const readItems = async () => {
+    const value = await synara.storage.get("items");
+    return Array.isArray(value) ? value.map((item) => notesFixtureItem.parse(item)) : [];
+  };
+  synara.rpc.register("list", notesFixtureContract.list, async () => ({
+    items: await readItems(),
+  }));
+  synara.agents.registerTool({
+    id: "add-note",
+    title: "Add note",
+    description: "Add a note.",
+    access: "write",
+    contract: notesFixtureContract.add,
+    execute: async (input) => {
+      const item = { projectId: input.projectId, title: input.title, body: input.body };
+      await synara.storage.set("items", [...(await readItems()), item]);
+      return { item };
+    },
+  });
+});
+
+describe("makeAgentGatewayMcpTransport dynamic plugin tools", () => {
+  it.effect("loads and invokes a plugin agent tool through a thread credential", () =>
+    Effect.gen(function* () {
+      const values = new Map<string, JsonValue>();
+      const registry = createPluginRegistry({
+        host: {} as never,
+        storage: {
+          get: (key) => Promise.resolve(values.get(key)),
+          set: (key, value) => {
+            values.set(key, value);
+            return Promise.resolve();
+          },
+          delete: (key) => {
+            values.delete(key);
+            return Promise.resolve();
+          },
+          update: async (key, updateValue) => {
+            const next = await updateValue(values.get(key));
+            if (next === undefined) values.delete(key);
+            else values.set(key, next);
+            return next;
+          },
+        },
+      });
+      const generation = yield* Effect.promise(() =>
+        registry.activate(notesFixtureManifest, notesFixturePlugin),
+      );
+      const registeredTool = registry.listAgentTools().find((tool) => tool.id === "add-note");
+      if (!registeredTool) throw new Error("Expected the notes fixture to register an agent tool.");
+      const toolName = pluginAgentToolName(registeredTool);
+      const transport = makeTransport({
+        threads: [makeThread("thread-plugin-notes")],
+        tool: {
+          definition: {
+            name: "built_in",
+            description: "built in",
+            inputSchema: { type: "object" },
+          },
+          requiredCapability: "thread:read",
+          handler: () => Effect.succeed({ content: [{ type: "text" as const, text: "built in" }] }),
+        },
+        dynamicTools: () =>
+          Effect.succeed(
+            makePluginAgentToolEntries(registry.listAgentTools(), (input, _context, signal) =>
+              Effect.tryPromise(() => registry.callAgentTool({ ...input, signal })),
+            ),
+          ),
+      });
+
+      const listed = yield* post(transport, "token-1", {
+        jsonrpc: "2.0",
+        id: "list-plugin-notes",
+        method: "tools/list",
+      });
+      if (!isJsonRecord(listed.body) || !isJsonRecord(listed.body.result)) {
+        throw new Error("Expected plugin tools/list result.");
+      }
+      findToolOrThrow(listed.body.result.tools as ReadonlyArray<unknown>, toolName);
+
+      const invalid = yield* post(transport, "token-1", {
+        jsonrpc: "2.0",
+        id: "invalid-note",
+        method: "tools/call",
+        params: { name: toolName, arguments: { title: 42 } },
+      });
+      if (!isJsonRecord(invalid.body) || !isJsonRecord(invalid.body.result)) {
+        throw new Error("Expected invalid plugin tool call result.");
+      }
+      assert.equal(invalid.body.result.isError, true);
+      assert.equal(values.has("items"), false);
+
+      const called = yield* post(transport, "token-1", {
+        jsonrpc: "2.0",
+        id: "add-note",
+        method: "tools/call",
+        params: {
+          name: toolName,
+          arguments: {
+            projectId: "project-notes",
+            title: "Proof note",
+            body: "Exercise the plugin tool path.",
+          },
+        },
+      });
+      assert.equal(called.status, 200);
+
+      const notes = yield* Effect.promise(() =>
+        registry.call({
+          pluginId: notesFixtureManifest.id,
+          generation,
+          method: "list",
+          input: {},
+        }),
+      );
+      const parsedNotes = notesFixtureContract.list.output.parse(notes);
+      assert.equal(parsedNotes.items.length, 1);
+      assert.equal(parsedNotes.items[0]?.title, "Proof note");
+      assert.equal(parsedNotes.items[0]?.projectId, "project-notes");
+    }),
+  );
+
+  it.effect("resolves dynamic tools for each list and call request", () =>
+    Effect.gen(function* () {
+      let dynamicTools: ReadonlyArray<ToolEntry> = [];
+      let dynamicLoads = 0;
+      let calls = 0;
+      const transport = makeTransport({
+        threads: [makeThread("thread-dynamic")],
+        tool: {
+          definition: {
+            name: "built_in",
+            description: "built in",
+            inputSchema: { type: "object" },
+          },
+          requiredCapability: "thread:read",
+          handler: () => Effect.succeed({ content: [{ type: "text" as const, text: "built in" }] }),
+        },
+        dynamicTools: () => {
+          dynamicLoads += 1;
+          return Effect.succeed(dynamicTools);
+        },
+      });
+
+      const first = yield* post(transport, "token-1", {
+        jsonrpc: "2.0",
+        id: "list-before",
+        method: "tools/list",
+      });
+      if (!isJsonRecord(first.body) || !isJsonRecord(first.body.result)) {
+        throw new Error("Expected the first tools/list result.");
+      }
+      assert.deepEqual(
+        (first.body.result.tools as ReadonlyArray<Record<string, unknown>>).map(
+          (tool) => tool.name,
+        ),
+        ["built_in"],
+      );
+
+      dynamicTools = [
+        {
+          definition: {
+            name: "plugin_acme_echo",
+            description: "dynamic",
+            inputSchema: { type: "object" },
+          },
+          requiredCapability: "thread:write",
+          requiresActiveTurn: true,
+          handler: () => {
+            calls += 1;
+            return Effect.succeed({ content: [{ type: "text" as const, text: "dynamic" }] });
+          },
+        },
+      ];
+
+      const second = yield* post(transport, "token-1", {
+        jsonrpc: "2.0",
+        id: "list-after",
+        method: "tools/list",
+      });
+      if (!isJsonRecord(second.body) || !isJsonRecord(second.body.result)) {
+        throw new Error("Expected the second tools/list result.");
+      }
+      assert.deepEqual(
+        (second.body.result.tools as ReadonlyArray<Record<string, unknown>>).map(
+          (tool) => tool.name,
+        ),
+        ["built_in", "plugin_acme_echo"],
+      );
+
+      const called = yield* post(transport, "token-1", {
+        jsonrpc: "2.0",
+        id: "call-dynamic",
+        method: "tools/call",
+        params: { name: "plugin_acme_echo", arguments: {} },
+      });
+      assert.equal(called.status, 200);
+      assert.equal(calls, 1);
+
+      const builtIn = yield* post(transport, "token-1", {
+        jsonrpc: "2.0",
+        id: "call-built-in",
+        method: "tools/call",
+        params: { name: "built_in", arguments: {} },
+      });
+      assert.equal(builtIn.status, 200);
+      assert.equal(dynamicLoads, 3);
+    }),
+  );
+
+  it.effect("keeps built-in and last-known plugin tools when catalog refresh fails", () =>
+    Effect.gen(function* () {
+      const pluginTool: ToolEntry = {
+        definition: {
+          name: "plugin_acme_echo",
+          description: "dynamic",
+          inputSchema: { type: "object" },
+        },
+        requiredCapability: "thread:read",
+        handler: () => Effect.succeed({ content: [{ type: "text" as const, text: "dynamic" }] }),
+      };
+      let shouldFail = false;
+      const transport = makeTransport({
+        threads: [makeThread("thread-dynamic-failure")],
+        tool: {
+          definition: {
+            name: "built_in",
+            description: "built in",
+            inputSchema: { type: "object" },
+          },
+          requiredCapability: "thread:read",
+          handler: () => Effect.succeed({ content: [{ type: "text" as const, text: "built in" }] }),
+        },
+        dynamicTools: () =>
+          shouldFail ? Effect.fail(new Error("catalog unavailable")) : Effect.succeed([pluginTool]),
+      });
+
+      yield* post(transport, "token-1", {
+        jsonrpc: "2.0",
+        id: "prime-catalog",
+        method: "tools/list",
+      });
+      shouldFail = true;
+      const response = yield* post(transport, "token-1", {
+        jsonrpc: "2.0",
+        id: "failed-refresh",
+        method: "tools/list",
+      });
+      if (!isJsonRecord(response.body) || !isJsonRecord(response.body.result)) {
+        throw new Error("Expected cached tools/list result.");
+      }
+      assert.deepEqual(
+        (response.body.result.tools as ReadonlyArray<Record<string, unknown>>).map(
+          (tool) => tool.name,
+        ),
+        ["built_in", "plugin_acme_echo"],
+      );
+    }),
+  );
+});
 
 describe("makeAgentGatewayMcpTransport tools/list schema sanitization", () => {
   it.effect("serves sanitized schemas while keeping stored definitions dirty", () =>

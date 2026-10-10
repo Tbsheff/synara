@@ -98,6 +98,8 @@ export interface ProviderAdapterCapabilities {
   readonly supportsLiveTurnDiffPatch?: boolean;
 }
 
+export type ProviderThreadActivity = "active" | "idle" | "not-loaded" | "error";
+
 export interface ProviderThreadTurnSnapshot {
   readonly id: TurnId;
   readonly items: ReadonlyArray<unknown>;
@@ -292,6 +294,9 @@ export interface ProviderAdapterShape<TError> {
     readonly providerOptions?: ProviderStartOptions;
   }) => Effect.Effect<ProviderThreadSnapshot, TError>;
 
+  readonly readThreadActivity?: (
+    threadId: ThreadId,
+  ) => Effect.Effect<ProviderThreadActivity, TError>;
   /** Display history only; never used to reconstruct native model context. */
   readonly readExternalThreadPage?: (input: {
     readonly externalThreadId: string;

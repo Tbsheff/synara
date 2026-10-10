@@ -146,6 +146,22 @@ const COMPUTER_SCOPES: Record<
   },
 };
 
+function computerScopeFor(
+  approval: Pick<PendingApproval, "approvalScope">,
+): (typeof COMPUTER_SCOPES)[keyof typeof COMPUTER_SCOPES] | undefined {
+  return approval.approvalScope ? COMPUTER_SCOPES[approval.approvalScope] : undefined;
+}
+
+/** The decisions this approval offers; plugin approval cards reuse it to stay in sync. */
+export function availableApprovalActions(
+  approval: Pick<PendingApproval, "approvalScope" | "sessionApprovalAvailable">,
+): ReadonlyArray<ApprovalAction> {
+  return (
+    computerScopeFor(approval)?.actions ??
+    (approval.sessionApprovalAvailable === false ? WITHOUT_SESSION_APPROVAL : APPROVAL_ACTIONS)
+  );
+}
+
 const KIND_PROMPT: Record<PendingApproval["requestKind"], string> = {
   command: "Approve this command?",
   "file-read": "Approve reading this file?",
@@ -165,12 +181,8 @@ export const ComposerPendingApprovalPanel = function ComposerPendingApprovalPane
   const requestKey = pendingRequestInstanceKey(requestId, approval.lifecycleGeneration);
   const submissionKey = JSON.stringify([requestKey, approval.responseAttemptKey ?? null]);
   const submittedRequestKeyRef = useRef<string | null>(null);
-  const computerScope = approval.approvalScope
-    ? COMPUTER_SCOPES[approval.approvalScope]
-    : undefined;
-  const actions =
-    computerScope?.actions ??
-    (approval.sessionApprovalAvailable === false ? WITHOUT_SESSION_APPROVAL : APPROVAL_ACTIONS);
+  const computerScope = computerScopeFor(approval);
+  const actions = availableApprovalActions(approval);
 
   const respondOnce = (action: ApprovalAction) => {
     if (isResponding || submittedRequestKeyRef.current === submissionKey) return;

@@ -35,6 +35,7 @@ import {
   type OrchestrationReactorShape,
 } from "./orchestration/Services/OrchestrationReactor";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
+import { PluginHostService } from "./plugins/PluginHost";
 import { ProjectionPendingInteractionRepository } from "./persistence/Services/ProjectionPendingInteractions";
 import { ThreadDeletionReactor } from "./orchestration/Services/ThreadDeletionReactor";
 import { ThreadSnoozeReactor } from "./orchestration/Services/ThreadSnoozeReactor";
@@ -82,6 +83,7 @@ export interface ServerShape {
     | OrchestrationReactor
     | ProjectionPendingInteractionRepository
     | ProjectionSnapshotQuery
+    | PluginHostService
     | ProviderSessionReaper
     | ProviderRuntimeReconciler
     | ProviderService

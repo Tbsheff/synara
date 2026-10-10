@@ -126,6 +126,7 @@ import {
 import { isShortcutDispatchSuspended, resolveShortcutCommand } from "~/keybindings";
 import { isTerminalFocused } from "~/lib/terminalFocus";
 import { cn } from "~/lib/utils";
+import { PluginPanelPane } from "~/plugins/PluginPanelPane";
 
 const PullRequestDockPane = lazy(() => import("../pullRequest/PullRequestDockPane"));
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
@@ -990,6 +991,16 @@ export function SingleChatSurface(props: {
             pane={pane}
             runtimeMode={context.runtimeMode}
             threadExists={pane.threadId !== null && existingThreadIds.has(pane.threadId)}
+          />
+        );
+      case "plugin":
+        return (
+          <PluginPanelPane
+            context={{ projectId: props.projectId, threadId: props.threadId }}
+            pluginId={pane.pluginId}
+            contributionId={pane.pluginContributionId}
+            scope={pane.pluginPanelScope}
+            params={pane.pluginParams}
           />
         );
       default:

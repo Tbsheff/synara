@@ -408,6 +408,8 @@ export interface CodexThreadSnapshot {
   cwd?: string | null;
 }
 
+export type CodexThreadStatusType = "notLoaded" | "idle" | "systemError" | "active";
+
 const CODEX_VERSION_CHECK_TIMEOUT_MS = 4_000;
 const CODEX_VERSION_CHECK_MAX_OUTPUT_BYTES = 1024 * 1024;
 /**
@@ -2221,6 +2223,39 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         ? await this.getOrCreateDiscoverySession(input.cwd?.trim() || process.cwd(), codexOptions)
         : await this.resolveContextForDiscovery(undefined, input.cwd);
     return this.readThreadSnapshot(context, input.externalThreadId);
+  }
+
+  async readThreadStatus(threadId: ThreadId, timeoutMs?: number): Promise<CodexThreadStatusType> {
+    const context = this.requireSession(threadId);
+    const providerThreadId = readResumeThreadId({
+      resumeCursor: context.session.resumeCursor,
+    });
+    if (!providerThreadId) {
+      throw new Error("Session is missing a provider resume thread id.");
+    }
+
+    const response = await this.sendRequest(
+      context,
+      "thread/read",
+      { threadId: providerThreadId, includeTurns: false },
+      timeoutMs,
+    );
+    const responseRecord = this.readObject(response);
+    const status =
+      this.readObject(this.readObject(responseRecord, "thread"), "status") ??
+      this.readObject(responseRecord, "status");
+    const statusType = this.readString(status, "type");
+    switch (statusType) {
+      case "notLoaded":
+      case "idle":
+      case "systemError":
+      case "active":
+        return statusType;
+      default:
+        throw new Error(
+          `thread/read returned an unrecognized thread status '${statusType ?? "missing"}'.`,
+        );
+    }
   }
 
   /** Page display summaries without transferring tool output or the full rollout. */

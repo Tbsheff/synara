@@ -107,6 +107,7 @@ import { useDesktopTopBarTrafficLightGutterClassName } from "../hooks/useDesktop
 import { useKeepAwakeState } from "../hooks/useKeepAwakeState";
 import { KeepAwakeSettingsSection } from "../components/KeepAwakeControls";
 import { useTheme } from "../hooks/useTheme";
+import { useLatestProjectStore } from "../latestProjectStore";
 import { isUiDensity } from "../lib/appDensity";
 import { isChatWidthMode, type ChatWidthMode } from "../lib/chatWidth";
 import { isElectron } from "../env";
@@ -128,6 +129,7 @@ import {
 } from "../settingsNavigation";
 import { SETTINGS_PAGE_BACKGROUND_CLASS_NAME } from "../settingsPanelStyles";
 import { isAudioLevelAvailable } from "../lib/audioLevel";
+import { PluginSettingsSections } from "../plugins/PluginSettingsSections";
 
 // ── Settings taxonomy ──────────────────────────────────────────────────────
 
@@ -336,6 +338,11 @@ function SettingsRouteView() {
       ? routeSearch.provider
       : null;
   const activeSectionItem = SETTINGS_NAV_ITEMS.find((item) => item.id === activeSection)!;
+  const latestProjectId = useLatestProjectStore((state) => state.latestProjectId);
+  const pluginSettingsContext = useMemo(
+    () => ({ projectId: latestProjectId, threadId: null }),
+    [latestProjectId],
+  );
 
   const {
     isDefaultActiveTheme,
@@ -1619,6 +1626,8 @@ function SettingsRouteView() {
         return <SkillsSettingsPanel />;
       case "usage":
         return <ProviderUsageSettingsPanel />;
+      case "extensions":
+        return <PluginSettingsSections context={pluginSettingsContext} />;
       default:
         return null;
     }
@@ -1681,7 +1690,7 @@ function SettingsRouteView() {
                       {activeSectionItem.description}
                     </p>
                   </div>
-                  {activeSection === "shortcuts" ? (
+                  {activeSection === "extensions" ? null : activeSection === "shortcuts" ? (
                     <KeyboardShortcutsResetButton />
                   ) : (
                     <Button

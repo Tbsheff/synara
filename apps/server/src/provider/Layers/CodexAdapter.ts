@@ -44,7 +44,10 @@ import {
   type ProviderAdapterError,
 } from "../Errors.ts";
 import { CodexAdapter, type CodexAdapterShape } from "../Services/CodexAdapter.ts";
-import { PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY } from "../Services/ProviderAdapter.ts";
+import {
+  PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY,
+  type ProviderThreadActivity,
+} from "../Services/ProviderAdapter.ts";
 import {
   CodexAppServerManager,
   CodexSessionAuthInvalidatedError,
@@ -2276,6 +2279,26 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
         })),
       );
 
+    const CODEX_THREAD_ACTIVITY_PROBE_TIMEOUT_MS = 5_000;
+    const readThreadActivity: NonNullable<CodexAdapterShape["readThreadActivity"]> = (threadId) =>
+      Effect.tryPromise({
+        try: () => manager.readThreadStatus(threadId, CODEX_THREAD_ACTIVITY_PROBE_TIMEOUT_MS),
+        catch: (cause) => toRequestError(threadId, "thread/read", cause),
+      }).pipe(
+        Effect.map((status): ProviderThreadActivity => {
+          switch (status) {
+            case "active":
+              return "active";
+            case "idle":
+              return "idle";
+            case "notLoaded":
+              return "not-loaded";
+            case "systemError":
+              return "error";
+          }
+        }),
+      );
+
     const readExternalThread: NonNullable<CodexAdapterShape["readExternalThread"]> = (input) =>
       Effect.tryPromise({
         try: () =>
@@ -2734,6 +2757,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
       interruptTurn,
       readThread,
       readExternalThread,
+      readThreadActivity,
       readExternalThreadPage,
       rollbackThread,
       compactThread,

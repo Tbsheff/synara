@@ -45,6 +45,7 @@ export const RAIL_ORDERABLE_ITEM_IDS = [
   "tasks",
   "pullRequests",
   "automations",
+  "plugins",
   "studio",
 ] as const;
 export type RailOrderableItemId = (typeof RAIL_ORDERABLE_ITEM_IDS)[number];
@@ -63,8 +64,13 @@ export function railItemCanHide(id: RailOrderableItemId): boolean {
 
 export function normalizeRailItemOrder(order: readonly string[]): RailOrderableItemId[] {
   const normalized = normalizeIdOrder(order, RAIL_ORDERABLE_ITEM_IDS, isRailOrderableItemId);
-  // Inbox shipped after users saved an order: it joins next to Home, as by default.
-  return placeNewIdAfter(normalized, order, "inbox", "home");
+  // Inbox and Plugins shipped after users saved an order: each joins where it sits by default.
+  return placeNewIdAfter(
+    placeNewIdAfter(normalized, order, "inbox", "home"),
+    order,
+    "plugins",
+    "automations",
+  );
 }
 
 export function normalizeHiddenRailItems(hidden: readonly string[]): RailOrderableItemId[] {
@@ -183,11 +189,13 @@ export function resolveActiveRailShortcutKey(input: {
 /**
  * Whether the panel column shows next to the rail for the active item. Every section either
  * owns a panel (Home/Spaces: projects and threads; Automations, Studio, Settings: their own
- * lists) or takes the full width: Kanban, Tasks, Pull requests, and Inbox each own
+ * lists) or takes the full width: Kanban, Tasks, Pull requests, Inbox, and Plugins each own
  * their page layout.
  */
 export function railItemShowsPanel(id: RailItemId): boolean {
-  return id !== "kanban" && id !== "tasks" && id !== "pullRequests" && id !== "inbox";
+  return (
+    id !== "kanban" && id !== "tasks" && id !== "pullRequests" && id !== "inbox" && id !== "plugins"
+  );
 }
 
 function matchesRoute(pathname: string, route: string): boolean {
@@ -201,6 +209,9 @@ export function railItemForPathname(pathname: string): RailRouteItemId | null {
   if (matchesRoute(pathname, "/tasks")) return "tasks";
   if (matchesRoute(pathname, "/pull-requests")) return "pullRequests";
   if (matchesRoute(pathname, "/automations")) return "automations";
+  if (matchesRoute(pathname, "/plugins") || matchesRoute(pathname, "/extensions")) {
+    return "plugins";
+  }
   // The rail item keeps its stored id "studio"; Hubs live at /hubs with legacy redirects.
   if (
     matchesRoute(pathname, "/hubs") ||

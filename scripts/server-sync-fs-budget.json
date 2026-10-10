@@ -157,6 +157,82 @@
       "statSync": 3
     }
   },
+  "apps/server/src/plugins/PluginHost.ts": {
+    "reason": "Plugin platform predates this guard; frozen reference budget, no new sync operations.",
+    "references": {
+      "existsSync": 2
+    }
+  },
+  "apps/server/src/plugins/authoringSkill.ts": {
+    "reason": "Plugin platform predates this guard; frozen reference budget, no new sync operations.",
+    "references": {
+      "existsSync": 1
+    }
+  },
+  "apps/server/src/plugins/build.ts": {
+    "reason": "Plugin platform predates this guard; frozen reference budget, no new sync operations.",
+    "references": {
+      "mkdirSync": 1,
+      "rmSync": 1,
+      "existsSync": 1
+    }
+  },
+  "apps/server/src/plugins/control.ts": {
+    "reason": "Plugin platform predates this guard; frozen reference budget, no new sync operations.",
+    "references": {
+      "readFileSync": 1,
+      "mkdirSync": 2,
+      "writeFileSync": 1,
+      "renameSync": 1,
+      "openSync": 1,
+      "statSync": 1,
+      "unlinkSync": 2,
+      "closeSync": 1,
+      "realpathSync": 2,
+      "existsSync": 1
+    }
+  },
+  "apps/server/src/plugins/management.ts": {
+    "reason": "Plugin platform predates this guard; frozen reference budget, no new sync operations.",
+    "references": {
+      "realpathSync": 1
+    }
+  },
+  "apps/server/src/plugins/manifest.ts": {
+    "reason": "Plugin platform predates this guard; frozen reference budget, no new sync operations.",
+    "references": {
+      "existsSync": 1,
+      "realpathSync": 2,
+      "statSync": 1,
+      "readFileSync": 1
+    }
+  },
+  "apps/server/src/plugins/scaffold.ts": {
+    "reason": "Plugin platform predates this guard; frozen reference budget, no new sync operations.",
+    "references": {
+      "writeFileSync": 1,
+      "mkdirSync": 3,
+      "readFileSync": 1,
+      "existsSync": 1
+    }
+  },
+  "apps/server/src/plugins/sdkSource.ts": {
+    "reason": "Plugin platform predates this guard; frozen reference budget, no new sync operations.",
+    "references": {
+      "existsSync": 1
+    }
+  },
+  "apps/server/src/plugins/skills.ts": {
+    "reason": "Plugin platform predates this guard; frozen reference budget, no new sync operations.",
+    "references": {
+      "existsSync": 6,
+      "readdirSync": 1,
+      "mkdirSync": 1,
+      "cpSync": 2,
+      "renameSync": 4,
+      "rmSync": 5
+    }
+  },
   "apps/server/src/privatePathPermissions.ts": {
     "reason": "Startup private data permissions: preserve descriptor identity, symlink and TOCTOU checks exactly.",
     "references": {

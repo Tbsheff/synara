@@ -36,6 +36,11 @@ const makeFilePane = (id: string) => ({
   pullRequestRepository: null,
   pullRequestNumber: null,
   pullRequestInitialTab: null,
+  pluginId: null,
+  pluginContributionId: null,
+  pluginPanelScope: null,
+  pluginTitle: null,
+  pluginParams: null,
 });
 
 function renderDock(content: ReactNode) {
@@ -115,6 +120,11 @@ it("maximizes and restores without remounting or resetting document state", asyn
         pullRequestRepository: null,
         pullRequestNumber: null,
         pullRequestInitialTab: null,
+        pluginId: null,
+        pluginContributionId: null,
+        pluginPanelScope: null,
+        pluginTitle: null,
+        pluginParams: null,
       },
     ],
   };
@@ -227,6 +237,11 @@ it("keeps the whole dock maximized across selecting, opening and closing documen
     pullRequestRepository: null,
     pullRequestNumber: null,
     pullRequestInitialTab: null,
+    pluginId: null,
+    pluginContributionId: null,
+    pluginPanelScope: null,
+    pluginTitle: null,
+    pluginParams: null,
   });
   function Harness() {
     const [state, setState] = useState<RightDockThreadState>({
@@ -431,6 +446,11 @@ it("offers maximize for every pane kind, not only documents", async () => {
         pullRequestRepository: null,
         pullRequestNumber: null,
         pullRequestInitialTab: null,
+        pluginId: null,
+        pluginContributionId: null,
+        pluginPanelScope: null,
+        pluginTitle: null,
+        pluginParams: null,
       },
     ],
   };
@@ -477,6 +497,11 @@ it("opens at half the shell by default and at the host's share when it asks for 
         pullRequestRepository: null,
         pullRequestNumber: null,
         pullRequestInitialTab: null,
+        pluginId: null,
+        pluginContributionId: null,
+        pluginPanelScope: null,
+        pluginTitle: null,
+        pluginParams: null,
       },
     ],
   };

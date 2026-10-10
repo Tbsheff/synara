@@ -43,6 +43,7 @@ import type { ProviderServiceError } from "../Errors.ts";
 import type { PersistedProviderRuntimeEvent } from "../../persistence/Services/ProviderRuntimeEvents.ts";
 import type {
   ProviderAdapterCapabilities,
+  ProviderThreadActivity,
   ProviderTurnDispatchOptions,
 } from "./ProviderAdapter.ts";
 
@@ -231,6 +232,11 @@ export interface ProviderServiceShape {
    * terminates those tasks.
    */
   readonly hasLiveRuntimeTasks?: (input: { readonly threadId: ThreadId }) => Effect.Effect<boolean>;
+
+  readonly readThreadActivity?: (input: {
+    readonly threadId: ThreadId;
+    readonly provider: ProviderSession["provider"];
+  }) => Effect.Effect<ProviderThreadActivity | null, ProviderServiceError>;
 
   /**
    * Forget a stale provider-native resume cursor while preserving local routing

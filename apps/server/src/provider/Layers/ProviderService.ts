@@ -4547,6 +4547,15 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
     const hasLiveRuntimeTasks: NonNullable<ProviderServiceShape["hasLiveRuntimeTasks"]> = (input) =>
       Effect.sync(() => (liveRuntimeTaskIds.get(input.threadId)?.size ?? 0) > 0);
 
+    const readThreadActivity: NonNullable<ProviderServiceShape["readThreadActivity"]> = (input) =>
+      Effect.gen(function* () {
+        // Probe the adapter instance that owns the live session; several
+        // instances can share one provider driver.
+        const live = yield* findLiveSession(input.threadId);
+        if (live === null || live.adapter.readThreadActivity === undefined) return null;
+        return yield* live.adapter.readThreadActivity(input.threadId);
+      });
+
     stopIdleRuntimeSession = (threadId, generation, cleanupStarted = false) => {
       const stopEffect = Effect.gen(function* () {
         if (!isRuntimeIdleGenerationCurrent(threadId, generation)) {
@@ -5037,6 +5046,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       stopSession,
       stopRuntimeSession,
       hasLiveRuntimeTasks,
+      readThreadActivity,
       clearSessionResumeCursor,
       listSessions,
       getCapabilities,

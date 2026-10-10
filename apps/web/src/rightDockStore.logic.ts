@@ -5,6 +5,7 @@
 
 import { arrayMove } from "@dnd-kit/sortable";
 import type { ProjectId, ThreadId, TurnId } from "@synara/contracts";
+import type { JsonValue } from "@synara/plugin-sdk";
 import { resolveTabAfterClose } from "./lib/tabStrip";
 import { isPlainObject, sanitizeStringKeyedRecord } from "./persistedRecord";
 
@@ -21,9 +22,11 @@ const RIGHT_DOCK_PANE_KINDS = [
   "sidechat",
   "git",
   "pullRequest",
+  "plugin",
 ] as const;
 
 export type RightDockPaneKind = (typeof RIGHT_DOCK_PANE_KINDS)[number];
+export type PluginPanelScope = "thread" | "new-thread";
 export type PullRequestInitialTab = "summary" | "timeline" | "code";
 
 const RIGHT_DOCK_PANE_KIND_SET: ReadonlySet<string> = new Set(RIGHT_DOCK_PANE_KINDS);
@@ -42,6 +45,11 @@ export interface RightDockPane {
   pullRequestRepository: string | null;
   pullRequestNumber: number | null;
   pullRequestInitialTab: PullRequestInitialTab | null;
+  pluginId: string | null;
+  pluginContributionId: string | null;
+  pluginPanelScope: PluginPanelScope | null;
+  pluginTitle: string | null;
+  pluginParams: JsonValue | null;
 }
 
 /**
@@ -58,8 +66,13 @@ export interface RightDockThreadState {
   activePaneId: string | null;
 }
 
-// Terminals and file previews have independent tabs. Side chats share one destination.
-const MULTI_INSTANCE_PANE_KINDS: ReadonlySet<RightDockPaneKind> = new Set(["file", "terminal"]);
+// Terminals, file previews, and plugin panels have independent tabs. Side chats share one
+// destination.
+const MULTI_INSTANCE_PANE_KINDS: ReadonlySet<RightDockPaneKind> = new Set([
+  "file",
+  "terminal",
+  "plugin",
+]);
 
 // Kinds that can only ever have one instance per host thread, derived as
 // "every kind that is not multi-instance" so the two sets can never drift.
@@ -81,6 +94,35 @@ export function createDefaultRightDockState(): RightDockThreadState {
 
 export function isRightDockPaneKind(value: unknown): value is RightDockPaneKind {
   return typeof value === "string" && RIGHT_DOCK_PANE_KIND_SET.has(value);
+}
+
+function isJsonValue(value: unknown): value is JsonValue {
+  if (value === null || typeof value === "string" || typeof value === "boolean") return true;
+  if (typeof value === "number") return Number.isFinite(value);
+  if (Array.isArray(value)) return value.every(isJsonValue);
+  if (!isPlainObject(value)) return false;
+  return Object.values(value as Record<string, unknown>).every(isJsonValue);
+}
+
+function jsonValuesEqual(left: JsonValue | null, right: JsonValue | null): boolean {
+  if (left === right) return true;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return (
+      Array.isArray(left) &&
+      Array.isArray(right) &&
+      left.length === right.length &&
+      left.every((value, index) => jsonValuesEqual(value, right[index] ?? null))
+    );
+  }
+  if (!isPlainObject(left) || !isPlainObject(right)) return false;
+  const leftKeys = Object.keys(left);
+  const rightKeys = Object.keys(right);
+  return (
+    leftKeys.length === rightKeys.length &&
+    leftKeys.every(
+      (key) => Object.hasOwn(right, key) && jsonValuesEqual(left[key] ?? null, right[key] ?? null),
+    )
+  );
 }
 
 // Persisted dock state predates the current pane-kind union, so a stale entry
@@ -120,6 +162,15 @@ function sanitizePersistedPane(value: unknown): RightDockPane | null {
       candidate.pullRequestInitialTab === "code"
         ? candidate.pullRequestInitialTab
         : null,
+    pluginId: typeof candidate.pluginId === "string" ? candidate.pluginId : null,
+    pluginContributionId:
+      typeof candidate.pluginContributionId === "string" ? candidate.pluginContributionId : null,
+    pluginPanelScope:
+      candidate.pluginPanelScope === "thread" || candidate.pluginPanelScope === "new-thread"
+        ? candidate.pluginPanelScope
+        : null,
+    pluginTitle: typeof candidate.pluginTitle === "string" ? candidate.pluginTitle : null,
+    pluginParams: isJsonValue(candidate.pluginParams) ? candidate.pluginParams : null,
   };
 }
 
@@ -178,6 +229,11 @@ export interface OpenPaneInput {
   pullRequestRepository?: string | null;
   pullRequestNumber?: number | null;
   pullRequestInitialTab?: PullRequestInitialTab | null;
+  pluginId?: string | null;
+  pluginContributionId?: string | null;
+  pluginPanelScope?: PluginPanelScope | null;
+  pluginTitle?: string | null;
+  pluginParams?: JsonValue | null;
 }
 
 function createPane(input: OpenPaneInput): RightDockPane {
@@ -192,6 +248,11 @@ function createPane(input: OpenPaneInput): RightDockPane {
     pullRequestRepository: input.pullRequestRepository ?? null,
     pullRequestNumber: input.pullRequestNumber ?? null,
     pullRequestInitialTab: input.pullRequestInitialTab ?? null,
+    pluginId: input.pluginId ?? null,
+    pluginContributionId: input.pluginContributionId ?? null,
+    pluginPanelScope: input.pluginPanelScope ?? null,
+    pluginTitle: input.pluginTitle ?? null,
+    pluginParams: input.pluginParams ?? null,
   };
 }
 
@@ -235,6 +296,20 @@ function findMatchingMultiInstancePane(
     const filePath = input.filePath ?? null;
     return state.panes.find((pane) => pane.kind === "file" && pane.filePath === filePath);
   }
+  if (input.kind === "plugin") {
+    const pluginId = input.pluginId ?? null;
+    const contributionId = input.pluginContributionId ?? null;
+    const panelScope = input.pluginPanelScope ?? null;
+    const params = input.pluginParams ?? null;
+    return state.panes.find(
+      (pane) =>
+        pane.kind === "plugin" &&
+        pane.pluginId === pluginId &&
+        pane.pluginContributionId === contributionId &&
+        pane.pluginPanelScope === panelScope &&
+        jsonValuesEqual(pane.pluginParams, params),
+    );
+  }
   return undefined;
 }
 
@@ -264,7 +339,20 @@ export function openPaneInState(
   } else {
     const existing = findMatchingMultiInstancePane(state, input);
     if (existing) {
-      return { open: true, panes: state.panes, activePaneId: existing.id };
+      const nextPluginTitle = input.pluginTitle ?? existing.pluginTitle;
+      const panes =
+        input.kind === "plugin" && nextPluginTitle !== existing.pluginTitle
+          ? state.panes.map((pane) =>
+              pane.id === existing.id
+                ? {
+                    ...pane,
+                    pluginTitle: nextPluginTitle,
+                  }
+                : pane,
+            )
+          : state.panes;
+      if (state.open && state.activePaneId === existing.id && panes === state.panes) return state;
+      return { open: true, panes, activePaneId: existing.id };
     }
   }
 

@@ -18,6 +18,7 @@ function mountFooter(input: {
       isComposerFooterCompact={false}
       leadingControls={null}
       composerPickerControls={null}
+      pluginControls={null}
       contextMeter={null}
       interactionMode="default"
       resetInteractionMode={vi.fn()}

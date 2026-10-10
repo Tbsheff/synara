@@ -339,6 +339,19 @@ import { ExpiredSidechatNotice } from "./chat/ExpiredSidechatNotice";
 import type { MessagesTimelineController } from "./chat/MessagesTimeline";
 import { buildTurnDiffSummaryByAssistantMessageId } from "./chat/MessagesTimeline.logic";
 import { ProjectPicker } from "./chat/ProjectPicker";
+import {
+  PluginComposerBanners,
+  PluginComposerControls,
+  usePluginComposerHost,
+} from "../plugins/PluginComposerExtensions";
+import { PluginHomepageSections } from "../plugins/PluginHomepageSections";
+import {
+  parsePluginApprovalDecision,
+  parsePluginUserInputAnswers,
+  pluginOwnsPendingInteraction,
+  PluginPendingInteractionView,
+  usePluginPendingInteraction,
+} from "../plugins/PluginPendingInteraction";
 import { ProviderHealthBanner } from "./chat/ProviderHealthBanner";
 import { resolveProviderModelLabel } from "./chat/ProviderModelPicker";
 import {
@@ -1503,6 +1516,7 @@ export default function ChatView({
     activePendingIsResponding,
     activePendingApproval,
     onRespondToApproval,
+    onRespondToUserInput,
     userInputSubmissionVersion,
     onCancelActivePendingUserInput,
     onToggleActivePendingUserInputOption,
@@ -1519,6 +1533,17 @@ export default function ChatView({
     setComposerTrigger,
     setComposerHighlightedItemId,
   });
+  const pluginApprovalCard = usePluginPendingInteraction("approval");
+  const pluginUserInputCard = usePluginPendingInteraction("userInput");
+  const [defaultPendingCardRequestKey, setDefaultPendingCardRequestKey] = useState<string | null>(
+    null,
+  );
+  const pluginOwnsPendingUserInput = pluginOwnsPendingInteraction({
+    registration: pluginUserInputCard,
+    requestKey: activePendingUserInputKey,
+    defaultCardRequestKey: defaultPendingCardRequestKey,
+  });
+  const composerPendingProgress = pluginOwnsPendingUserInput ? null : activePendingProgress;
   const activeProposedPlan = useMemo(() => {
     if (!latestTurnSettled) {
       return null;
@@ -1750,13 +1775,14 @@ export default function ChatView({
   );
   const isComposerApprovalState = activePendingApproval !== null;
   const isSidechatExpired = Boolean(activeThread?.sidechatExpiredAt);
-  const isComposerEditorDisabled = isConnecting || isComposerApprovalState || isSidechatExpired;
+  const isComposerEditorDisabled =
+    isConnecting || isComposerApprovalState || pluginOwnsPendingUserInput || isSidechatExpired;
   const canCollapsePastedTextToDraft = shouldEnableComposerPastedTextCollapse({
     isComposerApprovalState,
     hasPendingUserInput: pendingUserInputs.length > 0,
     showPlanFollowUpPrompt,
   });
-  const composerFooterHasWideActions = showPlanFollowUpPrompt || activePendingProgress !== null;
+  const composerFooterHasWideActions = showPlanFollowUpPrompt || composerPendingProgress !== null;
   useLayoutEffect(() => {
     if (previousActiveTurnLayoutKeyRef.current !== activeTurnLayoutKey) {
       previousActiveTurnLayoutKeyRef.current = activeTurnLayoutKey;
@@ -2755,6 +2781,38 @@ export default function ChatView({
       focusComposer();
     });
   }, [pendingComposerFocusRef, focusComposer]);
+  const setPluginComposerText = useCallback(
+    (nextText: string) => {
+      discardPromptHistoryNavigationForComposerMutation();
+      promptRef.current = nextText;
+      setPrompt(nextText);
+      setComposerCursor(collapseExpandedComposerCursor(nextText, nextText.length));
+      setComposerTrigger(detectComposerTrigger(nextText, nextText.length));
+    },
+    [
+      discardPromptHistoryNavigationForComposerMutation,
+      promptRef,
+      setComposerCursor,
+      setComposerTrigger,
+      setPrompt,
+    ],
+  );
+  const submitPluginComposer = useCallback(() => {
+    composerFormRef.current?.requestSubmit();
+  }, [composerFormRef]);
+  const pluginComposerHost = usePluginComposerHost({
+    promptRef,
+    setText: setPluginComposerText,
+    focus: scheduleComposerFocus,
+    submit: submitPluginComposer,
+  });
+  const pluginContext = useMemo(
+    () => ({
+      projectId: activeProject?.id ?? null,
+      threadId: activeThread?.id ?? threadId,
+    }),
+    [activeProject?.id, activeThread?.id, threadId],
+  );
   const { change: handleComputerControlModeChange, sequence: computerControlChangeSequence } =
     useComputerControlModeChange({
       threadId,
@@ -4348,7 +4406,7 @@ export default function ChatView({
     resetLocalDispatch,
     isVoiceTranscribing,
     waitForPendingComposerImages,
-    activePendingProgress,
+    activePendingProgress: composerPendingProgress,
     activePendingUserInputKey,
     pendingUserInputAnswersByRequestIdRef,
     setPendingUserInputAnswersByRequestId,
@@ -4761,7 +4819,7 @@ export default function ChatView({
   } = useChatComposerEditing({
     threadId,
     promptRef,
-    activePendingProgress,
+    activePendingProgress: composerPendingProgress,
     activePendingUserInputKey,
     pendingUserInputAnswersByRequestIdRef,
     setPendingUserInputAnswersByRequestId,
@@ -4977,7 +5035,7 @@ export default function ChatView({
     localDirectoryMenuRef,
     composerMenuItemsRef,
     activeComposerMenuItemRef,
-    activePendingProgress,
+    activePendingProgress: composerPendingProgress,
     isComposerApprovalState,
     pendingUserInputs,
     composerDraft,
@@ -5912,30 +5970,94 @@ export default function ChatView({
                   precedence and suppresses the question card while one is active. */}
             {activePendingApproval ? (
               <div className="pb-2">
-                <ComposerPendingApprovalPanel
-                  approval={activePendingApproval}
-                  pendingCount={pendingApprovals.length}
-                  isResponding={respondingRequestKeys.includes(
-                    pendingRequestInstanceKey(
-                      activePendingApproval.requestId,
-                      activePendingApproval.lifecycleGeneration,
-                    ),
+                <PluginPendingInteractionView
+                  requestKey={pendingRequestInstanceKey(
+                    activePendingApproval.requestId,
+                    activePendingApproval.lifecycleGeneration,
                   )}
-                  onRespond={onRespondToApproval}
+                  defaultCardRequestKey={defaultPendingCardRequestKey}
+                  registration={pluginApprovalCard}
+                  onUseDefaultCard={setDefaultPendingCardRequestKey}
+                  context={pluginContext}
+                  interaction={{
+                    kind: "approval",
+                    approval: activePendingApproval,
+                    pendingCount: pendingApprovals.length,
+                    isResponding: respondingRequestKeys.includes(
+                      pendingRequestInstanceKey(
+                        activePendingApproval.requestId,
+                        activePendingApproval.lifecycleGeneration,
+                      ),
+                    ),
+                  }}
+                  submit={(value) =>
+                    onRespondToApproval(
+                      activePendingApproval.requestId,
+                      parsePluginApprovalDecision(value, activePendingApproval),
+                      activePendingApproval.lifecycleGeneration,
+                      activePendingApproval.requestKind,
+                    )
+                  }
+                  cancel={() =>
+                    onRespondToApproval(
+                      activePendingApproval.requestId,
+                      "cancel",
+                      activePendingApproval.lifecycleGeneration,
+                      activePendingApproval.requestKind,
+                    )
+                  }
+                  fallback={
+                    <ComposerPendingApprovalPanel
+                      approval={activePendingApproval}
+                      pendingCount={pendingApprovals.length}
+                      isResponding={respondingRequestKeys.includes(
+                        pendingRequestInstanceKey(
+                          activePendingApproval.requestId,
+                          activePendingApproval.lifecycleGeneration,
+                        ),
+                      )}
+                      onRespond={onRespondToApproval}
+                    />
+                  }
                 />
               </div>
-            ) : pendingUserInputs.length > 0 ? (
+            ) : activePendingUserInput && activePendingUserInputKey ? (
               <div className="pb-2">
-                <ComposerPendingUserInputPanel
-                  pendingUserInputs={pendingUserInputs}
-                  submissionVersion={userInputSubmissionVersion}
-                  isResponding={activePendingIsResponding}
-                  answers={activePendingDraftAnswers}
-                  questionIndex={activePendingQuestionIndex}
-                  onToggleOption={onToggleActivePendingUserInputOption}
-                  onAdvance={onAdvanceActivePendingUserInput}
-                  onPrevious={onPreviousActivePendingUserInputQuestion}
-                  onCancel={onCancelActivePendingUserInput}
+                <PluginPendingInteractionView
+                  requestKey={activePendingUserInputKey}
+                  defaultCardRequestKey={defaultPendingCardRequestKey}
+                  registration={pluginUserInputCard}
+                  onUseDefaultCard={setDefaultPendingCardRequestKey}
+                  context={pluginContext}
+                  interaction={{
+                    kind: "userInput",
+                    requests: pendingUserInputs,
+                    activeRequest: activePendingUserInput,
+                    answers: activePendingDraftAnswers,
+                    questionIndex: activePendingQuestionIndex,
+                    isResponding: activePendingIsResponding,
+                  }}
+                  submit={(value) =>
+                    onRespondToUserInput(
+                      activePendingUserInput.requestId,
+                      parsePluginUserInputAnswers(value, activePendingUserInput.questions),
+                      activePendingUserInput.lifecycleGeneration,
+                    )
+                  }
+                  cancel={onCancelActivePendingUserInput}
+                  fallback={
+                    <ComposerPendingUserInputPanel
+                      pendingUserInputs={pendingUserInputs}
+                      submissionVersion={userInputSubmissionVersion}
+                      isResponding={activePendingIsResponding}
+                      answers={activePendingDraftAnswers}
+                      questionIndex={activePendingQuestionIndex}
+                      onToggleOption={onToggleActivePendingUserInputOption}
+                      onAdvance={onAdvanceActivePendingUserInput}
+                      onPrevious={onPreviousActivePendingUserInputQuestion}
+                      onCancel={() => void onCancelActivePendingUserInput().catch(() => undefined)}
+                    />
+                  }
                 />
               </div>
             ) : null}
@@ -5985,6 +6107,7 @@ export default function ChatView({
                 composerOverlayOpen && !isComposerApprovalState && "overflow-visible",
               )}
             >
+              <PluginComposerBanners context={pluginContext} text={prompt} />
               <ComposerInputBanners
                 roundedTopReset={false}
                 planFollowUp={
@@ -6117,10 +6240,10 @@ export default function ChatView({
                   key={threadId}
                   ref={composerEditorRef}
                   value={
-                    isComposerApprovalState
+                    isComposerApprovalState || pluginOwnsPendingUserInput
                       ? ""
-                      : activePendingProgress
-                        ? activePendingProgress.customAnswer
+                      : composerPendingProgress
+                        ? composerPendingProgress.customAnswer
                         : prompt
                   }
                   cursor={composerCursor}
@@ -6140,19 +6263,21 @@ export default function ChatView({
                   placeholder={
                     isComposerApprovalState
                       ? "Resolve this approval request to continue"
-                      : activePendingProgress
-                        ? activePendingProgress.activeQuestion?.options.length === 0
-                          ? "Type your answer to continue"
-                          : "Type your own answer, or leave this blank to use the selected option"
-                        : showPlanFollowUpPrompt && activeProposedPlan
-                          ? "Add feedback to refine the plan, or leave this blank to implement it"
-                          : activeThread?.parentThreadId
-                            ? "Message this subagent while it works"
-                            : hasLiveTurn
-                              ? "Ask for follow-up changes"
-                              : standaloneSidechatContext
-                                ? `Ask about this ${standaloneSidechatItemNoun}`
-                                : "Ask anything, @tag files/folders, or use / to show available commands"
+                      : pluginOwnsPendingUserInput
+                        ? "Answer the question above to continue"
+                        : composerPendingProgress
+                          ? composerPendingProgress.activeQuestion?.options.length === 0
+                            ? "Type your answer to continue"
+                            : "Type your own answer, or leave this blank to use the selected option"
+                          : showPlanFollowUpPrompt && activeProposedPlan
+                            ? "Add feedback to refine the plan, or leave this blank to implement it"
+                            : activeThread?.parentThreadId
+                              ? "Message this subagent while it works"
+                              : hasLiveTurn
+                                ? "Ask for follow-up changes"
+                                : standaloneSidechatContext
+                                  ? `Ask about this ${standaloneSidechatItemNoun}`
+                                  : "Ask anything, @tag files/folders, or use / to show available commands"
                   }
                   disabled={isComposerEditorDisabled}
                 />
@@ -6167,6 +6292,9 @@ export default function ChatView({
                     relocateComposerLeadingControls
                       ? null
                       : renderComposerLeadingControls({ iconOnly: false })
+                  }
+                  pluginControls={
+                    <PluginComposerControls context={pluginContext} composer={pluginComposerHost} />
                   }
                   composerPickerControls={composerPickerControls}
                   contextMeter={
@@ -6229,9 +6357,9 @@ export default function ChatView({
                     onToggle: toggleComposerVoiceRecording,
                   }}
                   pendingInput={
-                    activePendingProgress
+                    composerPendingProgress
                       ? {
-                          progress: activePendingProgress,
+                          progress: composerPendingProgress,
                           responding: activePendingIsResponding,
                           answersComplete: Boolean(activePendingResolvedAnswers),
                         }
@@ -6304,6 +6432,7 @@ export default function ChatView({
           activeThreadEntryPoint={terminalState.entryPoint}
           activeProvider={activeThread.session?.provider ?? activeThread.modelSelection.provider}
           activeProjectName={isEditorRail ? undefined : activeProjectDisplayName}
+          activeProjectId={activeProject?.id ?? null}
           threadBreadcrumbs={threadBreadcrumbs}
           {...(isEditorRail
             ? { className: cn(CHAT_SURFACE_HEADER_PADDING_X_CLASS, "h-full") }
@@ -6519,6 +6648,10 @@ export default function ChatView({
                 </div>
                 <div className="w-full shrink-0 pb-3 sm:pb-4">
                   {composerSection}
+                  <PluginHomepageSections
+                    className={cn("mt-3", COMPOSER_COLUMN_FRAME_CLASS_NAME)}
+                    context={pluginContext}
+                  />
                   {relocateComposerLeadingControls ? (
                     <div className={COMPOSER_COLUMN_FRAME_CLASS_NAME}>
                       <div className="flex w-full items-center gap-1">
@@ -6537,6 +6670,7 @@ export default function ChatView({
                 <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
                   <ChatTranscriptPane
                     activeThreadId={activeThread.id}
+                    pluginContext={pluginContext}
                     activeTurnId={activeTurnIdForTranscript}
                     agentActivityDetail={openAgentActivityDetail}
                     hasMessages={timelineEntries.length > 0}
@@ -6897,6 +7031,21 @@ export default function ChatView({
               runtimeMode,
               createThread: handleNewThread,
             })
+          }
+          pluginContext={pluginContext}
+          pluginMessage={
+            pendingTranscriptSelectionAction
+              ? (() => {
+                  const message = timelineMessages.find(
+                    (candidate) =>
+                      candidate.id ===
+                      pendingTranscriptSelectionAction.selection.assistantMessageId,
+                  );
+                  return message?.role === "assistant"
+                    ? { id: message.id, role: "assistant" as const, text: message.text }
+                    : undefined;
+                })()
+              : undefined
           }
         />
       ) : null}

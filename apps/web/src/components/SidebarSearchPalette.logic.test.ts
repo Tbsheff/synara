@@ -191,6 +191,13 @@ describe("SidebarSearchPalette.logic", () => {
     assert.equal(typed[0]?.id, "switch-space-work");
   });
 
+  it("matches Plugins by label", () => {
+    assert.deepEqual(
+      matchSidebarSearchActions(actions, "plugins").map((action) => action.id),
+      ["plugins"],
+    );
+  });
+
   it("matches command words across labels and keywords without admitting partial queries", () => {
     const commands: SidebarSearchAction[] = [
       { id: "go-inbox", label: "Go to Inbox", description: "Open Inbox.", keywords: ["navigate"] },

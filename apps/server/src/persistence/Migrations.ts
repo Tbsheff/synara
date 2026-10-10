@@ -147,6 +147,7 @@ import Migration0128 from "./Migrations/128_HubWork.ts";
 import Migration0129 from "./Migrations/129_ProjectionThreadsSnooze.ts";
 import Migration0130 from "./Migrations/130_PullRequestAutoFix.ts";
 import Migration0131 from "./Migrations/131_ProjectSourceFolders.ts";
+import Migration0132 from "./Migrations/132_PluginStorage.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -294,6 +295,7 @@ export const migrationEntries = [
   [129, "ProjectionThreadsSnooze", Migration0129],
   [130, "PullRequestAutoFix", Migration0130],
   [131, "ProjectSourceFolders", Migration0131],
+  [132, "PluginStorage", Migration0132],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>
@@ -359,7 +361,7 @@ export const findFirstMigrationLineageDivergence = (
   migrationEntries.find(([id, name]) => id <= highWaterMark && recordedNamesById.get(id) !== name);
 
 /**
- * A tracker identity that a *released* Synara build wrote for a migration whose
+ * A tracker identity that a known Synara build wrote for a migration whose
  * canonical ID later changed.
  *
  * v0.5.5 shipped `[54, "ProjectPullRequestPins"]`; v0.6.0 reserved 54 for the
@@ -397,6 +399,22 @@ export const MIGRATION_LINEAGE_ALIASES: readonly MigrationLineageAlias[] = [
     historicalName: "ProjectPullRequestPins",
     currentId: 69,
     historicalSlotRequiresRerun: false,
+  },
+  {
+    // Unreleased plugin-platform builds recorded PluginStorage at 104, then at
+    // 109. Upstream now owns both slots, so remove the row and let the migrator
+    // re-run every canonical migration from that slot forward; 132 is
+    // idempotent (`CREATE TABLE IF NOT EXISTS`).
+    historicalId: 104,
+    historicalName: "PluginStorage",
+    currentId: 132,
+    historicalSlotRequiresRerun: true,
+  },
+  {
+    historicalId: 109,
+    historicalName: "PluginStorage",
+    currentId: 132,
+    historicalSlotRequiresRerun: true,
   },
 ];
 

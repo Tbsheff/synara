@@ -95,6 +95,7 @@ export function makeAgentGatewayMcpTransport(input: {
   readonly credentials: AgentGatewayCredentialsShape;
   readonly snapshotQuery: ProjectionSnapshotQueryShape;
   readonly tools: ReadonlyArray<ToolEntry>;
+  readonly dynamicTools?: () => Effect.Effect<ReadonlyArray<ToolEntry>, Error>;
   readonly instructions: string;
   readonly requireThreadShell: (
     threadId: string,
@@ -121,19 +122,45 @@ export function makeAgentGatewayMcpTransport(input: {
   readonly isComputerToolName?: (toolName: string) => boolean;
   readonly computerControlCapability?: AgentGatewayCapability;
 }): AgentGatewayShape["handleMcpPost"] {
-  const toolsByName = new Map(input.tools.map((tool) => [tool.definition.name, tool]));
-  // The catalog is immutable after construction, so the sanitized `tools/list`
-  // definitions (a recursive schema walk plus JSON clone per tool) are computed
-  // once here instead of on every request.
+  const staticToolsByName = new Map<string, ToolEntry>();
   const servedDefinitionByToolName = new Map<string, ToolEntry["definition"]>();
   for (const tool of input.tools) {
+    if (staticToolsByName.has(tool.definition.name)) {
+      throw new Error(`Duplicate agent gateway tool name: ${tool.definition.name}`);
+    }
+    staticToolsByName.set(tool.definition.name, tool);
     servedDefinitionByToolName.set(tool.definition.name, {
       ...tool.definition,
-      // SAFETY: ToolEntry.inputSchema is typed Record<string, unknown>; the sanitizer
-      // returns a fresh object for object input, so this restores the static type.
       inputSchema: sanitizeToolInputSchema(tool.definition.inputSchema) as Record<string, unknown>,
     });
   }
+  const emptyDynamicCatalog = {
+    tools: [] as ReadonlyArray<ToolEntry>,
+    toolsByName: new Map<string, ToolEntry>(),
+  };
+  let cachedDynamicCatalog = emptyDynamicCatalog;
+  const indexDynamicTools = (dynamicTools: ReadonlyArray<ToolEntry>) =>
+    Effect.gen(function* () {
+      const toolsByName = new Map<string, ToolEntry>();
+      for (const tool of dynamicTools) {
+        if (staticToolsByName.has(tool.definition.name) || toolsByName.has(tool.definition.name)) {
+          return yield* Effect.fail(
+            new Error(`Duplicate agent gateway tool name: ${tool.definition.name}`),
+          );
+        }
+        toolsByName.set(tool.definition.name, tool);
+      }
+      return { tools: dynamicTools, toolsByName };
+    });
+  const resolveDynamicTools = () => {
+    if (!input.dynamicTools) return Effect.succeed(emptyDynamicCatalog);
+    return input.dynamicTools().pipe(
+      Effect.timeout("2 seconds"),
+      Effect.flatMap(indexDynamicTools),
+      Effect.tap((catalog) => Effect.sync(() => (cachedDynamicCatalog = catalog))),
+      Effect.catch(() => Effect.succeed(cachedDynamicCatalog)),
+    );
+  };
   const handleRequest = (request: JsonRpcRequest, context: Omit<ToolContext, "jsonRpcRequestId">) =>
     Effect.gen(function* () {
       switch (request.method) {
@@ -148,9 +175,11 @@ export function makeAgentGatewayMcpTransport(input: {
           );
         case "ping":
           return jsonRpcResult(request.id, {});
-        case "tools/list":
+        case "tools/list": {
+          const { tools: dynamicTools } = yield* resolveDynamicTools();
+          const tools = [...input.tools, ...dynamicTools];
           return jsonRpcResult(request.id, {
-            tools: filterToolsByCapability(input.tools, context.callerCapabilities)
+            tools: filterToolsByCapability(tools, context.callerCapabilities)
               // Discovery-only tools stay callable by exact name — toolsByName
               // is built from the unfiltered catalog — but do not advertise.
               .filter((tool) => tool.discoveryOnly !== true)
@@ -165,6 +194,7 @@ export function makeAgentGatewayMcpTransport(input: {
                   },
               ),
           });
+        }
         case "tools/call": {
           const toolName = request.params.name;
           if (typeof toolName !== "string") {
@@ -188,7 +218,9 @@ export function makeAgentGatewayMcpTransport(input: {
                 ),
               ),
             );
-          const tool = toolsByName.get(toolName);
+          const tool =
+            staticToolsByName.get(toolName) ??
+            (yield* resolveDynamicTools()).toolsByName.get(toolName);
           if (!tool) {
             // Entirely-unknown names stay INVALID_PARAMS — except a computer
             // tool the caller's session was never granted: that is a

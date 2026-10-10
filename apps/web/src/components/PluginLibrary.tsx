@@ -66,10 +66,11 @@ import {
   useDesktopTopBarWindowControlsGutterClassName,
 } from "~/hooks/useDesktopTopBarGutter";
 import { Skeleton } from "./ui/skeleton";
+import { SynaraPluginCatalog } from "~/plugins/SynaraPluginCatalog";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
-type DiscoveryTab = "plugins" | "skills";
+type DiscoveryTab = "synara" | "plugins" | "skills";
 type ProviderCapabilities = { plugins: boolean; skills: boolean };
 type PluginEntry = {
   marketplaceName: string;
@@ -382,7 +383,9 @@ export function PluginLibrary(props?: {
     "codex";
 
   const [selectedProvider, setSelectedProvider] = useState<ProviderKind>(preferredProvider);
-  const [selectedTab, setSelectedTab] = useState<DiscoveryTab>("plugins");
+  // Synara's own plugins are app-wide, so only the standalone page lists them; a group's
+  // embedded library stays on its workspace's provider plugins.
+  const [selectedTab, setSelectedTab] = useState<DiscoveryTab>(embedded ? "plugins" : "synara");
   const [pluginSearch, setPluginSearch] = useState("");
   const [skillSearch, setSkillSearch] = useState("");
   const deferredPluginSearch = useDeferredValue(pluginSearch);
@@ -455,10 +458,11 @@ export function PluginLibrary(props?: {
   // tabs never renders an unsupported frame, and the user's own selection
   // resurfaces if its provider becomes capable again.
   const supportsSelectedTab =
-    !settings.disabledProviders.includes(selectedProvider) &&
-    (selectedTab === "plugins"
-      ? providerCapabilities[selectedProvider].plugins
-      : providerCapabilities[selectedProvider].skills);
+    selectedTab === "synara" ||
+    (!settings.disabledProviders.includes(selectedProvider) &&
+      (selectedTab === "plugins"
+        ? providerCapabilities[selectedProvider].plugins
+        : providerCapabilities[selectedProvider].skills));
   const providerFallbackOrder =
     selectedTab === "plugins"
       ? enabledProviderOrder
@@ -562,6 +566,13 @@ export function PluginLibrary(props?: {
   const tabsAndProviderPicker = (
     <>
       <div className="flex items-end gap-3">
+        {!embedded ? (
+          <TabButton
+            label="Synara"
+            active={selectedTab === "synara"}
+            onClick={() => setSelectedTab("synara")}
+          />
+        ) : null}
         <TabButton
           label="Plugins"
           active={selectedTab === "plugins"}
@@ -574,30 +585,32 @@ export function PluginLibrary(props?: {
         />
       </div>
       <div className="flex-1" />
-      <div className="inline-flex rounded-full border border-border/60 bg-background/60 p-0.5">
-        {enabledProviderOrder.map((provider) => {
-          const capabilities = providerCapabilities[provider];
-          const label = PROVIDER_DISPLAY_NAMES[provider];
-          return (
-            <ProviderToggleButton
-              key={provider}
-              label={label}
-              provider={provider}
-              active={effectiveProvider === provider}
-              disabled={!capabilities.plugins && !capabilities.skills}
-              onClick={() => {
-                setSelectedProvider(provider);
-                if (selectedTab === "plugins" && !capabilities.plugins && capabilities.skills) {
-                  setSelectedTab("skills");
-                }
-                if (selectedTab === "skills" && !capabilities.skills && capabilities.plugins) {
-                  setSelectedTab("plugins");
-                }
-              }}
-            />
-          );
-        })}
-      </div>
+      {selectedTab === "synara" ? null : (
+        <div className="inline-flex rounded-full border border-border/60 bg-background/60 p-0.5">
+          {enabledProviderOrder.map((provider) => {
+            const capabilities = providerCapabilities[provider];
+            const label = PROVIDER_DISPLAY_NAMES[provider];
+            return (
+              <ProviderToggleButton
+                key={provider}
+                label={label}
+                provider={provider}
+                active={effectiveProvider === provider}
+                disabled={!capabilities.plugins && !capabilities.skills}
+                onClick={() => {
+                  setSelectedProvider(provider);
+                  if (selectedTab === "plugins" && !capabilities.plugins && capabilities.skills) {
+                    setSelectedTab("skills");
+                  }
+                  if (selectedTab === "skills" && !capabilities.skills && capabilities.plugins) {
+                    setSelectedTab("plugins");
+                  }
+                }}
+              />
+            );
+          })}
+        </div>
+      )}
     </>
   );
 
@@ -607,31 +620,37 @@ export function PluginLibrary(props?: {
       {!embedded ? (
         <div className="px-6 py-10 text-center">
           <h1 className="text-[28px] font-semibold text-foreground">
-            {providerLabel ? `Make ${providerLabel} work your way` : "Plugins and skills"}
+            {selectedTab === "synara"
+              ? "Plugins installed in Synara"
+              : providerLabel
+                ? `Make ${providerLabel} work your way`
+                : "Plugins and skills"}
           </h1>
         </div>
       ) : null}
 
       {/* Search */}
-      <div className="mx-auto max-w-2xl px-6 pb-6">
-        <InputGroup className="rounded-xl bg-background/70 shadow-xs">
-          <InputGroupAddon>
-            <InputGroupText>
-              <SearchIcon className="size-4 text-muted-foreground/60" />
-            </InputGroupText>
-          </InputGroupAddon>
-          <InputGroupInput
-            disabled={enabledProviderOrder.length === 0}
-            value={selectedTab === "plugins" ? pluginSearch : skillSearch}
-            onChange={(e) => {
-              if (selectedTab === "plugins") setPluginSearch(e.target.value);
-              else setSkillSearch(e.target.value);
-            }}
-            placeholder={selectedTab === "plugins" ? "Search plugins" : "Search skills"}
-            className="text-ui leading-snug"
-          />
-        </InputGroup>
-      </div>
+      {selectedTab === "synara" ? null : (
+        <div className="mx-auto max-w-2xl px-6 pb-6">
+          <InputGroup className="rounded-xl bg-background/70 shadow-xs">
+            <InputGroupAddon>
+              <InputGroupText>
+                <SearchIcon className="size-4 text-muted-foreground/60" />
+              </InputGroupText>
+            </InputGroupAddon>
+            <InputGroupInput
+              disabled={enabledProviderOrder.length === 0}
+              value={selectedTab === "plugins" ? pluginSearch : skillSearch}
+              onChange={(e) => {
+                if (selectedTab === "plugins") setPluginSearch(e.target.value);
+                else setSkillSearch(e.target.value);
+              }}
+              placeholder={selectedTab === "plugins" ? "Search plugins" : "Search skills"}
+              className="text-ui leading-snug"
+            />
+          </InputGroup>
+        </div>
+      )}
 
       {/* Warnings */}
       {((!discoveryCwd && selectedTab === "skills") ||
@@ -660,7 +679,17 @@ export function PluginLibrary(props?: {
 
       {/* Grid content */}
       <div className="px-3 pb-10 sm:px-5">
-        {selectedTab === "plugins" ? (
+        {selectedTab === "synara" ? (
+          <div className="mx-auto max-w-3xl">
+            <SynaraPluginCatalog
+              context={{
+                projectId: activeProject?.id ?? null,
+                threadId: focusedThreadId ?? null,
+              }}
+              layout="library"
+            />
+          </div>
+        ) : selectedTab === "plugins" ? (
           <>
             {!canListPlugins ? (
               <div className="mx-auto max-w-2xl">

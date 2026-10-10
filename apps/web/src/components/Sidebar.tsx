@@ -25,6 +25,7 @@ import {
   BellIcon,
   type LucideIcon,
   NewThreadIcon,
+  PluginIcon,
   PencilIcon,
   PinIcon,
   PlayIcon,
@@ -320,6 +321,13 @@ import { useHandleNewChat } from "../hooks/useHandleNewChat";
 import { useHandleNewGroupChat } from "../hooks/useHandleNewGroupChat";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { useProviderStatusesForLocalConfig } from "../hooks/useProviderStatusesForLocalConfig";
+import { usePluginNavPanels } from "../plugins/runtime";
+import {
+  PluginSidebarFooterExtensions,
+  PluginSidebarNavigationSurface,
+  PluginThreadListSurface,
+  usePluginSidebarPreferences,
+} from "../plugins/PluginSidebar";
 import { useThreadHandoff } from "../hooks/useThreadHandoff";
 import { useFeedbackDialogStore } from "../feedbackDialogStore";
 import { openExternalLink } from "~/lib/linkChips";
@@ -1352,6 +1360,8 @@ export default function Sidebar() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const pathname = useCommittedPathname();
+  const pluginPanels = usePluginNavPanels();
+  const [pluginSidebarPreferences, updatePluginSidebarPreferences] = usePluginSidebarPreferences();
   const isOnSettings = pathname === "/settings";
   const isOnGroupsRoute = pathname.startsWith("/hubs") || pathname.startsWith("/groups");
   const isOnKanban = pathname.startsWith("/kanban");
@@ -1359,6 +1369,7 @@ export default function Sidebar() {
   const isOnAutomations = pathname.startsWith("/automations");
   const isOnPullRequests = pathname.startsWith("/pull-requests");
   const isOnInbox = pathname.startsWith("/inbox");
+  const isOnPlugins = pathname === "/plugins" || pathname.startsWith("/extensions/");
   // Lightweight read of automations to drive the sidebar attention badge. Shares the
   // ["automations"] query cache with the Automations route (and its live stream updates).
   const automationListQuery = useQuery({
@@ -1444,6 +1455,10 @@ export default function Sidebar() {
     select: (params) =>
       typeof params.projectId === "string" ? ProjectId.makeUnsafe(params.projectId) : null,
   });
+  const pluginSidebarContext = useMemo(
+    () => ({ projectId: routeProjectId, threadId: routeThreadId }),
+    [routeProjectId, routeThreadId],
+  );
   const routeSearch = useDiffRouteSearch();
   const settingsSectionSearch = useSearch({ strict: false }) as Record<string, unknown>;
   const activeSettingsSection = normalizeSettingsSection(settingsSectionSearch.section);
@@ -4330,6 +4345,15 @@ export default function Sidebar() {
           void navigate({ to: "/automations" });
         },
       },
+      plugins: {
+        icon: PluginIcon,
+        label: "Plugins",
+        active: isOnPlugins,
+        badge: null,
+        onClick: () => {
+          void navigate({ to: "/plugins" });
+        },
+      },
     }),
     [
       automationAttentionBadge,
@@ -4338,6 +4362,7 @@ export default function Sidebar() {
       isOnAutomations,
       isOnInbox,
       isOnKanban,
+      isOnPlugins,
       isOnPullRequests,
       isOnTasks,
       appSettings.tasksViewMode,
@@ -6368,6 +6393,16 @@ export default function Sidebar() {
         keywords: ["feedback", "bug", "issue", "problem", "report", "support", "synara"],
       },
       {
+        id: "plugins",
+        label: "Plugins",
+        description: "Browse Synara plugins and provider marketplaces.",
+        keywords: ["extensions", "marketplace"],
+        run: () => {
+          void navigate({ to: "/plugins" });
+        },
+        icon: PluginIcon,
+      },
+      {
         id: "settings",
         label: "Settings",
         description: "Open app settings.",
@@ -6427,6 +6462,7 @@ export default function Sidebar() {
       handleSelectSpace,
       handleStartAddProject,
       importThreadShortcutLabel,
+      navigate,
       newChatShortcutLabel,
       newThreadShortcutLabel,
       openSpaceCreator,
@@ -7111,366 +7147,423 @@ export default function Sidebar() {
                       className="px-1.5 pt-1 pb-1.5"
                       onContextMenu={handleNavContextMenu}
                     >
-                      <SidebarMenu className="gap-0.5">
-                        {panelSidebarNavIds.map((id) => {
-                          const item = sidebarNavDescriptors[id];
-                          return (
-                            <SidebarPrimaryAction
-                              key={id}
-                              {...(id === "tasks" ? { coachmark: TASKS_COACHMARK } : {})}
-                              icon={item.icon}
-                              {...(item.iconClassName ? { iconClassName: item.iconClassName } : {})}
-                              label={item.label}
-                              active={item.active}
-                              badge={item.badge}
-                              onClick={item.onClick}
-                              {...(item.onMouseEnter ? { onMouseEnter: item.onMouseEnter } : {})}
-                              {...(item.onFocus ? { onFocus: item.onFocus } : {})}
-                            />
-                          );
-                        })}
-                      </SidebarMenu>
+                      <PluginSidebarNavigationSurface
+                        context={pluginSidebarContext}
+                        selectedProvider={pluginSidebarPreferences.navigationProvider}
+                      >
+                        <SidebarMenu className="gap-0.5">
+                          {panelSidebarNavIds.map((id) => {
+                            const item = sidebarNavDescriptors[id];
+                            return (
+                              <SidebarPrimaryAction
+                                key={id}
+                                {...(id === "tasks" ? { coachmark: TASKS_COACHMARK } : {})}
+                                icon={item.icon}
+                                {...(item.iconClassName
+                                  ? { iconClassName: item.iconClassName }
+                                  : {})}
+                                label={item.label}
+                                active={item.active}
+                                badge={item.badge}
+                                onClick={item.onClick}
+                                {...(item.onMouseEnter ? { onMouseEnter: item.onMouseEnter } : {})}
+                                {...(item.onFocus ? { onFocus: item.onFocus } : {})}
+                              />
+                            );
+                          })}
+                        </SidebarMenu>
+                      </PluginSidebarNavigationSurface>
+                      {pluginPanels.length > 0 ? (
+                        <SidebarMenu className="gap-0.5">
+                          {pluginPanels.map((panel) => {
+                            const panelPath = `/extensions/${panel.plugin.app}/${panel.id}`;
+                            return (
+                              <SidebarPrimaryAction
+                                key={`${panel.plugin.id}:${panel.id}`}
+                                icon={PluginIcon}
+                                label={panel.title}
+                                active={pathname === panelPath}
+                                onClick={() => {
+                                  void navigate({
+                                    to: "/extensions/$pluginKey/$panelId",
+                                    params: { pluginKey: panel.plugin.app!, panelId: panel.id },
+                                  });
+                                }}
+                              />
+                            );
+                          })}
+                        </SidebarMenu>
+                      ) : null}
                     </SidebarGroup>
                   ) : null}
 
-                  {isOnGroups ? (
-                    <SidebarGroupsSurface
-                      groupProjects={groupProjects}
-                      projectSidebarDataById={groupProjectSidebarDataById}
-                      threadsHydrated={threadsHydrated}
-                      visualActiveThreadId={visualActiveSidebarThreadId}
-                      threadSortOrder={appSettings.sidebarThreadSortOrder}
-                      onThreadSortOrderChange={(sortOrder) => {
-                        updateSettings({ sidebarThreadSortOrder: sortOrder });
-                      }}
-                      renderThreadRow={renderThreadRow}
-                      renderListSectionHeader={renderListSectionHeader}
-                      renderPinnedThreadsSection={renderPinnedThreadsSection}
-                      onOpenThread={activateThreadFromSidebarIntent}
-                      onOpenGroupSettings={(projectId, mode, options) => {
-                        setProjectAgentDialogState({ projectId, mode, ...options });
-                      }}
-                      onProjectContextMenu={handleProjectContextMenu}
-                    />
-                  ) : activityViewEnabled ? (
-                    <SidebarGroup className="px-1.5 py-1.5">
-                      <SidebarActivityView
-                        threads={activityNonGroupSidebarThreads}
-                        projectById={projectById}
-                        activeThreadId={visualActiveSidebarThreadId}
-                        pinnedThreadIdSet={pinnedThreadIdSet}
-                        settledOverrideByThreadId={settledOverrideByThreadId}
-                        threadsHydrated={threadsHydrated}
-                        scopeSelection={activityScope}
-                        onScopeSelectionChange={setActivityScope}
-                        resolveThreadStatus={resolveThreadStatusForSidebar}
-                        onOpenThread={activateThreadFromSidebarIntent}
-                        onOpenThreadPullRequest={openThreadPullRequest}
-                        onSetThreadSettled={setThreadSettledWithToast}
-                        onReturnSnoozedThread={(threadId) => setThreadSnoozedUntil(threadId, null)}
-                        onToggleThreadPinned={toggleThreadPinned}
-                        onArchiveThread={(threadId) => void archiveThreadWithUndo(threadId)}
-                        onMarkThreadRead={markThreadVisited}
-                        onRenameThread={openRenameThreadDialog}
-                        onThreadRenamePointerUp={handleThreadRenamePointerUp}
-                        onThreadContextMenu={(threadId, position) => {
-                          void handleThreadContextMenu(threadId, position);
-                        }}
-                        onProjectContextMenu={handleProjectContextMenu}
-                        prByThreadId={prByThreadId}
-                        threadJumpLabelByThreadId={visibleThreadJumpLabelByThreadId}
-                        onVisibleThreadIdsChange={handleActivityVisibleThreadIdsChange}
-                        renderThreadHoverCard={(thread, anchorId) =>
-                          renderThreadHoverCardPopup(
-                            thread,
-                            anchorId,
-                            visualActiveSidebarThreadId === thread.id,
-                          )
-                        }
-                        onCreateChat={handlePrimaryNewThread}
-                        onAddProject={handleStartAddProject}
-                      />
-                    </SidebarGroup>
-                  ) : showRailSpacesPanel ? (
-                    renderRailSpacesPanel()
-                  ) : (
-                    <SidebarGroup className="px-1.5 py-1.5">
-                      <SpaceSwitcher
-                        spaces={spaces}
-                        activeSpaceId={activeSpaceId}
-                        activityBySpaceId={spaceActivityById}
-                        voidSpace={voidSpace}
-                        onSelect={handleSelectSpace}
-                        onCreate={() => openSpaceCreator()}
-                        onEdit={(space) => openSpaceEditor(space.id)}
-                        onDelete={(space) => void handleDeleteSpace(space.id)}
-                        onReorder={handleReorderSpaces}
-                        onRenameSpace={(space, name) => void handleRenameSpace(space, name)}
-                        onEditVoid={openVoidEditor}
-                        onRenameVoid={handleRenameVoid}
-                        onResetVoid={resetVoidSpace}
-                        onDropProject={(projectId, spaceId) =>
-                          void handleMoveProjectToSpace(projectId, spaceId)
-                        }
-                        jumpShortcutLabelForTab={jumpShortcutLabelForSpaceTab}
-                      />
-                      {renderPinnedThreadsSection()}
-                      {renderListSectionHeader(
-                        "Projects",
-                        <>
-                          {standardProjects.length > 0 ? (
-                            <SidebarIconButton
-                              icon={allProjectsExpanded ? CollapseAllIcon : ExpandAllIcon}
-                              label={
-                                allProjectsExpanded
-                                  ? focusedProjectId
-                                    ? "Collapse all projects except the active project"
-                                    : "Collapse all projects"
-                                  : "Expand all projects"
-                              }
-                              className="disabled:cursor-default disabled:opacity-45"
-                              onClick={handleToggleProjects}
-                              tooltip={
-                                allProjectsExpanded
-                                  ? focusedProjectId
-                                    ? "Collapse all projects except the active chat's project"
-                                    : "Collapse all projects"
-                                  : "Expand all projects"
-                              }
-                              tooltipSide="bottom"
-                            />
-                          ) : null}
-                          <ProjectSortMenu
-                            projectSortOrder={appSettings.sidebarProjectSortOrder}
-                            threadSortOrder={appSettings.sidebarThreadSortOrder}
-                            onProjectSortOrderChange={(sortOrder) => {
-                              updateSettings({ sidebarProjectSortOrder: sortOrder });
-                            }}
-                            onThreadSortOrderChange={(sortOrder) => {
-                              updateSettings({ sidebarThreadSortOrder: sortOrder });
-                            }}
-                          />
-                          <SidebarIconButton
-                            icon={AddPlusIcon}
-                            label="Add project"
-                            onClick={handleStartAddProject}
-                            tooltip="Add project"
-                            tooltipSide="right"
-                          />
-                        </>,
-                      )}
-
-                      {isManualProjectSorting ? (
-                        <DndContext
-                          sensors={projectDnDSensors}
-                          collisionDetection={projectCollisionDetection}
-                          modifiers={[restrictToVerticalAxis, restrictToFirstScrollableAncestor]}
-                          onDragStart={handleProjectDragStart}
-                          onDragEnd={handleProjectDragEnd}
-                          onDragCancel={handleProjectDragCancel}
-                        >
-                          <SidebarMenu className="gap-3">
-                            <SortableContext
-                              items={standardProjects.map((project) => project.id)}
-                              strategy={verticalListSortingStrategy}
-                            >
-                              {standardProjects.map((project) => (
-                                <SortableProjectItem key={project.id} projectId={project.id}>
-                                  {(dragHandleProps) => renderProjectItem(project, dragHandleProps)}
-                                </SortableProjectItem>
-                              ))}
-                            </SortableContext>
-                          </SidebarMenu>
-                        </DndContext>
-                      ) : (
-                        <SidebarMenu ref={attachProjectListAutoAnimateRef} className="gap-3">
-                          {standardProjects.map((project) => (
-                            <SidebarMenuItem key={project.id} className="rounded-md">
-                              {renderProjectItem(project, null)}
-                            </SidebarMenuItem>
-                          ))}
-                        </SidebarMenu>
-                      )}
-
-                      {projectEmptyState === "loading" && (
-                        <div
-                          className="space-y-2 px-2 pt-4"
-                          aria-live="polite"
-                          aria-label="Loading projects"
-                        >
-                          <div className="text-center text-ui text-muted-foreground/58">
-                            Loading projects...
-                          </div>
-                          <div className="mx-auto grid w-full max-w-42 gap-1.5 opacity-70">
-                            <div className="h-2 rounded-full bg-muted/55 animate-pulse" />
-                            <div className="mx-auto h-2 w-4/5 rounded-full bg-muted/40 animate-pulse" />
-                            <div className="mx-auto h-2 w-3/5 rounded-full bg-muted/30 animate-pulse" />
-                          </div>
-                        </div>
-                      )}
-
-                      {projectEmptyState === "empty" && (
-                        <SpaceEmptyState
-                          space={activeSpace}
-                          hasProjectsElsewhere={allStandardProjectsBase.length > 0}
-                          onMoveProjects={() => {
-                            if (activeSpace) openSpaceProjectPicker(activeSpace.id);
+                  <PluginThreadListSurface
+                    context={pluginSidebarContext}
+                    selectedProvider={pluginSidebarPreferences.threadListProvider}
+                  >
+                    <>
+                      {isOnGroups ? (
+                        <SidebarGroupsSurface
+                          groupProjects={groupProjects}
+                          projectSidebarDataById={groupProjectSidebarDataById}
+                          threadsHydrated={threadsHydrated}
+                          visualActiveThreadId={visualActiveSidebarThreadId}
+                          threadSortOrder={appSettings.sidebarThreadSortOrder}
+                          onThreadSortOrderChange={(sortOrder) => {
+                            updateSettings({ sidebarThreadSortOrder: sortOrder });
                           }}
+                          renderThreadRow={renderThreadRow}
+                          renderListSectionHeader={renderListSectionHeader}
+                          renderPinnedThreadsSection={renderPinnedThreadsSection}
+                          onOpenThread={activateThreadFromSidebarIntent}
+                          onOpenGroupSettings={(projectId, mode, options) => {
+                            setProjectAgentDialogState({ projectId, mode, ...options });
+                          }}
+                          onProjectContextMenu={handleProjectContextMenu}
                         />
+                      ) : activityViewEnabled ? (
+                        <SidebarGroup className="px-1.5 py-1.5">
+                          <SidebarActivityView
+                            threads={activityNonGroupSidebarThreads}
+                            projectById={projectById}
+                            activeThreadId={visualActiveSidebarThreadId}
+                            pinnedThreadIdSet={pinnedThreadIdSet}
+                            settledOverrideByThreadId={settledOverrideByThreadId}
+                            threadsHydrated={threadsHydrated}
+                            scopeSelection={activityScope}
+                            onScopeSelectionChange={setActivityScope}
+                            resolveThreadStatus={resolveThreadStatusForSidebar}
+                            onOpenThread={activateThreadFromSidebarIntent}
+                            onOpenThreadPullRequest={openThreadPullRequest}
+                            onSetThreadSettled={setThreadSettledWithToast}
+                            onReturnSnoozedThread={(threadId) =>
+                              setThreadSnoozedUntil(threadId, null)
+                            }
+                            onToggleThreadPinned={toggleThreadPinned}
+                            onArchiveThread={(threadId) => void archiveThreadWithUndo(threadId)}
+                            onMarkThreadRead={markThreadVisited}
+                            onRenameThread={openRenameThreadDialog}
+                            onThreadRenamePointerUp={handleThreadRenamePointerUp}
+                            onThreadContextMenu={(threadId, position) => {
+                              void handleThreadContextMenu(threadId, position);
+                            }}
+                            onProjectContextMenu={handleProjectContextMenu}
+                            prByThreadId={prByThreadId}
+                            threadJumpLabelByThreadId={visibleThreadJumpLabelByThreadId}
+                            onVisibleThreadIdsChange={handleActivityVisibleThreadIdsChange}
+                            renderThreadHoverCard={(thread, anchorId) =>
+                              renderThreadHoverCardPopup(
+                                thread,
+                                anchorId,
+                                visualActiveSidebarThreadId === thread.id,
+                              )
+                            }
+                            onCreateChat={handlePrimaryNewThread}
+                            onAddProject={handleStartAddProject}
+                          />
+                        </SidebarGroup>
+                      ) : showRailSpacesPanel ? (
+                        renderRailSpacesPanel()
+                      ) : (
+                        <SidebarGroup className="px-1.5 py-1.5">
+                          <SpaceSwitcher
+                            spaces={spaces}
+                            activeSpaceId={activeSpaceId}
+                            activityBySpaceId={spaceActivityById}
+                            voidSpace={voidSpace}
+                            onSelect={handleSelectSpace}
+                            onCreate={() => openSpaceCreator()}
+                            onEdit={(space) => openSpaceEditor(space.id)}
+                            onDelete={(space) => void handleDeleteSpace(space.id)}
+                            onReorder={handleReorderSpaces}
+                            onRenameSpace={(space, name) => void handleRenameSpace(space, name)}
+                            onEditVoid={openVoidEditor}
+                            onRenameVoid={handleRenameVoid}
+                            onResetVoid={resetVoidSpace}
+                            onDropProject={(projectId, spaceId) =>
+                              void handleMoveProjectToSpace(projectId, spaceId)
+                            }
+                            jumpShortcutLabelForTab={jumpShortcutLabelForSpaceTab}
+                          />
+                          {renderPinnedThreadsSection()}
+                          {renderListSectionHeader(
+                            "Projects",
+                            <>
+                              {standardProjects.length > 0 ? (
+                                <SidebarIconButton
+                                  icon={allProjectsExpanded ? CollapseAllIcon : ExpandAllIcon}
+                                  label={
+                                    allProjectsExpanded
+                                      ? focusedProjectId
+                                        ? "Collapse all projects except the active project"
+                                        : "Collapse all projects"
+                                      : "Expand all projects"
+                                  }
+                                  className="disabled:cursor-default disabled:opacity-45"
+                                  onClick={handleToggleProjects}
+                                  tooltip={
+                                    allProjectsExpanded
+                                      ? focusedProjectId
+                                        ? "Collapse all projects except the active chat's project"
+                                        : "Collapse all projects"
+                                      : "Expand all projects"
+                                  }
+                                  tooltipSide="bottom"
+                                />
+                              ) : null}
+                              <ProjectSortMenu
+                                projectSortOrder={appSettings.sidebarProjectSortOrder}
+                                threadSortOrder={appSettings.sidebarThreadSortOrder}
+                                onProjectSortOrderChange={(sortOrder) => {
+                                  updateSettings({ sidebarProjectSortOrder: sortOrder });
+                                }}
+                                onThreadSortOrderChange={(sortOrder) => {
+                                  updateSettings({ sidebarThreadSortOrder: sortOrder });
+                                }}
+                              />
+                              <SidebarIconButton
+                                icon={AddPlusIcon}
+                                label="Add project"
+                                onClick={handleStartAddProject}
+                                tooltip="Add project"
+                                tooltipSide="right"
+                              />
+                            </>,
+                          )}
+
+                          {isManualProjectSorting ? (
+                            <DndContext
+                              sensors={projectDnDSensors}
+                              collisionDetection={projectCollisionDetection}
+                              modifiers={[
+                                restrictToVerticalAxis,
+                                restrictToFirstScrollableAncestor,
+                              ]}
+                              onDragStart={handleProjectDragStart}
+                              onDragEnd={handleProjectDragEnd}
+                              onDragCancel={handleProjectDragCancel}
+                            >
+                              <SidebarMenu className="gap-3">
+                                <SortableContext
+                                  items={standardProjects.map((project) => project.id)}
+                                  strategy={verticalListSortingStrategy}
+                                >
+                                  {standardProjects.map((project) => (
+                                    <SortableProjectItem key={project.id} projectId={project.id}>
+                                      {(dragHandleProps) =>
+                                        renderProjectItem(project, dragHandleProps)
+                                      }
+                                    </SortableProjectItem>
+                                  ))}
+                                </SortableContext>
+                              </SidebarMenu>
+                            </DndContext>
+                          ) : (
+                            <SidebarMenu ref={attachProjectListAutoAnimateRef} className="gap-3">
+                              {standardProjects.map((project) => (
+                                <SidebarMenuItem key={project.id} className="rounded-md">
+                                  {renderProjectItem(project, null)}
+                                </SidebarMenuItem>
+                              ))}
+                            </SidebarMenu>
+                          )}
+
+                          {projectEmptyState === "loading" && (
+                            <div
+                              className="space-y-2 px-2 pt-4"
+                              aria-live="polite"
+                              aria-label="Loading projects"
+                            >
+                              <div className="text-center text-ui text-muted-foreground/58">
+                                Loading projects...
+                              </div>
+                              <div className="mx-auto grid w-full max-w-42 gap-1.5 opacity-70">
+                                <div className="h-2 rounded-full bg-muted/55 animate-pulse" />
+                                <div className="mx-auto h-2 w-4/5 rounded-full bg-muted/40 animate-pulse" />
+                                <div className="mx-auto h-2 w-3/5 rounded-full bg-muted/30 animate-pulse" />
+                              </div>
+                            </div>
+                          )}
+
+                          {projectEmptyState === "empty" && (
+                            <SpaceEmptyState
+                              space={activeSpace}
+                              hasProjectsElsewhere={allStandardProjectsBase.length > 0}
+                              onMoveProjects={() => {
+                                if (activeSpace) openSpaceProjectPicker(activeSpace.id);
+                              }}
+                            />
+                          )}
+                        </SidebarGroup>
                       )}
-                    </SidebarGroup>
-                  )}
+                      {!isOnGroups &&
+                      !activityViewEnabled &&
+                      !showRailSpacesPanel &&
+                      snoozedSidebarThreads.length > 0 ? (
+                        <SidebarGroup className="px-1.5 pt-1 pb-2">
+                          <SidebarSnoozedThreadsSection
+                            threads={snoozedSidebarThreads}
+                            renderThreadRow={renderSnoozedThreadRow}
+                            onVisibleThreadIdsChange={setClassicSnoozedVisibleThreadIds}
+                          />
+                        </SidebarGroup>
+                      ) : null}
+                      {!isOnGroups &&
+                      !activityViewEnabled &&
+                      !showRailSpacesPanel &&
+                      chatsSectionVisible ? (
+                        // Rides inside the keyed surface wrapper, so it animates in step with the
+                        // Groups -> Projects switch.
+                        <SidebarGroup className="px-1.5 pt-1 pb-2">
+                          <div className="group/collapsible">
+                            <div className="group/project-header relative">
+                              <SidebarMenuButton
+                                size="sm"
+                                aria-expanded={chatSectionExpanded}
+                                className={cn(
+                                  SIDEBAR_HEADER_ROW_CLASS_NAME,
+                                  SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME,
+                                  SIDEBAR_ROW_HOVER_CLASS_NAME,
+                                  "cursor-pointer",
+                                )}
+                                onClick={() => setChatSectionExpanded((current) => !current)}
+                                onKeyDown={(event) => {
+                                  if (event.key !== "Enter" && event.key !== " ") return;
+                                  event.preventDefault();
+                                  setChatSectionExpanded((current) => !current);
+                                }}
+                              >
+                                <div className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
+                                  <span className="truncate font-system-ui text-ui font-normal text-muted-foreground/79">
+                                    Chats
+                                  </span>
+                                  <DisclosureChevron
+                                    open={chatSectionExpanded}
+                                    className="text-muted-foreground/79"
+                                  />
+                                </div>
+                              </SidebarMenuButton>
+                              <SidebarSectionToolbar placement="overlay" revealOnHover>
+                                <ChatSortMenu
+                                  threadSortOrder={appSettings.sidebarThreadSortOrder}
+                                  onThreadSortOrderChange={(sortOrder) => {
+                                    updateSettings({ sidebarThreadSortOrder: sortOrder });
+                                  }}
+                                />
+                                <SidebarIconButton
+                                  icon={NewThreadIcon}
+                                  label="Open new chat home"
+                                  onClick={(event) => {
+                                    event.preventDefault();
+                                    event.stopPropagation();
+                                    void handleCreateHomeChat();
+                                  }}
+                                  tooltip={
+                                    newChatShortcutLabel
+                                      ? `New chat (${newChatShortcutLabel})`
+                                      : "New chat"
+                                  }
+                                  tooltipSide="top"
+                                />
+                              </SidebarSectionToolbar>
+                            </div>
+
+                            <div
+                              className={cn(disclosureShellClassName(chatSectionExpanded), "pt-1")}
+                            >
+                              <div className={DISCLOSURE_INNER_CLASS}>
+                                <SidebarMenu
+                                  className={cn(
+                                    "gap-1",
+                                    disclosureContentClassName(chatSectionExpanded),
+                                  )}
+                                >
+                                  {visibleChatThreadRows.length > 0 ? (
+                                    renderedChatEntries.map((entry) =>
+                                      renderThreadRow(
+                                        entry.row.thread,
+                                        visibleChatThreadIds,
+                                        entry.row.depth,
+                                        true,
+                                      ),
+                                    )
+                                  ) : (
+                                    <div className="px-2 py-2 text-ui text-muted-foreground/48">
+                                      No chats yet
+                                    </div>
+                                  )}
+                                  {canShowMoreChatThreads || canShowLessChatThreads ? (
+                                    <SidebarMenuItem className="w-full">
+                                      <div className="flex w-full items-center gap-1">
+                                        {canShowMoreChatThreads ? (
+                                          <SidebarMenuButton
+                                            size="sm"
+                                            className="h-7 flex-1 justify-start rounded-lg pr-2 pl-8 text-left text-ui font-normal text-muted-foreground/79 hover:bg-transparent hover:text-foreground active:bg-transparent active:text-foreground"
+                                            onMouseDown={preventFocusOnMouseDown}
+                                            onClick={() =>
+                                              setChatThreadListExtraPages(
+                                                chatThreadListEffectiveExtraPages + 1,
+                                              )
+                                            }
+                                          >
+                                            <span>Show more</span>
+                                          </SidebarMenuButton>
+                                        ) : null}
+                                        {canShowLessChatThreads ? (
+                                          <SidebarMenuButton
+                                            size="sm"
+                                            className={cn(
+                                              "h-7 justify-start rounded-lg text-left text-ui font-normal text-muted-foreground/79 hover:bg-transparent hover:text-foreground active:bg-transparent active:text-foreground",
+                                              // Keep the left indent when "Show less" is the only affordance left.
+                                              canShowMoreChatThreads
+                                                ? "w-auto flex-none px-2"
+                                                : "flex-1 pr-2 pl-8",
+                                            )}
+                                            onMouseDown={preventFocusOnMouseDown}
+                                            onClick={() =>
+                                              setChatThreadListExtraPages(
+                                                Math.max(0, chatThreadListEffectiveExtraPages - 1),
+                                              )
+                                            }
+                                          >
+                                            <span>Show less</span>
+                                          </SidebarMenuButton>
+                                        ) : null}
+                                      </div>
+                                    </SidebarMenuItem>
+                                  ) : null}
+                                </SidebarMenu>
+                              </div>
+                            </div>
+                          </div>
+                        </SidebarGroup>
+                      ) : null}
+                    </>
+                  </PluginThreadListSurface>
                 </div>
               </>
             )}
-            {!isOnSettings &&
-            !isOnGroups &&
-            !activityViewEnabled &&
-            !showRailSpacesPanel &&
-            !showRailAutomationsPanel &&
-            snoozedSidebarThreads.length > 0 ? (
-              <SidebarGroup className="px-1.5 pt-1 pb-2">
-                <SidebarSnoozedThreadsSection
-                  threads={snoozedSidebarThreads}
-                  renderThreadRow={renderSnoozedThreadRow}
-                  onVisibleThreadIdsChange={setClassicSnoozedVisibleThreadIds}
-                />
-              </SidebarGroup>
-            ) : null}
-            {!isOnSettings &&
-            !isOnGroups &&
-            !activityViewEnabled &&
-            !showRailSpacesPanel &&
-            !showRailAutomationsPanel &&
-            chatsSectionVisible ? (
-              // sidebar-surface-enter: mounts on the Groups -> Projects switch, so it
-              // animates in step with the keyed surface wrapper above.
-              <SidebarGroup className="sidebar-surface-enter px-1.5 pt-1 pb-2">
-                <div className="group/collapsible">
-                  <div className="group/project-header relative">
-                    <SidebarMenuButton
-                      size="sm"
-                      aria-expanded={chatSectionExpanded}
-                      className={cn(
-                        SIDEBAR_HEADER_ROW_CLASS_NAME,
-                        SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME,
-                        SIDEBAR_ROW_HOVER_CLASS_NAME,
-                        "cursor-pointer",
-                      )}
-                      onClick={() => setChatSectionExpanded((current) => !current)}
-                      onKeyDown={(event) => {
-                        if (event.key !== "Enter" && event.key !== " ") return;
-                        event.preventDefault();
-                        setChatSectionExpanded((current) => !current);
-                      }}
-                    >
-                      <div className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
-                        <span className="truncate font-system-ui text-ui font-normal text-muted-foreground/79">
-                          Chats
-                        </span>
-                        <DisclosureChevron
-                          open={chatSectionExpanded}
-                          className="text-muted-foreground/79"
-                        />
-                      </div>
-                    </SidebarMenuButton>
-                    <SidebarSectionToolbar placement="overlay" revealOnHover>
-                      <ChatSortMenu
-                        threadSortOrder={appSettings.sidebarThreadSortOrder}
-                        onThreadSortOrderChange={(sortOrder) => {
-                          updateSettings({ sidebarThreadSortOrder: sortOrder });
-                        }}
-                      />
-                      <SidebarIconButton
-                        icon={NewThreadIcon}
-                        label="Open new chat home"
-                        onClick={(event) => {
-                          event.preventDefault();
-                          event.stopPropagation();
-                          void handleCreateHomeChat();
-                        }}
-                        tooltip={
-                          newChatShortcutLabel ? `New chat (${newChatShortcutLabel})` : "New chat"
-                        }
-                        tooltipSide="top"
-                      />
-                    </SidebarSectionToolbar>
-                  </div>
-
-                  <div className={cn(disclosureShellClassName(chatSectionExpanded), "pt-1")}>
-                    <div className={DISCLOSURE_INNER_CLASS}>
-                      <SidebarMenu
-                        className={cn("gap-1", disclosureContentClassName(chatSectionExpanded))}
-                      >
-                        {visibleChatThreadRows.length > 0 ? (
-                          renderedChatEntries.map((entry) =>
-                            renderThreadRow(
-                              entry.row.thread,
-                              visibleChatThreadIds,
-                              entry.row.depth,
-                              true,
-                            ),
-                          )
-                        ) : (
-                          <div className="px-2 py-2 text-ui text-muted-foreground/48">
-                            No chats yet
-                          </div>
-                        )}
-                        {canShowMoreChatThreads || canShowLessChatThreads ? (
-                          <SidebarMenuItem className="w-full">
-                            <div className="flex w-full items-center gap-1">
-                              {canShowMoreChatThreads ? (
-                                <SidebarMenuButton
-                                  size="sm"
-                                  className="h-7 flex-1 justify-start rounded-lg pr-2 pl-8 text-left text-ui font-normal text-muted-foreground/79 hover:bg-transparent hover:text-foreground active:bg-transparent active:text-foreground"
-                                  onMouseDown={preventFocusOnMouseDown}
-                                  onClick={() =>
-                                    setChatThreadListExtraPages(
-                                      chatThreadListEffectiveExtraPages + 1,
-                                    )
-                                  }
-                                >
-                                  <span>Show more</span>
-                                </SidebarMenuButton>
-                              ) : null}
-                              {canShowLessChatThreads ? (
-                                <SidebarMenuButton
-                                  size="sm"
-                                  className={cn(
-                                    "h-7 justify-start rounded-lg text-left text-ui font-normal text-muted-foreground/79 hover:bg-transparent hover:text-foreground active:bg-transparent active:text-foreground",
-                                    // Keep the left indent when "Show less" is the only affordance left.
-                                    canShowMoreChatThreads
-                                      ? "w-auto flex-none px-2"
-                                      : "flex-1 pr-2 pl-8",
-                                  )}
-                                  onMouseDown={preventFocusOnMouseDown}
-                                  onClick={() =>
-                                    setChatThreadListExtraPages(
-                                      Math.max(0, chatThreadListEffectiveExtraPages - 1),
-                                    )
-                                  }
-                                >
-                                  <span>Show less</span>
-                                </SidebarMenuButton>
-                              ) : null}
-                            </div>
-                          </SidebarMenuItem>
-                        ) : null}
-                      </SidebarMenu>
-                    </div>
-                  </div>
-                </div>
-              </SidebarGroup>
-            ) : null}
           </SidebarContent>
 
           <SidebarFooter
-            // Help and the update button live in the rail; the footer only carries debug tools.
+            // Help and the update button live in the rail; the footer only carries plugin
+            // extensions and debug tools.
             className="gap-2 border-sidebar-border border-t-0 p-2 pt-0 font-system-ui"
           >
             <SidebarMenu>
               <SidebarMenuItem>
                 <div className="flex flex-col gap-1">
+                  <PluginSidebarFooterExtensions
+                    context={pluginSidebarContext}
+                    preferences={pluginSidebarPreferences}
+                    updatePreferences={updatePluginSidebarPreferences}
+                    onManageExtensions={() => {
+                      void navigate({
+                        to: "/settings",
+                        search: (previous) => ({ ...previous, section: "extensions" }),
+                      });
+                    }}
+                  />
                   {DebugFeatureFlagsMenu && showDebugFeatureFlagsMenu && !isOnSettings ? (
                     <Suspense fallback={null}>
                       <DebugFeatureFlagsMenu />
@@ -7823,7 +7916,7 @@ export default function Sidebar() {
       >
         <DialogPopup className="max-w-md">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 text-base">
+            <DialogTitle className="flex items-center gap-2 text-ui">
               <PlayIcon className="size-4 text-emerald-500" />
               Start dev
             </DialogTitle>

@@ -14,6 +14,7 @@ import {
   ImportThreadIcon,
   MoonIcon,
   NewThreadIcon,
+  PluginIcon,
   SettingsIcon,
   SidechatIcon,
   SunIcon,
@@ -176,6 +177,7 @@ const ACTION_ICONS: Record<string, IconComponent> = {
   feedback: BugReportIcon,
   settings: SettingsIcon,
   "usage-settings": UsageGaugeIcon,
+  plugins: PluginIcon,
 };
 
 const BROWSE_STALE_TIME_MS = 10_000;

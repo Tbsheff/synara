@@ -54,6 +54,9 @@ import { useThreadSelectionStore } from "../threadSelectionStore";
 import { onServerMaintenanceUpdated } from "../wsNativeApi";
 import { useWorkspacePathsStore } from "../workspacePathsStore";
 import { useProviderStatusesForLocalConfig } from "~/hooks/useProviderStatusesForLocalConfig";
+import { PluginRuntimeProvider } from "~/plugins/runtime";
+import { PluginAppOverlays } from "~/plugins/PluginAppOverlays";
+import { useFocusedChatContext } from "~/focusedChatContext";
 import { useRefreshProviderStatusesNow } from "~/hooks/useProviderStatusRefresh";
 import { resolveProviderSendAvailabilityWithRefresh } from "~/lib/providerAvailability";
 import { toastManager } from "~/components/ui/toast";
@@ -586,6 +589,11 @@ function ChatRouteLayout() {
   const [railSlot, setRailSlot] = useState<HTMLDivElement | null>(null);
   // The route column slides with the panel; the leading controls dock needs it to stay put.
   const [routeColumn, setRouteColumn] = useState<HTMLDivElement | null>(null);
+  const { activeProjectId, focusedThreadId } = useFocusedChatContext();
+  const pluginContext = useMemo(
+    () => ({ projectId: activeProjectId, threadId: focusedThreadId }),
+    [activeProjectId, focusedThreadId],
+  );
 
   // The thread sidebar always lives on the left; the right dock is a separate surface.
   // It fills its clipping wrapper and sits on the panel tone.
@@ -628,38 +636,41 @@ function ChatRouteLayout() {
   // the existing <Sidebar> offcanvas slide and resize run unchanged below the strip and are
   // clipped at the rail. The strip height reaches CSS as a variable (see index.css).
   return (
-    <SidebarProvider
-      defaultOpen
-      open={resolvedSidebarOpen}
-      onOpenChange={handleSidebarOpenChange}
-      className="h-svh overflow-hidden bg-[var(--app-rail-shell-background)]"
-      style={{ "--app-top-strip-height": `${CHAT_SURFACE_HEADER_HEIGHT_PX}px` } as CSSProperties}
-      data-sidebar-side="left"
-      data-sidebar-layout="rail"
-    >
-      <ThreadRetentionMaintenanceToast />
-      <ChatRouteGlobalShortcuts />
-      <AppRailSlotProvider value={railSlot}>
-        <SidebarLeadingControlsDock routeColumn={routeColumn} railSlot={railSlot}>
-          {isMobile ? (
-            // Phones show the sidebar as a sheet that carries its own rail (see ThreadSidebar),
-            // so the shell keeps no left column.
-            sidebarElement
-          ) : (
-            <div className="flex min-h-0 shrink-0 flex-col">
-              <AppShellTopStrip />
-              <div className="flex min-h-0 flex-1">
-                <div ref={setRailSlot} className="flex shrink-0" />
-                <div className="app-rail-panel relative flex shrink-0 overflow-hidden [contain:paint]">
-                  {sidebarElement}
+    <PluginRuntimeProvider>
+      <SidebarProvider
+        defaultOpen
+        open={resolvedSidebarOpen}
+        onOpenChange={handleSidebarOpenChange}
+        className="h-svh overflow-hidden bg-[var(--app-rail-shell-background)]"
+        style={{ "--app-top-strip-height": `${CHAT_SURFACE_HEADER_HEIGHT_PX}px` } as CSSProperties}
+        data-sidebar-side="left"
+        data-sidebar-layout="rail"
+      >
+        <ThreadRetentionMaintenanceToast />
+        <ChatRouteGlobalShortcuts />
+        <AppRailSlotProvider value={railSlot}>
+          <SidebarLeadingControlsDock routeColumn={routeColumn} railSlot={railSlot}>
+            {isMobile ? (
+              // Phones show the sidebar as a sheet that carries its own rail (see ThreadSidebar),
+              // so the shell keeps no left column.
+              sidebarElement
+            ) : (
+              <div className="flex min-h-0 shrink-0 flex-col">
+                <AppShellTopStrip />
+                <div className="flex min-h-0 flex-1">
+                  <div ref={setRailSlot} className="flex shrink-0" />
+                  <div className="app-rail-panel relative flex shrink-0 overflow-hidden [contain:paint]">
+                    {sidebarElement}
+                  </div>
                 </div>
               </div>
-            </div>
-          )}
-          {mainContentShell}
-        </SidebarLeadingControlsDock>
-      </AppRailSlotProvider>
-    </SidebarProvider>
+            )}
+            {mainContentShell}
+          </SidebarLeadingControlsDock>
+        </AppRailSlotProvider>
+        <PluginAppOverlays context={pluginContext} />
+      </SidebarProvider>
+    </PluginRuntimeProvider>
   );
 }
 

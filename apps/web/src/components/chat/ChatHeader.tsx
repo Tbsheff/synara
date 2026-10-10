@@ -69,6 +69,9 @@ import { ProviderUsageMenuControl } from "../ProviderUsageMenuControl";
 import { EnvironmentToggle, type EnvironmentToggleState } from "./environment/EnvironmentToggle";
 import { SurfacePanelToggle, type SurfacePanelToggleState } from "./chatHeaderControls";
 import type { ThreadHandoffTarget } from "~/lib/threadHandoff";
+import { usePluginContributions } from "../../plugins/runtime";
+import { PluginThreadHeaderActions } from "./PluginThreadHeaderActions";
+import { PluginPanelActionButtons } from "../../plugins/PluginPanelActions";
 
 /**
  * Width (px) below which collapsible header controls drop their text labels and
@@ -83,6 +86,7 @@ interface ChatHeaderProps {
   activeThreadEntryPoint: ThreadPrimarySurface;
   activeProvider: ProviderKind;
   activeProjectName: string | undefined;
+  activeProjectId: ProjectId | null;
   threadBreadcrumbs: ReadonlyArray<{
     threadId: ThreadId;
     title: string;
@@ -419,6 +423,7 @@ export function ChatHeader({
   activeThreadEntryPoint,
   activeProvider,
   activeProjectName,
+  activeProjectId,
   threadBreadcrumbs,
   className,
   threadTabs,
@@ -475,6 +480,7 @@ export function ChatHeader({
   const isSidechat = isSidechatProp ?? false;
   const environment = environmentProp ?? null;
   const editorChatControls = editorChatControlsProp ?? null;
+  const threadHeaderActions = usePluginContributions("threadHeaderActions");
   const headerRef = useRef<HTMLDivElement>(null);
   const [compact, setCompact] = useState(false);
   const { additions: diffAdditions, deletions: diffDeletions, hasChanges } = diffTotals;
@@ -710,6 +716,19 @@ export function ChatHeader({
         )}
       </div>
       <div className="flex shrink-0 items-center gap-2 [-webkit-app-region:no-drag]">
+        {!minimalChrome ? (
+          <PluginThreadHeaderActions
+            actions={threadHeaderActions}
+            threadId={activeThreadId}
+            projectId={activeProjectId}
+          />
+        ) : null}
+        {!minimalChrome && surfaceMode === "single" ? (
+          <PluginPanelActionButtons
+            context={{ projectId: activeProjectId, threadId: activeThreadId }}
+            scope="thread"
+          />
+        ) : null}
         {!minimalChrome && !hideHandoffControls && !environment ? (
           <ProviderUsageMenuControl provider={activeProvider} />
         ) : null}

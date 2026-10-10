@@ -16,6 +16,7 @@ import {
   GitPullRequestIcon,
   GlobeIcon,
   InfoIcon,
+  PluginIcon,
   SidechatIcon,
   TerminalIcon,
 } from "~/lib/icons";
@@ -46,6 +47,7 @@ export const RIGHT_DOCK_PANE_META: Record<RightDockPaneKind, RightDockPaneMeta> 
   sidechat: { label: "Side chats", Icon: SidechatIcon },
   git: { label: "Git", Icon: GitCommitIcon },
   pullRequest: { label: "Pull request", Icon: GitPullRequestIcon },
+  plugin: { label: "Extension", Icon: PluginIcon },
 };
 
 // Neutral fallback for any pane kind we no longer recognize (e.g. stale
@@ -146,6 +148,8 @@ export function buildRightDockPaneLabelOverrides(
       if (title) {
         overrides[pane.id] = title;
       }
+    } else if (pane.kind === "plugin" && pane.pluginTitle) {
+      overrides[pane.id] = pane.pluginTitle;
     }
   }
 

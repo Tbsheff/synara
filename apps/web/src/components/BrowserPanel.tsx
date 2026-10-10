@@ -6,7 +6,7 @@
 // Note: raw <button>s for autocomplete-suggestion rows and tab-title activate
 // regions are intentional — list-row and tab semantics, not shadcn Buttons.
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
@@ -54,6 +54,9 @@ import {
 } from "~/lib/nativeSurfaceOcclusion";
 import { serverLocalServersQueryOptions } from "~/lib/serverReactQuery";
 import { cn, isMacNavigatorPlatform } from "~/lib/utils";
+import { PluginBrowserToolbarActions } from "~/plugins/PluginBrowserToolbarActions";
+import { useStore } from "~/store";
+import { createThreadProjectIdSelector } from "~/storeSelectors";
 
 import {
   useBrowserStateStore,
@@ -527,13 +530,13 @@ function BrowserLocalServersHome({
             {loading ? (
               <>
                 <RefreshCwIcon className="mb-4 size-12 animate-spin text-white/20" />
-                <p className="text-base font-semibold text-white">Scanning local servers</p>
+                <p className="text-ui font-semibold text-white">Scanning local servers</p>
                 <p className="mt-2 text-ui leading-snug text-white/35">Checking localhost ports</p>
               </>
             ) : (
               <>
                 <GlobeIcon className="mb-4 size-16 stroke-[1.5] text-white/30" />
-                <p className="text-base font-semibold text-white">No local servers</p>
+                <p className="text-ui font-semibold text-white">No local servers</p>
                 <p className="mt-2 text-ui leading-snug text-white/35">Try another browser URL</p>
               </>
             )}
@@ -584,6 +587,8 @@ export function BrowserPanel({
   const isFloatingMode = mode === "floating";
   const api = readNativeApi();
   const isLiveRuntime = runtimeMode === "live";
+  const projectId = useStore(useMemo(() => createThreadProjectIdSelector(threadId), [threadId]));
+  const pluginContext = useMemo(() => ({ projectId, threadId }), [projectId, threadId]);
   const threadBrowserState = useBrowserStateStore(selectThreadBrowserState(threadId));
   const recentHistory = useBrowserStateStore(selectThreadBrowserHistory(threadId));
   const upsertThreadState = useBrowserStateStore((store) => store.upsertThreadState);
@@ -1877,6 +1882,13 @@ export function BrowserPanel({
         ) : null}
       </div>
       <div className="flex shrink-0 items-center gap-1.5 [-webkit-app-region:no-drag]">
+        {activeTab ? (
+          <PluginBrowserToolbarActions
+            context={pluginContext}
+            tabId={activeTab.id}
+            url={activeTab.url}
+          />
+        ) : null}
         <ButtonGroup label="Page actions">
           <BrowserVaultButton
             destination={

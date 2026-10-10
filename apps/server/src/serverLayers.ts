@@ -75,6 +75,7 @@ import { PullRequestAutoFixServiceLive } from "./pullRequestAutoFix/Layers/PullR
 import { GitHubInboxServiceLive } from "./githubInbox/Layers/GitHubInboxService";
 import { ProviderHealthLive } from "./provider/Layers/ProviderHealth";
 import { makeServerProviderLayer } from "./provider/runtimeLayer";
+import { PluginHostLive } from "./plugins/PluginHost";
 
 export { makeServerProviderLayer } from "./provider/runtimeLayer";
 
@@ -237,6 +238,10 @@ export function makeServerRuntimeServicesLayer(
     Layer.provideMerge(serverSettingsLayer),
     Layer.provideMerge(providerHealthLayer),
   );
+  const pluginHostLayer = PluginHostLive.pipe(
+    Layer.provideMerge(OrchestrationLayerLive),
+    Layer.provideMerge(ServerSettingsLive),
+  );
   const agentGatewayLayer = AgentGatewayLive.pipe(
     Layer.provideMerge(
       Layer.mergeAll(
@@ -264,8 +269,9 @@ export function makeServerRuntimeServicesLayer(
     // The gateway exposes device_* tools only where a backend can exist, but it
     // resolves the service on every platform to make that decision.
     Layer.provideMerge(DeviceServiceLive),
-    Layer.provideMerge(ComputerServiceLive),
-  );
+    Layer.provideMerge(pluginHostLayer),
+    // `pipe` accepts at most 20 operators, so the last provider chains separately.
+  ).pipe(Layer.provideMerge(ComputerServiceLive));
   // The inbox owns the repository inventory, GitHub read queue, and snapshots; the pull request
   // service shares them so detail reads and mutations stay consistent with the list.
   const githubInboxServiceLayer = GitHubInboxServiceLive.pipe(
@@ -286,7 +292,6 @@ export function makeServerRuntimeServicesLayer(
     Layer.provideMerge(runtimeServicesLayer),
     Layer.provideMerge(ServerSettingsLive),
   );
-
   return Layer.mergeAll(
     agentGatewayCredentialsLayer,
     agentGatewayLayer,
@@ -332,6 +337,7 @@ export function makeServerRuntimeServicesLayer(
     ServerRuntimeStartupLive,
     WorkspaceLayerLive,
     ProjectFaviconResolverLive,
+    pluginHostLayer,
   ).pipe(Layer.provideMerge(serverSettingsLayer), Layer.provideMerge(NodeServices.layer));
 }
 

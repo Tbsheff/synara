@@ -4264,6 +4264,42 @@ describe("thread checkpoint control", () => {
     });
   });
 
+  it("reads the provider thread status from a metadata-only thread/read", async () => {
+    const { manager, context, sendRequest } = createThreadControlHarness();
+    for (const statusType of ["notLoaded", "idle", "systemError", "active"] as const) {
+      sendRequest.mockResolvedValueOnce({
+        thread: {
+          id: "thread_1",
+          status:
+            statusType === "active"
+              ? { type: statusType, activeFlags: ["waitingOnApproval"] }
+              : { type: statusType },
+        },
+      });
+      await expect(manager.readThreadStatus(asThreadId("thread_1"), 5_000)).resolves.toBe(
+        statusType,
+      );
+    }
+    expect(sendRequest).toHaveBeenCalledWith(
+      context,
+      "thread/read",
+      { threadId: "thread_1", includeTurns: false },
+      5_000,
+    );
+
+    sendRequest.mockResolvedValueOnce({ status: { type: "idle" } });
+    await expect(manager.readThreadStatus(asThreadId("thread_1"))).resolves.toBe("idle");
+
+    sendRequest.mockResolvedValueOnce({ thread: { id: "thread_1", status: { type: "paused" } } });
+    await expect(manager.readThreadStatus(asThreadId("thread_1"))).rejects.toThrow(
+      "unrecognized thread status 'paused'",
+    );
+    sendRequest.mockResolvedValueOnce({ thread: { id: "thread_1" } });
+    await expect(manager.readThreadStatus(asThreadId("thread_1"))).rejects.toThrow(
+      "unrecognized thread status 'missing'",
+    );
+  });
+
   it("reads thread turns from flat thread/read responses", async () => {
     const { manager, context, sendRequest } = createThreadControlHarness();
     sendRequest.mockResolvedValue({
