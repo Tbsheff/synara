@@ -1,7 +1,7 @@
 import {
   EventId,
   ProviderRuntimeEvent as ProviderRuntimeEventSchema,
-  RuntimeItemId,
+  ProviderItemId,
   ThreadId,
   TurnId,
   type ProviderEvent,
@@ -24,7 +24,7 @@ function commandCompleted(): ProviderEvent {
     createdAt: "2026-10-11T00:00:00.000Z",
     method: "item/completed",
     turnId: TurnId.makeUnsafe("turn-1"),
-    itemId: RuntimeItemId.makeUnsafe("cmd-1"),
+    itemId: ProviderItemId.makeUnsafe("cmd-1"),
     payload: {
       threadId: "provider-thread",
       turnId: "turn-1",
