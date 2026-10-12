@@ -6902,7 +6902,6 @@ export default function Sidebar() {
     }));
   const handleRailItemReorder = (activeId: string, overId: string) => {
     // Same rule as the nav: an unshipped item (Inbox on Stable) stays out of the saved order.
-    // Groups keeps its slot, since it is only switched off, not missing from the build.
     const order = railItemOrder.filter(
       (id) => (id !== "inbox" || inboxAvailable) && (id !== "cloud" || cloudAvailable),
     );

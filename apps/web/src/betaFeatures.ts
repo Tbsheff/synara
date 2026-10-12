@@ -27,11 +27,6 @@ const DESKTOP_FLAVOR = desktopFlavorFromProtocol(
 export const isBetaFeatureOn = (feature: string): boolean =>
   isBetaFeatureEnabled(feature, DESKTOP_FLAVOR);
 
-/**
- * Groups is Beta-only. Off, group folders read as ordinary projects (so no
- * chat is hidden), and every Groups entry point is gone. The server refuses
- * the group APIs regardless; this only keeps Stable from offering them.
- */
 export const GROUPS_ON = isBetaFeatureOn(GROUPS_BETA_FEATURE);
 
 /**

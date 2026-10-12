@@ -1,17 +1,16 @@
-// Stable build: Groups is off, so a group folder reads as an ordinary project.
 import { type ProjectId } from "@synara/contracts";
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock(import("../betaFeatures"), async (importOriginal) => ({
+vi.mock(import("@synara/shared/betaFeatures"), async (importOriginal) => ({
   ...(await importOriginal()),
-  GROUPS_ON: false,
+  desktopFlavorFromProtocol: () => "production",
 }));
 
 import type { Project } from "../types";
 import { isGroupContainerProject } from "./groupProjects";
 
 describe("isGroupContainerProject on Stable", () => {
-  it("treats a group folder as an ordinary project", () => {
+  it("recognizes a saved Hub folder", () => {
     const project = {
       id: "project-group" as ProjectId,
       kind: "group",
@@ -22,6 +21,6 @@ describe("isGroupContainerProject on Stable", () => {
         homeDir: "/Users/tester",
         groupsWorkspaceRoot: "/Users/tester/Documents/Synara/Groups",
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 });

@@ -74,7 +74,7 @@ export function makeHubWorkGateway(dependencies: {
     Effect.gen(function* () {
       if (!isServerGroupsEnabled())
         return yield* Effect.fail(
-          new GatewayToolError("capability_denied", "Hubs are available in Synara Beta."),
+          new GatewayToolError("capability_denied", "Hubs are disabled on this host."),
         );
       const config = yield* projectAgentRepository.getConfig(record.projectId);
       const current = yield* repository.get(record.id);

@@ -84,8 +84,8 @@ describe("HTML render", () => {
     }
   });
 
-  it("keeps inline HTML out of Stable", () => {
-    expect(isBetaFeatureEnabled(INLINE_HTML_RENDER_BETA_FEATURE, "production")).toBe(false);
+  it("offers inline HTML in Stable and Beta", () => {
+    expect(isBetaFeatureEnabled(INLINE_HTML_RENDER_BETA_FEATURE, "production")).toBe(true);
     expect(isBetaFeatureEnabled(INLINE_HTML_RENDER_BETA_FEATURE, "beta")).toBe(true);
   });
 });

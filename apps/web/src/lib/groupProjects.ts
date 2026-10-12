@@ -43,7 +43,6 @@ export function isGroupContainerProject(
   project: Pick<Project, "cwd" | "kind"> | null | undefined,
   paths: ServerWorkspacePaths,
 ): boolean {
-  // Without Groups (Stable) a group folder is an ordinary project.
   if (!project || !GROUPS_ON) {
     return false;
   }

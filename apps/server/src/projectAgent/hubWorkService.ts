@@ -130,7 +130,7 @@ export function makeHubWorkService(dependencies: HubWorkDependencies): HubWorkSe
   const requireConfig = (projectId: ProjectId) =>
     Effect.gen(function* () {
       if (!isServerGroupsEnabled())
-        return yield* Effect.fail(fail("Hubs are available in Synara Beta."));
+        return yield* Effect.fail(fail("Hubs are disabled on this host."));
       const config = yield* projectAgentRepository
         .getConfig(projectId)
         .pipe(Effect.mapError(serviceError));

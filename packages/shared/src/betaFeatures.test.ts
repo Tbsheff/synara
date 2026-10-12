@@ -5,6 +5,7 @@ import {
   desktopFlavorFromBundleId,
   desktopFlavorFromProtocol,
   GROUPS_BETA_FEATURE,
+  INLINE_HTML_RENDER_BETA_FEATURE,
   isBetaFeatureEnabled,
   PROVIDER_CLOUD_BETA_FEATURE,
 } from "./betaFeatures";
@@ -17,13 +18,16 @@ import {
 } from "./desktopIdentity";
 
 describe("isBetaFeatureEnabled", () => {
-  it.each(["inbox", "pull-request-auto-fix", "tasks"])(
-    "offers %s in Stable and Beta",
-    (feature) => {
-      expect(isBetaFeatureEnabled(feature, "production")).toBe(true);
-      expect(isBetaFeatureEnabled(feature, "beta")).toBe(true);
-    },
-  );
+  it.each([
+    "inbox",
+    "pull-request-auto-fix",
+    "tasks",
+    GROUPS_BETA_FEATURE,
+    INLINE_HTML_RENDER_BETA_FEATURE,
+  ])("offers %s in Stable and Beta", (feature) => {
+    expect(isBetaFeatureEnabled(feature, "production")).toBe(true);
+    expect(isBetaFeatureEnabled(feature, "beta")).toBe(true);
+  });
 
   it("enables Oh My Pi in Stable and all other flavors", () => {
     for (const flavor of [
@@ -38,12 +42,13 @@ describe("isBetaFeatureEnabled", () => {
     }
   });
 
-  it("keeps Groups out of Stable only", () => {
-    expect(BETA_ONLY_FEATURES).toContain(GROUPS_BETA_FEATURE);
+  it("lists only cloud agents as Beta-only", () => {
+    expect(BETA_ONLY_FEATURES).toEqual([PROVIDER_CLOUD_BETA_FEATURE]);
     for (const flavor of ["development", "canary", "cua", "beta", "unknown"] as const) {
       expect(isBetaFeatureEnabled(GROUPS_BETA_FEATURE, flavor)).toBe(true);
     }
-    expect(isBetaFeatureEnabled(GROUPS_BETA_FEATURE, "production")).toBe(false);
+    expect(isBetaFeatureEnabled(GROUPS_BETA_FEATURE, "production")).toBe(true);
+    expect(isBetaFeatureEnabled(INLINE_HTML_RENDER_BETA_FEATURE, "production")).toBe(true);
   });
 
   it("keeps cloud agents out of Stable only", () => {

@@ -4,6 +4,13 @@ import { describe, expect, it, vi } from "vitest";
 import { makeAgentGatewayHtmlTools } from "./htmlTools";
 import { GatewayToolError, type ToolContext } from "./toolRuntime";
 
+vi.mock("../betaFeatureGate.ts", async () => {
+  const { isBetaFeatureEnabled } = await import("@synara/shared/betaFeatures");
+  return {
+    isServerBetaFeatureEnabled: (feature: string) => isBetaFeatureEnabled(feature, "production"),
+  };
+});
+
 const context: ToolContext = {
   principal: {
     kind: "provider-session",
@@ -23,7 +30,12 @@ const context: ToolContext = {
 };
 
 describe("synara_html_render", () => {
-  it("withholds the tool on Stable and refuses a cached handler after the gate closes", async () => {
+  it("publishes the tool on the Stable server", () => {
+    expect(makeAgentGatewayHtmlTools({ append: () => Effect.void })[0]?.definition.name).toBe(
+      "synara_html_render",
+    );
+  });
+  it("withholds a disabled tool and refuses a cached handler after the gate closes", async () => {
     const append = vi.fn(() => Effect.void);
     expect(makeAgentGatewayHtmlTools({ append, isEnabled: () => false })).toEqual([]);
     let enabled = true;

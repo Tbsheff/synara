@@ -47,7 +47,15 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         description:
           "Keep to-dos in one list, plan your day in Inbox and hand a task to an agent when you are ready.",
         details:
-          "Edit notes, due dates, priority and project, then choose a provider, model, effort and a new or existing chat. Task cards show activity, questions, approvals and the reply to review. The List / Kanban switch keeps the board accessible, and a one-time navigation tip introduces Tasks. Older servers without Tasks fall back to Kanban. Hubs remain Beta-only.",
+          "Edit notes, due dates, priority and project, then choose a provider, model, effort and a new or existing chat. Task cards show activity, questions, approvals and the reply to review. The List / Kanban switch keeps the board accessible, and a one-time navigation tip introduces Tasks. Older servers without Tasks fall back to Kanban.",
+      },
+      {
+        id: "hubs-html-stable",
+        title: "Hubs and HTML pages in Stable",
+        description:
+          "Use a Hub to coordinate related work and view agent-made HTML pages in your chats.",
+        details:
+          "Hubs, their Library, saved HTML pages and HTML code previews are available in Stable and Beta. On first Stable launch, saved active Hubs start paused. Review their state, then select Resume to restore check-ins and worker monitoring. Cloud agents remain Beta-only.",
       },
       {
         id: "workspace-search",
@@ -388,7 +396,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         description:
           "A feature tour introduces the new workspace, provider accounts and review workflow.",
         details:
-          "Synara 1.0.0 is a Stable release. Hubs and the Tasks to-do list remain exclusive to Synara Beta, with separate data and update feeds. Stable does not send Beta diagnostics.",
+          "Synara 1.0.0 is a Stable release. Stable and Beta keep separate data and update feeds. Stable does not send Beta diagnostics.",
       },
       {
         id: "git-writing",

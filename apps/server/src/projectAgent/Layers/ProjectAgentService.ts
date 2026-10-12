@@ -6719,7 +6719,6 @@ export const makeProjectAgentService = Effect.gen(function* () {
   return impl satisfies ProjectAgentServiceShape;
 });
 
-// Stable (Groups off) gets the inert face; Beta and every other host get the service.
 export const ProjectAgentServiceLive = Layer.effect(
   ProjectAgentService,
   makeProjectAgentService.pipe(

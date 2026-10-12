@@ -1597,7 +1597,6 @@ export const makeAgentGateway = Effect.gen(function* () {
         })
       : []),
     ...computerBrowserTools,
-    // Group tools are Beta-only: Stable does not offer them to agents at all.
     ...(isServerGroupsEnabled() ? [...projectAgentTools, ...(hubGateway?.tools ?? [])] : []),
   ];
   let cachedPluginDescriptors: ReadonlyArray<RegisteredPluginAgentTool> | undefined;

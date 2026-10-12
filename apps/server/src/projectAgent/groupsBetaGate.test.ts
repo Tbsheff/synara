@@ -6,8 +6,16 @@ import {
   GROUPS_BETA_ONLY_MESSAGE,
   gateProjectAgentServiceForStable,
   isGroupProjectCommand,
+  isServerGroupsEnabled,
 } from "./groupsBetaGate";
 import type { ProjectAgentServiceShape } from "./Services/ProjectAgentService";
+
+vi.mock("../betaFeatureGate", async () => {
+  const { isBetaFeatureEnabled } = await import("@synara/shared/betaFeatures");
+  return {
+    isServerBetaFeatureEnabled: (feature: string) => isBetaFeatureEnabled(feature, "production"),
+  };
+});
 
 const PROJECT_ID = ProjectId.makeUnsafe("project-group");
 const THREAD_ID = ThreadId.makeUnsafe("thread-coordinator");
@@ -19,7 +27,7 @@ function gatedService() {
 }
 
 describe("gateProjectAgentServiceForStable", () => {
-  it("refuses hub APIs with the Beta message", async () => {
+  it("refuses hub APIs when the gate is explicitly disabled", async () => {
     const { gated } = gatedService();
     const error = await Effect.runPromise(
       Effect.flip(gated.getOverview({ projectId: PROJECT_ID }, { kind: "user" })),
@@ -52,6 +60,10 @@ describe("gateProjectAgentServiceForStable", () => {
     await Effect.runPromise(gated.onProjectDeleted(PROJECT_ID));
     expect(onProjectDeleted).toHaveBeenCalledWith(PROJECT_ID);
   });
+});
+
+it("enables Hubs on the Stable server", () => {
+  expect(isServerGroupsEnabled()).toBe(true);
 });
 
 describe("isGroupProjectCommand", () => {

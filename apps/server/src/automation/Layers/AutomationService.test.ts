@@ -595,6 +595,13 @@ const gitCore = {
     }),
 } as unknown as GitCoreShape;
 
+vi.mock("../../betaFeatureGate.ts", async () => {
+  const { isBetaFeatureEnabled } = await import("@synara/shared/betaFeatures");
+  return {
+    isServerBetaFeatureEnabled: (feature: string) => isBetaFeatureEnabled(feature, "production"),
+  };
+});
+
 const layer = it.layer(
   AutomationServiceLive.pipe(
     Layer.provideMerge(AutomationRepositoryLive),
@@ -6315,7 +6322,7 @@ layer("AutomationService", (it) => {
   );
 });
 
-layer("Stable saved Groups automations", (it) => {
+layer("Explicitly disabled Groups automations", (it) => {
   afterEach(() => vi.restoreAllMocks());
 
   it.effect("refuses saved group check-ins without changing their definitions or runs", () =>
@@ -6346,7 +6353,7 @@ layer("Stable saved Groups automations", (it) => {
         const savedDefinition = yield* repository.getDefinitionById({ id: definition.id });
         const result = yield* service.runNow({ automationId: definition.id }).pipe(Effect.result);
         assert.equal(result._tag, "Failure");
-        if (result._tag === "Failure") assert.match(result.failure.message, /Synara Beta/);
+        if (result._tag === "Failure") assert.match(result.failure.message, /Hubs are disabled/);
         assert.deepEqual(
           yield* repository.getDefinitionById({ id: definition.id }),
           savedDefinition,

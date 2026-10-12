@@ -103,7 +103,7 @@ Le tre cose da tenere distinte sono:
 2. **Esecuzione:** tentativo, sessione e stato operativo. Un turno finito non significa task concluso; un retry non significa nuova richiesta.
 3. **Consegna:** risultato, file, domanda e PR. Una PR aperta non significa pronta al merge; una PR chiusa senza merge non equivale a successo.
 
-Estendere ProjectTask/managed-worker/eventi esistenti dopo una verifica del loro ownership, evitando un secondo task engine. Conservare API e chiavi persistite `groups`, route compatibili e gate Beta server/web. Migrazioni additive; nessun comportamento Hub attivo su Stable.
+Estendere ProjectTask/managed-worker/eventi esistenti dopo una verifica del loro ownership, evitando un secondo task engine. Conservare API e chiavi persistite `groups`, route compatibili e shared server/web gates. Hubs run in Stable and Beta; keep migrations additive.
 
 ## 6. Piano eseguibile
 
@@ -233,7 +233,7 @@ Questi sono scenari di accettazione proposti, **non test già superati**. Per il
 | PR cambia head; arriva un finding vecchio  | Nessuna readiness/fix basata su prova stale                  | SHA/fingerprint e decisione watcher                                |
 | Nota memoria modificata e nuovo worker     | Nuova revisione ricevuta, origine conservata                 | Packet effettivo e CAS                                             |
 | Report in folder Library mai aperto        | Ricerca lo trova e apre il file corretto                     | Risposta server e browser                                          |
-| Pausa, archive, Stable                     | Nessun nuovo dispatch Hub; stato conservato                  | Lifecycle, migrazioni e gate server/web                            |
+| Pausa, archive                             | Nessun nuovo dispatch Hub; stato conservato                  | Lifecycle, migrazioni e gate server/web                            |
 | Riciclo coordinatore                       | Decisioni e richieste aperte ancora disponibili              | Confronto prima/dopo e consumo reale                               |
 
 Misure utili: task duplicati; follow-up assegnati correttamente; richieste da ripetere; messaggi visibili per risultato; decisioni perse dopo restart; richieste automatiche di tool non consentiti al ruolo; wake/token per task. Stabilire baseline e risultati osservati prima di proporre percentuali di miglioramento.
@@ -250,7 +250,7 @@ Per ogni implementazione: test Vitest mirati tramite `bun run test`, poi `bun ru
 | Rumore o loop PR/progress/wake           | Medio-alto       | Fingerprint, milestone, backoff, policy di notifica                                           |
 | Nascondere risultati per protocol miss   | Alto impatto     | Fallback transcript e errori sempre visibili                                                  |
 | Memoria persa o auto-prompt crescente    | Medio-alto       | CAS, selezione, budget, checkpoint e confronto misurato                                       |
-| Feature attiva in Stable                 | Alto impatto     | Gate `groups` su ogni nuovo tool/service/evento, migrazioni additive/inerti                   |
+| Unexpected work on first Stable launch   | Alto impatto     | Pause saved active Hubs once before startup; Resume restores normal work                      |
 | Sovrapposizione di codice fra worker     | Dipende dai task | Worktree + ownership file/task; conflitti di merge restano possibili                          |
 
 Scelte prodotto da valutare sul piano concreto: default tre o altro limite per nuovi Hub; quanto dettaglio lasciare nel coordinatore; opt-in di auto-fix PR; worktree come default per task di codice; eventuale modalità solo strumenti dopo averne dimostrato l’affidabilità. Nessuna scelta richiede fermare i fix W0.

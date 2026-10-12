@@ -1,9 +1,19 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
 import { isBetaFeatureEnabled } from "@synara/shared/betaFeatures";
 
-import { visibleProviderDescriptors } from "./betaFeatures";
+vi.mock(import("@synara/shared/betaFeatures"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  desktopFlavorFromProtocol: () => "production",
+}));
+
+import {
+  CLOUD_ON,
+  GROUPS_ON,
+  INLINE_HTML_RENDER_ON,
+  visibleProviderDescriptors,
+} from "./betaFeatures";
 
 describe("visibleProviderDescriptors", () => {
   it("respects a disabled provider feature", () => {
@@ -20,4 +30,10 @@ describe("visibleProviderDescriptors", () => {
     );
     expect(visible).toEqual(PROVIDER_DESCRIPTORS);
   });
+});
+
+it("offers Hubs and inline HTML on Stable while cloud agents stay off", () => {
+  expect(GROUPS_ON).toBe(true);
+  expect(INLINE_HTML_RENDER_ON).toBe(true);
+  expect(CLOUD_ON).toBe(false);
 });

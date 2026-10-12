@@ -7,8 +7,7 @@ same instructions and memory, and files the threads deliver land in one shared L
 A hub does not need a repository. It works just as well for research, writing, planning, or any
 other non-code work.
 
-> **Synara Beta only.** Hubs ship in Synara Beta. Stable does not show them, and any hub folder
-> there appears as an ordinary project.
+> **Stable and Beta.** Hubs are available in both apps. Each app keeps its own data.
 
 > **Compatibility:** Existing hubs keep their files and saved settings. The on-disk parent folder
 > remains `~/Documents/Synara/Groups/`; the stored feature key and API identifiers retain `groups`.
@@ -17,6 +16,19 @@ other non-code work.
 > **Before you begin:** Hubs appear under the **Hubs** tab of the sidebar switcher. If you do
 > not see the tab, open Settings → **Sidebar sections** and turn on **Hubs** ("Show the Hubs
 > tab in the sidebar switcher.").
+
+## First Stable launch with saved Hubs
+
+The first Stable launch with Hubs enabled pauses saved active Hubs before any
+background service starts. It keeps their files, goals, memory, worker records,
+and pending wake events. It disables their automations, cancels old pending or
+deferred check-ins, and invalidates old completion checks. Each Hub records the
+reason in its activity log. Review its state, then select **Resume** to restore
+the automations that were enabled, with fresh schedules. Wake processing and
+worker monitoring then run as usual.
+
+This happens once per Stable data home. It does not pause new Hubs on later
+launches, change already paused or archived Hubs, or change Beta state.
 
 ## Hub or ordinary thread?
 

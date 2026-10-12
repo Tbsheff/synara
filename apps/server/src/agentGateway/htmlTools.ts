@@ -58,7 +58,7 @@ export function makeAgentGatewayHtmlTools(dependencies: {
       },
       handler: (args, context) =>
         Effect.gen(function* () {
-          if (!isEnabled()) return mcpToolResultError("Inline HTML is available in Synara Beta.");
+          if (!isEnabled()) return mcpToolResultError("Inline HTML is disabled on this host.");
           const document = readHtmlRenderDocument({
             ...args,
             height: args.height ?? HTML_RENDER_DEFAULT_HEIGHT,

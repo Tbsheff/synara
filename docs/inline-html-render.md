@@ -1,6 +1,6 @@
 # Inline HTML pages
 
-In Beta, agents can call `synara_html_render` with a title, one self-contained
+In Stable and Beta, agents can call `synara_html_render` with a title, one self-contained
 HTML document, and an optional frame height. The title limit is 200 characters.
 The HTML limit is 512 KiB in UTF-8. Height defaults to 480 CSS pixels and must be
 an integer from 80 to 2000.
@@ -34,9 +34,9 @@ Both views share `HtmlRenderDocument`. Settled assistant `html` fences offer
 **Preview** and **Code** with Code as the default. Open streaming fences and user
 messages do not offer a preview.
 
-The `inline-html-render` Beta feature gate removes the tool from the Stable
-catalog, refuses calls when disabled, hides saved pages, and hides code previews.
-It follows the current Beta policy for development and non-desktop hosts.
+The shared `inline-html-render` gate enables the tool, saved pages, and code
+previews in Stable and Beta. The gateway still checks the caller's active turn
+and thread before it stores a page.
 
 This adapts the upstream HTML frame design and message protocol. The root
 [LICENSE](../LICENSE) retains its MIT copyright notice and permission terms.

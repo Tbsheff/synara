@@ -12,8 +12,8 @@ vi.mock("@synara/shared/betaFeatures", async (importOriginal) => ({
   desktopFlavorFromProtocol: () => "production",
 }));
 
-it("keeps saved renders and code previews inert on Stable", async () => {
-  expect(INLINE_HTML_RENDER_ON).toBe(false);
+it("shows saved renders and enables code previews on Stable", async () => {
+  expect(INLINE_HTML_RENDER_ON).toBe(true);
   const screen = await render(
     <>
       <HtmlRenderFrame document={{ title: "Saved", html: "<p>Saved</p>", height: 480 }} />
@@ -21,11 +21,15 @@ it("keeps saved renders and code previews inert on Stable", async () => {
     </>,
   );
   try {
-    expect(document.querySelector("iframe")).toBeNull();
-    expect(document.querySelector("[data-html-render-frame]")).toBeNull();
-    expect(screen.getByRole("button", { name: "Open in panel" }).query()).toBeNull();
-    expect(screen.getByRole("button", { name: "Preview", exact: true }).query()).toBeNull();
-    expect(screen.getByRole("button", { name: "Code", exact: true }).query()).toBeNull();
+    expect(document.querySelector("iframe")).not.toBeNull();
+    expect(document.querySelector("[data-html-render-frame]")).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Open in panel" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Preview", exact: true })).toBeVisible();
+    await screen.getByRole("button", { name: "Preview", exact: true }).click();
+    expect(screen.getByRole("button", { name: "Code", exact: true })).toBeVisible();
+    expect(document.querySelectorAll("iframe")).toHaveLength(2);
+    await screen.getByRole("button", { name: "Code", exact: true }).click();
+    expect(document.querySelectorAll("iframe")).toHaveLength(1);
     expect(document.querySelector(".chat-markdown-codeblock__actions")).not.toBeNull();
   } finally {
     await screen.unmount();

@@ -3,6 +3,7 @@ import * as path from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
+import { vi } from "vitest";
 import {
   AutomationId,
   DEFAULT_SERVER_SETTINGS,
@@ -54,6 +55,13 @@ import { ProjectionThreadSessionRepository } from "../../persistence/Services/Pr
 import type { ProviderSession } from "@synara/contracts";
 import { ProjectAgentService } from "../Services/ProjectAgentService.ts";
 import { ProjectAgentServiceLive } from "./ProjectAgentService.ts";
+
+vi.mock("../../betaFeatureGate.ts", async () => {
+  const { isBetaFeatureEnabled } = await import("@synara/shared/betaFeatures");
+  return {
+    isServerBetaFeatureEnabled: (feature: string) => isBetaFeatureEnabled(feature, "production"),
+  };
+});
 
 const groupId = ProjectId.makeUnsafe("project-group-1");
 const groupId2 = ProjectId.makeUnsafe("project-group-2");

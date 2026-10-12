@@ -17006,7 +17006,7 @@ describe("ProviderCommandReactor", () => {
     {
       coordinatorThreadIds: ["thread-1"] as readonly string[],
       coordinatorConfigState: undefined,
-      label: "Stable saved coordinator",
+      label: "explicitly disabled Hub coordinator",
       groupsEnabled: false,
       expected: false,
     },

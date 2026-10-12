@@ -299,26 +299,14 @@ To put a feature behind the list:
 
 Promote a feature to Stable by deleting its entry; every gate resolves itself.
 
-The list currently contains `groups` (Hubs), `inline-html-render`, and
-`provider-cloud`, gated off in Stable.
-[Inline HTML pages](docs/inline-html-render.md) use a caller-scoped gateway tool and
-a sandboxed transcript frame. Stable hides saved pages and code previews and does
-not list or accept the tool.
+The list currently contains `provider-cloud`, gated off in Stable.
 [Cloud agents](docs/cloud-agents.md) use a separate Cloud page. Stable refuses the
 cloud APIs, does not start the cloud service, and leaves saved submissions inert.
+Hubs (`groups`) and [inline HTML pages](docs/inline-html-render.md) are available in
+both Stable and Beta.
 Tasks, Inbox, and Auto-fix CI are available in both apps.
 Oh My Pi, the rail sidebar layout, and message trail
 sound are available in both Stable and Beta.
-
-On Stable, Hubs are inert rather than hidden data: the server refuses the hub
-APIs, Library routes and gateway tools, stops coordinator wakes and monitoring,
-leaves saved Hub check-ins and completion evaluations unchanged and unscheduled,
-uses ordinary Synara tool approvals for former coordinator chats, and refuses
-creating a hub; the web hides the Hubs tab, route, setting, and
-thread actions, and shows any existing hub folder as an ordinary project so its
-chats stay reachable. The gate lives in
-`apps/server/src/projectAgent/groupsBetaGate.ts` and `GROUPS_ON` in
-`apps/web/src/betaFeatures.ts`.
 
 Tasks and its delegation APIs are available in Stable and Beta. Tasks takes
 Kanban's navigation slot and preserves its saved order and visibility; its
@@ -342,6 +330,19 @@ the microphone, or both. The desktop IPC handler refuses other platforms,
 and the web hides the selector on hosts without a supported desktop bridge.
 Only loudness levels are sent to the trail, and the reader stops when the
 visible trail no longer subscribes. First use can request macOS audio access.
+
+## First Stable launch with saved Hubs
+
+The first Stable launch with Hubs enabled pauses saved active Hubs before any
+background service starts. It keeps their files, goals, memory, worker records,
+and pending wake events. It disables their automations, cancels old pending or
+deferred check-ins, and invalidates old completion checks. Each Hub records the
+reason in its activity log. Review its state, then select **Resume** to restore
+the automations that were enabled, with fresh schedules. Wake processing and
+worker monitoring then run as usual.
+
+This happens once per Stable data home. It does not pause new Hubs on later
+launches, change already paused or archived Hubs, or change Beta state.
 
 ## Diagnostics
 
