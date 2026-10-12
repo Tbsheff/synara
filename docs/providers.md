@@ -47,6 +47,10 @@ Slow Git work in one workspace leaves other workspaces free to progress. Recover
 completed captures and undo outcomes; an interrupted operation with an uncertain outcome
 is reported for inspection instead of automatically changing the workspace again.
 
+Pi and Antigravity do not offer Synara Plan mode or Ask for approval. Select Full access
+explicitly to use these providers. Changing providers does not grant more access to a saved
+thread or draft. Oh My Pi keeps its existing mode choices.
+
 Pi preserves separate assistant messages within a turn, including progress before tool calls
 and the final response. Reasoning items also end with their SDK message. Retries start new
 message items while the overall turn remains active until Pi settles. This applies to newly
@@ -607,3 +611,10 @@ computer awake either for the server lifetime or while an agent turn is running.
 The server owns a `caffeinate -dims -w <server PID>` assertion; switching off or
 shutting down terminates it, deleting the last active thread releases its agent
 lease, and the native PID watch releases it if the server crashes. It does not change persistent macOS power settings.
+
+### First-run provider checks
+
+The welcome tour shows **Could not check** and the probe error when a provider check fails.
+**Not installed** means the probe found no executable. An installed CLI with a failed sign-in
+check does not count as connected. If the sign-in command cannot start in the terminal, use
+**Retry** to run it again, then **Re-detect** to check the result.
