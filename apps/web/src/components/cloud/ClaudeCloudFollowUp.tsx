@@ -7,11 +7,11 @@ import { useMutation } from "@tanstack/react-query";
 import { useRef, useState } from "react";
 
 import { cloudSendFollowUpMutationOptions } from "~/lib/cloudReactQuery";
-import { ArrowUpIcon, ExternalLinkIcon } from "~/lib/icons";
+import { ExternalLinkIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { ensureNativeApi } from "~/nativeApi";
-import { GLASS_RAISED_SURFACE_CLASS_NAME } from "~/surfaceStyles";
-import { PR_BODY_TEXT_CLASS_NAME, PR_META_TEXT_CLASS_NAME } from "../pullRequest/pullRequestText";
+import { PillComposerField } from "../PillComposerField";
+import { PR_META_TEXT_CLASS_NAME } from "../pullRequest/pullRequestText";
 import { Alert, AlertDescription, AlertTitle } from "../ui/alert";
 import { Button } from "../ui/button";
 import { dialogFieldLabelClassName } from "../ui/dialog";
@@ -84,39 +84,17 @@ export function ClaudeCloudFollowUp({ capabilities }: { capabilities: CloudCapab
           spellCheck={false}
         />
       </label>
-      <div
-        className={`${GLASS_RAISED_SURFACE_CLASS_NAME} flex items-center gap-2 rounded-3xl border border-border/60 bg-background py-1 pl-3 pr-1.5 shadow-sm`}
-      >
-        <textarea
-          rows={Math.min(6, message.split("\n").length)}
-          value={message}
-          maxLength={CLOUD_FOLLOW_UP_MESSAGE_MAX_LENGTH}
-          disabled={mutation.isPending || !capabilities.canFollowUp}
-          placeholder="Send a follow-up"
-          aria-label="Follow-up message"
-          onChange={(event) => setMessage(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
-              event.preventDefault();
-              submit();
-            }
-          }}
-          className={cn(
-            PR_BODY_TEXT_CLASS_NAME,
-            "font-system-ui min-w-0 flex-1 resize-none bg-transparent py-1.5 outline-none placeholder:text-muted-foreground disabled:opacity-60",
-          )}
-        />
-        <button
-          type="button"
-          disabled={!canSubmit}
-          aria-label="Send follow-up"
-          title="Send follow-up"
-          onClick={submit}
-          className="flex size-7 shrink-0 items-center justify-center self-end rounded-full bg-primary text-primary-foreground transition-opacity disabled:opacity-35"
-        >
-          <ArrowUpIcon className="size-4" />
-        </button>
-      </div>
+      <PillComposerField
+        value={message}
+        onValueChange={setMessage}
+        onSubmit={submit}
+        canSubmit={canSubmit}
+        disabled={mutation.isPending || !capabilities.canFollowUp}
+        placeholder="Send a follow-up"
+        ariaLabel="Follow-up message"
+        submitLabel="Send follow-up"
+        maxLength={CLOUD_FOLLOW_UP_MESSAGE_MAX_LENGTH}
+      />
       {receipt ? (
         <div className={cn(PR_META_TEXT_CLASS_NAME, "flex items-center gap-2 text-foreground")}>
           <span>Queued for session {receipt.sessionId}.</span>
