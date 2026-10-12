@@ -3,7 +3,15 @@ import { render } from "vitest-browser-react";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { StreamingTextRevealController, useStreamingTextReveal } from "./useStreamingTextReveal";
+import arrivals from "./__fixtures__/streamingTextReveal.arrivals.json";
+
+import {
+  StreamingTextRevealController,
+  useStreamingTextReveal,
+  visibleTextNodes,
+  emptyRevealSchedule,
+  nextRevealSchedule,
+} from "./useStreamingTextReveal";
 
 const controllers: StreamingTextRevealController[] = [];
 
@@ -39,7 +47,7 @@ function clock() {
 function paintedRanges(): Range[] {
   return [...CSS.highlights.entries()]
     .filter(([name]) => name.startsWith("chat-stream-reveal"))
-    .flatMap(([, highlight]) => [...highlight] as Range[]);
+    .flatMap(([, highlight]) => Array.from(highlight) as Range[]);
 }
 
 function rangeAllocations() {
@@ -55,6 +63,35 @@ function rangeAllocations() {
     },
   );
   return () => count;
+}
+
+function scanCounts() {
+  const createWalker = document.createTreeWalker.bind(document);
+  const join = Array.prototype.join;
+  const charCodeAt = String.prototype.charCodeAt;
+  const counts = { walks: 0, nodes: 0, copiedChars: 0, comparedChars: 0 };
+  vi.spyOn(document, "createTreeWalker").mockImplementation((...args) => {
+    counts.walks += 1;
+    const walker = createWalker(...args);
+    const next = walker.nextNode.bind(walker);
+    vi.spyOn(walker, "nextNode").mockImplementation(() => {
+      const node = next();
+      if (node) counts.nodes += 1;
+      return node;
+    });
+    return walker;
+  });
+  vi.spyOn(Array.prototype, "join").mockImplementation(function (this: string[], separator) {
+    if (separator === "" && this.every((value: unknown) => typeof value === "string")) {
+      counts.copiedChars += this.reduce((sum: number, value: string) => sum + value.length, 0);
+    }
+    return join.call(this, separator);
+  });
+  vi.spyOn(String.prototype, "charCodeAt").mockImplementation(function (this: string, index) {
+    counts.comparedChars += 1;
+    return charCodeAt.call(this, index);
+  });
+  return counts;
 }
 
 function RevealHarness({ text }: { readonly text: string }) {
@@ -121,6 +158,10 @@ describe("streaming text fade", () => {
     expect(Reflect.get(controller, "nodes")).toEqual([]);
     expect(Reflect.get(controller, "nodeStarts")).toEqual([]);
     expect(Reflect.get(controller, "root")).toBeNull();
+    expect(Reflect.get(controller, "nodeTexts")).toHaveLength(0);
+    expect(Reflect.get(controller, "mutations")).toHaveLength(0);
+    expect(Reflect.get(controller, "tailBlock")).toBeNull();
+    expect(Reflect.get(controller, "observer")).toBeNull();
     expect(paintedRanges()).toEqual([]);
     controller.observe(root, true);
     expect(paintedRanges()).toEqual([]);
@@ -178,6 +219,175 @@ describe("streaming text fade", () => {
     expect(paintedRanges()).toEqual([]);
     expect(allocations()).toBe(0);
     await screen.unmount();
+  });
+
+  it("scans only changed tail nodes while keeping stable block offsets", () => {
+    const advance = clock();
+    const { root, controller } = fixture("");
+    root.innerHTML = `${"<p>stable block</p>".repeat(100)}<p>tail</p>`;
+    controller.observe(root, true);
+    const counts = scanCounts();
+    for (let step = 0; step < 20; step += 1) {
+      advance(1_000 + step * 40);
+      root.lastChild!.firstChild!.textContent += " new";
+      controller.observe(root, true);
+      expect(
+        paintedRanges().every((range) => range.startContainer === root.lastChild!.firstChild),
+      ).toBe(true);
+    }
+    console.info("[text-fade] tail scans", counts);
+    expect(counts.walks).toBe(0);
+    expect(counts.nodes).toBe(0);
+    expect(counts.copiedChars).toBe(0);
+    expect(counts.comparedChars).toBeLessThan(2_000);
+  });
+
+  it("measures saved 1,019-update arrival lengths with 400-character prose blocks", () => {
+    const advance = clock();
+    const { root, controller } = fixture("");
+    controller.observe(root, true);
+    const counts = scanCounts();
+    let length = 0;
+    for (const arrival of arrivals) {
+      advance(1_000 + arrival.at - arrivals[0]!.at);
+      while (length < arrival.length) {
+        if (length % 400 === 0) {
+          const paragraph = document.createElement("p");
+          paragraph.append(document.createTextNode(""));
+          root.append(paragraph);
+        }
+        const count = Math.min(arrival.length - length, 400 - (length % 400));
+        (root.lastChild!.firstChild as Text).appendData("x".repeat(count));
+        length += count;
+      }
+      controller.observe(root, true);
+    }
+    console.info("[text-fade] saved arrivals", { updates: arrivals.length, length, ...counts });
+    expect(arrivals).toHaveLength(1_019);
+    expect(length).toBe(8_001);
+    expect(counts.walks).toBeLessThan(50);
+    expect(counts.nodes).toBeLessThan(100);
+    expect(counts.copiedChars).toBeLessThan(30_000);
+    expect(counts.comparedChars).toBeLessThan(500_000);
+  });
+
+  it("uses a full scan for stable edits, formatting, replacement, and hidden math changes", () => {
+    const advance = clock();
+    const { root, controller } = fixture("");
+    root.innerHTML = "<p>old </p><p>tail</p>";
+    controller.observe(root, true);
+    const counts = scanCounts();
+    root.firstChild!.firstChild!.textContent = "edit ";
+    controller.observe(root, true);
+    expect(counts.walks).toBe(1);
+    advance(1_300);
+    root.lastChild!.textContent = "tail new";
+    controller.observe(root, true);
+    expect(counts.walks).toBe(2);
+    const replacedRange = paintedRanges().find(
+      (range) => range.startContainer === root.lastChild!.firstChild,
+    );
+    expect(replacedRange).toBeDefined();
+    root.lastChild!.textContent = "tail new";
+    controller.observe(root, true);
+    expect(counts.walks).toBe(3);
+    expect(paintedRanges()).not.toContain(replacedRange);
+    root.innerHTML = "<p>edit </p><p><span class='katex-mathml'>hidden</span>tail new</p>";
+    controller.observe(root, true);
+    expect(counts.walks).toBe(4);
+    root.querySelector("span")!.removeAttribute("class");
+    controller.observe(root, true);
+    expect(counts.walks).toBe(5);
+    expect(Reflect.get(controller, "nodeStarts")).toEqual([0, 5, 11]);
+    expect(
+      paintedRanges()
+        .map((range) => range.toString())
+        .join(""),
+    ).not.toContain("edit");
+  });
+
+  it("keeps incremental schedules equal to full text comparisons through tail edits", () => {
+    const advance = clock();
+    const { root, controller } = fixture("");
+    root.innerHTML = "<p>stable </p><p><b>one</b><i> two</i></p>";
+    controller.observe(root, true);
+    let previous = visibleTextNodes(root)
+      .map((node) => node.data)
+      .join("");
+    let schedule = emptyRevealSchedule();
+    for (let step = 0; step < 40; step += 1) {
+      const now = 1_000 + step * 40;
+      advance(now);
+      schedule = {
+        arrivals: schedule.arrivals,
+        lastStartAt: schedule.lastStartAt,
+        fragments: schedule.fragments.filter((fragment) => now - fragment.startedAt < 200),
+      };
+      const tail = root.lastChild!;
+      if (step % 7 === 0) {
+        const next = document.createElement("p");
+        next.textContent = " next";
+        root.append(next);
+      } else if (step % 5 === 0) {
+        tail.textContent = `${tail.textContent!.slice(0, -2)}!`;
+      } else if (step % 3 === 0) {
+        tail.insertBefore(document.createTextNode(" first"), tail.firstChild);
+      } else {
+        (visibleTextNodes(tail).at(-1) as Text).appendData(" +");
+      }
+      const next = visibleTextNodes(root)
+        .map((node) => node.data)
+        .join("");
+      schedule = nextRevealSchedule(schedule, previous, next, now);
+      controller.observe(root, true);
+      expect(Reflect.get(controller, "schedule")).toEqual(schedule);
+      const nodes = visibleTextNodes(root);
+      let start = 0;
+      expect(Reflect.get(controller, "nodes")).toEqual(nodes);
+      expect(Reflect.get(controller, "nodeStarts")).toEqual(
+        nodes.map((node) => {
+          const offset = start;
+          start += node.data.length;
+          return offset;
+        }),
+      );
+      previous = next;
+    }
+  });
+
+  it("keeps offsets after an empty tail when formatting lands during settlement", () => {
+    const advance = clock();
+    const { root, controller } = fixture("");
+    root.innerHTML = "<p>old </p><span></span>";
+    controller.observe(root, true);
+    root.firstChild!.firstChild!.textContent += "new";
+    controller.observe(root, true);
+    controller.observe(root, false);
+    const finalBlock = document.createElement("p");
+    finalBlock.textContent = "tail";
+    root.append(finalBlock);
+    advance(1_100);
+    expect(Reflect.get(controller, "nodeStarts")).toEqual([0, 7]);
+    expect(paintedRanges().map((range) => range.toString())).toEqual(["new"]);
+    advance(1_300);
+    expect(Reflect.get(controller, "observer")).toBeNull();
+    expect(paintedRanges()).toEqual([]);
+  });
+
+  it("remaps asynchronous formatting changes on the next animation frame", async () => {
+    const advance = clock();
+    const { root, controller } = fixture();
+    controller.observe(root, true);
+    root.firstChild!.textContent += "new";
+    controller.observe(root, true);
+    const detached = root.firstChild!;
+    root.innerHTML = "<p><strong>old </strong><em>new</em></p>";
+    await Promise.resolve();
+    advance(1_100);
+    expect(paintedRanges().map((range) => range.toString())).toEqual(["new"]);
+    expect(Reflect.get(controller, "nodes")).not.toContain(detached);
+    advance(1_300);
+    expect(paintedRanges()).toEqual([]);
   });
 
   it("releases ranges on replacement and disposal without fading the old prefix", () => {
