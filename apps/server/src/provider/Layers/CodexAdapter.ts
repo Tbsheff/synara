@@ -80,6 +80,7 @@ import {
   parseCodexUserInputQuestions,
   type CodexAppServerSendTurnInput,
   type CodexAppServerStartSessionInput,
+  type CodexSessionExitPayload,
   type CodexSessionInspection,
 } from "../../codexAppServerManager.ts";
 import {
@@ -325,6 +326,22 @@ function asArray(value: unknown): unknown[] | undefined {
 
 function asNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function readCodexSessionExit(
+  payload: Record<string, unknown> | undefined,
+): CodexSessionExitPayload | undefined {
+  const exitKind = payload?.exitKind;
+  if (exitKind !== "graceful" && exitKind !== "error") return undefined;
+  const turnId = asString(payload?.turnId);
+  const signal = asString(payload?.signal);
+  return {
+    exitCode: asNumber(payload?.exitCode) ?? null,
+    signal: (signal as NodeJS.Signals | undefined) ?? null,
+    exitKind,
+    ...(turnId ? { turnId: TurnId.makeUnsafe(turnId) } : {}),
+    ...(payload?.causeAlreadyReported === true ? { causeAlreadyReported: true } : {}),
+  };
 }
 
 // Keep manager-emitted stderr lines visible without escalating them into a fatal thread error.
@@ -2713,13 +2730,31 @@ function mapToRuntimeEvents(
 
   if (event.method === "session/exited" || event.method === "session/closed") {
     tracker.forgetThread(canonicalThreadId);
+    const exit = event.method === "session/exited" ? readCodexSessionExit(payload) : undefined;
+    const exitKind = event.method === "session/closed" ? "graceful" : exit?.exitKind;
+    const crashError: ReadonlyArray<ProviderRuntimeEvent> =
+      exit?.exitKind === "error" && exit.causeAlreadyReported !== true
+        ? [
+            {
+              ...runtimeEventBase(event, canonicalThreadId),
+              ...(exit.turnId ? { turnId: exit.turnId } : {}),
+              type: "runtime.error",
+              payload: {
+                message: event.message ?? "Codex app-server exited unexpectedly.",
+                class: "transport_error",
+                detail: { exitCode: exit.exitCode, signal: exit.signal },
+              },
+            },
+          ]
+        : [];
     return [
+      ...crashError,
       {
         ...runtimeEventBase(event, canonicalThreadId),
         type: "session.exited",
         payload: {
           ...(event.message ? { reason: event.message } : {}),
-          ...(event.method === "session/closed" ? { exitKind: "graceful" } : {}),
+          ...(exitKind ? { exitKind } : {}),
         },
       },
     ];

@@ -248,6 +248,7 @@ interface CodexSessionContext {
   terminalFailure?: SessionTerminalCause;
   /** Transport/process failure initiated teardown, so a later exit remains observable. */
   failureStopping?: boolean;
+  exitReported?: boolean;
   transportError?: Error;
   stopPromise?: Promise<void>;
   teardownError?: Error;
@@ -287,6 +288,14 @@ type CodexDiscoveryOptions = NonNullable<ProviderStartOptions["codex"]>;
 export interface CodexSessionInspection {
   readonly session: ProviderSession;
   readonly codexOptions?: CodexDiscoveryOptions;
+}
+
+export interface CodexSessionExitPayload {
+  readonly exitCode: number | null;
+  readonly signal: NodeJS.Signals | null;
+  readonly exitKind: "graceful" | "error";
+  readonly turnId?: TurnId;
+  readonly causeAlreadyReported?: true;
 }
 
 interface JsonRpcError {
@@ -4274,7 +4283,17 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       if (context.stopping && context.failureStopping !== true) {
         return;
       }
+      if (context.exitReported) {
+        return;
+      }
+      context.exitReported = true;
 
+      const activeTurnId = context.session.activeTurnId;
+      const failureReported = context.terminalFailure !== undefined;
+      const exitKind =
+        code !== 0 || signal !== null || activeTurnId !== undefined || failureReported
+          ? "error"
+          : "graceful";
       const message = `codex app-server exited (code=${code ?? "null"}, signal=${signal ?? "null"}).`;
       const exitError = new Error(message);
       const ownedContext = context.discovery
@@ -4291,7 +4310,14 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         lastError: code === 0 ? context.session.lastError : message,
       });
       if (ownedContext) {
-        this.emitLifecycleEvent(context, "session/exited", message);
+        const exit: CodexSessionExitPayload = {
+          exitCode: code,
+          signal,
+          exitKind,
+          ...(activeTurnId !== undefined ? { turnId: activeTurnId } : {}),
+          ...(failureReported ? { causeAlreadyReported: true } : {}),
+        };
+        this.emitLifecycleEvent(context, "session/exited", message, exit);
       }
       // Retire resources promptly while retaining the replacement barrier until
       // teardown settles. Post-exit capture keeps startup failures uncertain.
@@ -5018,7 +5044,12 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     );
   }
 
-  private emitLifecycleEvent(context: CodexSessionContext, method: string, message: string): void {
+  private emitLifecycleEvent(
+    context: CodexSessionContext,
+    method: string,
+    message: string,
+    payload?: unknown,
+  ): void {
     if (context.discovery) {
       return;
     }
@@ -5036,6 +5067,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         : {}),
       method,
       message,
+      ...(payload !== undefined ? { payload } : {}),
     });
   }
 
