@@ -51,6 +51,7 @@ import {
   ThreadTurnDiffCompletedPayload,
   ThreadTurnStartRequestedPayload,
 } from "./Schemas.ts";
+import { projectIndexedEvent } from "./indexedReadModel.ts";
 import { resolveStableMessageTurnId } from "./messageTurnId.ts";
 import { maxIso, settleTurnStateFromSession } from "./turnLifecycle.ts";
 import {
@@ -399,6 +400,9 @@ export function projectEvent(
   model: OrchestrationReadModel,
   event: OrchestrationEvent,
 ): Effect.Effect<OrchestrationReadModel, OrchestrationProjectorDecodeError> {
+  const indexed = projectIndexedEvent(model, event, projectEvent);
+  if (indexed) return indexed;
+
   const nextBase: OrchestrationReadModel = {
     ...model,
     snapshotSequence: event.sequence,

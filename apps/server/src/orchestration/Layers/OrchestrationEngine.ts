@@ -80,6 +80,11 @@ import {
 import { PROJECT_METADATA_SNAPSHOT_PROJECTORS } from "../projectMetadataProjection.ts";
 import { createEmptyReadModel, projectEvent } from "../projector.ts";
 import {
+  findReadModelThread,
+  indexReadModel,
+  replaceReadModelThread,
+} from "../indexedReadModel.ts";
+import {
   OrchestrationProjectionPipeline,
   type ShellMetadataOrchestrationEvent,
 } from "../Services/ProjectionPipeline.ts";
@@ -181,7 +186,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
     chatWorkspaceRoot: serverConfig.chatWorkspaceRoot,
   } as const;
 
-  let commandReadModel = createEmptyReadModel(new Date().toISOString());
+  let commandReadModel = indexReadModel(createEmptyReadModel(new Date().toISOString()));
 
   const eventPubSub = yield* PubSub.sliding<OrchestrationEvent>(
     ORCHESTRATION_EVENT_PUBSUB_CAPACITY,
@@ -562,7 +567,10 @@ const makeOrchestrationEngine = Effect.gen(function* () {
     if (commandSequence < commandReadModel.snapshotSequence) {
       return commandReadModel;
     }
-    commandReadModel = { ...nextCommandReadModel, snapshotSequence: commandSequence };
+    commandReadModel = indexReadModel({
+      ...nextCommandReadModel,
+      snapshotSequence: commandSequence,
+    });
     return commandReadModel;
   }).pipe(
     Effect.catchCause((cause) =>
@@ -584,22 +592,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
     ),
   );
 
-  const overlayThread = (
-    model: OrchestrationReadModel,
-    thread: OrchestrationReadModel["threads"][number],
-  ): OrchestrationReadModel => {
-    const existingThread = model.threads.find((entry) => entry.id === thread.id);
-    // The command cache may contain only deltas received since a restart.
-    // Durable detail includes the complete text, now including pending chunks.
-    // Overlaying that detail with a partial cache would truncate completion.
-    const hasThread = existingThread !== undefined;
-    return {
-      ...model,
-      threads: hasThread
-        ? model.threads.map((entry) => (entry.id === thread.id ? thread : entry))
-        : [...model.threads, thread],
-    };
-  };
+  const overlayThread = replaceReadModelThread;
 
   const loadThreadDetailForDecider = (
     command: OrchestrationCommand,
@@ -651,9 +644,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
                   }),
               ),
               Effect.map((message) => {
-                const thread = commandReadModel.threads.find(
-                  (entry) => entry.id === command.threadId,
-                );
+                const thread = findReadModelThread(commandReadModel, command.threadId);
                 if (!thread || Option.isNone(message)) return commandReadModel;
                 return overlayThread(commandReadModel, {
                   ...thread,
@@ -693,12 +684,13 @@ const makeOrchestrationEngine = Effect.gen(function* () {
                 }),
             ),
             Effect.flatMap((message) => {
-              const model = commandReadModel.threads.some((entry) => entry.id === command.threadId)
-                ? Effect.succeed(commandReadModel)
-                : loadThreadDetailForDecider(command, commandReadModel, command.threadId);
+              const model =
+                findReadModelThread(commandReadModel, command.threadId) !== undefined
+                  ? Effect.succeed(commandReadModel)
+                  : loadThreadDetailForDecider(command, commandReadModel, command.threadId);
               return model.pipe(
                 Effect.map((readModel) => {
-                  const thread = readModel.threads.find((entry) => entry.id === command.threadId);
+                  const thread = findReadModelThread(readModel, command.threadId);
                   // A missing projection row must not discard text still in cache.
                   // SQL failures stay errors; a present row remains authoritative.
                   if (!thread || Option.isNone(message)) return readModel;
@@ -1075,8 +1067,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
 
       let resolvedGoal: string | null = null;
       if (command.type === "thread.meta.update" && command.goalAchieved === true) {
-        const persistedGoal =
-          commandReadModel.threads.find((entry) => entry.id === command.threadId)?.goal ?? "";
+        const persistedGoal = findReadModelThread(commandReadModel, command.threadId)?.goal ?? "";
         const goalCommand = command;
         resolvedGoal = yield* Effect.promise(() =>
           readMaterializedThreadGoalText({
@@ -1146,9 +1137,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
 
           let deciderReadModel = yield* buildDeciderReadModel(command);
           if (resolvedGoal !== null && command.type === "thread.meta.update") {
-            const currentThread = deciderReadModel.threads.find(
-              (entry) => entry.id === command.threadId,
-            );
+            const currentThread = findReadModelThread(deciderReadModel, command.threadId);
             if (currentThread !== undefined)
               deciderReadModel = overlayThread(deciderReadModel, {
                 ...currentThread,
@@ -1519,7 +1508,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
 
   yield* projectionPipeline.bootstrap;
 
-  commandReadModel = yield* projectionSnapshotQuery.getCommandReadModel();
+  commandReadModel = indexReadModel(yield* projectionSnapshotQuery.getCommandReadModel());
   lastPublishedSequence = yield* eventStore.getHighWaterSequence();
 
   const finishEnvelope = Ref.modify(engineAdmissionState, (current) => {
@@ -1711,7 +1700,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
   // Compatibility bridge for older tests and out-of-tree callers. Production
   // code should use ProjectionSnapshotQuery directly instead of depending on
   // the command engine to own a hydrated read model.
-  const getReadModel = () => Effect.sync(() => commandReadModel);
+  const getReadModel = () => Effect.sync(() => ({ ...commandReadModel }));
   const refreshCommandReadModel: OrchestrationEngineShape["refreshCommandReadModel"] = () =>
     maintenanceLock.withPermits(1)(refreshCommandReadModelFromProjectionState);
 
