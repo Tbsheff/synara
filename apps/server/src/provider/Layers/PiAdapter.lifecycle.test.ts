@@ -81,7 +81,15 @@ afterEach(() => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-type ResponseKind = "success" | "error" | "overflow" | "partial-error" | "tool" | "until-abort";
+type ResponseKind =
+  | "success"
+  | "error"
+  | "overflow"
+  | "partial-error"
+  | "tool"
+  | "until-abort"
+  | "chunked-until-abort";
+const CHUNKED_DELTA_COUNT = 40;
 function responses(...kinds: ResponseKind[]) {
   let calls = 0;
   captured.stream = (model, context, options) => {
@@ -107,7 +115,29 @@ function responses(...kinds: ResponseKind[]) {
       timestamp: Date.now(),
     };
     stream.push({ type: "start", partial: message });
-    if (kind === "error" || kind === "overflow") {
+    const untilAbort = () => {
+      const abort = () => {
+        message.stopReason = "aborted";
+        message.errorMessage = "Request was aborted";
+        stream.push({ type: "error", reason: "aborted", error: message });
+      };
+      if (options?.signal?.aborted) abort();
+      else options?.signal?.addEventListener("abort", abort, { once: true });
+    };
+    if (kind === "chunked-until-abort") {
+      const thinking = { type: "thinking" as const, thinking: "" };
+      const text = { type: "text" as const, text: "" };
+      message.content.push(thinking, text);
+      for (let index = 0; index < CHUNKED_DELTA_COUNT; index++) {
+        thinking.thinking += "r";
+        stream.push({ type: "thinking_delta", contentIndex: 0, delta: "r", partial: message });
+      }
+      for (let index = 0; index < CHUNKED_DELTA_COUNT; index++) {
+        text.text += "t";
+        stream.push({ type: "text_delta", contentIndex: 1, delta: "t", partial: message });
+      }
+      untilAbort();
+    } else if (kind === "error" || kind === "overflow") {
       message.stopReason = "error";
       message.errorMessage =
         kind === "overflow"
@@ -138,13 +168,7 @@ function responses(...kinds: ResponseKind[]) {
         message.stopReason = "toolUse";
         stream.push({ type: "done", reason: "toolUse", message });
       } else if (kind === "until-abort") {
-        const abort = () => {
-          message.stopReason = "aborted";
-          message.errorMessage = "Request was aborted";
-          stream.push({ type: "error", reason: "aborted", error: message });
-        };
-        if (options?.signal?.aborted) abort();
-        else options?.signal?.addEventListener("abort", abort, { once: true });
+        untilAbort();
       } else {
         stream.push({ type: "done", reason: "stop", message });
       }
@@ -235,6 +259,9 @@ async function withAdapter(
     }).pipe(Effect.provide(layer), Effect.scoped),
   );
 }
+
+const timeout = () =>
+  new Promise<"timeout">((resolve) => setTimeout(() => resolve("timeout"), 1_500));
 
 async function send(adapter: PiAdapterShape) {
   return Effect.runPromise(adapter.sendTurn({ threadId, input: "Test this turn" }));
@@ -362,6 +389,38 @@ it("retains only the latest cumulative tool snapshot while preserving final outp
     );
     await Effect.runPromise(adapter.interruptTurn(threadId, turn.turnId));
     await waitFor(() => expect(completions(events)).toHaveLength(1));
+    await expectNextTurn(adapter, events, turn.turnId);
+  });
+});
+
+it("keeps one transcript item per streamed segment and still rolls back the turn", async () => {
+  responses("success", "chunked-until-abort");
+  await withAdapter(async (adapter, events) => {
+    const session = captured.sessions[0]!;
+    await send(adapter);
+    await waitFor(() => expect(completions(events)).toHaveLength(1));
+    const settledLeafId = session.sessionManager.getLeafId();
+    const turn = await send(adapter);
+    await waitFor(() =>
+      expect(
+        events.filter(
+          (event) =>
+            event.type === "content.delta" &&
+            event.turnId === turn.turnId &&
+            event.payload.streamKind === "assistant_text",
+        ),
+      ).toHaveLength(CHUNKED_DELTA_COUNT),
+    );
+    const active = await Effect.runPromise(adapter.readThread(threadId));
+    expect(active.turns.find((entry) => entry.id === turn.turnId)?.items).toEqual([
+      { type: "reasoning", delta: "r".repeat(CHUNKED_DELTA_COUNT) },
+      { type: "assistant_message", delta: "t".repeat(CHUNKED_DELTA_COUNT) },
+    ]);
+    await Effect.runPromise(adapter.interruptTurn(threadId, turn.turnId));
+    await waitFor(() => expect(completions(events)).toHaveLength(2));
+    expect(session.sessionManager.getLeafId()).not.toBe(settledLeafId);
+    await Effect.runPromise(adapter.rollbackThread(threadId, 1));
+    expect(session.sessionManager.getLeafId()).toBe(settledLeafId);
     await expectNextTurn(adapter, events, turn.turnId);
   });
 });
@@ -729,6 +788,63 @@ it("starts a concurrent send cleanly after the committing prompt rejects preflig
       payload: { state: "completed" },
     });
     expect(session.pendingMessageCount).toBe(0);
+  });
+});
+
+it.each(["sendTurn", "steerTurn"] as const)(
+  "stops a session whose prompt never commits and fails the %s waiting on it",
+  async (method) => {
+    responses("success");
+    await withAdapter(async (adapter, events) => {
+      const session = captured.sessions[0]!;
+      vi.spyOn(session, "prompt").mockImplementation(() => new Promise<void>(() => {}));
+      await send(adapter);
+      const dispatch =
+        method === "sendTurn"
+          ? adapter.sendTurn({ threadId, input: "Waits on a hung commit" })
+          : adapter.steerTurn!({ threadId, input: "Waits on a hung commit" });
+      const waiting = Effect.runPromise(Effect.flip(dispatch));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      const stopped = await Promise.race([
+        Effect.runPromise(adapter.stopSession(threadId)).then(() => "stopped" as const),
+        timeout(),
+      ]);
+      expect(stopped).toBe("stopped");
+      const failure = await Promise.race([waiting, timeout()]);
+      expect(failure).toMatchObject({ _tag: "ProviderAdapterSessionClosedError" });
+      await waitFor(() =>
+        expect(events.some((event) => event.type === "session.exited")).toBe(true),
+      );
+    });
+  },
+);
+
+it("restarts a session whose prompt never commits and fails the send waiting on it", async () => {
+  responses("success");
+  await withAdapter(async (adapter, _events, cwd) => {
+    const session = captured.sessions[0]!;
+    vi.spyOn(session, "prompt").mockImplementation(() => new Promise<void>(() => {}));
+    await send(adapter);
+    const waiting = Effect.runPromise(
+      Effect.flip(adapter.sendTurn({ threadId, input: "Waits on a hung commit" })),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const restarted = await Promise.race([
+      Effect.runPromise(
+        adapter.startSession({
+          threadId,
+          cwd,
+          runtimeMode: "full-access",
+          providerOptions: { pi: { agentDir: cwd } },
+          modelSelection: { provider: "pi", model: "openai/gpt-4o" },
+        }),
+      ).then(() => "restarted" as const),
+      timeout(),
+    ]);
+    expect(restarted).toBe("restarted");
+    const failure = await Promise.race([waiting, timeout()]);
+    expect(failure).toMatchObject({ _tag: "ProviderAdapterSessionClosedError" });
+    expect(captured.sessions).toHaveLength(2);
   });
 });
 
