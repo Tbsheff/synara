@@ -21,10 +21,9 @@ import {
   type OrchestrationThreadShell,
   type ProviderKind,
   type ProviderRuntimeEvent,
-  type RuntimeItemId,
+  RuntimeItemId,
   type RuntimeMode,
   type TurnOrigin,
-  TRANSCRIPT_LIVE_OUTPUT_MIN_INTERVAL_MS,
   TRANSCRIPT_NOTICE_ACTIVITY_KIND,
   TRANSCRIPT_OUTPUT_TAIL_MAX_CHARS,
 } from "@synara/contracts";
@@ -98,6 +97,7 @@ import {
 } from "../../persistence/Services/ProviderRuntimeEvents.ts";
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
 import { isGitRepository } from "../../git/isRepo.ts";
+import type { ProjectionRepositoryError } from "../../persistence/Errors.ts";
 import {
   OrchestrationCommandIdentityCollisionError,
   OrchestrationCommandPreviouslyRejectedError,
@@ -231,7 +231,8 @@ const STARTED_TOOL_ITEM_TYPE_TTL = Duration.minutes(60);
 const PERSISTED_PROGRESS_INTERVAL_MS = 1_000;
 const PERSISTED_PROGRESS_CACHE_CAPACITY = 4_096;
 const PERSISTED_PROGRESS_TTL = Duration.minutes(60);
-const PROPOSED_PLAN_PREVIEW_INTERVAL_MS = TRANSCRIPT_LIVE_OUTPUT_MIN_INTERVAL_MS;
+const PROPOSED_PLAN_PREVIEW_INTERVAL_MS = 1_000;
+const PROPOSED_PLAN_PREVIEW_CHARS_PER_INTERVAL = 8_000;
 const MAX_BUFFERED_REASONING_SUMMARY_CHARS = 8_000;
 const MAX_BUFFERED_REASONING_SUMMARY_PARTS = 24;
 const REASONING_PREVIEW_INTERVAL_MS = 250;
@@ -274,6 +275,7 @@ type RuntimeIngestionInput =
     };
 
 type BufferedToolOutput = OutputTail;
+type StartedToolItemPayload = Extract<ProviderRuntimeEvent, { type: "item.started" }>["payload"];
 type BufferedReasoningSummary = {
   readonly parts: ReadonlyMap<number, string>;
   readonly rawText?: string;
@@ -454,6 +456,23 @@ function isRowMakingProviderRuntimeEvent(event: ProviderRuntimeEvent): boolean {
 
 function assistantMessageSegmentKey(threadId: ThreadId, messageId: MessageId): string {
   return JSON.stringify([threadId, messageId]);
+}
+
+function toolOutputBufferKey(
+  threadId: ThreadId,
+  turnId: string | undefined,
+  itemId: string,
+): string {
+  return JSON.stringify([threadId, turnId ?? null, itemId]);
+}
+
+function parseToolOutputBufferKey(key: string): {
+  readonly threadId: string;
+  readonly turnId: string | null;
+  readonly itemId: string;
+} {
+  const [threadId, turnId, itemId] = JSON.parse(key) as [string, string | null, string];
+  return { threadId, turnId, itemId };
 }
 
 function reasoningSummaryBufferKey(
@@ -742,6 +761,24 @@ function subagentThreadTitle(identity: {
     return `Subagent [${identity.role}]`;
   }
   return identity.providerThreadId ? `Subagent ${identity.providerThreadId}` : "Subagent";
+}
+
+const TRANSIENT_RUNTIME_FAILURE_TAGS: ReadonlySet<string> = new Set([
+  "PersistenceSqlError",
+  "SqlError",
+  "OrchestrationCommandAdmissionError",
+  "OrchestrationCommandTimeoutError",
+  "OrchestrationCommandInternalError",
+  "TimeoutError",
+]);
+
+function isTransientRuntimeIngestionFailure(cause: Cause.Cause<unknown>): boolean {
+  const error = Option.getOrUndefined(Cause.findErrorOption(cause));
+  return (
+    isJsonObject(error) &&
+    typeof error._tag === "string" &&
+    TRANSIENT_RUNTIME_FAILURE_TAGS.has(error._tag)
+  );
 }
 
 const takeCached = <Key, Value>(cache: Cache.Cache<Key, Value>, key: Key) =>
@@ -1038,7 +1075,7 @@ const make = Effect.gen(function* () {
     timeToLive: TURN_ORIGIN_BY_TURN_TTL,
     lookup: () => Effect.succeed(undefined),
   });
-  const startedToolItemTypeByKey = yield* Cache.make<string, string | undefined>({
+  const startedToolItemByKey = yield* Cache.make<string, StartedToolItemPayload | undefined>({
     capacity: STARTED_TOOL_ITEM_TYPE_CACHE_CAPACITY,
     timeToLive: STARTED_TOOL_ITEM_TYPE_TTL,
     lookup: () => Effect.succeed(undefined),
@@ -1199,12 +1236,8 @@ const make = Effect.gen(function* () {
 
   const getThreadDetail = Effect.fnUntraced(function* (
     threadId: ThreadId,
-  ): Effect.fn.Return<OrchestrationThread | undefined> {
-    return Option.getOrUndefined(
-      yield* projectionSnapshotQuery
-        .getThreadDetailById(threadId)
-        .pipe(Effect.catch(() => Effect.succeed(Option.none()))),
-    );
+  ): Effect.fn.Return<OrchestrationThread | undefined, ProjectionRepositoryError> {
+    return Option.getOrUndefined(yield* projectionSnapshotQuery.getThreadDetailById(threadId));
   });
 
   // PERF: cheap counterpart to getThreadDetail for events that never read the
@@ -1212,22 +1245,18 @@ const make = Effect.gen(function* () {
   // empty arrays. See eventNeedsHeavyThreadDetail.
   const getThreadShellDetail = Effect.fnUntraced(function* (
     threadId: ThreadId,
-  ): Effect.fn.Return<OrchestrationThread | undefined> {
+  ): Effect.fn.Return<OrchestrationThread | undefined, ProjectionRepositoryError> {
     const shell = Option.getOrUndefined(
-      yield* projectionSnapshotQuery
-        .getThreadShellById(threadId)
-        .pipe(Effect.catch(() => Effect.succeed(Option.none()))),
+      yield* projectionSnapshotQuery.getThreadShellById(threadId),
     );
     return shell ? threadDetailFromShell(shell) : undefined;
   });
 
   const getProjectShell = Effect.fnUntraced(function* (
     thread: Pick<OrchestrationThread, "projectId">,
-  ): Effect.fn.Return<OrchestrationProjectShell | undefined> {
+  ): Effect.fn.Return<OrchestrationProjectShell | undefined, ProjectionRepositoryError> {
     return Option.getOrUndefined(
-      yield* projectionSnapshotQuery
-        .getProjectShellById(thread.projectId)
-        .pipe(Effect.catch(() => Effect.succeed(Option.none()))),
+      yield* projectionSnapshotQuery.getProjectShellById(thread.projectId),
     );
   });
 
@@ -1362,26 +1391,6 @@ const make = Effect.gen(function* () {
 
   const clearAssistantMessageIdsForTurn = (threadId: ThreadId, turnId: TurnId) =>
     Cache.invalidate(turnMessageIdsByTurnKey, providerTurnKey(threadId, turnId));
-
-  const appendBufferedAssistantText = (messageId: MessageId, delta: string) =>
-    Cache.getOption(bufferedAssistantTextByMessageId, messageId).pipe(
-      Effect.flatMap((existingText) =>
-        Effect.gen(function* () {
-          const nextText = Option.match(existingText, {
-            onNone: () => delta,
-            onSome: (text) => `${text}${delta}`,
-          });
-          if (nextText.length <= MAX_BUFFERED_ASSISTANT_CHARS) {
-            yield* Cache.set(bufferedAssistantTextByMessageId, messageId, nextText);
-            return "";
-          }
-
-          // Safety valve: flush full buffered text as an assistant delta to cap memory.
-          yield* Cache.invalidate(bufferedAssistantTextByMessageId, messageId);
-          return nextText;
-        }),
-      ),
-    );
 
   const getBufferedAssistantText = (messageId: MessageId) =>
     Cache.getOption(bufferedAssistantTextByMessageId, messageId).pipe(
@@ -1563,6 +1572,87 @@ const make = Effect.gen(function* () {
       ),
     );
   };
+
+  const settleUnfinishedToolOutputs = Effect.fnUntraced(function* (input: {
+    readonly threadId: ThreadId;
+    readonly terminalEvent: ProviderRuntimeEvent;
+    readonly sequence: number;
+    readonly turnId?: TurnId;
+  }) {
+    for (const key of Array.from(yield* Cache.keys(bufferedToolOutputByKey))) {
+      const target = parseToolOutputBufferKey(key);
+      if (target.threadId !== input.terminalEvent.threadId) continue;
+      if (input.turnId !== undefined && target.turnId !== input.turnId) continue;
+      const output = Option.getOrUndefined(yield* Cache.getOption(bufferedToolOutputByKey, key));
+      if (!output) continue;
+      const startedKey = `${input.threadId}:${target.itemId}`;
+      const started = Option.getOrUndefined(
+        yield* Cache.getOption(startedToolItemByKey, startedKey),
+      );
+      if (input.turnId !== undefined && started?.command?.background === true) continue;
+      const itemType = started?.itemType ?? "command_execution";
+      const completionEvent = withBufferedToolOutputData(
+        {
+          type: "item.completed",
+          eventId: EventId.makeUnsafe(
+            `${input.terminalEvent.eventId}:tool-output:${target.itemId}`,
+          ),
+          provider: input.terminalEvent.provider,
+          createdAt: input.terminalEvent.createdAt,
+          threadId: input.terminalEvent.threadId,
+          ...(target.turnId !== null ? { turnId: TurnId.makeUnsafe(target.turnId) } : {}),
+          itemId: RuntimeItemId.makeUnsafe(target.itemId),
+          payload: {
+            ...started,
+            itemType,
+            status: "failed",
+            ...(itemType === "command_execution"
+              ? { command: { ...started?.command, interrupted: true } }
+              : {}),
+          },
+        },
+        output,
+      );
+      yield* Effect.forEach(
+        projectProviderRuntimeActivities(completionEvent, input.sequence, {
+          threadId: input.threadId,
+        }),
+        (activity) => dispatchActivityUpdate(completionEvent, input.threadId, activity),
+        { discard: true },
+      );
+      yield* Cache.invalidate(bufferedToolOutputByKey, key);
+      yield* Cache.invalidate(startedToolItemByKey, startedKey);
+    }
+  });
+
+  const clearActiveToolsWhere = (
+    threadId: ThreadId,
+    shouldClear: (turnId: TurnId | null) => boolean,
+  ) =>
+    projectionThreadSessionRepository.getToolInFlight({ threadId }).pipe(
+      Effect.flatMap((rows) =>
+        Effect.forEach(
+          rows.filter((row) => shouldClear(row.turnId)),
+          (row) =>
+            projectionThreadSessionRepository.markToolFinished({ threadId, itemId: row.itemId }),
+          { discard: true },
+        ),
+      ),
+      Effect.catchCause(() => Effect.void),
+    );
+
+  const isDurablyTerminalTurn = (threadId: ThreadId, turnId: TurnId) =>
+    projectionTurnRepository
+      .getByTurnId({ threadId, turnId })
+      .pipe(
+        Effect.map(
+          (turn) =>
+            Option.isSome(turn) &&
+            (turn.value.state === "completed" ||
+              turn.value.state === "error" ||
+              turn.value.state === "interrupted"),
+        ),
+      );
 
   const clearAssistantMessageState = (threadId: ThreadId, messageId: MessageId) =>
     Effect.gen(function* () {
@@ -2169,7 +2259,9 @@ const make = Effect.gen(function* () {
       if (
         buffered.lastPreviewAt !== undefined &&
         Number.isFinite(previewAt) &&
-        previewAt - buffered.lastPreviewAt < PROPOSED_PLAN_PREVIEW_INTERVAL_MS
+        previewAt - buffered.lastPreviewAt <
+          PROPOSED_PLAN_PREVIEW_INTERVAL_MS *
+            Math.max(1, Math.ceil(buffered.text.length / PROPOSED_PLAN_PREVIEW_CHARS_PER_INTERVAL))
       ) {
         return;
       }
@@ -2663,6 +2755,19 @@ const make = Effect.gen(function* () {
       const activeTurnId = thread.session?.activeTurnId ?? null;
       const isTerminalTurnEvent = event.type === "turn.completed" || event.type === "turn.aborted";
       const rawEventTurnId = toTurnId(event.turnId);
+      if (
+        event.type === "turn.started" &&
+        rawEventTurnId &&
+        !sameId(activeTurnId, rawEventTurnId) &&
+        (yield* isDurablyTerminalTurn(thread.id, rawEventTurnId))
+      ) {
+        yield* Effect.logWarning("provider.runtime.settled_turn_start_ignored", {
+          threadId: thread.id,
+          turnId: rawEventTurnId,
+          eventId: event.eventId,
+        });
+        return;
+      }
       if (event.type === "turn.started" && rawEventTurnId) {
         yield* rememberOutstandingTurn(thread.id, rawEventTurnId);
         if (event.payload.origin !== undefined) {
@@ -2696,11 +2801,7 @@ const make = Effect.gen(function* () {
         event.itemId !== undefined &&
         isToolLifecycleItemType(event.payload.itemType)
       ) {
-        yield* Cache.set(
-          startedToolItemTypeByKey,
-          `${thread.id}:${event.itemId}`,
-          event.payload.itemType,
-        );
+        yield* Cache.set(startedToolItemByKey, `${thread.id}:${event.itemId}`, event.payload);
         yield* projectionThreadSessionRepository
           .markToolStarted({
             threadId: thread.id,
@@ -2724,14 +2825,14 @@ const make = Effect.gen(function* () {
           .pipe(Effect.catchCause(() => Effect.void));
       }
       if (event.type === "turn.started" && eventTurnId) {
-        yield* projectionThreadSessionRepository
-          .clearActiveTools({
-            threadId: thread.id,
-            exceptTurnId: eventTurnId,
-          })
-          .pipe(Effect.catchCause(() => Effect.void));
+        const outstandingTurnIds = (yield* Ref.get(outstandingTurnIdsByThreadRef)).get(thread.id);
+        yield* clearActiveToolsWhere(thread.id, (toolTurnId) =>
+          toolTurnId === null
+            ? (outstandingTurnIds?.size ?? 0) <= 1
+            : toolTurnId !== eventTurnId && outstandingTurnIds?.has(toolTurnId) !== true,
+        );
       }
-      if (isTerminalTurnEvent || event.type === "session.exited") {
+      if (event.type === "session.exited") {
         yield* projectionThreadSessionRepository
           .clearActiveTools({
             threadId: thread.id,
@@ -2753,6 +2854,13 @@ const make = Effect.gen(function* () {
         if (eventTurnId) {
           yield* forgetOutstandingTurn(thread.id, eventTurnId);
         }
+        const remainingTurnIds = (yield* Ref.get(outstandingTurnIdsByThreadRef)).get(thread.id);
+        yield* clearActiveToolsWhere(
+          thread.id,
+          (toolTurnId) =>
+            (eventTurnId !== undefined && toolTurnId === eventTurnId) ||
+            (remainingTurnIds?.size ?? 0) === 0,
+        );
         if (terminalApplicability?.reason === "ambiguous-missing-turn-id") {
           yield* Effect.logWarning("provider.runtime.ambiguous_terminal_event_ignored", {
             threadId: thread.id,
@@ -3056,7 +3164,7 @@ const make = Effect.gen(function* () {
       }
 
       const toolOutputKey = event.itemId
-        ? [event.threadId, event.turnId ?? "no-turn", event.itemId].join(":")
+        ? toolOutputBufferKey(event.threadId, event.turnId, event.itemId)
         : null;
       const toolOutputDelta =
         toolOutputKey &&
@@ -3090,6 +3198,16 @@ const make = Effect.gen(function* () {
         event.payload.command?.background === true
       ) {
         liveToolOutputHub.markBackground(thread.id, event.itemId as RuntimeItemId);
+        const startedKey = `${thread.id}:${event.itemId}`;
+        const started = Option.getOrUndefined(
+          yield* Cache.getOption(startedToolItemByKey, startedKey),
+        );
+        if (started && started.command?.background !== true) {
+          yield* Cache.set(startedToolItemByKey, startedKey, {
+            ...started,
+            command: { ...started.command, background: true },
+          });
+        }
       }
       if (event.type === "item.completed" && event.itemId) {
         liveToolOutputHub.clearItem(thread.id, event.itemId as RuntimeItemId);
@@ -3136,10 +3254,28 @@ const make = Effect.gen(function* () {
         statesForThread.set(assistantMessageId, segmentState);
         const startsNewSegment = !segmentState.hasText || segmentState.splitPending;
         const segmentStartedAt = startsNewSegment ? now : undefined;
-        segmentState.hasText = true;
-        segmentState.splitPending = false;
         const bufferedSegmentKey = assistantMessageSegmentKey(thread.id, assistantMessageId);
-        if (assistantDeliveryMode === "buffered") {
+        const nextBufferedText =
+          assistantDeliveryMode === "buffered"
+            ? `${yield* getBufferedAssistantText(assistantMessageId)}${assistantDelta}`
+            : "";
+        if (
+          assistantDeliveryMode === "buffered" &&
+          nextBufferedText.length > MAX_BUFFERED_ASSISTANT_CHARS
+        ) {
+          yield* orchestrationEngine.dispatch({
+            type: "thread.message.assistant.delta",
+            commandId: providerCommandId(event, "assistant-delta-buffer-spill", assistantMessageId),
+            threadId: thread.id,
+            messageId: assistantMessageId,
+            delta: nextBufferedText,
+            ...(turnId ? { turnId } : {}),
+            createdAt: now,
+          });
+          bufferedTextSegmentsByMessageKey.delete(bufferedSegmentKey);
+          bufferedTextSpilledByMessageKey.add(bufferedSegmentKey);
+          yield* Cache.invalidate(bufferedAssistantTextByMessageId, assistantMessageId);
+        } else if (assistantDeliveryMode === "buffered") {
           // Buffer the delta as part of the current segment: a row-making
           // provider event between deltas closes the current segment and the
           // next delta starts a new one at its own time. On final flush the
@@ -3168,27 +3304,7 @@ const make = Effect.gen(function* () {
               ]);
             }
           }
-          const spillChunk = yield* appendBufferedAssistantText(assistantMessageId, assistantDelta);
-          if (spillChunk.length > 0) {
-            // Oversized turn: the spill boundary splits the buffered text, so
-            // per-segment fan-out can no longer reproduce the cache's
-            // truncation. Fall back to the single-delta flush at completion.
-            bufferedTextSegmentsByMessageKey.delete(bufferedSegmentKey);
-            bufferedTextSpilledByMessageKey.add(bufferedSegmentKey);
-            yield* orchestrationEngine.dispatch({
-              type: "thread.message.assistant.delta",
-              commandId: providerCommandId(
-                event,
-                "assistant-delta-buffer-spill",
-                assistantMessageId,
-              ),
-              threadId: thread.id,
-              messageId: assistantMessageId,
-              delta: spillChunk,
-              ...(turnId ? { turnId } : {}),
-              createdAt: now,
-            });
-          }
+          yield* Cache.set(bufferedAssistantTextByMessageId, assistantMessageId, nextBufferedText);
         } else {
           yield* orchestrationEngine.dispatch({
             type: "thread.message.assistant.delta",
@@ -3202,6 +3318,8 @@ const make = Effect.gen(function* () {
             createdAt: now,
           });
         }
+        segmentState.hasText = true;
+        segmentState.splitPending = false;
       }
 
       if (proposedPlanDelta && proposedPlanDelta.length > 0) {
@@ -3342,6 +3460,14 @@ const make = Effect.gen(function* () {
 
       if (isTerminalTurnEvent) {
         const finalizedTurnId = eventTurnId ?? activeTurnId ?? undefined;
+        if (!(event.type === "turn.completed" && runtimeTurnState(event) === "completed")) {
+          yield* settleUnfinishedToolOutputs({
+            threadId: thread.id,
+            terminalEvent: event,
+            sequence: runtimeSequence,
+            ...(finalizedTurnId ? { turnId: finalizedTurnId } : {}),
+          });
+        }
         if (finalizedTurnId) {
           liveToolOutputHub.clearTurn(thread.id, finalizedTurnId);
         } else {
@@ -3389,6 +3515,11 @@ const make = Effect.gen(function* () {
       }
 
       if (event.type === "session.exited") {
+        yield* settleUnfinishedToolOutputs({
+          threadId: thread.id,
+          terminalEvent: event,
+          sequence: runtimeSequence,
+        });
         liveToolOutputHub.clearThread(thread.id);
         yield* clearOutstandingTurns(thread.id);
         const exitedTurnId = eventTurnId ?? activeTurnId ?? undefined;
@@ -3417,6 +3548,12 @@ const make = Effect.gen(function* () {
         const runtimeErrorMessage =
           asString(runtimePayloadRecord(event)?.message) ?? "Provider runtime error";
         const erroredTurnId = eventTurnId ?? activeTurnId ?? undefined;
+        yield* settleUnfinishedToolOutputs({
+          threadId: thread.id,
+          terminalEvent: event,
+          sequence: runtimeSequence,
+          ...(erroredTurnId ? { turnId: erroredTurnId } : {}),
+        });
         if (erroredTurnId) {
           liveToolOutputHub.clearTurn(thread.id, erroredTurnId);
         } else {
@@ -3627,10 +3764,10 @@ const make = Effect.gen(function* () {
         event.type === "tool.progress" && event.payload.toolUseId
           ? Option.getOrUndefined(
               yield* Cache.getOption(
-                startedToolItemTypeByKey,
+                startedToolItemByKey,
                 `${thread.id}:${event.payload.toolUseId}`,
               ),
-            )
+            )?.itemType
           : undefined;
       const projectedActivities = projectProviderRuntimeActivities(
         scopedActivityEvent,
@@ -3706,7 +3843,7 @@ const make = Effect.gen(function* () {
         yield* Cache.invalidate(turnOriginByTurnKey, providerTurnKey(thread.id, projectionTurnId));
       }
       if (event.type === "item.completed" && event.itemId) {
-        yield* Cache.invalidate(startedToolItemTypeByKey, `${thread.id}:${event.itemId}`);
+        yield* Cache.invalidate(startedToolItemByKey, `${thread.id}:${event.itemId}`);
       }
 
       if (isTerminalTurnEvent && eventTurnId) {
@@ -3841,6 +3978,7 @@ const make = Effect.gen(function* () {
   // A failed journal row blocks later runtime rows in the same page. Domain
   // inputs still drain, and the durable poll retries from the exact cursor.
   let runtimeJournalPageBlocked = false;
+  let runtimeJournalBlockedTransiently = false;
 
   const quarantineUnreplayableCommand = Effect.fnUntraced(function* (
     input: Extract<RuntimeIngestionInput, { source: "runtime" }>,
@@ -3872,6 +4010,7 @@ const make = Effect.gen(function* () {
       .pipe(
         Effect.catchCause((cause) => {
           runtimeJournalPageBlocked = true;
+          runtimeJournalBlockedTransiently = true;
           return Effect.logWarning("provider runtime unreplayable command quarantine failed", {
             sequence: input.sequence,
             eventId: input.event.eventId,
@@ -3888,6 +4027,7 @@ const make = Effect.gen(function* () {
     }
     if (!advanced) {
       runtimeJournalPageBlocked = true;
+      runtimeJournalBlockedTransiently = true;
       yield* Effect.logWarning("provider runtime unreplayable command could not be quarantined", {
         sequence: input.sequence,
         eventId: input.event.eventId,
@@ -3930,13 +4070,16 @@ const make = Effect.gen(function* () {
             ) {
               return quarantineUnreplayableCommand(input, error);
             }
+            const transient = isTransientRuntimeIngestionFailure(cause);
             if (input.source === "runtime") {
               runtimeJournalPageBlocked = true;
+              runtimeJournalBlockedTransiently = transient;
             }
             return Effect.logWarning("provider runtime ingestion failed to process event", {
               source: input.source,
               eventId: input.event.eventId,
               eventType: input.event.type,
+              transient,
               cause: Cause.pretty(cause),
             });
           }),
@@ -3968,6 +4111,10 @@ const make = Effect.gen(function* () {
 
   const deadLetterPoisonHeadRow = Effect.gen(function* () {
     yield* flushRuntimeCursor;
+    if (runtimeJournalBlockedTransiently) {
+      poisonGate.reset();
+      return false;
+    }
     const cursor = yield* runtimeEvents.getConsumerCursor(PROVIDER_RUNTIME_INGESTION_CONSUMER);
     if (!poisonGate.noteBlockedDrain(cursor, Date.now())) return false;
     const highWater = yield* runtimeEvents.getHighWaterSequence;
@@ -4022,6 +4169,7 @@ const make = Effect.gen(function* () {
           }
 
           runtimeJournalPageBlocked = false;
+          runtimeJournalBlockedTransiently = false;
           const progressSurvivors = new Set(coalesceProviderRuntimeProgress(page));
           // Every row still updates process-local state and durable cursor
           // bookkeeping; only replaceable activity snapshots are suppressed.
@@ -4074,7 +4222,10 @@ const make = Effect.gen(function* () {
     while (true) {
       yield* Effect.sleep(Duration.millis(delayMs));
       const hadBacklog = yield* drainRuntimeJournalSafely;
-      delayMs = nextRuntimeJournalSafetyPollDelayMs(delayMs, hadBacklog);
+      delayMs = nextRuntimeJournalSafetyPollDelayMs(
+        delayMs,
+        hadBacklog && !runtimeJournalPageBlocked,
+      );
     }
   });
 
