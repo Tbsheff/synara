@@ -1,10 +1,12 @@
-import { Deferred, Effect, Exit, Scope } from "effect";
-import { describe, expect, it } from "vitest";
+import { Deferred, Duration, Effect, Exit, Scope } from "effect";
+import { TestClock } from "effect/testing";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   evaluateAcpTurnIdleTick,
   forkAcpTurnIdleWatchdog,
   isAcpTurnProgressEventTag,
+  isAcpWatchdogTickAfterSuspend,
   resolveAcpTurnIdleTimeoutMs,
 } from "./AcpTurnIdleWatchdog.ts";
 
@@ -204,5 +206,153 @@ describe("forkAcpTurnIdleWatchdog", () => {
       fired: true,
       stayedAliveDuringNestedWork: true,
     });
+  });
+});
+
+describe("isAcpWatchdogTickAfterSuspend", () => {
+  it("treats a tick gap far beyond the check interval as a suspend and resume", () => {
+    expect(
+      isAcpWatchdogTickAfterSuspend({ tickGapMs: 2 * 60 * 60_000, checkIntervalMs: 15_000 }),
+    ).toBe(true);
+  });
+
+  it("treats on-time and modestly late ticks as regular ticks", () => {
+    expect(isAcpWatchdogTickAfterSuspend({ tickGapMs: 15_000, checkIntervalMs: 15_000 })).toBe(
+      false,
+    );
+    expect(isAcpWatchdogTickAfterSuspend({ tickGapMs: 40_000, checkIntervalMs: 15_000 })).toBe(
+      false,
+    );
+  });
+
+  it("does not read timer jitter on very short intervals as a suspend", () => {
+    expect(isAcpWatchdogTickAfterSuspend({ tickGapMs: 50, checkIntervalMs: 1 })).toBe(false);
+  });
+});
+
+describe("evaluateAcpTurnIdleTick after a suspend", () => {
+  it("refreshes the clock instead of timing out on the first tick after resume", () => {
+    expect(
+      evaluateAcpTurnIdleTick({
+        isTurnActive: true,
+        isAwaitingHuman: false,
+        idleMs: 2 * 60 * 60_000,
+        idleTimeoutMs: 600_000,
+        resumedFromSuspend: true,
+      }),
+    ).toBe("touch");
+  });
+
+  it("still stops a turn that ended during the suspend", () => {
+    expect(
+      evaluateAcpTurnIdleTick({
+        isTurnActive: false,
+        isAwaitingHuman: false,
+        idleMs: 2 * 60 * 60_000,
+        idleTimeoutMs: 600_000,
+        resumedFromSuspend: true,
+      }),
+    ).toBe("stop");
+  });
+});
+
+describe("forkAcpTurnIdleWatchdog across wall-clock jumps", () => {
+  const checkIntervalMs = 15_000;
+  const idleTimeoutMs = 600_000;
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const runWatchdog = (
+    drive: (input: {
+      readonly tick: (wallClockAdvanceMs: number) => Effect.Effect<void>;
+      readonly fired: () => number | null;
+    }) => Effect.Effect<void>,
+  ) =>
+    Effect.gen(function* () {
+      let wallNow = Date.UTC(2026, 9, 11, 9, 0, 0);
+      vi.spyOn(Date, "now").mockImplementation(() => wallNow);
+      let lastActivityAt = wallNow;
+      let firedIdleMs: number | null = null;
+      const scope = yield* Scope.make();
+      yield* forkAcpTurnIdleWatchdog({
+        idleTimeoutMs,
+        checkIntervalMs,
+        scope,
+        isTurnActive: () => firedIdleMs === null,
+        isAwaitingHuman: () => false,
+        lastActivityAt: () => lastActivityAt,
+        touchActivity: () => {
+          lastActivityAt = wallNow;
+        },
+        onIdleTimeout: (idleMs) =>
+          Effect.sync(() => {
+            firedIdleMs = idleMs;
+          }),
+      });
+      yield* Effect.yieldNow;
+      yield* drive({
+        tick: (wallClockAdvanceMs) =>
+          Effect.gen(function* () {
+            wallNow += wallClockAdvanceMs;
+            yield* TestClock.adjust(Duration.millis(checkIntervalMs));
+            yield* Effect.yieldNow;
+          }),
+        fired: () => firedIdleMs,
+      });
+      yield* Scope.close(scope, Exit.void);
+    }).pipe(Effect.provide(TestClock.layer()), Effect.scoped);
+
+  it("does not fail a healthy turn on the first tick after laptop sleep", async () => {
+    let firedAfterResume: number | null = null;
+    let firedAfterGrace: number | null = null;
+    await Effect.runPromise(
+      runWatchdog(({ tick, fired }) =>
+        Effect.gen(function* () {
+          yield* tick(checkIntervalMs);
+          yield* tick(2 * 60 * 60_000);
+          firedAfterResume = fired();
+          for (let index = 0; index < 5; index += 1) yield* tick(checkIntervalMs);
+          firedAfterGrace = fired();
+        }),
+      ),
+    );
+    expect(firedAfterResume).toBeNull();
+    expect(firedAfterGrace).toBeNull();
+  });
+
+  it("still fails a turn that stalls after a resume once the idle limit passes again", async () => {
+    let firedIdleMs: number | null = null;
+    await Effect.runPromise(
+      runWatchdog(({ tick, fired }) =>
+        Effect.gen(function* () {
+          yield* tick(2 * 60 * 60_000);
+          for (let index = 0; index < idleTimeoutMs / checkIntervalMs; index += 1) {
+            yield* tick(checkIntervalMs);
+          }
+          firedIdleMs = fired();
+        }),
+      ),
+    );
+    expect(firedIdleMs).toBe(idleTimeoutMs);
+  });
+
+  it("fails a real stall that ticks regularly with no activity", async () => {
+    let firedBeforeLimit: number | null = null;
+    let firedIdleMs: number | null = null;
+    await Effect.runPromise(
+      runWatchdog(({ tick, fired }) =>
+        Effect.gen(function* () {
+          const ticksToLimit = idleTimeoutMs / checkIntervalMs;
+          for (let index = 0; index < ticksToLimit - 1; index += 1) yield* tick(checkIntervalMs);
+          firedBeforeLimit = fired();
+          yield* tick(checkIntervalMs);
+          firedIdleMs = fired();
+        }),
+      ),
+    );
+    expect(firedBeforeLimit).toBeNull();
+    expect(firedIdleMs).toBe(idleTimeoutMs);
   });
 });
