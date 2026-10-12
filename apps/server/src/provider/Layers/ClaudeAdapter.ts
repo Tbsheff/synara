@@ -9030,6 +9030,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
     return {
       provider: PROVIDER,
       capabilities: {
+        supportsSessionPrewarm: true,
         sessionModelSwitch: "in-session",
         conversationRollback: "restart-session",
         supportsSkillMentions: false,

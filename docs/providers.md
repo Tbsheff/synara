@@ -272,7 +272,29 @@ the rejection of stale tool requests. It still reloads the native conversation a
 If additional native threads remain loaded, native unloading or resume cannot be verified, or
 a turn was interrupted, failed, or aborted for inactivity, Synara uses the full process-restart
 recovery path. You can continue in the same task. Idle provider processes still shut down after
-10 minutes by default.
+15 minutes by default.
+
+### Warm idle sessions
+
+Opening a saved thread or focusing its composer requests a provider session without a prompt.
+Codex and Claude opt in through adapter capabilities. Archived threads, expired side chats,
+subagents, cache-review holds, disabled providers, active work, and stale account or model
+selections do not pre-warm. Unsaved drafts with no durable workspace still start on their first send.
+
+The server keeps at most four idle sessions for pre-warm, evicting the least recently used idle
+session when it needs space. Active turns and background tasks do not count and are never evicted
+for space. Server settings `warmSessionLimit` (0 disables pre-warm; maximum 32) and
+`warmSessionIdleTimeoutMinutes` (1–240; default 15) control this policy. The timeout applies on the
+next idle schedule; `SYNARA_PROVIDER_RUNTIME_IDLE_STOP_MS` remains an operator override.
+
+Saved model and access-mode changes use the existing session reconfiguration path before the
+next send. A warm request must match the thread’s saved provider account; it cannot move a native
+conversation to another account. Opening or focusing after an allowed saved account change
+starts the session for that account. Session leases and tool credential rotation keep their
+existing scope. Each app uses its own server settings and home.
+
+A warm follow-up keeps the session in the working state. Cold startup uses the normal shimmer
+work line, without a separate provider-start label or worktree setup step.
 
 ### Claude Auto / 200k / 1M selection
 

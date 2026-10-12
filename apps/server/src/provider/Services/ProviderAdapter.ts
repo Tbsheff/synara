@@ -83,6 +83,7 @@ export interface ProviderTurnDispatchOptions {
 export type ProviderConversationRollbackMode = "native" | "restart-session";
 
 export interface ProviderAdapterCapabilities {
+  readonly supportsSessionPrewarm?: boolean;
   /**
    * Declares whether changing the model on an existing session is supported.
    */

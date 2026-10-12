@@ -60,6 +60,7 @@ import {
   Layer,
   Option,
   PubSub,
+  Semaphore,
   Schema,
   SchemaIssue,
   Scope,
@@ -96,6 +97,7 @@ import {
   isStartedTurnApplicable,
 } from "../terminalTurnApplicability.ts";
 import { makeProviderLifecycleCoordinator } from "../providerLifecycleCoordinator.ts";
+import { selectWarmSessionEvictions } from "../warmSessionPolicy.ts";
 import { makeKeyedLock } from "../keyedLock.ts";
 import { carryProviderAttachmentPaths } from "../providerAttachmentPaths.ts";
 import {
@@ -156,7 +158,7 @@ export interface ProviderServiceLiveOptions {
   ) => Effect.Effect<boolean, ProviderValidationError>;
 }
 
-const DEFAULT_PROVIDER_RUNTIME_IDLE_STOP_MS = 10 * 60 * 1000;
+const DEFAULT_PROVIDER_RUNTIME_IDLE_STOP_MS = 15 * 60 * 1000;
 export const PROVIDER_RUNTIME_EVENT_BUFFER_CAPACITY = 2_048;
 export const PROVIDER_RUNTIME_QUARANTINE_CAUSE_MAX_BYTES = 16 * 1024;
 const configuredProviderRuntimeIdleStopMs = process.env.SYNARA_PROVIDER_RUNTIME_IDLE_STOP_MS;
@@ -1004,6 +1006,9 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
     );
     const runtimeEventProducerScope = yield* Scope.make("sequential");
     const interruptRotationScope = yield* Effect.scope;
+    const warmSessionLock = yield* Semaphore.make(1);
+    const warmSessionTouches = new Map<ThreadId, number>();
+    let idleStopMinutes = (yield* serverSettings.getSettings).warmSessionIdleTimeoutMinutes;
     const runtimeIdleTimers = new Map<ThreadId, ReturnType<typeof setTimeout>>();
     const liveRuntimeTaskIds = new Map<ThreadId, Set<string>>();
     const runtimeTaskSettlementWaiters = new Map<ThreadId, Set<() => void>>();
@@ -1057,16 +1062,23 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       if ((liveRuntimeTaskIds.get(threadId)?.size ?? 0) > 0) {
         return;
       }
-      if (runtimeIdleStopMs <= 0) {
+      if (runtimeIdleStopMs <= 0 && !warmSessionTouches.has(threadId)) {
         retireRuntimeIdleGeneration(threadId);
         return;
       }
 
       const generation = invalidateRuntimeIdleGeneration(threadId);
-      const timer = setTimeout(() => {
-        runtimeIdleTimers.delete(threadId);
-        stopIdleRuntimeSession?.(threadId, generation);
-      }, runtimeIdleStopMs);
+      if (runtimeIdleStopMs <= 0) return;
+      const timer = setTimeout(
+        () => {
+          runtimeIdleTimers.delete(threadId);
+          stopIdleRuntimeSession?.(threadId, generation);
+        },
+        options?.runtimeIdleStopMs ??
+          (configuredProviderRuntimeIdleStopMs !== undefined
+            ? runtimeIdleStopMs
+            : idleStopMinutes * 60_000),
+      );
       timer.unref();
       runtimeIdleTimers.set(threadId, timer);
     };
@@ -2482,12 +2494,11 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         );
       });
 
+    let enforceWarmSessionLimit = (_threadId: ThreadId): Effect.Effect<void, unknown> =>
+      Effect.void;
     const retiredGatewaySessionRecoveries = new Set<ThreadId>();
     scheduleRetiredGatewaySessionRecovery = (event) => {
-      if (
-        (event.type !== "turn.completed" && event.type !== "turn.aborted") ||
-        !runtimeEventRetiredGatewayTurnAuthority(event)
-      ) {
+      if (event.type !== "turn.completed" && event.type !== "turn.aborted") {
         return Effect.void;
       }
 
@@ -2504,10 +2515,14 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           yield* Effect.yieldNow;
           const binding = Option.getOrUndefined(yield* directory.getBinding(event.threadId));
           if (!binding) return;
-          yield* recoverSessionForThread({
-            binding,
-            operation: "ProviderService.proactiveGatewayCredentialRotation",
-          });
+          if (runtimeEventRetiredGatewayTurnAuthority(event)) {
+            yield* recoverSessionForThread({
+              binding,
+              operation: "ProviderService.proactiveGatewayCredentialRotation",
+            });
+            scheduleRuntimeIdleStop(event.threadId);
+          }
+          yield* enforceWarmSessionLimit(event.threadId);
         }).pipe(
           Effect.catchCause((cause) =>
             Effect.logWarning("provider.session.proactive_gateway_rotation_failed", {
@@ -4454,6 +4469,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         });
         yield* waitForRuntimeIdleStop(input.threadId);
         clearRuntimeIdleTimer(input.threadId);
+        warmSessionTouches.delete(input.threadId);
         return yield* lifecycle.run(input.threadId, (lease) =>
           Effect.gen(function* () {
             const routed = yield* resolveRoutableSession({
@@ -4581,6 +4597,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 providerInterruptionFences.delete(input.threadId);
               }
             }
+            warmSessionTouches.delete(input.threadId);
             retireRuntimeIdleGeneration(input.threadId, expectedIdleGeneration);
           }),
         );
@@ -4648,7 +4665,11 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         }
         // Live adapter snapshots can temporarily omit cursors even though the
         // directory already persisted one from an earlier runtime event.
-        if (!hasResumeCursor(session.resumeCursor) && !hasResumeCursor(binding.resumeCursor)) {
+        if (
+          !warmSessionTouches.has(threadId) &&
+          !hasResumeCursor(session.resumeCursor) &&
+          !hasResumeCursor(binding.resumeCursor)
+        ) {
           retireRuntimeIdleGeneration(threadId, generation);
           return;
         }
@@ -4865,6 +4886,88 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
     const getCapabilities: ProviderServiceShape["getCapabilities"] = (provider) =>
       registry.getByProvider(provider).pipe(Effect.map((adapter) => adapter.capabilities));
 
+    const idleWarmSessions = () =>
+      listSessions().pipe(
+        Effect.map((sessions) =>
+          sessions
+            .filter(
+              (session) =>
+                session.status === "ready" &&
+                session.activeTurnId === undefined &&
+                (runtimeIdleTimers.has(session.threadId) ||
+                  warmSessionTouches.has(session.threadId)) &&
+                (liveRuntimeTaskIds.get(session.threadId)?.size ?? 0) === 0 &&
+                (dispatchStateByThread.get(session.threadId)?.inFlightGenerations.size ?? 0) === 0,
+            )
+            .toSorted(
+              (a, b) =>
+                (warmSessionTouches.get(a.threadId) ?? Date.parse(a.updatedAt)) -
+                (warmSessionTouches.get(b.threadId) ?? Date.parse(b.updatedAt)),
+            ),
+        ),
+      );
+
+    const evictWarmSessions = (threadId: ThreadId, reserving: boolean) =>
+      Effect.gen(function* () {
+        const settings = yield* serverSettings.getSettings;
+        idleStopMinutes = settings.warmSessionIdleTimeoutMinutes;
+        const candidates = yield* idleWarmSessions();
+        const evictions = selectWarmSessionEvictions({
+          idleThreadIds: candidates.map((session) => session.threadId),
+          threadId,
+          limit: settings.warmSessionLimit,
+          reserving,
+        });
+        if (evictions === null) return false;
+        for (const id of evictions) {
+          const generation = runtimeIdleGenerations.get(id);
+          if (generation === undefined) continue;
+          stopIdleRuntimeSession?.(id, generation);
+          yield* waitForRuntimeIdleStop(id);
+        }
+        const remaining = (yield* idleWarmSessions()).filter(
+          (session) => !reserving || session.threadId !== threadId,
+        );
+        return remaining.length + (reserving ? 1 : 0) <= settings.warmSessionLimit;
+      });
+
+    enforceWarmSessionLimit = (threadId) =>
+      Effect.gen(function* () {
+        const settings = yield* serverSettings.getSettings;
+        const candidates = new Set([...runtimeIdleTimers.keys(), ...warmSessionTouches.keys()]);
+        if (candidates.size <= settings.warmSessionLimit) return;
+        yield* warmSessionLock.withPermits(1)(
+          evictWarmSessions(threadId, false).pipe(Effect.asVoid),
+        );
+      });
+
+    const prewarmSession: NonNullable<ProviderServiceShape["prewarmSession"]> = (input, start) =>
+      warmSessionLock.withPermits(1)(
+        Effect.gen(function* () {
+          const capabilities = yield* getCapabilities(input.provider);
+          if (capabilities.supportsSessionPrewarm !== true) return false;
+          yield* ensureProviderEnabled(input.provider, "ProviderService.prewarmSession");
+          if (!(yield* evictWarmSessions(input.threadId, true))) return false;
+          const wasWarm = warmSessionTouches.has(input.threadId);
+          warmSessionTouches.set(input.threadId, Date.now());
+          const started = yield* start.pipe(
+            Effect.onError(() =>
+              Effect.sync(() => {
+                if (!wasWarm) warmSessionTouches.delete(input.threadId);
+              }),
+            ),
+          );
+          if (!started) {
+            if (!wasWarm) warmSessionTouches.delete(input.threadId);
+            return false;
+          }
+          warmSessionTouches.set(input.threadId, Date.now());
+          scheduleRuntimeIdleStop(input.threadId);
+          yield* evictWarmSessions(input.threadId, false);
+          return true;
+        }),
+      );
+
     const rollbackConversation: ProviderServiceShape["rollbackConversation"] = (rawInput) =>
       Effect.gen(function* () {
         const input = yield* decodeInputOrValidationError({
@@ -5038,6 +5141,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             clearTimeout(timer);
           }
           runtimeIdleTimers.clear();
+          warmSessionTouches.clear();
           for (const threadId of new Set([
             ...liveRuntimeTaskIds.keys(),
             ...runtimeTaskSettlementWaiters.keys(),
@@ -5073,6 +5177,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
     yield* Effect.addFinalizer(() => closeRuntimeEvents);
 
     return {
+      prewarmSession,
       startSession,
       startSessionWithOutcome,
       getPersistedSessionProfile,

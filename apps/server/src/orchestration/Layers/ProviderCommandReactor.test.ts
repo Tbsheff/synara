@@ -688,6 +688,7 @@ describe("ProviderCommandReactor", () => {
       sendTurn: sendTurn as ProviderServiceShape["sendTurn"],
       steerTurn: steerTurn as ProviderServiceShape["steerTurn"],
       startReview,
+      prewarmSession: (_input, start) => start,
       forkThread,
       interruptTurn: interruptTurn as ProviderServiceShape["interruptTurn"],
       stopTask,
@@ -1202,6 +1203,110 @@ describe("ProviderCommandReactor", () => {
       )?.text,
     ).toBe("What happened?");
     expect((await harness.completionState())[0]?.context_consumed).toBe(1);
+  });
+
+  it("pre-warms an open thread without a message or a turn", async () => {
+    const harness = await createHarness();
+    const thread = (await readHarnessThread(harness))!;
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.warm",
+        commandId: CommandId.makeUnsafe("warm-open"),
+        threadId: thread.id,
+        modelSelection: thread.modelSelection,
+        runtimeMode: thread.runtimeMode,
+        interactionMode: thread.interactionMode,
+        createdAt: new Date().toISOString(),
+      }),
+    );
+    await harness.drain();
+    expect(harness.startSession).toHaveBeenCalledTimes(1);
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+    expect(harness.startReview).not.toHaveBeenCalled();
+    const warmed = (await readHarnessThread(harness))!;
+    expect(warmed.latestTurn).toBeNull();
+    expect(warmed.messages).toEqual(thread.messages);
+    expect(warmed.session?.status).toBe("ready");
+  });
+
+  it("re-warms an empty thread on an allowed saved account change without a prompt", async () => {
+    const harness = await createHarness({
+      serverSettings: {
+        providerInstances: {
+          codex_work: {
+            driver: "codex",
+            enabled: true,
+            config: { homePath: "/tmp/warm-codex-work" },
+          },
+        },
+      },
+    });
+    const thread = (await readHarnessThread(harness))!;
+    const warm = (id: string, modelSelection = thread.modelSelection) =>
+      Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.session.warm",
+          commandId: CommandId.makeUnsafe(id),
+          threadId: thread.id,
+          modelSelection,
+          runtimeMode: thread.runtimeMode,
+          interactionMode: thread.interactionMode,
+          createdAt: new Date().toISOString(),
+        }),
+      );
+    await warm("warm-account-initial");
+    await harness.drain();
+    const modelSelection = { ...thread.modelSelection, instanceId: "codex_work" };
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("warm-account-selection"),
+        threadId: thread.id,
+        modelSelection,
+      }),
+    );
+    await harness.drain();
+    await warm("warm-account-updated", modelSelection);
+    await harness.drain();
+    expect(harness.startSession).toHaveBeenCalledTimes(2);
+    expect(harness.startSession.mock.calls[1]?.[1]).toMatchObject({
+      providerInstanceId: "codex_work",
+    });
+    expect(harness.startSession.mock.calls[1]?.[1]).not.toHaveProperty("resumeCursor");
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+    expect((await readHarnessThread(harness))?.latestTurn).toBeNull();
+  });
+
+  it("ignores archived and stale-account warm requests", async () => {
+    const harness = await createHarness();
+    const thread = (await readHarnessThread(harness))!;
+    const warm = (commandId: string, modelSelection = thread.modelSelection) =>
+      harness.engine.dispatch({
+        type: "thread.session.warm",
+        commandId: CommandId.makeUnsafe(commandId),
+        threadId: thread.id,
+        modelSelection,
+        runtimeMode: thread.runtimeMode,
+        interactionMode: thread.interactionMode,
+        createdAt: new Date().toISOString(),
+      });
+    await Effect.runPromise(
+      warm("warm-wrong-account", { ...thread.modelSelection, instanceId: "codex-other" }),
+    );
+    await harness.drain();
+    expect(harness.startSession).not.toHaveBeenCalled();
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.archive",
+        commandId: CommandId.makeUnsafe("warm-archive"),
+        threadId: thread.id,
+      }),
+    );
+    await harness.drain();
+    await Effect.runPromise(warm("warm-after-archive"));
+    await harness.drain();
+    expect(harness.startSession).not.toHaveBeenCalled();
+    expect(harness.sendTurn).not.toHaveBeenCalled();
   });
 
   it("prefixes the provider input with the project context packet", async () => {
