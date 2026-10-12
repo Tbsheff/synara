@@ -56,3 +56,15 @@ describe("LRUCache", () => {
     expect(cache.get("e")).toBe(5);
   });
 });
+
+it("rejects entries above the byte budget before evicting useful entries", () => {
+  const cache = new LRUCache<string>(2, 25);
+  cache.set("a", "A", 10);
+  cache.set("b", "B", 10);
+  cache.set("oversized", "huge", 26);
+  expect(cache.get("oversized")).toBeNull();
+  expect(cache.get("a")).toBe("A");
+  expect(cache.get("b")).toBe("B");
+  cache.set("a", "huge replacement", 26);
+  expect(cache.get("a")).toBe("A");
+});

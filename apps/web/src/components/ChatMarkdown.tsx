@@ -58,6 +58,7 @@ import { copyTextToClipboard } from "../hooks/useCopyToClipboard";
 import { resolveDiffThemeName, type DiffThemeName } from "../lib/diffRendering";
 import {
   loadSyntaxHighlighting,
+  MAX_SYNTAX_HIGHLIGHT_INPUT_CHARS,
   type SyntaxHighlightingModule,
 } from "../lib/syntaxHighlightingLoader";
 import {
@@ -1117,7 +1118,14 @@ function LoadedShikiCodeBlock({
   isStreaming,
   sourceOffset,
 }: HighlightedCodeBlockProps) {
-  const cacheKey = syntaxHighlighting.createSyntaxHighlightCacheKey(code, language, themeName);
+  const exceedsSizeLimit = code.length + plainTail.length > MAX_SYNTAX_HIGHLIGHT_INPUT_CHARS;
+  const highlightCode = exceedsSizeLimit ? "" : code;
+  const renderedTail = exceedsSizeLimit ? code + plainTail : plainTail;
+  const cacheKey = syntaxHighlighting.createSyntaxHighlightCacheKey(
+    highlightCode,
+    language,
+    themeName,
+  );
   const cachedHighlightedHtml = isStreaming
     ? null
     : syntaxHighlighting.getCachedSyntaxHighlightedHtml(cacheKey);
@@ -1127,20 +1135,25 @@ function LoadedShikiCodeBlock({
       : null;
   const highlightedHtml =
     cachedHighlightedHtml ??
-    syntaxHighlighting.highlightCodeToHtmlWithFallback(highlighter!, code, language, themeName);
+    syntaxHighlighting.highlightCodeToHtmlWithFallback(
+      highlighter!,
+      highlightCode,
+      language,
+      themeName,
+    );
   const needsCaching = !isStreaming && cachedHighlightedHtml == null;
 
   useEffect(() => {
     if (needsCaching) {
-      syntaxHighlighting.cacheSyntaxHighlightedHtml(cacheKey, highlightedHtml, code);
+      syntaxHighlighting.cacheSyntaxHighlightedHtml(cacheKey, highlightedHtml, highlightCode);
     }
-  }, [cacheKey, code, highlightedHtml, needsCaching, syntaxHighlighting]);
+  }, [cacheKey, highlightCode, highlightedHtml, needsCaching, syntaxHighlighting]);
 
   return (
     <FindAwareShikiHtml
-      html={syntaxHighlighting.appendPlainTextToHighlightedHtml(highlightedHtml, plainTail)}
+      html={syntaxHighlighting.appendPlainTextToHighlightedHtml(highlightedHtml, renderedTail)}
       highlightedHtml={highlightedHtml}
-      plainTail={plainTail}
+      plainTail={renderedTail}
       sourceOffset={sourceOffset}
     />
   );
