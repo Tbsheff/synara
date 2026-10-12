@@ -279,7 +279,10 @@ async function refreshCodexAuth(
 
   const path = state.source.path;
   return withRefreshLock(path, async () => {
-    const live = (await reloadCodexAuth(ctx, state.source)) ?? state;
+    const live = await reloadCodexAuth(ctx, state.source);
+    if (!live) {
+      return { kind: "needs-auth" };
+    }
     if (live.accessToken !== state.accessToken && !codexAuthNeedsRefresh(live, ctx.nowMs)) {
       return { kind: "updated", state: live, redeemed: false };
     }
@@ -301,9 +304,20 @@ async function refreshCodexAuth(
       bodyFormat: "form",
     });
     if (refreshed.ok) {
+      const current = await reloadCodexAuth(ctx, state.source);
+      if (!current) {
+        log.warn("codex credentials were removed during token refresh; discarding the rotation");
+        return { kind: "needs-auth" };
+      }
+      const credentialReplacedDuringRefresh =
+        current.refreshToken !== live.refreshToken || current.accountId !== live.accountId;
+      if (credentialReplacedDuringRefresh) {
+        log.warn("codex credentials changed during token refresh; keeping the on-disk login");
+        return { kind: "updated", state: current, redeemed: true };
+      }
       return {
         kind: "updated",
-        state: await persistRotatedCodexAuth(live, refreshed, ctx.nowMs),
+        state: await persistRotatedCodexAuth(current, refreshed, ctx.nowMs),
         redeemed: true,
       };
     }
