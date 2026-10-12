@@ -435,19 +435,29 @@ export function deriveWorkLogEntries(
     options,
   )
     .filter((entry) => !isUninformativeCommandStartEntry(entry))
-    .map(
-      ({
-        collapseCommand: _collapseCommand,
-        collapseKey: _collapseKey,
-        runtimeWarningMessage: _runtimeWarningMessage,
-        runtimeWarningRepeatCount: _runtimeWarningRepeatCount,
-        suppressStandaloneCommandStart: _suppressStandaloneCommandStart,
-        taskListHasTasks: _taskListHasTasks,
-        ...entry
-      }) => entry,
-    );
+    .map(toPublicWorkLogEntry);
   const completions = deriveBackgroundTaskCompletionEntries(ordered, latestTurnId, visibleTurnIds);
   return [...derived, ...completions, ...deriveTurnFailureEntries(ordered)];
+}
+
+const publicWorkLogEntryCache = new WeakMap<DerivedWorkLogEntry, WorkLogEntry>();
+
+function toPublicWorkLogEntry(derived: DerivedWorkLogEntry): WorkLogEntry {
+  const cached = publicWorkLogEntryCache.get(derived);
+  if (cached) {
+    return cached;
+  }
+  const {
+    collapseCommand: _collapseCommand,
+    collapseKey: _collapseKey,
+    runtimeWarningMessage: _runtimeWarningMessage,
+    runtimeWarningRepeatCount: _runtimeWarningRepeatCount,
+    suppressStandaloneCommandStart: _suppressStandaloneCommandStart,
+    taskListHasTasks: _taskListHasTasks,
+    ...entry
+  } = derived;
+  publicWorkLogEntryCache.set(derived, entry);
+  return entry;
 }
 
 function isTurnFailureActivity(activity: OrchestrationThreadActivity): boolean {
@@ -1596,6 +1606,38 @@ function normalizeCollabTaskOutput(value: string | null): string | null {
   return (unwrappedTask || output).trim() || null;
 }
 
+type DerivedWorkLogEntryMerge = (
+  previous: DerivedWorkLogEntry,
+  next: DerivedWorkLogEntry,
+) => DerivedWorkLogEntry;
+
+function memoizeDerivedWorkLogEntryMerge(
+  merge: DerivedWorkLogEntryMerge,
+): DerivedWorkLogEntryMerge {
+  const mergedByPrevious = new WeakMap<
+    DerivedWorkLogEntry,
+    WeakMap<DerivedWorkLogEntry, DerivedWorkLogEntry>
+  >();
+  return (previous, next) => {
+    let mergedByNext = mergedByPrevious.get(previous);
+    const cached = mergedByNext?.get(next);
+    if (cached) {
+      return cached;
+    }
+    const merged = merge(previous, next);
+    if (!mergedByNext) {
+      mergedByNext = new WeakMap();
+      mergedByPrevious.set(previous, mergedByNext);
+    }
+    mergedByNext.set(next, merged);
+    return merged;
+  };
+}
+
+const mergeSnapshotEntriesMemo = memoizeDerivedWorkLogEntryMerge(mergeSnapshotEntries);
+const mergeRuntimeWarningEntriesMemo = memoizeDerivedWorkLogEntryMerge(mergeRuntimeWarningEntries);
+const mergeDerivedWorkLogEntriesMemo = memoizeDerivedWorkLogEntryMerge(mergeDerivedWorkLogEntries);
+
 function collapseDerivedWorkLogEntries(
   entries: ReadonlyArray<DerivedWorkLogEntry>,
 ): DerivedWorkLogEntry[] {
@@ -1636,7 +1678,7 @@ function collapseDerivedWorkLogEntries(
     if (snapshotKey !== undefined) {
       const existingIndex = snapshotIndexByKey.get(snapshotKey);
       if (existingIndex !== undefined) {
-        collapsed[existingIndex] = mergeSnapshotEntries(collapsed[existingIndex]!, entry);
+        collapsed[existingIndex] = mergeSnapshotEntriesMemo(collapsed[existingIndex]!, entry);
         continue;
       }
       snapshotIndexByKey.set(snapshotKey, collapsed.length);
@@ -1645,11 +1687,11 @@ function collapseDerivedWorkLogEntries(
     }
     const previous = collapsed.at(-1);
     if (previous && shouldCollapseRuntimeWarningEntries(previous, entry)) {
-      collapsed[collapsed.length - 1] = mergeRuntimeWarningEntries(previous, entry);
+      collapsed[collapsed.length - 1] = mergeRuntimeWarningEntriesMemo(previous, entry);
       continue;
     }
     if (previous && shouldCollapseContextCompactionEntries(previous, entry)) {
-      collapsed[collapsed.length - 1] = mergeDerivedWorkLogEntries(previous, entry);
+      collapsed[collapsed.length - 1] = mergeDerivedWorkLogEntriesMemo(previous, entry);
       continue;
     }
     const stableToolKey =
@@ -1660,12 +1702,12 @@ function collapseDerivedWorkLogEntries(
     if (stableToolKey !== undefined) {
       const existingIndex = stableToolIndexByKey.get(stableToolKey);
       if (existingIndex !== undefined) {
-        collapsed[existingIndex] = mergeDerivedWorkLogEntries(collapsed[existingIndex]!, entry);
+        collapsed[existingIndex] = mergeDerivedWorkLogEntriesMemo(collapsed[existingIndex]!, entry);
         continue;
       }
     }
     if (previous && shouldCollapseToolLifecycleEntries(previous, entry)) {
-      collapsed[collapsed.length - 1] = mergeDerivedWorkLogEntries(previous, entry);
+      collapsed[collapsed.length - 1] = mergeDerivedWorkLogEntriesMemo(previous, entry);
       if (stableToolKey !== undefined) {
         stableToolIndexByKey.set(stableToolKey, collapsed.length - 1);
       }
@@ -2002,16 +2044,7 @@ function reconcileSettledLiveActivities(
 
     const terminal = entry.turnId ? terminalByTurnId.get(entry.turnId) : undefined;
     if (terminal) {
-      return {
-        ...entry,
-        toolStatus:
-          terminal.state === "failed"
-            ? "failed"
-            : terminal.state === "cancelled"
-              ? "cancelled"
-              : "completed",
-        liveActivity: settleWorkLogLiveActivity(liveActivity, terminal.state, terminal.settledAt),
-      };
+      return settleDerivedWorkLogEntry(entry, liveActivity, terminal.state, terminal.settledAt);
     }
 
     if (!hasActiveTurnContext) {
@@ -2034,23 +2067,41 @@ function reconcileSettledLiveActivities(
       latestTurnId && entry.turnId === latestTurnId && latestTerminalState
         ? latestTerminalState
         : "cancelled";
-    return {
-      ...entry,
-      toolStatus:
-        settledState === "failed"
-          ? "failed"
-          : settledState === "cancelled"
-            ? "cancelled"
-            : "completed",
-      liveActivity: settleWorkLogLiveActivity(
-        liveActivity,
-        settledState,
-        latestTurnId && entry.turnId === latestTurnId && options.latestTurnCompletedAt
-          ? options.latestTurnCompletedAt
-          : liveActivity.lastActivityAt,
-      ),
-    };
+    return settleDerivedWorkLogEntry(
+      entry,
+      liveActivity,
+      settledState,
+      latestTurnId && entry.turnId === latestTurnId && options.latestTurnCompletedAt
+        ? options.latestTurnCompletedAt
+        : liveActivity.lastActivityAt,
+    );
   });
+}
+
+type SettledWorkLogState = Extract<WorkLogLiveActivityState, "completed" | "failed" | "cancelled">;
+
+const settledDerivedWorkLogEntryCache = new WeakMap<
+  DerivedWorkLogEntry,
+  { state: SettledWorkLogState; settledAt: string; entry: DerivedWorkLogEntry }
+>();
+
+function settleDerivedWorkLogEntry(
+  entry: DerivedWorkLogEntry,
+  liveActivity: WorkLogLiveActivity,
+  state: SettledWorkLogState,
+  settledAt: string,
+): DerivedWorkLogEntry {
+  const cached = settledDerivedWorkLogEntryCache.get(entry);
+  if (cached && cached.state === state && cached.settledAt === settledAt) {
+    return cached.entry;
+  }
+  const settled: DerivedWorkLogEntry = {
+    ...entry,
+    toolStatus: state,
+    liveActivity: settleWorkLogLiveActivity(liveActivity, state, settledAt),
+  };
+  settledDerivedWorkLogEntryCache.set(entry, { state, settledAt, entry: settled });
+  return settled;
 }
 
 function isInProgressLiveActivityState(state: WorkLogLiveActivityState): boolean {

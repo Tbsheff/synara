@@ -71,13 +71,13 @@ describe("route restore refresh coordinator", () => {
   it("stops after the fenced shell refresh restores threads", async () => {
     let hasThreads = false;
     const getShellSnapshot = vi.fn().mockResolvedValue(shellSnapshot(["thread-1"]));
-    const getSnapshot = vi.fn();
+    const countThreads = vi.fn();
     const repairState = vi.fn();
 
     await expect(
       runEmptyRouteRestoreRefresh({
         getShellSnapshot,
-        getSnapshot,
+        countThreads,
         repairState,
         applyShellSnapshot: (snapshot) => {
           hasThreads = snapshot.threads.length > 0;
@@ -87,28 +87,28 @@ describe("route restore refresh coordinator", () => {
     ).resolves.toBe(true);
 
     expect(getShellSnapshot).toHaveBeenCalledTimes(1);
-    expect(getSnapshot).not.toHaveBeenCalled();
+    expect(countThreads).not.toHaveBeenCalled();
     expect(repairState).not.toHaveBeenCalled();
   });
 
-  it("uses one full snapshot only as a probe and re-reads the fenced shell", async () => {
+  it("uses one thread count only as a probe and re-reads the fenced shell", async () => {
     let hasThreads = false;
-    let fullSnapshotProbed = false;
+    let threadCountProbed = false;
     const getShellSnapshot = vi
       .fn()
       .mockImplementation(async () =>
-        fullSnapshotProbed ? shellSnapshot(["thread-1"]) : shellSnapshot([]),
+        threadCountProbed ? shellSnapshot(["thread-1"]) : shellSnapshot([]),
       );
-    const getSnapshot = vi.fn().mockImplementation(async () => {
-      fullSnapshotProbed = true;
-      return readModel(["thread-1"]);
+    const countThreads = vi.fn().mockImplementation(async () => {
+      threadCountProbed = true;
+      return 1;
     });
     const repairState = vi.fn();
     const appliedShellSnapshots: OrchestrationShellSnapshot[] = [];
 
     const recovery = runEmptyRouteRestoreRefresh({
       getShellSnapshot,
-      getSnapshot,
+      countThreads,
       repairState,
       applyShellSnapshot: (snapshot) => {
         appliedShellSnapshots.push(snapshot);
@@ -119,7 +119,7 @@ describe("route restore refresh coordinator", () => {
     await vi.runAllTimersAsync();
     await expect(recovery).resolves.toBe(true);
 
-    expect(getSnapshot).toHaveBeenCalledTimes(1);
+    expect(countThreads).toHaveBeenCalledTimes(1);
     expect(repairState).not.toHaveBeenCalled();
     expect(getShellSnapshot).toHaveBeenCalledTimes(EMPTY_ROUTE_PROJECTION_POLL_ATTEMPTS + 1);
     expect(appliedShellSnapshots).toHaveLength(EMPTY_ROUTE_PROJECTION_POLL_ATTEMPTS + 1);
@@ -129,12 +129,12 @@ describe("route restore refresh coordinator", () => {
     let hasThreads = false;
     const shellCalls = { count: 0 };
     const getShellSnapshot = emptyUntilRepairShell(shellCalls);
-    const getSnapshot = vi.fn().mockResolvedValue(readModel([]));
+    const countThreads = vi.fn().mockResolvedValue(0);
     const repairState = vi.fn().mockResolvedValue(readModel(["thread-repaired"]));
 
     const recovery = runEmptyRouteRestoreRefresh({
       getShellSnapshot,
-      getSnapshot,
+      countThreads,
       repairState,
       applyShellSnapshot: (snapshot) => {
         hasThreads = snapshot.threads.length > 0;
@@ -145,7 +145,7 @@ describe("route restore refresh coordinator", () => {
     await expect(recovery).resolves.toBe(true);
 
     expect(getShellSnapshot).toHaveBeenCalledTimes(EMPTY_ROUTE_PROJECTION_POLL_ATTEMPTS + 1);
-    expect(getSnapshot).toHaveBeenCalledTimes(1);
+    expect(countThreads).toHaveBeenCalledTimes(1);
     expect(repairState).toHaveBeenCalledTimes(1);
   });
 
@@ -156,12 +156,12 @@ describe("route restore refresh coordinator", () => {
       shellCalls += 1;
       return shellCalls === 1 ? shellSnapshot([]) : shellSnapshot(["thread-1"]);
     });
-    const getSnapshot = vi.fn().mockResolvedValue(readModel([]));
+    const countThreads = vi.fn().mockResolvedValue(0);
     const repairState = vi.fn();
 
     const recovery = runEmptyRouteRestoreRefresh({
       getShellSnapshot,
-      getSnapshot,
+      countThreads,
       repairState,
       applyShellSnapshot: (snapshot) => {
         hasThreads = snapshot.threads.length > 0;
@@ -172,7 +172,7 @@ describe("route restore refresh coordinator", () => {
     await expect(recovery).resolves.toBe(true);
 
     expect(getShellSnapshot).toHaveBeenCalledTimes(2);
-    expect(getSnapshot).not.toHaveBeenCalled();
+    expect(countThreads).not.toHaveBeenCalled();
     expect(repairState).not.toHaveBeenCalled();
   });
 
@@ -185,7 +185,7 @@ describe("route restore refresh coordinator", () => {
       },
     };
     const getShellSnapshot = emptyUntilRepairShell(shellCalls);
-    const getSnapshot = vi.fn().mockResolvedValue(readModel([]));
+    const countThreads = vi.fn().mockResolvedValue(0);
     const repairState = vi.fn(
       () =>
         new Promise<OrchestrationReadModel>((resolve) => {
@@ -196,7 +196,7 @@ describe("route restore refresh coordinator", () => {
     unregister = registerEmptyRouteRestoreRefresh(() =>
       runEmptyRouteRestoreRefresh({
         getShellSnapshot,
-        getSnapshot,
+        countThreads,
         repairState,
         applyShellSnapshot: (snapshot) => {
           hasThreads = snapshot.threads.length > 0;
@@ -245,12 +245,12 @@ describe("route restore refresh coordinator", () => {
     let hasThreads = false;
     const shellCalls = { count: 0 };
     const getShellSnapshot = emptyUntilRepairShell(shellCalls);
-    const getSnapshot = vi.fn().mockResolvedValue(readModel([]));
+    const countThreads = vi.fn().mockResolvedValue(0);
     const repairState = vi.fn().mockResolvedValue(readModel(["thread-repaired"]));
 
     const recovery = runEmptyRouteRestoreRefresh({
       getShellSnapshot,
-      getSnapshot,
+      countThreads,
       repairState,
       applyShellSnapshot: (snapshot) => {
         hasThreads = snapshot.threads.length > 0;
@@ -261,7 +261,7 @@ describe("route restore refresh coordinator", () => {
     await expect(recovery).resolves.toBe(true);
 
     expect(repairState).toHaveBeenCalledTimes(1);
-    expect(getSnapshot).toHaveBeenCalledTimes(1);
+    expect(countThreads).toHaveBeenCalledTimes(1);
     expect(getShellSnapshot).toHaveBeenCalledTimes(EMPTY_ROUTE_PROJECTION_POLL_ATTEMPTS + 1);
   });
 });

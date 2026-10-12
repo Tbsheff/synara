@@ -8,14 +8,15 @@
 // the popout + dialog components.
 
 import { Schema } from "effect";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { APP_VERSION } from "../branding";
 import { useAnnouncementSheetSlot } from "../components/announcementSheetSlot";
 import { useLocalStorage } from "../hooks/useLocalStorage";
-import { WHATS_NEW_ENTRIES } from "./entries";
+import { useWhatsNewEntries } from "./entriesLoader";
 import {
   resolveWhatsNewState,
+  whatsNewNeedsEntries,
   type WhatsNewEntry,
   type WhatsNewInputs,
   type WhatsNewState,
@@ -32,6 +33,8 @@ const WhatsNewStorageSchema = Schema.Struct({
 type WhatsNewStorage = typeof WhatsNewStorageSchema.Type;
 
 const INITIAL_STORAGE: WhatsNewStorage = { lastSeenVersion: null };
+const NO_ENTRIES: readonly WhatsNewEntry[] = [];
+const WAITING_FOR_ENTRIES: WhatsNewState = { kind: "noop" };
 
 export interface UseWhatsNewResult {
   /**
@@ -83,7 +86,7 @@ export function useWhatsNew(options?: {
   readonly entries?: readonly WhatsNewEntry[];
   readonly currentVersion?: string;
 }): UseWhatsNewResult {
-  const entries = options?.entries ?? WHATS_NEW_ENTRIES;
+  const entriesOverride = options?.entries;
   const currentVersion = options?.currentVersion ?? APP_VERSION;
 
   const [storage, setStorage] = useLocalStorage(
@@ -96,14 +99,24 @@ export function useWhatsNew(options?: {
   // that updating localStorage (e.g. acknowledging the dialog) doesn't flip
   // the UI back and forth while animations are still running.
   const [initialLastSeenVersion] = useState(() => storage.lastSeenVersion);
-  const initialState: WhatsNewState = resolveWhatsNewState({
-    entries,
-    currentVersion,
-    lastSeenVersion: initialLastSeenVersion,
-  } satisfies WhatsNewInputs);
+  const needsLoadedEntries =
+    entriesOverride === undefined && whatsNewNeedsEntries(currentVersion, initialLastSeenVersion);
+  const loadedEntries = useWhatsNewEntries(needsLoadedEntries);
+  const entries = entriesOverride ?? loadedEntries;
+  const initialState: WhatsNewState = useMemo(
+    () =>
+      needsLoadedEntries && entries === null
+        ? WAITING_FOR_ENTRIES
+        : resolveWhatsNewState({
+            entries: entries ?? NO_ENTRIES,
+            currentVersion,
+            lastSeenVersion: initialLastSeenVersion,
+          } satisfies WhatsNewInputs),
+    [currentVersion, entries, initialLastSeenVersion, needsLoadedEntries],
+  );
 
-  // The popout starts visible only when we actually have something to show.
-  const [isPopoutVisible, setIsPopoutVisible] = useState(initialState.kind === "show");
+  const [popoutDismissed, setPopoutDismissed] = useState(false);
+  const isPopoutVisible = initialState.kind === "show" && !popoutDismissed;
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   // Keep one claim across the card → notes transition. Queuing never marks notes
   // seen; only the existing explicit dismissal/close handlers acknowledge them.
@@ -145,7 +158,7 @@ export function useWhatsNew(options?: {
   const dismissPopout = () => {
     // X on the card: treat as "I've acknowledged this update". Mark as seen
     // and hide the popout forever (for this version).
-    setIsPopoutVisible(false);
+    setPopoutDismissed(true);
     markSeen();
   };
 
@@ -155,7 +168,7 @@ export function useWhatsNew(options?: {
       // Dismissing the dialog = finished reading the notes. Hide the
       // popout too so we don't leave the "click me" affordance lingering
       // after the user clearly engaged.
-      setIsPopoutVisible(false);
+      setPopoutDismissed(true);
       markSeen();
     }
   };

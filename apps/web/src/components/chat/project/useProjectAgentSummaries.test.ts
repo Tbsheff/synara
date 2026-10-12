@@ -63,6 +63,34 @@ beforeEach(() => {
 });
 
 describe("useProjectAgentSummaries store", () => {
+  it("keeps the summaries map when a poll returns equal content", () => {
+    const store = useProjectAgentSummariesStore.getState();
+    store.setSummaries([makeSummary(), makeSummary({ projectId: repoId, configured: false })]);
+    const loadedMap = useProjectAgentSummariesStore.getState().summariesByProjectId;
+    let notifications = 0;
+    const unsubscribe = useProjectAgentSummariesStore.subscribe(() => {
+      notifications += 1;
+    });
+    try {
+      for (let poll = 0; poll < 10; poll += 1) {
+        store.setSummaries(
+          structuredClone([makeSummary(), makeSummary({ projectId: repoId, configured: false })]),
+        );
+      }
+      expect(notifications).toBe(0);
+      expect(useProjectAgentSummariesStore.getState().summariesByProjectId).toBe(loadedMap);
+
+      store.setSummaries([makeSummary({ coordinatorStatus: "running" })]);
+      const changedMap = useProjectAgentSummariesStore.getState().summariesByProjectId;
+      expect(notifications).toBe(1);
+      expect(changedMap).not.toBe(loadedMap);
+      expect(changedMap.get(groupId)?.coordinatorStatus).toBe("running");
+      expect(changedMap.has(repoId)).toBe(false);
+    } finally {
+      unsubscribe();
+    }
+  });
+
   it("applies hasGoal on goal-upserted so the goal chip hides", async () => {
     vi.useFakeTimers();
     try {

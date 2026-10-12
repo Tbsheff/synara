@@ -10,6 +10,7 @@ import { create } from "zustand";
 import { subscribeToWindowReturn } from "~/hooks/useRefreshOnWindowReturn";
 import { startVisibleInterval } from "~/lib/visibleInterval";
 import { readNativeApi } from "~/nativeApi";
+import { deepEqualJson } from "~/storeNormalization";
 import { projectAgentOverviewConfigured } from "./projectAgentOverview.logic";
 
 type ProjectAgentSummariesState = {
@@ -52,6 +53,28 @@ function summaryFromOverview(
   };
 }
 
+function reuseEqualSummaries(
+  current: ProjectAgentSummariesState,
+  next: Map<ProjectId, ProjectAgentSummary>,
+):
+  | ProjectAgentSummariesState
+  | Pick<ProjectAgentSummariesState, "loaded" | "summariesByProjectId"> {
+  let unchanged = next.size === current.summariesByProjectId.size;
+  for (const [projectId, summary] of next) {
+    const previous = current.summariesByProjectId.get(projectId);
+    if (previous === summary) continue;
+    if (previous !== undefined && deepEqualJson(previous, summary)) {
+      next.set(projectId, previous);
+      continue;
+    }
+    unchanged = false;
+  }
+  if (unchanged && current.loaded) {
+    return current;
+  }
+  return { loaded: true, summariesByProjectId: unchanged ? current.summariesByProjectId : next };
+}
+
 export const useProjectAgentSummariesStore = create<ProjectAgentSummariesState>((set) => ({
   summariesByProjectId: new Map(),
   loaded: false,
@@ -72,7 +95,7 @@ export const useProjectAgentSummariesStore = create<ProjectAgentSummariesState>(
           next.set(projectId, summary);
         }
       }
-      return { loaded: true, summariesByProjectId: next };
+      return reuseEqualSummaries(current, next);
     }),
   applySummary: (summary) =>
     set((current) => {

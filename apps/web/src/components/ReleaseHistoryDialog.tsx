@@ -7,7 +7,7 @@
 // user asks to view history.
 
 import { ChangelogAccordion } from "../whatsNew/ChangelogAccordion";
-import { WHATS_NEW_ENTRIES } from "../whatsNew/entries";
+import { useWhatsNewEntries } from "../whatsNew/entriesLoader";
 import { sortEntriesByVersionDesc, type WhatsNewEntry } from "../whatsNew/logic";
 import { Button } from "./ui/button";
 import {
@@ -41,11 +41,12 @@ export default function ReleaseHistoryDialog({
   entries: entriesProp,
   defaultExpandedVersion: defaultExpandedVersionProp,
 }: ReleaseHistoryDialogProps) {
-  const entries = entriesProp ?? WHATS_NEW_ENTRIES;
+  const loadedEntries = useWhatsNewEntries(open && entriesProp === undefined);
+  const entries = entriesProp ?? loadedEntries;
   const defaultExpandedVersion = defaultExpandedVersionProp ?? null;
   // Sort at render time so the source of truth (`entries.ts`) stays free of
   // ordering rules — authors can prepend, append, or reorder entries freely.
-  const sorted = sortEntriesByVersionDesc(entries);
+  const sorted = entries ? sortEntriesByVersionDesc(entries) : null;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -58,7 +59,9 @@ export default function ReleaseHistoryDialog({
         </DialogHeader>
 
         <DialogPanel className="max-h-[min(62vh,520px)] px-4 py-3">
-          <ChangelogAccordion entries={sorted} defaultExpandedVersion={defaultExpandedVersion} />
+          {sorted ? (
+            <ChangelogAccordion entries={sorted} defaultExpandedVersion={defaultExpandedVersion} />
+          ) : null}
         </DialogPanel>
 
         <DialogFooter>

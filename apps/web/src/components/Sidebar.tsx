@@ -297,7 +297,6 @@ import {
   SidebarThreadRowContent,
   type SidebarThreadTerminalStatus,
 } from "./SidebarThreadRowContent";
-import { GroupSettingsDialog } from "./chat/group/GroupSettingsDialog";
 import { SidebarGroupsSurface } from "./SidebarGroupsSurface";
 import {
   activateThreadWhenHydrated,
@@ -314,7 +313,7 @@ import { SnoozeUntilDialog } from "./SnoozeUntilDialog";
 import { SNOOZE_PRESETS } from "../lib/threadSnooze";
 import ReleaseHistoryDialog from "./ReleaseHistoryDialog";
 import { GROUPS_ON, INBOX_ON, isBetaFeatureOn } from "../betaFeatures";
-import { WHATS_NEW_ENTRIES } from "../whatsNew/entries";
+import { useWhatsNewEntries } from "../whatsNew/entriesLoader";
 import { sortEntriesByVersionDesc } from "../whatsNew/logic";
 import { SidebarSearchPalette, type SidebarSearchPaletteMode } from "./SidebarSearchPalette";
 import { useHandleNewChat } from "../hooks/useHandleNewChat";
@@ -576,6 +575,11 @@ const GITHUB_CANCEL_RECOVERY_MAX_ATTEMPTS = 40;
 const GITHUB_CANCEL_RECOVERY_DELAY_MS = 250;
 /** Snap the optimistic segment selection back if the navigation never lands. */
 const EMPTY_PROJECT_SIDEBAR_DATA: ReadonlyMap<ProjectId, SidebarDerivedProjectData> = new Map();
+const GroupSettingsDialog = lazy(() =>
+  import("./chat/group/GroupSettingsDialog").then((module) => ({
+    default: module.GroupSettingsDialog,
+  })),
+);
 const DebugFeatureFlagsMenu = import.meta.env.DEV
   ? lazy(() =>
       import("./DebugFeatureFlagsMenu").then((module) => ({
@@ -926,9 +930,30 @@ function ProjectSortMenu({
 
 const SYNARA_DOCS_URL = "https://trysynara.com/docs";
 
-// Latest curated releases surfaced directly in the help menu. Static data, so
-// computed once at module scope rather than per render.
-const HELP_MENU_RELEASE_ENTRIES = sortEntriesByVersionDesc(WHATS_NEW_ENTRIES).slice(0, 3);
+const HELP_MENU_RELEASE_ENTRY_COUNT = 3;
+
+function HelpMenuReleaseItems(props: { onOpenRelease: (version: string) => void }) {
+  const entries = useWhatsNewEntries(true);
+  const latestEntries = useMemo(
+    () =>
+      entries ? sortEntriesByVersionDesc(entries).slice(0, HELP_MENU_RELEASE_ENTRY_COUNT) : [],
+    [entries],
+  );
+  return latestEntries.map((entry) => (
+    <MenuItem
+      key={entry.version}
+      className={SIDEBAR_CONTEXT_MENU_ITEM_CLASS_NAME}
+      onClick={() => props.onOpenRelease(entry.version)}
+    >
+      <span className="min-w-0 flex-1 truncate">
+        {entry.features[0]?.title ?? `Version ${entry.version}`}
+      </span>
+      <span className="shrink-0 text-[var(--color-text-foreground-secondary)] tabular-nums">
+        {entry.date}
+      </span>
+    </MenuItem>
+  ));
+}
 
 // Footer help menu; swapped out for the desktop-update pill while an update is
 // available (see SidebarFooter).
@@ -984,20 +1009,7 @@ function SidebarHelpMenu({
             <div className="px-2 py-1 sm:text-ui leading-snug font-medium text-muted-foreground">
               What’s new
             </div>
-            {HELP_MENU_RELEASE_ENTRIES.map((entry) => (
-              <MenuItem
-                key={entry.version}
-                className={SIDEBAR_CONTEXT_MENU_ITEM_CLASS_NAME}
-                onClick={() => openReleaseHistory(entry.version)}
-              >
-                <span className="min-w-0 flex-1 truncate">
-                  {entry.features[0]?.title ?? `Version ${entry.version}`}
-                </span>
-                <span className="shrink-0 text-[var(--color-text-foreground-secondary)] tabular-nums">
-                  {entry.date}
-                </span>
-              </MenuItem>
-            ))}
+            <HelpMenuReleaseItems onOpenRelease={openReleaseHistory} />
             <MenuItem
               className={SIDEBAR_CONTEXT_MENU_ITEM_CLASS_NAME}
               onClick={() => openReleaseHistory(null)}
@@ -8032,55 +8044,55 @@ export default function Sidebar() {
       ) : null}
 
       {projectAgentDialogProject ? (
-        <GroupSettingsDialog
-          key={projectAgentDialogProject.id}
-          open={projectAgentDialogState !== null}
-          mode={projectAgentDialogState?.mode ?? "onboarding"}
-          projectId={projectAgentDialogProject.id}
-          projectName={projectAgentDialogProject.name}
-          workspacePath={projectAgentDialogProject.cwd}
-          defaultModelSelection={projectAgentDialogProject.defaultModelSelection ?? null}
-          allowDiscard={projectAgentDialogState?.discardable === true}
-          onOpenChange={(open) => {
-            if (!open) {
-              setProjectAgentDialogState(null);
-            }
-          }}
-          onSaved={(overview) => {
-            if (projectAgentDialogState?.mode !== "onboarding") return;
-            const coordinatorThreadId = overview.config?.coordinatorThreadId;
-            const firstMessage = projectAgentDialogState.firstMessage;
-            if (coordinatorThreadId && firstMessage) {
-              void postGroupPickupMessage(coordinatorThreadId, firstMessage);
-            }
-            if (coordinatorThreadId) {
-              pendingCoordinatorActivationRef.current?.cancel();
-              pendingCoordinatorActivationRef.current = {
-                pathname,
-                cancel: activateThreadWhenHydrated({
-                  hasThread: () =>
-                    useStore.getState().sidebarThreadSummaryById[coordinatorThreadId] !== undefined,
-                  subscribe: (listener) => useStore.subscribe(listener),
-                  // The sidebar intent path resolves against the summary map captured at
-                  // render time; a thread created by this dialog hydrates later, so wait
-                  // for its row and then open it directly.
-                  activate: () => {
-                    prewarmThreadDetailForIntent(coordinatorThreadId);
-                    setOptimisticActiveThreadId(coordinatorThreadId);
-                    setSelectionAnchor(coordinatorThreadId);
-                    openChatThreadPage(coordinatorThreadId);
-                    rememberLastThreadRouteNow({ threadId: coordinatorThreadId });
-                    void navigate({
-                      to: "/$threadId",
-                      params: { threadId: coordinatorThreadId },
-                      search: (previous) => ({ ...previous, splitViewId: undefined }),
-                    });
-                  },
-                }),
-              };
-            }
-          }}
-        />
+        <Suspense fallback={null}>
+          <GroupSettingsDialog
+            key={projectAgentDialogProject.id}
+            open={projectAgentDialogState !== null}
+            mode={projectAgentDialogState?.mode ?? "onboarding"}
+            projectId={projectAgentDialogProject.id}
+            projectName={projectAgentDialogProject.name}
+            workspacePath={projectAgentDialogProject.cwd}
+            defaultModelSelection={projectAgentDialogProject.defaultModelSelection ?? null}
+            allowDiscard={projectAgentDialogState?.discardable === true}
+            onOpenChange={(open) => {
+              if (!open) {
+                setProjectAgentDialogState(null);
+              }
+            }}
+            onSaved={(overview) => {
+              if (projectAgentDialogState?.mode !== "onboarding") return;
+              const coordinatorThreadId = overview.config?.coordinatorThreadId;
+              const firstMessage = projectAgentDialogState.firstMessage;
+              if (coordinatorThreadId && firstMessage) {
+                void postGroupPickupMessage(coordinatorThreadId, firstMessage);
+              }
+              if (coordinatorThreadId) {
+                pendingCoordinatorActivationRef.current?.cancel();
+                pendingCoordinatorActivationRef.current = {
+                  pathname,
+                  cancel: activateThreadWhenHydrated({
+                    hasThread: () =>
+                      useStore.getState().sidebarThreadSummaryById[coordinatorThreadId] !==
+                      undefined,
+                    subscribe: (listener) => useStore.subscribe(listener),
+                    activate: () => {
+                      prewarmThreadDetailForIntent(coordinatorThreadId);
+                      setOptimisticActiveThreadId(coordinatorThreadId);
+                      setSelectionAnchor(coordinatorThreadId);
+                      openChatThreadPage(coordinatorThreadId);
+                      rememberLastThreadRouteNow({ threadId: coordinatorThreadId });
+                      void navigate({
+                        to: "/$threadId",
+                        params: { threadId: coordinatorThreadId },
+                        search: (previous) => ({ ...previous, splitViewId: undefined }),
+                      });
+                    },
+                  }),
+                };
+              }
+            }}
+          />
+        </Suspense>
       ) : null}
 
       {searchPaletteOpen ? (

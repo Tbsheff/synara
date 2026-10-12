@@ -1791,7 +1791,7 @@ function EventRouter() {
     const unregisterEmptyRouteRestoreRefresh = registerEmptyRouteRestoreRefresh(() =>
       runEmptyRouteRestoreRefresh({
         getShellSnapshot: () => api.orchestration.getShellSnapshot(),
-        getSnapshot: () => api.orchestration.getSnapshot(),
+        countThreads: async () => (await api.orchestration.getCounts()).threadCount,
         repairState: () => api.orchestration.repairState(),
         applyShellSnapshot: applyQueriedShellSnapshot,
         hasThreads: () => (useStore.getState().threadIds?.length ?? 0) > 0,

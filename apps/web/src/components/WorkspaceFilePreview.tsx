@@ -8,11 +8,8 @@
 import type { ProjectFileChangeEvent, ProjectReadFileResult } from "@synara/contracts";
 import type { SynaraPluginAppContext } from "@synara/plugin-sdk/app";
 import type { FileContents as PierreFileContents } from "@pierre/diffs";
-import {
-  Editor as PierreEditor,
-  type EditorOptions as PierreEditorOptions,
-} from "@pierre/diffs/edit";
-import { EditProvider, File as PierreFile } from "@pierre/diffs/react";
+import type { EditorOptions as PierreEditorOptions } from "@pierre/diffs/edit";
+import { EditProvider, File as PierreFile, type CreateEditor } from "@pierre/diffs/react";
 import {
   isSupportedLocalImagePath,
   isSupportedLocalPdfPath,
@@ -71,19 +68,16 @@ import {
 import { refreshGitAfterFileWrite } from "~/lib/gitReactQuery";
 import {
   MAX_SYNTAX_HIGHLIGHT_INPUT_CHARS,
-  cacheSyntaxHighlightedHtml,
-  createSyntaxHighlightCacheKey,
-  getCachedSyntaxHighlightedHtml,
-  getSyntaxHighlighterPromise,
-  getSyntaxLanguageForPath,
-  highlightCodeToHtmlWithFallback,
-} from "~/lib/syntaxHighlighting";
+  loadSyntaxHighlighting,
+  type SyntaxHighlightingModule,
+} from "~/lib/syntaxHighlightingLoader";
 import { cn } from "~/lib/utils";
 import { resolveWorkspaceFileEditorReadOnlyReason } from "~/lib/workspaceFileEditor";
 import { readNativeApi } from "~/nativeApi";
 import { PluginFileOpener, resolvePluginFileSource } from "~/plugins/PluginFileOpener";
 import { PluginSourceCodeRenderer } from "~/plugins/PluginSourceCodeRenderer";
 import ChatMarkdown from "./ChatMarkdown";
+import { loadPierreEdit } from "./codeEditor/pierreEdit";
 import { DiffTruncationWarning } from "./DiffTruncationWarning";
 import { FileLineCommentBox } from "./chat/FileLineCommentBox";
 import { PanelStateMessage } from "./chat/PanelStateMessage";
@@ -201,9 +195,14 @@ function SyntaxHighlightedFileContents(props: {
   contents: string;
   themeName: DiffThemeName;
 }) {
-  const language = getSyntaxLanguageForPath(props.path);
-  const cacheKey = createSyntaxHighlightCacheKey(props.contents, language, props.themeName);
-  const cachedHighlightedHtml = getCachedSyntaxHighlightedHtml(cacheKey);
+  const syntaxHighlighting = use(loadSyntaxHighlighting());
+  const language = syntaxHighlighting.getSyntaxLanguageForPath(props.path);
+  const cacheKey = syntaxHighlighting.createSyntaxHighlightCacheKey(
+    props.contents,
+    language,
+    props.themeName,
+  );
+  const cachedHighlightedHtml = syntaxHighlighting.getCachedSyntaxHighlightedHtml(cacheKey);
 
   if (cachedHighlightedHtml != null) {
     return (
@@ -219,6 +218,7 @@ function SyntaxHighlightedFileContents(props: {
   // not change this component's hook order once the cache fills.
   return (
     <UncachedSyntaxHighlightedFileContents
+      syntaxHighlighting={syntaxHighlighting}
       cacheKey={cacheKey}
       contents={props.contents}
       language={language}
@@ -228,13 +228,15 @@ function SyntaxHighlightedFileContents(props: {
 }
 
 function UncachedSyntaxHighlightedFileContents(props: {
+  syntaxHighlighting: SyntaxHighlightingModule;
   cacheKey: string;
   contents: string;
   language: string;
   themeName: DiffThemeName;
 }) {
-  const highlighter = use(getSyntaxHighlighterPromise(props.language));
-  const highlightedHtml = highlightCodeToHtmlWithFallback(
+  const { syntaxHighlighting } = props;
+  const highlighter = use(syntaxHighlighting.getSyntaxHighlighterPromise(props.language));
+  const highlightedHtml = syntaxHighlighting.highlightCodeToHtmlWithFallback(
     highlighter,
     props.contents,
     props.language,
@@ -242,8 +244,8 @@ function UncachedSyntaxHighlightedFileContents(props: {
   );
 
   useEffect(() => {
-    cacheSyntaxHighlightedHtml(props.cacheKey, highlightedHtml, props.contents);
-  }, [props.cacheKey, highlightedHtml, props.contents]);
+    syntaxHighlighting.cacheSyntaxHighlightedHtml(props.cacheKey, highlightedHtml, props.contents);
+  }, [syntaxHighlighting, props.cacheKey, highlightedHtml, props.contents]);
 
   return (
     <div
@@ -276,10 +278,6 @@ function FileContentsView(props: { path: string; contents: string; themeName: Di
   );
 }
 
-function createPierreEditor(options: PierreEditorOptions<undefined>) {
-  return new PierreEditor(options);
-}
-
 type EditableFileContentsProps = {
   path: string;
   contents: string;
@@ -294,6 +292,12 @@ type EditableFileContentsProps = {
 };
 
 function PierreEditableFileContents(props: EditableFileContentsProps) {
+  const pierreEdit = use(loadPierreEdit());
+  const syntaxHighlighting = use(loadSyntaxHighlighting());
+  const createPierreEditor = useCallback<CreateEditor<undefined>>(
+    (options) => new pierreEdit.Editor(options),
+    [pierreEdit],
+  );
   const editorContainerRef = useRef<HTMLDivElement>(null);
   const editorId = useId();
   const labelEditor = useCallback(() => {
@@ -341,10 +345,17 @@ function PierreEditableFileContents(props: EditableFileContentsProps) {
     () => ({
       name: props.path,
       contents: document.seedContents,
-      lang: getSyntaxLanguageForPath(props.path),
+      lang: syntaxHighlighting.getSyntaxLanguageForPath(props.path),
       cacheKey: `${props.cacheKey}:${editorId}:${document.revision}`,
     }),
-    [document.seedContents, document.revision, editorId, props.cacheKey, props.path],
+    [
+      document.seedContents,
+      document.revision,
+      editorId,
+      props.cacheKey,
+      props.path,
+      syntaxHighlighting,
+    ],
   );
   const editorOptions = useMemo<PierreEditorOptions<undefined>>(
     () => ({
@@ -398,10 +409,21 @@ function EditableFileContents(props: EditableFileContentsProps) {
       props.contents.length > MAX_SYNTAX_HIGHLIGHT_INPUT_CHARS ||
       props.contents.split("\n").length > 1_000,
   );
-  return plainText ? (
-    <NumberedPlainEditableFileContents {...props} />
-  ) : (
-    <PierreEditableFileContents {...props} />
+  if (plainText) {
+    return <NumberedPlainEditableFileContents {...props} />;
+  }
+  return (
+    <FilePreviewHighlightErrorBoundary fallback={<NumberedPlainEditableFileContents {...props} />}>
+      <Suspense
+        fallback={
+          <div className="editor-file-editor__pierre" hidden={props.hidden} aria-busy="true">
+            <PlainFileContents contents={props.contents} />
+          </div>
+        }
+      >
+        <PierreEditableFileContents {...props} />
+      </Suspense>
+    </FilePreviewHighlightErrorBoundary>
   );
 }
 

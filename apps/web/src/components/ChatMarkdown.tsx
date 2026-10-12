@@ -49,6 +49,10 @@ import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import { copyTextToClipboard } from "../hooks/useCopyToClipboard";
 import { resolveDiffThemeName, type DiffThemeName } from "../lib/diffRendering";
+import {
+  loadSyntaxHighlighting,
+  type SyntaxHighlightingModule,
+} from "../lib/syntaxHighlightingLoader";
 import { dedentCode, parseCodeFenceInfo, type CodeFenceInfo } from "../lib/codeFence";
 import { getFileIconName, pathLooksLikeKnownFile } from "../file-icons";
 import { CentralIcon } from "~/lib/central-icons";
@@ -985,14 +989,6 @@ interface SuspenseShikiCodeBlockProps {
   sourceOffset: number;
 }
 
-type SyntaxHighlightingModule = typeof import("../lib/syntaxHighlighting");
-let syntaxHighlightingModulePromise: Promise<SyntaxHighlightingModule> | null = null;
-
-function getSyntaxHighlightingModulePromise(): Promise<SyntaxHighlightingModule> {
-  syntaxHighlightingModulePromise ??= import("../lib/syntaxHighlighting");
-  return syntaxHighlightingModulePromise;
-}
-
 // While a message streams, its open code block grows on every reveal commit (~25/s) and
 // each commit re-tokenizes the whole block — quadratic in block length and the single
 // largest renderer cost of a code-heavy turn. Highlight at most this often while
@@ -1034,7 +1030,7 @@ function SuspenseShikiCodeBlock({
     isStreaming,
     streamingCodeHighlightIntervalMs(liveCode.length),
   );
-  const syntaxHighlighting = use(getSyntaxHighlightingModulePromise());
+  const syntaxHighlighting = use(loadSyntaxHighlighting());
   return (
     <LoadedShikiCodeBlock
       syntaxHighlighting={syntaxHighlighting}

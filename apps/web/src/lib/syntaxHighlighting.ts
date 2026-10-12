@@ -17,8 +17,6 @@ import { LRUCache } from "./lruCache";
 const MAX_HIGHLIGHT_CACHE_ENTRIES = 500;
 const MAX_HIGHLIGHT_CACHE_MEMORY_BYTES = 50 * 1024 * 1024;
 
-export const MAX_SYNTAX_HIGHLIGHT_INPUT_CHARS = 250_000;
-
 const highlightedCodeCache = new LRUCache<string>(
   MAX_HIGHLIGHT_CACHE_ENTRIES,
   MAX_HIGHLIGHT_CACHE_MEMORY_BYTES,
