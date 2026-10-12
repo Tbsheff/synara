@@ -244,12 +244,13 @@ The copy shares no live work with Stable:
 - Automations arrive turned off, with no scheduler lease and no active run.
   PR Auto-fix watches arrive paused. Turn them on in Beta to run them there.
 - A chat whose worktree lives in Stable's `worktrees` folder arrives with its
-  worktree detached ("Worktree pending"). Beta refuses to run it there; switch
-  it to the local project or fork it into a new worktree.
+  worktree detached ("Worktree pending"), and Beta refuses its next turn.
+  Switch the chat to the local project, or start a new chat in a new worktree.
 - Beta writes checkpoint refs under `refs/synara-beta/checkpoints`. The import
   copies Stable's checkpoint refs in each project repository into that
-  namespace and only reads Stable's own refs. If a repository is missing, its
-  older diffs and Undo are unavailable in Beta.
+  namespace and only reads Stable's own refs. If a repository is missing or the
+  copy fails, its older diffs and Undo are unavailable in Beta; the Beta server
+  log records the number of failed repositories.
 - Beta keeps scratch folders for chats without a project in its own cache
   folder. An imported chat gets a new, empty scratch folder.
 

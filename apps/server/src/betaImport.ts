@@ -559,41 +559,53 @@ async function runGit(cwd: string, args: readonly string[], stdin?: string) {
   });
 }
 
-async function copyCheckpointRefsToBetaNamespace(repositories: readonly string[]): Promise<void> {
+function betaCheckpointRefUpdates(forEachRefOutput: string): string[] {
+  const targets = new Map<string, { objectName: string; fromStable: boolean }>();
+  for (const line of forEachRefOutput.split("\n")) {
+    const [objectName, refName] = line.trim().split(" ");
+    if (!objectName || !refName) continue;
+    const betaRef = toBetaCheckpointRef(refName);
+    if (betaRef === refName) continue;
+    const fromStable = refName.startsWith("refs/synara/");
+    if (targets.get(betaRef)?.fromStable && !fromStable) continue;
+    targets.set(betaRef, { objectName, fromStable });
+  }
+  return [...targets].map(([betaRef, { objectName }]) => `update ${betaRef} ${objectName}\n`);
+}
+
+async function copyCheckpointRefsToBetaNamespace(repositories: readonly string[]): Promise<number> {
   const visitedCommonDirs = new Set<string>();
+  let failedRepositories = 0;
   for (const repository of repositories) {
+    let commonDirPath: string;
     try {
-      const commonDir = await runGit(repository, [
-        "rev-parse",
-        "--path-format=absolute",
-        "--git-common-dir",
-      ]);
-      const commonDirPath = commonDir.stdout.trim();
-      if (commonDir.code !== 0 || commonDirPath === "" || visitedCommonDirs.has(commonDirPath)) {
-        continue;
-      }
-      visitedCommonDirs.add(commonDirPath);
+      const commonDir = await runGit(repository, ["rev-parse", "--git-common-dir"]);
+      if (commonDir.code !== 0 || commonDir.stdout.trim() === "") continue;
+      commonDirPath = resolve(repository, commonDir.stdout.trim());
+    } catch {
+      continue;
+    }
+    if (visitedCommonDirs.has(commonDirPath)) continue;
+    visitedCommonDirs.add(commonDirPath);
+    try {
       const listed = await runGit(repository, [
         "for-each-ref",
         "--format=%(objectname) %(refname)",
         "refs/",
       ]);
-      if (listed.code !== 0) continue;
-      const updates = listed.stdout
-        .split("\n")
-        .map((line) => line.trim().split(" "))
-        .flatMap(([objectName, refName]) => {
-          if (!objectName || !refName) return [];
-          const betaRef = toBetaCheckpointRef(refName);
-          return betaRef === refName ? [] : [`update ${betaRef} ${objectName}\n`];
-        });
-      if (updates.length > 0) {
-        await runGit(repository, ["update-ref", "--stdin"], updates.join(""));
+      if (listed.code !== 0) {
+        failedRepositories += 1;
+        continue;
       }
+      const updates = betaCheckpointRefUpdates(listed.stdout);
+      if (updates.length === 0) continue;
+      const updated = await runGit(repository, ["update-ref", "--stdin"], updates.join(""));
+      if (updated.code !== 0) failedRepositories += 1;
     } catch {
-      continue;
+      failedRepositories += 1;
     }
   }
+  return failedRepositories;
 }
 
 /** Stable homes a beta may import from: the one stable handed over, else the default. */
@@ -608,8 +620,13 @@ export async function runBetaImportIfRequested(input: {
   /** Newest migration this beta build knows; newer source databases are refused. */
   readonly latestMigrationId: number;
   readonly allowedSourceHomes?: readonly string[];
-  readonly copyCheckpointRefs?: (repositories: readonly string[]) => Promise<void>;
-}): Promise<{ readonly consumed: boolean; readonly ok: boolean; readonly error?: string }> {
+  readonly copyCheckpointRefs?: (repositories: readonly string[]) => Promise<number>;
+}): Promise<{
+  readonly consumed: boolean;
+  readonly ok: boolean;
+  readonly error?: string;
+  readonly checkpointRefCopyFailures?: number;
+}> {
   const markerPath = join(input.betaHomeDir, BETA_IMPORT_REQUEST_FILE_NAME);
   if (!existsSync(markerPath)) {
     return { consumed: false, ok: true };
@@ -682,6 +699,7 @@ export async function runBetaImportIfRequested(input: {
     }
     // Validate and copy every source entry before changing Beta. An unreadable
     // secret or a linked file must not report success after replacing its DB.
+    let checkpointRefCopyFailures = 0;
     const stagedRoot = mkdtempSync(join(input.betaHomeDir, ".beta-import-"));
     try {
       const stagedStateDir = join(stagedRoot, "userdata");
@@ -693,13 +711,17 @@ export async function runBetaImportIfRequested(input: {
           ...new Set([join(sourceHomeDir, "worktrees"), join(realSourceHomeDir, "worktrees")]),
         ],
       });
-      await (input.copyCheckpointRefs ?? copyCheckpointRefsToBetaNamespace)(repositories);
+      checkpointRefCopyFailures = await (
+        input.copyCheckpointRefs ?? copyCheckpointRefsToBetaNamespace
+      )(repositories);
       const copiedEntries = copyStateEntries(sourceStateDir, stagedStateDir, input.stateDir);
       commitStagedImport(stagedStateDir, input.stateDir, copiedEntries);
     } finally {
       rmSync(stagedRoot, { recursive: true, force: true });
     }
-    return finish(true);
+    return checkpointRefCopyFailures > 0
+      ? { ...finish(true), checkpointRefCopyFailures }
+      : finish(true);
   } catch (error) {
     return finish(false, error instanceof Error ? error.message : String(error));
   }
