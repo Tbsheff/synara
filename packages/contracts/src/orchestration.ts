@@ -3202,3 +3202,5 @@ export const OrchestrationRpcSchemas = {
     output: Schema.Void,
   },
 } as const;
+
+export const MAX_THREAD_CHECKPOINTS = 500;
