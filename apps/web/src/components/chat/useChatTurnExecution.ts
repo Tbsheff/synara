@@ -423,14 +423,6 @@ export function useChatTurnExecution({
               // Non-critical: the goal can be set again with /goal on the live thread.
             }
           }
-          if (targetProjectKindForSend === "chat") {
-            await api.orchestration.dispatchCommand({
-              type: "project.meta.update",
-              commandId: newCommandId(),
-              projectId: targetProjectIdForSend,
-              title,
-            });
-          }
         }
 
         // On first message: lock in branch + create worktree if needed.
@@ -689,6 +681,21 @@ export function useChatTurnExecution({
             });
         });
         turnStartSucceeded = true;
+        if (createdServerThreadForLocalDraft && targetProjectKindForSend === "chat") {
+          void api.orchestration
+            .dispatchCommand({
+              type: "project.meta.update",
+              commandId: newCommandId(),
+              projectId: targetProjectIdForSend,
+              title,
+            })
+            .catch((error: unknown) => {
+              console.warn(
+                "[chat] Could not rename the chat container after its first turn",
+                error,
+              );
+            });
+        }
         if (
           shouldResumeSettledLocalThread &&
           currentActiveGitBranchForSend !== null &&

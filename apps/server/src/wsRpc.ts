@@ -1,3 +1,4 @@
+import { loadThreadSnapshotWithBootstrapWait } from "./orchestration/threadSnapshotBootstrap.ts";
 import { readEventLoopStatus } from "./eventLoopMonitor";
 import { makeGitActionRunner } from "./git/gitActionRunner";
 import { AgentGatewaySessionRegistry } from "./agentGateway/Services/AgentGatewaySessionRegistry";
@@ -266,7 +267,6 @@ const MAX_DIAGNOSTIC_ARGS_CHARS = 500;
 // Covers subscribe-vs-projection races on freshly created threads; a thread
 // that truly does not exist still fails, just this much later.
 const THREAD_DETAIL_SNAPSHOT_BOOTSTRAP_TIMEOUT_MS = 5_000;
-const THREAD_DETAIL_SNAPSHOT_BOOTSTRAP_POLL_MS = 100;
 
 class WsRequestAdmissionMiddleware extends RpcMiddleware.Service<WsRequestAdmissionMiddleware>()(
   "synara/WsRequestAdmissionMiddleware",
@@ -804,23 +804,15 @@ const makeWsRpcHandlersLayer = () =>
             ),
           );
 
-      // A thread subscription can race the projector: the client subscribes the
-      // moment a create/turn RPC resolves, while the detail read model commits
-      // asynchronously behind the journal. Failing straight away with
-      // THREAD_SNAPSHOT_NOT_FOUND tears the stream down for a thread the server
-      // is actively running. Waiting here is safe because the cursor-safe
-      // stream attaches its live tap before evaluating the snapshot effect, so
-      // no event that commits during the wait is lost.
       const loadThreadDetailSnapshotWithBootstrapWait = (threadId: ThreadId) =>
-        Effect.gen(function* () {
-          const deadline = Date.now() + THREAD_DETAIL_SNAPSHOT_BOOTSTRAP_TIMEOUT_MS;
-          while (true) {
-            const detail = yield* projectionReadModelQuery.getThreadDetailSnapshotById(threadId);
-            if (Option.isSome(detail) || Date.now() >= deadline) {
-              return detail;
-            }
-            yield* Effect.sleep(THREAD_DETAIL_SNAPSHOT_BOOTSTRAP_POLL_MS);
-          }
+        loadThreadSnapshotWithBootstrapWait({
+          readSnapshot: projectionReadModelQuery.getThreadDetailSnapshotById(threadId),
+          subscribeReady: orchestrationEngine.subscribeDomainEvents.pipe(
+            Effect.map((events) =>
+              events.pipe(Stream.filter((event) => isThreadDetailEventFor(event, threadId))),
+            ),
+          ),
+          timeoutMs: THREAD_DETAIL_SNAPSHOT_BOOTSTRAP_TIMEOUT_MS,
         });
 
       const isGlobalGitHubCliError = (error: unknown): error is GitHubCliError =>
