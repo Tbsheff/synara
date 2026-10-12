@@ -7173,14 +7173,19 @@ describe("ProviderCommandReactor", () => {
             createdAt: now,
           }),
         );
-        await waitFor(async () =>
-          (await readHarnessThread(harness))!.activities.some(
-            (activity) =>
-              activity.kind === "provider.turn.start.failed" &&
-              JSON.stringify(activity.payload).includes("The message was not sent to the provider"),
-          ),
-        ).catch((error) => {
-          throw new Error("quarantine skip activity missing", { cause: error });
+        await waitFor(async () => {
+          const thread = (await readHarnessThread(harness))!;
+          return (
+            thread.activities.some(
+              (activity) =>
+                activity.kind === "provider.turn.start.failed" &&
+                JSON.stringify(activity.payload).includes(
+                  "The message was not sent to the provider",
+                ),
+            ) && (thread.session?.lastError ?? "").includes(PROVIDER_DELIVERY_BLOCK_SUMMARY)
+          );
+        }).catch((error) => {
+          throw new Error("quarantine skip activity or session error missing", { cause: error });
         });
         expect(
           Option.getOrThrow(
