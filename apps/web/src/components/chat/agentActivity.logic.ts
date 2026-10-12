@@ -33,6 +33,16 @@ export function isReasoningUpdateWorkEntry(
   );
 }
 
+export function isSubagentTaskProgressWorkEntry(
+  entry: Pick<WorkLogEntry, "activityKind" | "taskId" | "label" | "toolTitle">,
+): boolean {
+  return (
+    entry.activityKind === "task.progress" &&
+    entry.taskId !== undefined &&
+    !isReasoningUpdateWorkEntry(entry)
+  );
+}
+
 export function isCodexActivityStatusWorkEntry(entry: WorkLogEntry): boolean {
   if (isReasoningUpdateWorkEntry(entry) || entry.activityKind === "tool.summary") {
     return true;
@@ -162,10 +172,16 @@ export function deriveAgentActivityTimelineState(
   };
 
   for (const entry of entries) {
+    if (isSubagentTaskProgressWorkEntry(entry)) {
+      continue;
+    }
     // Legacy providers emit free-standing reasoning updates with no item id;
     // keep compacting those. Canonical Codex reasoning carries toolCallId, so
     // each completed provider item remains its own visible row.
     if (isReasoningUpdateWorkEntry(entry) && !entry.toolCallId) {
+      if (pendingReasoningEntries[0] && pendingReasoningEntries[0].taskId !== entry.taskId) {
+        flushReasoningEntries();
+      }
       pendingReasoningEntries.push(entry);
       continue;
     }

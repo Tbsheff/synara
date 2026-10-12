@@ -10,17 +10,68 @@ import {
   useRef,
   useState,
   type MouseEvent,
+  type PointerEvent,
   type WheelEvent,
 } from "react";
 import { flushSync } from "react-dom";
-import { isScrollContainerNearBottom } from "../../chat-scroll";
+import {
+  getScrollContainerDistanceFromBottom,
+  isScrollContainerNearBottom,
+} from "../../chat-scroll";
 import { isEditableEventTarget } from "../../lib/editableEventTarget";
 import type { TimelineEntry } from "../../session-logic";
 import { buildTranscriptAutoFollowSignal, buildTranscriptTailKey } from "../ChatView.logic";
 import {
+  FOLLOW_ZONE_PX,
+  isTranscriptListRevealing,
+  isUpwardMoveFromUserInput,
+  PINNED_END_SLACK_PX,
+  pinScrollContainerToEnd,
   scrollTranscriptToSettledEnd,
+  setScrollingToEndOnItsOwn,
   stopTranscriptScrollAtCurrentOffset,
 } from "./transcriptScroll";
+
+const PRESS_DRAG_THRESHOLD_PX = 8;
+const PRIMARY_POINTER_BUTTON = 0;
+const SECONDARY_POINTER_BUTTON = 2;
+const INTERACTION_ANCHOR_SELECTOR = "button, summary, [role='button'], [data-scroll-anchor-target]";
+const DISCLOSURE_TRIGGER_SELECTOR = "summary, [aria-expanded], [data-scroll-anchor-target]";
+const TIMELINE_ROW_SELECTOR = "[data-timeline-row-kind]";
+const NON_CONTENT_TIMELINE_ROW_KINDS = new Set(["working", "worktree-setup"]);
+
+function isScrollbarPointer(container: HTMLElement, event: PointerEvent<HTMLDivElement>): boolean {
+  if (event.target !== container) return false;
+  const bounds = container.getBoundingClientRect();
+  return (
+    event.clientX >= bounds.left + container.clientLeft + container.clientWidth ||
+    event.clientY >= bounds.top + container.clientTop + container.clientHeight
+  );
+}
+
+function isTailContentRow(container: HTMLElement, row: Element): boolean {
+  let tailRow: Element | null = null;
+  let tailTop = Number.NEGATIVE_INFINITY;
+  for (const candidate of container.querySelectorAll<HTMLElement>(TIMELINE_ROW_SELECTOR)) {
+    if (NON_CONTENT_TIMELINE_ROW_KINDS.has(candidate.dataset.timelineRowKind ?? "")) continue;
+    const top = candidate.getBoundingClientRect().top;
+    if (top >= tailTop) {
+      tailRow = candidate;
+      tailTop = top;
+    }
+  }
+  return tailRow === row;
+}
+
+function hasSelectionInside(container: HTMLElement): boolean {
+  const selection = document.getSelection();
+  return (
+    selection !== null &&
+    !selection.isCollapsed &&
+    selection.anchorNode !== null &&
+    container.contains(selection.anchorNode)
+  );
+}
 
 interface ChatTranscriptScrollInput {
   activeThreadId: ThreadId | null;
@@ -64,6 +115,14 @@ export function useChatTranscriptScroll({
   }, []);
 
   const tailAnchorScrollInFlightRef = useRef(false);
+  const followEvidenceRef = useRef({
+    lastWheelUpAt: Number.NEGATIVE_INFINITY,
+    lastUpKeyAt: Number.NEGATIVE_INFINITY,
+    touchActive: false,
+    lastTouchEndAt: Number.NEGATIVE_INFINITY,
+    pointerDownAt: null as number | null,
+    lastScrollTop: null as number | null,
+  });
 
   // Scroll helpers stay list-owned so transcript updates stop bouncing through
   // a separate measurement/controller loop during streaming.
@@ -85,6 +144,8 @@ export function useChatTranscriptScroll({
     keyboard?: boolean;
   } | null>(null);
   const pendingScrollGestureFrameRef = useRef<number | null>(null);
+  const pointerPressHoldsDetachRef = useRef(false);
+  const disclosureDetachScrollTopRef = useRef<number | null>(null);
   const cancelPendingScrollGesture = useCallback(() => {
     const frameId = pendingScrollGestureFrameRef.current;
     if (frameId !== null) window.cancelAnimationFrame(frameId);
@@ -96,6 +157,14 @@ export function useChatTranscriptScroll({
   // has measured the tail. A user gesture invalidates that pending settle.
   const settledScrollRequestRef = useRef(0);
   const settledScrollInFlightRef = useRef(false);
+  const setSettledScrollInFlight = useCallback(
+    (inFlight: boolean) => {
+      settledScrollInFlightRef.current = inFlight;
+      const container = legendListRef.current?.getScrollableNode?.();
+      if (container instanceof HTMLElement) setScrollingToEndOnItsOwn(container, inFlight);
+    },
+    [legendListRef],
+  );
   // Smooth only the first auto-follow after a send; live stream re-sticks stay cheap.
   const animateNextAutoFollowScrollRef = useRef(false);
   const scrollToEnd = useCallback(
@@ -108,6 +177,7 @@ export function useChatTranscriptScroll({
   const armTranscriptAutoFollow = useCallback(
     (targetThreadId: ThreadId, animated = false) => {
       cancelPendingScrollGesture();
+      disclosureDetachScrollTopRef.current = null;
       autoFollowThreadIdRef.current = targetThreadId;
       animateNextAutoFollowScrollRef.current = animated;
       isAtEndRef.current = true;
@@ -120,11 +190,12 @@ export function useChatTranscriptScroll({
   const clearTranscriptAutoFollow = useCallback(
     (synchronous = false) => {
       cancelPendingScrollGesture();
+      disclosureDetachScrollTopRef.current = null;
       const scrollTarget = settledScrollInFlightRef.current ? legendListRef.current : null;
       autoFollowThreadIdRef.current = null;
       animateNextAutoFollowScrollRef.current = false;
       settledScrollRequestRef.current += 1;
-      settledScrollInFlightRef.current = false;
+      setSettledScrollInFlight(false);
       programmaticScrollUntilRef.current = 0;
       // A user scroll gesture takes over from any in-flight tail-anchor slide.
       tailAnchorScrollInFlightRef.current = false;
@@ -141,7 +212,12 @@ export function useChatTranscriptScroll({
         void stopTranscriptScrollAtCurrentOffset(scrollTarget);
       }
     },
-    [legendListRef, cancelPendingScrollGesture, setTranscriptScrollDetached],
+    [
+      legendListRef,
+      cancelPendingScrollGesture,
+      setSettledScrollInFlight,
+      setTranscriptScrollDetached,
+    ],
   );
   const onTranscriptNavigate = useCallback(() => {
     // Search can navigate from an effect. Its ref ownership changes immediately,
@@ -168,9 +244,35 @@ export function useChatTranscriptScroll({
     messageCount: transcriptMessageCount,
     tailKey: transcriptTailKey,
   });
+  const restoreFollowAfterLayoutMove = useCallback((container: HTMLElement): boolean => {
+    const evidence = followEvidenceRef.current;
+    const previousScrollTop = evidence.lastScrollTop;
+    evidence.lastScrollTop = container.scrollTop;
+    const movedUp =
+      previousScrollTop !== null && container.scrollTop < previousScrollTop - FOLLOW_ZONE_PX;
+    const followOwnsScroll =
+      !isUserScrollDetachedRef.current &&
+      pendingScrollGestureRef.current === null &&
+      !tailAnchorScrollInFlightRef.current &&
+      !settledScrollInFlightRef.current;
+    if (
+      !movedUp ||
+      !followOwnsScroll ||
+      getScrollContainerDistanceFromBottom(container) <= FOLLOW_ZONE_PX ||
+      isUpwardMoveFromUserInput({ ...evidence, now: performance.now() })
+    ) {
+      return false;
+    }
+    if (pinScrollContainerToEnd(container) !== "pinned") return false;
+    programmaticScrollUntilRef.current = performance.now() + 200;
+    evidence.lastScrollTop = container.scrollTop;
+    isAtEndRef.current = true;
+    return true;
+  }, []);
   const onIsAtEndChange = useCallback(
     (isAtEnd: boolean) => {
       const container = legendListRef.current?.getScrollableNode();
+      if (container instanceof HTMLElement && restoreFollowAfterLayoutMove(container)) return;
       const pending = pendingScrollGestureRef.current;
       if (pending?.keyboard && container === pending.container) {
         // Native key scrolling can begin after keyup and after multiple frames.
@@ -218,6 +320,13 @@ export function useChatTranscriptScroll({
         (!isUserScrollDetachedRef.current ||
           !(container instanceof HTMLElement) ||
           isScrollContainerNearBottom(container, 1));
+      if (atEnd && isUserScrollDetachedRef.current && pointerPressHoldsDetachRef.current) return;
+      const disclosureDetachScrollTop = disclosureDetachScrollTopRef.current;
+      const readerStillAtDisclosureDetach =
+        disclosureDetachScrollTop !== null &&
+        container instanceof HTMLElement &&
+        Math.abs(container.scrollTop - disclosureDetachScrollTop) <= FOLLOW_ZONE_PX;
+      if (atEnd && isUserScrollDetachedRef.current && readerStillAtDisclosureDetach) return;
       if (atEnd === isAtEndRef.current && (!atEnd || !isUserScrollDetachedRef.current)) return;
       // A gesture can detach without changing the previous edge notification.
       if (atEnd) {
@@ -231,7 +340,13 @@ export function useChatTranscriptScroll({
       }
       isAtEndRef.current = atEnd;
     },
-    [legendListRef, hasStreamingAssistantText, scrollToEnd, setTranscriptScrollDetached],
+    [
+      legendListRef,
+      hasStreamingAssistantText,
+      restoreFollowAfterLayoutMove,
+      scrollToEnd,
+      setTranscriptScrollDetached,
+    ],
   );
   const cancelPendingInteractionAnchorAdjustment = useCallback(() => {
     const pendingFrame = pendingInteractionAnchorFrameRef.current;
@@ -244,10 +359,14 @@ export function useChatTranscriptScroll({
       const scrollContainer = legendListRef.current?.getScrollableNode?.();
       if (!(scrollContainer instanceof HTMLElement) || !(event.target instanceof Element)) return;
 
-      const trigger = event.target.closest<HTMLElement>(
-        "button, summary, [role='button'], [data-scroll-anchor-target]",
-      );
+      const trigger = event.target.closest<HTMLElement>(INTERACTION_ANCHOR_SELECTOR);
       if (!trigger || !scrollContainer.contains(trigger)) return;
+      if (!isUserScrollDetachedRef.current && trigger.matches(DISCLOSURE_TRIGGER_SELECTOR)) {
+        const row = trigger.closest(TIMELINE_ROW_SELECTOR);
+        if (row && isTailContentRow(scrollContainer, row)) return;
+        clearTranscriptAutoFollow(true);
+        disclosureDetachScrollTopRef.current = scrollContainer.scrollTop;
+      }
       if (trigger.closest("[data-scroll-anchor-ignore]")) return;
 
       pendingInteractionAnchorRef.current = {
@@ -271,25 +390,112 @@ export function useChatTranscriptScroll({
         activeScrollContainer.scrollTop += delta;
       });
     },
-    [legendListRef, cancelPendingInteractionAnchorAdjustment],
+    [legendListRef, cancelPendingInteractionAnchorAdjustment, clearTranscriptAutoFollow],
   );
-  const onMessagesPointerDownBase = useCallback(() => {
-    clearTranscriptAutoFollow(true);
-  }, [clearTranscriptAutoFollow]);
+  const endPointerPressRef = useRef<(() => void) | null>(null);
+  const endPointerPress = useCallback(() => {
+    const end = endPointerPressRef.current;
+    endPointerPressRef.current = null;
+    pointerPressHoldsDetachRef.current = false;
+    followEvidenceRef.current.pointerDownAt = null;
+    end?.();
+  }, []);
+  useEffect(() => endPointerPress, [endPointerPress]);
+  const onMessagesPointerDownBase = useCallback(
+    (event: PointerEvent<HTMLDivElement>) => {
+      endPointerPress();
+      if (event.button === SECONDARY_POINTER_BUTTON) return;
+      followEvidenceRef.current.pointerDownAt = performance.now();
+      const container = legendListRef.current?.getScrollableNode();
+      if (
+        !(container instanceof HTMLElement) ||
+        event.button !== PRIMARY_POINTER_BUTTON ||
+        isScrollbarPointer(container, event)
+      ) {
+        clearTranscriptAutoFollow(true);
+        return;
+      }
+      const { pointerId, clientX: originX, clientY: originY } = event;
+      let lastScrollTop = container.scrollTop;
+      let released = false;
+      const releaseFollow = () => {
+        if (released) return;
+        released = true;
+        pointerPressHoldsDetachRef.current = true;
+        clearTranscriptAutoFollow(true);
+      };
+      const onPointerMove = (moveEvent: globalThis.PointerEvent) => {
+        if (moveEvent.buttons === 0) {
+          endPointerPress();
+          return;
+        }
+        if (released || moveEvent.pointerId !== pointerId) return;
+        const distance = Math.hypot(moveEvent.clientX - originX, moveEvent.clientY - originY);
+        if (distance > PRESS_DRAG_THRESHOLD_PX) releaseFollow();
+      };
+      const onSelectionChange = () => {
+        if (hasSelectionInside(container)) releaseFollow();
+      };
+      const onScroll = () => {
+        if (released) return;
+        const scrollTop = container.scrollTop;
+        const movedUpFromEnd =
+          scrollTop < lastScrollTop - 1 && !isScrollContainerNearBottom(container, 1);
+        lastScrollTop = scrollTop;
+        if (movedUpFromEnd) releaseFollow();
+      };
+      const onPressEnd = (endEvent: globalThis.PointerEvent) => {
+        if (endEvent.pointerId !== pointerId) return;
+        if (hasSelectionInside(container)) releaseFollow();
+        endPointerPress();
+      };
+      window.addEventListener("pointermove", onPointerMove, true);
+      window.addEventListener("pointerup", onPressEnd, true);
+      window.addEventListener("pointercancel", onPressEnd, true);
+      window.addEventListener("blur", endPointerPress);
+      document.addEventListener("selectionchange", onSelectionChange);
+      container.addEventListener("scroll", onScroll, { passive: true });
+      endPointerPressRef.current = () => {
+        window.removeEventListener("pointermove", onPointerMove, true);
+        window.removeEventListener("pointerup", onPressEnd, true);
+        window.removeEventListener("pointercancel", onPressEnd, true);
+        window.removeEventListener("blur", endPointerPress);
+        document.removeEventListener("selectionchange", onSelectionChange);
+        container.removeEventListener("scroll", onScroll);
+      };
+    },
+    [legendListRef, clearTranscriptAutoFollow, endPointerPress],
+  );
   const releaseTranscriptScrollGesture = useCallback(() => {
     const state = legendListRef.current?.getState();
     if (state) onIsAtEndChange(state.isAtEnd);
   }, [legendListRef, onIsAtEndChange]);
   const onMessagesPointerCancelBase = releaseTranscriptScrollGesture;
-  const onMessagesPointerUpBase = releaseTranscriptScrollGesture;
+  const onMessagesPointerUpBase = useCallback(() => {
+    const container = legendListRef.current?.getScrollableNode();
+    if (container instanceof HTMLElement && hasSelectionInside(container)) return;
+    releaseTranscriptScrollGesture();
+  }, [legendListRef, releaseTranscriptScrollGesture]);
   const onMessagesScrollBase = useCallback(() => {}, []);
-  const onMessagesTouchEndBase = releaseTranscriptScrollGesture;
+  const onMessagesTouchEndBase = useCallback(() => {
+    followEvidenceRef.current.touchActive = false;
+    followEvidenceRef.current.lastTouchEndAt = performance.now();
+    releaseTranscriptScrollGesture();
+  }, [releaseTranscriptScrollGesture]);
   const onMessagesTouchMoveBase = useCallback(() => {
     clearTranscriptAutoFollow(true);
   }, [clearTranscriptAutoFollow]);
   const onMessagesTouchStartBase = useCallback(() => {
-    clearTranscriptAutoFollow(true);
-  }, [clearTranscriptAutoFollow]);
+    followEvidenceRef.current.touchActive = true;
+    const endTouch = () => {
+      followEvidenceRef.current.touchActive = false;
+      followEvidenceRef.current.lastTouchEndAt = performance.now();
+      window.removeEventListener("touchend", endTouch, true);
+      window.removeEventListener("touchcancel", endTouch, true);
+    };
+    window.addEventListener("touchend", endTouch, true);
+    window.addEventListener("touchcancel", endTouch, true);
+  }, []);
   const onMessagesScrollGesture = useCallback(
     (upward: boolean) => {
       const container = legendListRef.current?.getScrollableNode();
@@ -340,12 +546,16 @@ export function useChatTranscriptScroll({
     (event: WheelEvent<HTMLDivElement>) => {
       // Horizontal scroll, zoom, and scrolling down at the end do not leave it.
       if (event.ctrlKey || event.deltaY === 0) return;
+      if (event.deltaY < 0) followEvidenceRef.current.lastWheelUpAt = performance.now();
       onMessagesScrollGesture(event.deltaY < 0);
     },
     [onMessagesScrollGesture],
   );
   useEffect(() => {
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Tab" && event.shiftKey) {
+        followEvidenceRef.current.lastUpKeyAt = performance.now();
+      }
       const container = legendListRef.current?.getScrollableNode();
       if (
         !(container instanceof HTMLElement) ||
@@ -367,6 +577,7 @@ export function useChatTranscriptScroll({
         event.key === "Home" ||
         (event.key === " " && event.shiftKey);
       if (upward) {
+        followEvidenceRef.current.lastUpKeyAt = performance.now();
         if (container.scrollTop <= 0) return;
         const pending = pendingScrollGestureRef.current;
         const origin =
@@ -436,14 +647,15 @@ export function useChatTranscriptScroll({
   // after it had already skipped the new thread, without re-triggering it.
   useLayoutEffect(() => {
     isAtEndRef.current = true;
+    disclosureDetachScrollTopRef.current = null;
     settledScrollRequestRef.current += 1;
-    settledScrollInFlightRef.current = false;
+    setSettledScrollInFlight(false);
     programmaticScrollUntilRef.current = 0;
     setTranscriptScrollDetached(false);
     showScrollDebouncer.current.cancel();
     const settle = window.setTimeout(() => setShowScrollToBottom(false), 0);
     return () => window.clearTimeout(settle);
-  }, [activeThreadId, setTranscriptScrollDetached]);
+  }, [activeThreadId, setSettledScrollInFlight, setTranscriptScrollDetached]);
   useLayoutEffect(() => {
     const shouldFollowPendingTurn =
       activeThreadId !== null && autoFollowThreadIdRef.current === activeThreadId;
@@ -461,12 +673,17 @@ export function useChatTranscriptScroll({
       }
       const shouldAnimate = animateNextAutoFollowScrollRef.current;
       animateNextAutoFollowScrollRef.current = false;
-      scrollToEnd(shouldAnimate);
+      const container = legendListRef.current?.getScrollableNode?.();
+      const alreadyPinned =
+        container instanceof HTMLElement &&
+        !isTranscriptListRevealing(container) &&
+        getScrollContainerDistanceFromBottom(container) <= PINNED_END_SLACK_PX;
+      if (!alreadyPinned) scrollToEnd(shouldAnimate);
     });
     return () => {
       window.cancelAnimationFrame(frameId);
     };
-  }, [activeThreadId, scrollToEnd, transcriptAutoFollowSignal]);
+  }, [activeThreadId, legendListRef, scrollToEnd, transcriptAutoFollowSignal]);
 
   // A composer that grows (attachments, approval cards, queued turns) eats into the
   // transcript's bottom content inset, which would push the tail behind the frosted
@@ -512,6 +729,7 @@ export function useChatTranscriptScroll({
 
   const onScrollToBottom = useCallback(() => {
     cancelPendingScrollGesture();
+    disclosureDetachScrollTopRef.current = null;
     tailAnchorScrollInFlightRef.current = false;
     setTranscriptScrollDetached(false);
     isAtEndRef.current = true;
@@ -524,7 +742,7 @@ export function useChatTranscriptScroll({
 
     const requestId = settledScrollRequestRef.current + 1;
     settledScrollRequestRef.current = requestId;
-    settledScrollInFlightRef.current = true;
+    setSettledScrollInFlight(true);
     programmaticScrollUntilRef.current = performance.now() + 200;
     void scrollTranscriptToSettledEnd({
       target,
@@ -538,7 +756,7 @@ export function useChatTranscriptScroll({
         if (settledScrollRequestRef.current !== requestId) {
           return;
         }
-        settledScrollInFlightRef.current = false;
+        setSettledScrollInFlight(false);
         if (!settled) {
           return;
         }
@@ -548,10 +766,15 @@ export function useChatTranscriptScroll({
       })
       .catch(() => {
         if (settledScrollRequestRef.current === requestId) {
-          settledScrollInFlightRef.current = false;
+          setSettledScrollInFlight(false);
         }
       });
-  }, [legendListRef, cancelPendingScrollGesture, setTranscriptScrollDetached]);
+  }, [
+    legendListRef,
+    cancelPendingScrollGesture,
+    setSettledScrollInFlight,
+    setTranscriptScrollDetached,
+  ]);
 
   const previousThreadIdRef = useRef(activeThreadId);
   const pendingStreamingThreadRef = useRef<ThreadId | null>(null);

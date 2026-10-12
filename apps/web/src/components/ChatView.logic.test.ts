@@ -7,13 +7,14 @@ import {
   TurnId,
   type GitWorktreeSetupProgressEvent,
   type ModelSlug,
+  type OrchestrationThreadActivity,
   type PendingClaudeCacheReview,
   type RuntimeMode,
 } from "@synara/contracts";
 import { describe, expect, it, vi } from "vitest";
 
 import type { QueuedComposerChatTurn } from "../composerDraftStore";
-import type { WorkLogEntry } from "../session-logic";
+import { deriveLatestTurnErrorContext, type WorkLogEntry } from "../session-logic";
 
 import {
   appendVoiceTranscriptToPrompt,
@@ -38,6 +39,14 @@ import {
   resolvePromptHistoryNavigation,
   resolveNextLocalDispatchSnapshot,
   resolveWorkingLabel,
+  paceWorkingLabel,
+  resolveTranscriptLiveTurn,
+  WORKING_LABEL_MIN_HOLD_MS,
+  WORKING_LABEL_REVERT_DELAY_MS,
+  deriveWorkingStatusText,
+  collectVisibleReasoningHeadings,
+  deriveReasoningStatusHeading,
+  threadErrorBannerContextFor,
   deriveComposerSendState,
   deriveComposerVoiceState,
   editAndResendDispatchFields,
@@ -3136,5 +3145,370 @@ describe("turn dispatch settings", () => {
     expect(resolved.runtimeMode).toBe("approval-required");
     expect(resolved.enableComputerControl).toBe(false);
     expect(resolved.computerControlMode).toBe("off");
+  });
+});
+
+describe("deriveWorkingStatusText", () => {
+  const turnId = TurnId.makeUnsafe("turn-live");
+  const otherTurnId = TurnId.makeUnsafe("turn-old");
+  const activity = (
+    id: string,
+    kind: string,
+    createdAt: string,
+    payload: OrchestrationThreadActivity["payload"],
+    activityTurnId: TurnId = turnId,
+  ): OrchestrationThreadActivity => ({
+    id: EventId.makeUnsafe(id),
+    createdAt,
+    kind,
+    summary: kind,
+    tone: "info",
+    payload,
+    turnId: activityTurnId,
+  });
+  const reasoning = (id: string, createdAt: string, heading: string, activityTurnId = turnId) =>
+    activity(
+      id,
+      "task.progress",
+      createdAt,
+      { reasoning: { heading, summary: `**${heading}**` } },
+      activityTurnId,
+    );
+
+  it("uses the latest reasoning heading of the running turn", () => {
+    const text = deriveWorkingStatusText({
+      activities: [
+        reasoning("r-old", "2026-10-10T00:00:09.000Z", "Old turn heading", otherTurnId),
+        reasoning("r-1", "2026-10-10T00:00:01.000Z", "Inspecting the adapter"),
+        reasoning("r-2", "2026-10-10T00:00:02.000Z", "Planning the fix"),
+      ],
+      messages: [],
+      turnId,
+    });
+    expect(text).toBe("Planning the fix");
+    expect(resolveWorkingLabel({ isSendBusy: false, turnTakenOver: true, statusText: text })).toBe(
+      "Planning the fix",
+    );
+  });
+
+  it("prefers a persisted session status reason and ignores machine tokens", () => {
+    const base = [reasoning("r-1", "2026-10-10T00:00:01.000Z", "Planning the fix")];
+    expect(
+      deriveWorkingStatusText({
+        activities: [
+          ...base,
+          activity("status", "session.status", "2026-10-10T00:00:00.500Z", {
+            state: "running",
+            reason: "Environment disconnected",
+          }),
+        ],
+        messages: [],
+        turnId,
+      }),
+    ).toBe("Environment disconnected");
+    expect(
+      deriveWorkingStatusText({
+        activities: [
+          ...base,
+          activity("status", "session.status", "2026-10-10T00:00:03.000Z", {
+            state: "running",
+            reason: null,
+          }),
+        ],
+        messages: [],
+        turnId,
+      }),
+    ).toBe("Planning the fix");
+    expect(
+      deriveWorkingStatusText({
+        activities: [
+          activity("status", "session.status", "2026-10-10T00:00:03.000Z", {
+            state: "running",
+            reason: "task:running",
+          }),
+        ],
+        messages: [],
+        turnId,
+      }),
+    ).toBeNull();
+  });
+
+  it("shows the retry counter only while the retry is the latest turn activity", () => {
+    const retry = activity("retry", "runtime.warning", "2026-10-10T00:00:05.000Z", {
+      willRetry: true,
+      retryAttempt: 2,
+      retryMaxAttempts: 5,
+    });
+    const heading = reasoning("r-1", "2026-10-10T00:00:01.000Z", "Planning the fix");
+    expect(deriveWorkingStatusText({ activities: [heading, retry], messages: [], turnId })).toBe(
+      "Reconnecting 2/5",
+    );
+    expect(
+      deriveWorkingStatusText({
+        activities: [heading, retry, reasoning("r-2", "2026-10-10T00:00:06.000Z", "Resumed")],
+        messages: [],
+        turnId,
+      }),
+    ).toBe("Resumed");
+    expect(
+      deriveWorkingStatusText({
+        activities: [heading, retry],
+        messages: [{ role: "assistant", turnId, createdAt: "2026-10-10T00:00:07.000Z" }],
+        turnId,
+      }),
+    ).toBe("Planning the fix");
+  });
+
+  it("returns nothing without a running turn", () => {
+    expect(
+      deriveWorkingStatusText({
+        activities: [reasoning("r-1", "2026-10-10T00:00:01.000Z", "Planning the fix")],
+        messages: [],
+        turnId: null,
+      }),
+    ).toBeNull();
+    expect(resolveWorkingLabel({ isSendBusy: false, turnTakenOver: true, statusText: null })).toBe(
+      "Thinking",
+    );
+  });
+});
+
+describe("working status reasoning heading", () => {
+  const turnId = TurnId.makeUnsafe("turn-reasoning");
+  const reasoningActivity = (
+    id: string,
+    createdAt: string,
+    reasoning: Record<string, string | boolean>,
+  ): OrchestrationThreadActivity => ({
+    id: EventId.makeUnsafe(id),
+    createdAt,
+    kind: "task.progress",
+    summary: "Reasoning trace",
+    tone: "tool",
+    payload: { reasoning },
+    turnId,
+  });
+  const reasoningRow = (heading: string, rowTurnId?: TurnId): WorkLogEntry => ({
+    id: `row-${heading}`,
+    createdAt: "2026-10-10T00:00:01.000Z",
+    label: "Reasoning trace",
+    tone: "tool",
+    turnId: rowTurnId ?? turnId,
+    reasoning: { heading },
+  });
+
+  it("falls back to the generic label when the heading is already a transcript row", () => {
+    const activities = [
+      reasoningActivity("r-1", "2026-10-10T00:00:01.000Z", {
+        heading: "Counting symmetric tilings",
+        summary: "**Counting symmetric tilings**",
+      }),
+    ];
+    const visibleReasoningHeadings = collectVisibleReasoningHeadings(
+      [reasoningRow("**Counting  symmetric tilings**")],
+      turnId,
+    );
+
+    expect(deriveWorkingStatusText({ activities, messages: [], turnId })).toBe(
+      "Counting symmetric tilings",
+    );
+    expect(
+      deriveWorkingStatusText({ activities, messages: [], turnId, visibleReasoningHeadings }),
+    ).toBeNull();
+    expect(
+      resolveWorkingLabel({
+        isSendBusy: false,
+        turnTakenOver: true,
+        statusText: deriveWorkingStatusText({
+          activities,
+          messages: [],
+          turnId,
+          visibleReasoningHeadings,
+        }),
+      }),
+    ).toBe("Thinking");
+  });
+
+  it("keeps a heading that no visible row of the running turn shows", () => {
+    const activities = [
+      reasoningActivity("r-1", "2026-10-10T00:00:02.000Z", { heading: "Checking the proof" }),
+    ];
+    const visibleReasoningHeadings = collectVisibleReasoningHeadings(
+      [
+        reasoningRow("Counting symmetric tilings"),
+        reasoningRow("Checking the proof", TurnId.makeUnsafe("turn-old")),
+        {
+          ...reasoningRow("Checking the proof"),
+          reasoning: { heading: "Checking the proof", redacted: true },
+        },
+      ],
+      turnId,
+    );
+
+    expect(
+      deriveWorkingStatusText({ activities, messages: [], turnId, visibleReasoningHeadings }),
+    ).toBe("Checking the proof");
+  });
+
+  it("matches long headings before the status cap is applied", () => {
+    const heading = `Reviewing ${"the tiling recurrence ".repeat(10)}`.trim();
+    const activities = [reasoningActivity("r-1", "2026-10-10T00:00:01.000Z", { heading })];
+
+    expect(deriveWorkingStatusText({ activities, messages: [], turnId })?.endsWith("…")).toBe(true);
+    expect(
+      deriveWorkingStatusText({
+        activities,
+        messages: [],
+        turnId,
+        visibleReasoningHeadings: collectVisibleReasoningHeadings([reasoningRow(heading)], turnId),
+      }),
+    ).toBeNull();
+  });
+
+  it("derives a status heading from the first line of headingless reasoning", () => {
+    const activities = [
+      reasoningActivity("r-1", "2026-10-10T00:00:01.000Z", {
+        summary: "\n\n**Tiling a 3x8 board.** \nLet a(n) be the count.\n**Later bold**",
+      }),
+    ];
+
+    expect(deriveWorkingStatusText({ activities, messages: [], turnId })).toBe(
+      "Tiling a 3x8 board.",
+    );
+  });
+
+  it("does not derive a heading from redacted reasoning", () => {
+    const activities = [
+      reasoningActivity("r-1", "2026-10-10T00:00:01.000Z", { redacted: true, summary: "secret" }),
+    ];
+
+    expect(deriveWorkingStatusText({ activities, messages: [], turnId })).toBeNull();
+  });
+
+  it("strips Markdown and caps derived headings", () => {
+    expect(
+      deriveReasoningStatusHeading("<!-- c -->\n## The `user` wants [docs](https://x.y)"),
+    ).toBe("The user wants docs");
+    expect(deriveReasoningStatusHeading("- *Plan* the __fix__")).toBe("Plan the fix");
+    expect(deriveReasoningStatusHeading("  \n<!-- only -->\n")).toBeNull();
+    const long = deriveWorkingStatusText({
+      activities: [
+        reasoningActivity("r-1", "2026-10-10T00:00:01.000Z", { summary: "word ".repeat(80) }),
+      ],
+      messages: [],
+      turnId,
+    });
+    expect(long?.length).toBe(120);
+    expect(long?.endsWith("…")).toBe(true);
+  });
+});
+
+describe("thread error banner context", () => {
+  const turnId = TurnId.makeUnsafe("turn-failed");
+  const failure = (
+    id: string,
+    kind: string,
+    payload: Record<string, string>,
+    activityTurnId?: TurnId,
+  ): OrchestrationThreadActivity => ({
+    id: EventId.makeUnsafe(id),
+    createdAt: "2026-10-10T00:00:01.000Z",
+    kind,
+    summary: kind,
+    tone: "error",
+    payload,
+    turnId: activityTurnId ?? turnId,
+  });
+
+  it("carries the latest turn's failure cause next to its stop reason", () => {
+    const context = deriveLatestTurnErrorContext(
+      [
+        failure(
+          "old",
+          "runtime.error",
+          { errorMessage: "Old cause", errorCode: "old_code" },
+          TurnId.makeUnsafe("turn-old"),
+        ),
+        failure("e-1", "runtime.error", { message: " Reached maximum number of turns (8) " }),
+        failure("e-2", "turn.completed", { state: "failed", errorCode: "error_max_turns" }),
+      ],
+      turnId,
+    );
+
+    expect(context).toEqual({
+      cause: "Reached maximum number of turns (8)",
+      stopReason: "error_max_turns",
+    });
+    expect(threadErrorBannerContextFor("Reached maximum number of turns (8)", context)).toBe(
+      context,
+    );
+    expect(threadErrorBannerContextFor("Socket closed", context)).toBeNull();
+    expect(threadErrorBannerContextFor(null, context)).toBeNull();
+  });
+
+  it("has no context without a failure on the latest turn", () => {
+    expect(deriveLatestTurnErrorContext([], turnId)).toBeNull();
+    expect(threadErrorBannerContextFor("Any error", { stopReason: "error_max_turns" })).toBeNull();
+  });
+});
+
+describe("paceWorkingLabel", () => {
+  it("shows the newest label of a burst once the hold ends", () => {
+    let pacing = { shown: "Reading files" as string, shownAtMs: 0 };
+    const labels: string[] = [];
+    for (const [atMs, target] of [
+      [100, "Tracing the retry path"],
+      [200, "Inspecting the reducer"],
+      [300, "Inspecting the reducer"],
+    ] as const) {
+      const step = paceWorkingLabel(pacing, target, atMs);
+      pacing = step.pacing;
+      labels.push(pacing.shown);
+      expect(step.retryAtMs).toBe(WORKING_LABEL_MIN_HOLD_MS);
+    }
+    expect(labels).toEqual(["Reading files", "Reading files", "Reading files"]);
+    const settled = paceWorkingLabel(pacing, "Inspecting the reducer", WORKING_LABEL_MIN_HOLD_MS);
+    expect(settled.pacing).toEqual({
+      shown: "Inspecting the reducer",
+      shownAtMs: WORKING_LABEL_MIN_HOLD_MS,
+    });
+    expect(settled.retryAtMs).toBeNull();
+  });
+
+  it("keeps a status heading when the resolver falls back to Thinking", () => {
+    const pacing = { shown: "Inspecting the reducer", shownAtMs: 1_000 };
+    const early = paceWorkingLabel(pacing, "Thinking", 1_000 + WORKING_LABEL_MIN_HOLD_MS);
+    expect(early.pacing.shown).toBe("Inspecting the reducer");
+    expect(early.retryAtMs).toBe(1_000 + WORKING_LABEL_REVERT_DELAY_MS);
+    const late = paceWorkingLabel(pacing, "Thinking", 1_000 + WORKING_LABEL_REVERT_DELAY_MS);
+    expect(late.pacing.shown).toBe("Thinking");
+  });
+
+  it("leaves progress steps after the normal hold", () => {
+    const pacing = { shown: "Loading", shownAtMs: 0 };
+    expect(paceWorkingLabel(pacing, "Thinking", WORKING_LABEL_MIN_HOLD_MS).pacing.shown).toBe(
+      "Thinking",
+    );
+  });
+});
+
+describe("resolveTranscriptLiveTurn", () => {
+  it("keeps the live turn and its start through the settle grace", () => {
+    expect(
+      resolveTranscriptLiveTurn({
+        isWorking: false,
+        settleGraceActive: true,
+        activeWorkStartedAt: null,
+        latestTurnStartedAt: "2026-03-17T19:12:28.000Z",
+      }),
+    ).toEqual({ showsLiveTurn: true, turnStartedAt: "2026-03-17T19:12:28.000Z" });
+    expect(
+      resolveTranscriptLiveTurn({
+        isWorking: false,
+        settleGraceActive: false,
+        activeWorkStartedAt: null,
+        latestTurnStartedAt: "2026-03-17T19:12:28.000Z",
+      }),
+    ).toEqual({ showsLiveTurn: false, turnStartedAt: null });
   });
 });

@@ -101,6 +101,13 @@ describe("MessagesTimeline changed files", () => {
         expect(document.body.textContent ?? "").not.toContain(path);
       }
 
+      const cardToggle = document.querySelector<HTMLButtonElement>(
+        'button[aria-label="Expand changed files list"]',
+      );
+      expect(cardToggle?.getAttribute("aria-expanded")).toBe("false");
+      cardToggle?.click();
+      await expect.poll(() => cardToggle?.getAttribute("aria-expanded")).toBe("true");
+
       const expandButton = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
         (button) => (button.textContent ?? "").includes("Show 2 more files"),
       );

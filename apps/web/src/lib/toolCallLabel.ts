@@ -1595,3 +1595,497 @@ function stripArchCommand(args: string): string | null {
   }
   return index < tokens.length ? tokens.slice(index).join(" ") : null;
 }
+
+export interface ToolRowLabel {
+  readonly action: string;
+  readonly detail: string | null;
+  readonly suffix: string | null;
+}
+
+export function toolRowLabelText(label: ToolRowLabel): string {
+  return [label.action, label.detail].filter(Boolean).join(" ") + (label.suffix ?? "");
+}
+
+function rowLabel(action: string, detail?: string | null, suffix?: string | null): ToolRowLabel {
+  const trimmedDetail = detail?.trim();
+  return {
+    action,
+    detail: trimmedDetail ? trimmedDetail : null,
+    suffix: suffix ?? null,
+  };
+}
+
+const SECONDS_PER_MINUTE = 60;
+const SECONDS_PER_HOUR = 3_600;
+
+export function formatCommandDuration(durationMs: number | undefined | null): string | null {
+  if (durationMs === undefined || durationMs === null || !Number.isFinite(durationMs)) return null;
+  if (durationMs < 1_000) return null;
+  const totalSeconds = Math.floor(durationMs / 1_000);
+  if (totalSeconds < SECONDS_PER_MINUTE) return `${totalSeconds}s`;
+  const hours = Math.floor(totalSeconds / SECONDS_PER_HOUR);
+  const minutes = Math.floor((totalSeconds % SECONDS_PER_HOUR) / SECONDS_PER_MINUTE);
+  const seconds = totalSeconds % SECONDS_PER_MINUTE;
+  return hours > 0 ? `${hours}h ${minutes}m ${seconds}s` : `${minutes}m ${seconds}s`;
+}
+
+export function commandRowDisplayCommand(rawCommand: string): string {
+  const inline = deriveInlineCommandCall(rawCommand).trim() || rawCommand.trim();
+  return inline.replace(/\s+/gu, " ").trim();
+}
+
+type ParsedCommandActionInput = {
+  readonly type: "read" | "search" | "list_files" | "unknown";
+  readonly name?: string | undefined;
+  readonly path?: string | undefined;
+  readonly query?: string | undefined;
+};
+
+function parsedActionTarget(action: ParsedCommandActionInput): string | null {
+  const path = action.path?.trim();
+  if (path) return basenameOfPath(path) || path;
+  return action.name?.trim() || null;
+}
+
+function parsedActionLabel(
+  action: ParsedCommandActionInput,
+  running: boolean,
+): ToolRowLabel | null {
+  switch (action.type) {
+    case "read": {
+      const target = parsedActionTarget(action);
+      return target ? rowLabel(running ? "Reading" : "Read", target) : null;
+    }
+    case "search": {
+      const query = action.query?.trim();
+      const path = action.path?.trim();
+      if (!query) return rowLabel(running ? "Searching for files" : "Searched for files");
+      return rowLabel(
+        running ? "Searching for" : "Searched for",
+        path ? `${query} in ${path}` : query,
+      );
+    }
+    case "list_files": {
+      const path = action.path?.trim();
+      const verb = running ? "Listing files" : "Listed files";
+      return path ? rowLabel(verb, `in ${path}`) : rowLabel(verb);
+    }
+    case "unknown":
+      return null;
+  }
+}
+
+function parsedActionsLabel(
+  actions: ReadonlyArray<ParsedCommandActionInput>,
+  running: boolean,
+): ToolRowLabel | null {
+  if (actions.length === 0) return null;
+  const labels = actions.map((action) => parsedActionLabel(action, running));
+  if (labels.some((label) => label === null)) return null;
+  const known = labels as ToolRowLabel[];
+  if (known.length === 1) return known[0]!;
+  if (actions.every((action) => action.type === "read")) {
+    return rowLabel(known[0]!.action, known.map((label) => label.detail).join(", "));
+  }
+  const [first, ...rest] = known;
+  const restText = rest.map((label) => {
+    const text = toolRowLabelText(label);
+    return `${text.charAt(0).toLowerCase()}${text.slice(1)}`;
+  });
+  return rowLabel(first!.action, [first!.detail, ...restText].filter(Boolean).join(", "));
+}
+
+export interface CommandRowLabelInput {
+  readonly command: string | undefined;
+  readonly description?: string | undefined;
+  readonly status: SynaraMcpToolStatus;
+  readonly exitCode?: number | null | undefined;
+  readonly durationMs?: number | undefined;
+  readonly interrupted?: boolean | undefined;
+  readonly background?: boolean | undefined;
+  readonly parsedActions?: ReadonlyArray<ParsedCommandActionInput> | undefined;
+}
+
+export function isFailedCommandOutcome(input: {
+  readonly status: SynaraMcpToolStatus;
+  readonly exitCode?: number | null | undefined;
+}): boolean {
+  if (typeof input.exitCode === "number") return input.exitCode !== 0 && input.status !== "running";
+  return input.status === "failed";
+}
+
+function descriptionOnlyCommandLabel(description: string | undefined): ToolRowLabel | null {
+  const text = description?.trim();
+  if (!text) return null;
+  return rowLabel(`${text.charAt(0).toUpperCase()}${text.slice(1)}`);
+}
+
+export function deriveCommandRowLabel(input: CommandRowLabelInput): ToolRowLabel {
+  const running = input.status === "running";
+  const stopped = input.interrupted === true || input.status === "cancelled";
+  const failed = !stopped && isFailedCommandOutcome(input);
+  const command = input.command ? commandRowDisplayCommand(input.command) : "";
+  if (!command) {
+    const described = descriptionOnlyCommandLabel(input.description);
+    if (described) return described;
+  }
+  if (failed) return rowLabel("Ran", command || "command");
+  if (!stopped) {
+    const parsed = parsedActionsLabel(input.parsedActions ?? [], running);
+    if (parsed) return parsed;
+  }
+  const duration = formatCommandDuration(input.durationMs);
+  if (running) {
+    if (input.background)
+      return rowLabel("Started background terminal", command && `with ${command}`);
+    return rowLabel("Running", command || "command");
+  }
+  if (stopped) {
+    return rowLabel("Stopped", command || "command", duration ? ` after ${duration}` : null);
+  }
+  return rowLabel("Ran", command || "command", duration ? ` in ${duration}` : null);
+}
+
+export type FileChangeRowKind = "add" | "update" | "delete" | "move";
+
+const FILE_CHANGE_VERBS: Record<
+  FileChangeRowKind,
+  { done: string; running: string; stopped: string }
+> = {
+  add: { done: "Created", running: "Creating", stopped: "Stopped creating" },
+  update: { done: "Edited", running: "Editing", stopped: "Stopped editing" },
+  delete: { done: "Deleted", running: "Deleting", stopped: "Stopped deleting" },
+  move: { done: "Moved", running: "Moving", stopped: "Stopped moving" },
+};
+
+export function fileChangeRowVerb(kind: FileChangeRowKind, status: SynaraMcpToolStatus): string {
+  const verbs = FILE_CHANGE_VERBS[kind] ?? FILE_CHANGE_VERBS.update;
+  if (status === "running") return verbs.running;
+  if (status === "cancelled") return verbs.stopped;
+  return verbs.done;
+}
+
+export interface WebSearchRowLabelInput {
+  readonly query?: string | undefined;
+  readonly queries?: ReadonlyArray<string> | undefined;
+  readonly action?:
+    | {
+        readonly type: "search" | "open_page" | "find_in_page" | "other";
+        readonly query?: string | undefined;
+        readonly url?: string | undefined;
+        readonly pattern?: string | undefined;
+      }
+    | undefined;
+}
+
+export function webSearchRowQuery(input: WebSearchRowLabelInput): string | null {
+  const queries = (input.queries ?? []).map((query) => query.trim()).filter(Boolean);
+  const query = input.action?.query?.trim() || input.query?.trim() || queries[0] || null;
+  if (!query) return null;
+  return queries.length > 1 ? `${query} …` : query;
+}
+
+export function deriveWebSearchRowLabel(
+  input: WebSearchRowLabelInput,
+  running: boolean,
+): ToolRowLabel {
+  const action = input.action;
+  const url = action?.url?.trim();
+  if (action?.type === "open_page" && url) {
+    return rowLabel(running ? "Opening" : "Opened", url);
+  }
+  const pattern = action?.pattern?.trim();
+  if (action?.type === "find_in_page" && url && pattern) {
+    return rowLabel(running ? "Searching for" : "Searched for", `'${pattern}' in ${url}`);
+  }
+  const query = webSearchRowQuery(input);
+  const verb = running ? "Searching the web" : "Searched the web";
+  return query ? rowLabel(`${verb} for`, query) : rowLabel(verb);
+}
+
+export interface ReasoningRowLabelInput {
+  readonly heading?: string | undefined;
+  readonly redacted?: boolean | undefined;
+  readonly durationMs?: number | undefined;
+}
+
+function stripMarkdownEmphasis(value: string): string {
+  return value.replace(/^\s*(\*\*|__)(.+?)\1\s*$/u, "$2").trim();
+}
+
+export function deriveReasoningRowLabel(
+  input: ReasoningRowLabelInput,
+  running: boolean,
+): ToolRowLabel {
+  if (input.redacted) return rowLabel("Reasoning redacted");
+  const heading = input.heading ? stripMarkdownEmphasis(input.heading) : "";
+  if (heading) return rowLabel(heading);
+  if (running) return rowLabel("Thinking");
+  const duration = formatCommandDuration(input.durationMs);
+  return duration ? rowLabel("Thought for", duration) : rowLabel("Thought");
+}
+
+type ToolArguments = Readonly<Record<string, unknown>>;
+
+function toolArgumentsRecord(value: unknown): ToolArguments {
+  if (typeof value === "string") {
+    try {
+      const parsed: unknown = JSON.parse(value);
+      return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
+        ? (parsed as ToolArguments)
+        : {};
+    } catch {
+      return {};
+    }
+  }
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as ToolArguments)
+    : {};
+}
+
+function argText(args: ToolArguments, ...keys: string[]): string | null {
+  for (const key of keys) {
+    const value = args[key];
+    if (typeof value === "string" && value.trim().length > 0) return value.trim();
+    if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  }
+  return null;
+}
+
+function argNumber(args: ToolArguments, key: string): number | null {
+  const value = args[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function argPathName(args: ToolArguments, ...keys: string[]): string | null {
+  const path = argText(args, ...keys);
+  return path ? basenameOfPath(path) || path : null;
+}
+
+function singleLine(value: string | null, maxChars = 120): string | null {
+  if (!value) return null;
+  const line = value.replace(/\s+/gu, " ").trim();
+  return line.length <= maxChars ? line : `${line.slice(0, maxChars - 1).trimEnd()}…`;
+}
+
+function readLineRange(args: ToolArguments): string | null {
+  const pages = argText(args, "pages");
+  if (pages) return `pages ${pages}`;
+  const offset = argNumber(args, "offset");
+  const limit = argNumber(args, "limit");
+  if (offset === null && limit === null) return null;
+  const start = offset ?? 1;
+  return limit !== null ? `lines ${start}-${start + limit - 1}` : `from line ${start}`;
+}
+
+type ToolLabelBuilder = (args: ToolArguments, running: boolean) => ToolRowLabel;
+
+function tense(running: boolean, present: string, past: string): string {
+  return running ? present : past;
+}
+
+function searchLabel(running: boolean, subject: string | null, path: string | null): ToolRowLabel {
+  const verb = tense(running, "Searching for", "Searched for");
+  if (!subject) return rowLabel(verb, path ? `files in ${path}` : "files");
+  return rowLabel(verb, path ? `${subject} in ${path}` : subject);
+}
+
+const NAMED_TOOL_LABELS: Readonly<Record<string, ToolLabelBuilder>> = {
+  Read: (args, running) => {
+    const file = argPathName(args, "file_path", "filePath", "path");
+    const range = readLineRange(args);
+    return rowLabel(
+      tense(running, "Reading", "Read"),
+      file ?? "file",
+      range ? ` (${range})` : null,
+    );
+  },
+  Grep: (args, running) =>
+    searchLabel(running, singleLine(argText(args, "pattern")), argText(args, "path", "glob")),
+  Glob: (args, running) =>
+    rowLabel(
+      tense(running, "Searching for files", "Searched for files"),
+      [singleLine(argText(args, "pattern")), argText(args, "path") && `in ${argText(args, "path")}`]
+        .filter(Boolean)
+        .join(" "),
+    ),
+  WebFetch: (args, running) =>
+    rowLabel(tense(running, "Fetching", "Fetched"), argText(args, "url")),
+  WebSearch: (args, running) =>
+    deriveWebSearchRowLabel({ query: argText(args, "query") ?? undefined }, running),
+  Skill: (args, running) => {
+    const skill = argText(args, "skill", "name", "command");
+    return skill
+      ? rowLabel(tense(running, "Using", "Used"), `${skill} skill`)
+      : rowLabel(tense(running, "Using a skill", "Used a skill"));
+  },
+  ToolSearch: (args, running) =>
+    rowLabel(
+      tense(running, "Searching tools for", "Searched tools for"),
+      singleLine(argText(args, "query")),
+    ),
+  SendMessage: (args, running) =>
+    rowLabel(
+      tense(running, "Sending message to", "Sent message to"),
+      argText(args, "to", "recipient"),
+    ),
+  LSP: (args) =>
+    rowLabel(
+      "LSP",
+      [argText(args, "operation"), argPathName(args, "filePath", "file_path", "path")]
+        .filter(Boolean)
+        .join(" "),
+    ),
+  Monitor: (args, running) =>
+    rowLabel(
+      tense(running, "Monitoring", "Monitored"),
+      singleLine(argText(args, "description") ?? argText(args, "command")),
+    ),
+  CronCreate: (args) => {
+    const cron = argText(args, "cron", "schedule");
+    const prompt = singleLine(argText(args, "prompt"), 80);
+    return rowLabel("Scheduled", [cron, prompt].filter(Boolean).join(": ") || "a task");
+  },
+  CronDelete: (args) => rowLabel("Deleted schedule", argText(args, "id", "job_id")),
+  CronList: () => rowLabel("Listed schedules"),
+  ListAgents: () => rowLabel("Listed agents"),
+  TaskOutput: (args, running) =>
+    rowLabel(
+      tense(running, "Reading output of", "Read output of"),
+      argText(args, "task_id", "taskId", "bash_id") ?? "task",
+    ),
+  TaskStop: (args, running) =>
+    rowLabel(
+      tense(running, "Stopping", "Stopped"),
+      argText(args, "task_id", "shell_id", "taskId") ?? "task",
+    ),
+  KillShell: (args, running) =>
+    rowLabel(tense(running, "Stopping shell", "Stopped shell"), argText(args, "shell_id")),
+  BashOutput: (args, running) =>
+    rowLabel(tense(running, "Reading shell output", "Read shell output"), argText(args, "bash_id")),
+  SlashCommand: (args, running) =>
+    rowLabel(tense(running, "Running", "Ran"), argText(args, "command")),
+  EnterPlanMode: () => rowLabel("Entered plan mode"),
+  EnterWorktree: (args) => rowLabel("Entered worktree", argText(args, "path", "name", "branch")),
+  ExitWorktree: () => rowLabel("Exited worktree"),
+  NotebookEdit: (args, running) =>
+    rowLabel(tense(running, "Editing", "Edited"), argPathName(args, "notebook_path")),
+  ListMcpResourcesTool: (args, running) =>
+    rowLabel(
+      tense(running, "Listing resources", "Listed resources"),
+      argText(args, "server") && `from ${argText(args, "server")}`,
+    ),
+  ReadMcpResourceTool: (args, running) =>
+    rowLabel(tense(running, "Reading", "Read"), argText(args, "uri") ?? "resource"),
+  REPL: (args, running) =>
+    rowLabel(tense(running, "Running code", "Ran code"), singleLine(argText(args, "code"), 80)),
+  ScheduleWakeup: () => rowLabel("Scheduled a wake-up"),
+  PushNotification: (args) =>
+    rowLabel("Sent a notification", singleLine(argText(args, "message", "title"), 80)),
+  ReadNotifications: () => rowLabel("Read notifications"),
+  ReportFindings: () => rowLabel("Reported findings"),
+  ProposeGoal: (args) =>
+    rowLabel("Proposed a goal", singleLine(argText(args, "goal", "title"), 80)),
+  ProposeSkills: () => rowLabel("Proposed skills"),
+  SendFeedback: () => rowLabel("Sent feedback"),
+  RemoteTrigger: (args) =>
+    rowLabel("Triggered", argText(args, "name", "trigger") ?? "a remote run"),
+};
+
+const SERVER_TOOL_LABELS: Readonly<Record<string, ToolLabelBuilder>> = {
+  advisor: (_args, running) => rowLabel(tense(running, "Asking the advisor", "Asked the advisor")),
+  web_search: (args, running) =>
+    deriveWebSearchRowLabel({ query: argText(args, "query") ?? undefined }, running),
+  web_fetch: (args, running) =>
+    rowLabel(tense(running, "Fetching", "Fetched"), argText(args, "url")),
+  code_execution: (args, running) =>
+    rowLabel(
+      tense(running, "Running code", "Ran code"),
+      singleLine(argText(args, "command", "code"), 80),
+    ),
+  bash_code_execution: (args, running) =>
+    rowLabel(tense(running, "Running", "Ran"), singleLine(argText(args, "command"), 80) ?? "code"),
+  text_editor_code_execution: (args, running) =>
+    rowLabel(
+      tense(running, "Editing", "Edited"),
+      argPathName(args, "path", "file_path") ?? "a file in the code container",
+    ),
+  tool_search: (args, running) => {
+    const query = singleLine(argText(args, "query"));
+    return query
+      ? rowLabel(tense(running, "Searching tools for", "Searched tools for"), query)
+      : rowLabel(tense(running, "Searching tools", "Searched tools"));
+  },
+};
+
+const KEY_ARGUMENT_FIELDS = [
+  "query",
+  "q",
+  "search",
+  "url",
+  "uri",
+  "path",
+  "file_path",
+  "filePath",
+  "file",
+  "name",
+  "title",
+  "repo",
+  "repository",
+  "issue",
+  "id",
+  "command",
+  "prompt",
+  "message",
+  "text",
+] as const;
+
+export function deriveToolKeyArgument(argumentsValue: unknown): string | null {
+  const args = toolArgumentsRecord(argumentsValue);
+  return singleLine(argText(args, ...KEY_ARGUMENT_FIELDS), 80);
+}
+
+export function humanizeToolNameSentence(toolName: string): string {
+  const spaced = toolName
+    .replace(/([a-z0-9])([A-Z])/gu, "$1 $2")
+    .replace(/[_\-.]+/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim()
+    .toLowerCase();
+  if (!spaced) return toolName;
+  return `${spaced.charAt(0).toUpperCase()}${spaced.slice(1)}`;
+}
+
+function splitMcpToolName(toolName: string): { server: string; tool: string } | null {
+  if (!toolName.startsWith("mcp__")) return null;
+  const [, server, ...rest] = toolName.split("__");
+  const tool = rest.join("__");
+  return server && tool ? { server, tool } : null;
+}
+
+export interface ToolCallRowLabelInput {
+  readonly toolName?: string | undefined;
+  readonly server?: string | undefined;
+  readonly serverToolKind?: string | undefined;
+  readonly arguments?: unknown;
+  readonly status: SynaraMcpToolStatus;
+}
+
+export function deriveToolCallRowLabel(input: ToolCallRowLabelInput): ToolRowLabel | null {
+  const running = input.status === "running";
+  const args = toolArgumentsRecord(input.arguments);
+  const serverKindBuilder =
+    input.serverToolKind && input.serverToolKind !== "mcp" && input.serverToolKind !== "other"
+      ? SERVER_TOOL_LABELS[input.serverToolKind]
+      : undefined;
+  if (serverKindBuilder) return serverKindBuilder(args, running);
+  const toolName = input.toolName?.trim();
+  if (!toolName) return null;
+  const namedBuilder = Object.hasOwn(NAMED_TOOL_LABELS, toolName)
+    ? NAMED_TOOL_LABELS[toolName]
+    : undefined;
+  if (namedBuilder) return namedBuilder(args, running);
+  const mcp = splitMcpToolName(toolName);
+  const bareTool = mcp?.tool ?? toolName;
+  return rowLabel(humanizeToolNameSentence(bareTool), deriveToolKeyArgument(args));
+}

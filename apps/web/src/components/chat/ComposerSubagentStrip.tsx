@@ -180,6 +180,15 @@ export const ComposerSubagentStrip = function ComposerSubagentStrip({
                       </span>
                     ) : null}
                   </span>
+                  {item.isActive && item.latestUpdate ? (
+                    <span
+                      data-testid="composer-subagent-latest-update"
+                      className="min-w-0 max-w-[45%] shrink truncate text-ui-sm text-muted-foreground/55"
+                      title={item.latestUpdate}
+                    >
+                      {item.latestUpdate}
+                    </span>
+                  ) : null}
                   {item.statusLabel ? (
                     <span
                       className={cn(

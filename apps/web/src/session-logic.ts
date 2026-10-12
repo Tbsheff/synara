@@ -26,6 +26,7 @@ export {
   type PendingUserInput,
 } from "./pendingInteractionDerivation";
 export {
+  deriveLatestTurnErrorContext,
   deriveTimelineEntries,
   deriveWorkLogEntries,
   isFileChangeWorkLogEntry,
@@ -34,6 +35,7 @@ export {
   omitRoutedSubagentWorkEntries,
   orderedActivities,
   type TimelineEntry,
+  type TurnErrorContext,
   type WorkLogAutomation,
   type WorkLogEntry,
   type WorkLogLiveActivity,
@@ -79,6 +81,7 @@ export interface LatestProposedPlanState {
   planMarkdown: string;
   implementedAt: string | null;
   implementationThreadId: ThreadId | null;
+  partial?: boolean;
 }
 
 function formatDuration(durationMs: number): string {
@@ -555,9 +558,19 @@ export function findSidebarProposedPlan(input: {
 }
 
 export function hasActionableProposedPlan(
-  proposedPlan: LatestProposedPlanState | Pick<ProposedPlan, "implementedAt"> | null,
+  proposedPlan:
+    | LatestProposedPlanState
+    | Pick<ProposedPlan, "implementedAt" | "partial" | "turnId">
+    | null,
+  latestTurn?: Pick<OrchestrationLatestTurn, "turnId" | "state"> | null,
 ): boolean {
-  return proposedPlan !== null && proposedPlan.implementedAt === null;
+  if (proposedPlan === null || proposedPlan.implementedAt !== null) return false;
+  if (proposedPlan.partial === true) return false;
+  const isFromUnfinishedLatestTurn =
+    latestTurn != null &&
+    proposedPlan.turnId === latestTurn.turnId &&
+    latestTurn.state !== "completed";
+  return !isFromUnfinishedLatestTurn;
 }
 
 export function buildSourceProposedPlanReference(input: {
@@ -582,6 +595,7 @@ function toLatestProposedPlanState(proposedPlan: ProposedPlan): LatestProposedPl
     planMarkdown: proposedPlan.planMarkdown,
     implementedAt: proposedPlan.implementedAt,
     implementationThreadId: proposedPlan.implementationThreadId,
+    ...(proposedPlan.partial ? { partial: true } : {}),
   };
 }
 

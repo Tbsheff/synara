@@ -100,6 +100,8 @@ export interface ChatMessage {
   completedAt?: string | undefined;
   streaming: boolean;
   source?: OrchestrationMessageSource;
+  finalAnswer?: boolean;
+  retracted?: boolean;
 }
 
 export interface ProposedPlan {
@@ -108,6 +110,7 @@ export interface ProposedPlan {
   planMarkdown: string;
   implementedAt: string | null;
   implementationThreadId: ThreadId | null;
+  partial?: boolean;
   createdAt: string;
   updatedAt: string;
 }

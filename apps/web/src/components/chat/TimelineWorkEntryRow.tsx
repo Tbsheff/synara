@@ -3,7 +3,7 @@
 // Layer: Web chat presentation component
 // Exports: TimelineWorkEntryRow, EditedFileRowContent, prefersCompactWorkEntryRow
 
-import type { ModelSelection, TurnId } from "@synara/contracts";
+import type { FileChangeEntry, ModelSelection, TurnId } from "@synara/contracts";
 import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
 import {
   createElement,
@@ -61,7 +61,7 @@ import { AutomationCreatedCard } from "./AutomationCreatedCard";
 import { ConnectedComputerSetupRequiredCard } from "./ComputerSetupRequiredCard";
 import { ComputerControlDeniedCard } from "./ComputerControlDeniedCard";
 import ChatMarkdown from "../ChatMarkdown";
-import { DiffStatLabel } from "./DiffStatLabel";
+import { DiffStat } from "../ui/diff-stat";
 import { type ExpandedImagePreview } from "./ExpandedImagePreview";
 import { LinkChipIcon } from "../LinkChipIcon";
 import { normalizeCompactToolLabel } from "./MessagesTimeline.logic";
@@ -69,6 +69,38 @@ import { SynaraLogo } from "../SynaraLogo";
 import { ToolCallDetailsContent } from "./ToolCallDetailsDialog";
 import { DisclosureChevron } from "../ui/DisclosureChevron";
 import { DisclosureRegion } from "../ui/DisclosureRegion";
+import { DISCLOSURE_CLEANUP_BUFFER_MS, DISCLOSURE_TRANSITION_MS } from "~/lib/disclosureMotion";
+import {
+  buildTypedCommandView,
+  buildTypedToolCallView,
+  buildTypedWebSearchView,
+  effectiveFileChangeKind,
+  effectiveFileChangeMovePath,
+  fileChangeDisplayPath,
+  resolveFileChangeStat,
+  type TypedToolRowStatus,
+} from "../../lib/toolCallDetails";
+import {
+  contextCompactionTitle,
+  readGroupedHookNoticeData,
+  TRANSCRIPT_NOTICE_TONE_ICON_CLASS_NAME,
+  TRANSCRIPT_NOTICE_TONE_TEXT_CLASS_NAME,
+  transcriptNoticePresentation,
+  transcriptNoticeStatusLabel,
+  transcriptNoticeTitle,
+  transcriptNoticeTone,
+} from "../../lib/transcriptNoticeLabels";
+import { legacyUnmappedMethodTitle } from "../../lib/legacyUnmappedEventLabels";
+import {
+  FileChangeDiffDetails,
+  ReasoningSummaryDetails,
+  SubagentLaunchDetails,
+  type SubagentLaunchView,
+  TranscriptNoticeDetails,
+  TypedCommandDetails,
+  TypedToolCallDetails,
+  TypedWebSearchDetails,
+} from "./ToolCallDetailsDialog";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { fileDiffStatsByPath, resolveFileDiffStatByChangedPath } from "~/lib/diffRendering";
 import {
@@ -76,9 +108,17 @@ import {
   isPrefixedToolArgumentSummary,
 } from "../../lib/toolArgumentSummary";
 import {
+  deriveCommandRowLabel,
   deriveFriendlyCommandTarget,
+  deriveReasoningRowLabel,
   deriveSynaraMcpToolTitle,
+  deriveToolCallRowLabel,
+  deriveWebSearchRowLabel,
+  fileChangeRowVerb,
+  toolRowLabelText,
+  type ToolRowLabel,
   extractWebFetchUrl,
+  isFailedCommandOutcome,
   isGenericToolTitle,
   isSynaraBrowserToolCall,
   normalizeToolTextForComparison,
@@ -86,12 +126,17 @@ import {
   sanitizeSynaraMcpToolPreview,
   type SynaraMcpToolStatus,
 } from "../../lib/toolCallLabel";
-import { formatLiveActivityMeta, useLiveActivityNow } from "../../lib/liveActivityPresentation";
+import {
+  formatLiveActivityMeta,
+  formatSettledActivityOutcome,
+  isLiveActivityInProgress,
+  useLiveActivityNow,
+} from "../../lib/liveActivityPresentation";
 import { openWorkspaceFileReference, useWorkspaceFileOpener } from "../../lib/workspaceFileOpener";
 import { MUTED_LABEL_TEXT_CLASS_NAME, MUTED_LABEL_TEXT_COLOR } from "~/surfaceStyles";
+import { useTheme } from "~/hooks/useTheme";
+import { InlineMentionChip } from "./InlineMentionChip";
 
-const TRANSCRIPT_DISCLOSURE_TRANSITION_MS = 220;
-const TRANSCRIPT_DISCLOSURE_CLEANUP_BUFFER_MS = 40;
 // Rest tone is the shared quiet-label gray (same one the composer pickers use for
 // their effort/thinking labels) so a tool row and the picker below it read as one
 // muted tone; hover still lifts the whole row to full foreground.
@@ -303,6 +348,7 @@ export function renderWorkEntryIcon(Icon: LucideIcon, className: string): ReactE
 // over the kind-derived entry icon. Shared with the collapsed tool-group summary
 // row, which borrows its first entry's icon.
 export function workEntryLeftIcon(workEntry: TimelineWorkEntry): LucideIcon {
+  if (workEntry.notice) return transcriptNoticePresentation(workEntry.notice.noticeKind).icon;
   if (isComputerWorkEntry(workEntry)) return ComputerUseIcon;
   if (isGitHubMcpToolCall(workEntry)) return GitHubIcon;
   if (isSynaraBrowserWorkEntry(workEntry)) return GlobeIcon;
@@ -418,6 +464,225 @@ function toolWorkEntryHeading(workEntry: TimelineWorkEntry): string {
   return capitalizePhrase(normalizeCompactToolLabel(workEntry.toolTitle));
 }
 
+function hasOwnToolPresentation(workEntry: TimelineWorkEntry): boolean {
+  return (
+    isComputerWorkEntry(workEntry) ||
+    isSynaraBrowserWorkEntry(workEntry) ||
+    isSynaraToolCall(workEntry) ||
+    workEntry.itemType === "collab_agent_tool_call"
+  );
+}
+
+function typedReadFilePath(workEntry: TimelineWorkEntry): string | null {
+  const args = workEntry.toolCall?.arguments;
+  if (args === null || typeof args !== "object" || Array.isArray(args)) return null;
+  const record = args as Record<string, unknown>;
+  const path = record.file_path ?? record.filePath ?? record.path;
+  return typeof path === "string" && path.trim().length > 0 ? path.trim() : null;
+}
+
+function typedToolRowStatus(workEntry: TimelineWorkEntry): TypedToolRowStatus {
+  const status = toolWorkEntryStatus(workEntry);
+  const settledState = workEntry.liveActivity?.state;
+  if (status === "completed" && (settledState === "failed" || settledState === "cancelled")) {
+    return settledState;
+  }
+  return status;
+}
+
+function workEntryOutcomeMeta(workEntry: TimelineWorkEntry, nowMs: number): string | null {
+  const commandExecution = typedCommandExecution(workEntry);
+  const rowStatus = typedToolRowStatus(workEntry);
+  const status =
+    commandExecution &&
+    rowStatus === "completed" &&
+    isFailedCommandOutcome({ status: rowStatus, exitCode: commandExecution.exitCode })
+      ? "failed"
+      : rowStatus;
+  const labelSaysStopped =
+    commandExecution !== undefined &&
+    (status === "cancelled" || commandExecution.interrupted === true);
+  if (labelSaysStopped) return null;
+  const meta = workEntry.liveActivity
+    ? formatLiveActivityMeta(workEntry.liveActivity, nowMs, {
+        subagent: workEntry.itemType === "collab_agent_tool_call",
+        settledDurationMs: commandExecution?.durationMs,
+        lastOutputAt: workEntry.liveOutput?.updatedAt,
+      })
+    : null;
+  if (meta || !commandExecution || status !== "failed") return meta;
+  return formatSettledActivityOutcome("failed", commandExecution.durationMs ?? null);
+}
+
+const SUBAGENT_STATUS_LABELS: Record<TypedToolRowStatus, string> = {
+  running: "Running",
+  completed: "Completed",
+  failed: "Failed",
+  cancelled: "Stopped",
+};
+
+function subagentLaunchView(workEntry: TimelineWorkEntry): SubagentLaunchView | null {
+  if (workEntry.itemType !== "collab_agent_tool_call") return null;
+  const action = workEntry.subagentAction;
+  const subagent = workEntry.subagents?.[0];
+  return {
+    status: SUBAGENT_STATUS_LABELS[typedToolRowStatus(workEntry)],
+    model: action?.model ?? subagent?.model ?? null,
+    prompt: action?.prompt ?? subagent?.prompt ?? null,
+  };
+}
+
+const EMPTY_COMMAND_EXECUTION: NonNullable<TimelineWorkEntry["commandExecution"]> = {};
+
+function typedCommandExecution(workEntry: TimelineWorkEntry) {
+  if (isFileChangeWorkEntry(workEntry)) return undefined;
+  if (workEntry.commandExecution) return workEntry.commandExecution;
+  const commandLike =
+    workEntry.itemType === "command_execution" ||
+    Boolean(workEntry.command ?? workEntry.rawCommand);
+  return workEntry.liveOutput && commandLike ? EMPTY_COMMAND_EXECUTION : undefined;
+}
+
+function imageViewLabel(workEntry: TimelineWorkEntry): ToolRowLabel | null {
+  if (workEntry.itemType !== "image_view") return null;
+  const count = workEntry.toolCall?.images?.length ?? 1;
+  return {
+    action: count > 1 ? `Viewed ${count} images` : "Viewed an image",
+    detail: null,
+    suffix: null,
+  };
+}
+
+function typedWorkEntryLabel(workEntry: TimelineWorkEntry): ToolRowLabel | null {
+  if (workEntry.notice) {
+    return { action: transcriptNoticeTitle(workEntry.notice), detail: null, suffix: null };
+  }
+  if (workEntry.unmappedMethod) {
+    const title = legacyUnmappedMethodTitle(workEntry.unmappedMethod);
+    const preview = workEntryPreview(workEntry);
+    const message =
+      preview && preview !== workEntry.unmappedMethod && preview !== title ? preview : null;
+    return message
+      ? { action: `${title}:`, detail: message, suffix: null }
+      : { action: title, detail: null, suffix: null };
+  }
+  const compactionTitle = contextCompactionTitle(workEntry);
+  if (compactionTitle) {
+    return { action: compactionTitle, detail: null, suffix: null };
+  }
+  if (workEntry.steeredMessage) {
+    return { action: capitalizePhrase(workEntry.label), detail: null, suffix: null };
+  }
+  const status = typedToolRowStatus(workEntry);
+  const running = status === "running";
+  if (workEntry.reasoning) {
+    return deriveReasoningRowLabel(workEntry.reasoning, running);
+  }
+  if (hasOwnToolPresentation(workEntry)) {
+    return null;
+  }
+  const imageView = imageViewLabel(workEntry);
+  if (imageView) {
+    return imageView;
+  }
+  const commandExecution = typedCommandExecution(workEntry);
+  if (commandExecution) {
+    return deriveCommandRowLabel({
+      command: commandExecution.command ?? workEntry.rawCommand ?? workEntry.command,
+      description: commandExecution.description,
+      exitCode: commandExecution.exitCode,
+      status,
+      durationMs: commandExecution.durationMs,
+      interrupted: commandExecution.interrupted,
+      background: commandExecution.background,
+      parsedActions: commandExecution.parsedActions,
+    });
+  }
+  if (workEntry.webSearch) {
+    return deriveWebSearchRowLabel(workEntry.webSearch, running);
+  }
+  if (workEntry.toolCall) {
+    return deriveToolCallRowLabel({
+      toolName: workEntry.toolCall.toolName ?? workEntry.toolName,
+      server: workEntry.toolCall.server,
+      serverToolKind: workEntry.toolCall.serverToolKind,
+      arguments: workEntry.toolCall.arguments,
+      status,
+    });
+  }
+  return null;
+}
+
+function hasTypedWorkEntryDetails(workEntry: TimelineWorkEntry): boolean {
+  const notice = workEntry.notice;
+  if (notice) {
+    return Boolean(
+      notice.body?.trim() ||
+      notice.detail?.trim() ||
+      (readGroupedHookNoticeData(notice)?.hookEvents.length ?? 0) > 0,
+    );
+  }
+  if (workEntry.reasoning) {
+    return Boolean(workEntry.reasoning.summary?.trim());
+  }
+  if (hasOwnToolPresentation(workEntry)) {
+    return false;
+  }
+  if (typedCommandExecution(workEntry)) return true;
+  if (workEntry.webSearch) return !buildTypedWebSearchView(workEntry.webSearch).isEmpty;
+  return Boolean(workEntry.toolCall);
+}
+
+function TypedWorkEntryDetails(props: {
+  workEntry: TimelineWorkEntry;
+  markdownCwd: string | undefined;
+  onImageExpand: (preview: ExpandedImagePreview) => void;
+}) {
+  const { workEntry } = props;
+  const status = typedToolRowStatus(workEntry);
+  const running = status === "running";
+  if (workEntry.notice) {
+    return <TranscriptNoticeDetails notice={workEntry.notice} />;
+  }
+  if (workEntry.reasoning?.summary) {
+    return (
+      <ReasoningSummaryDetails
+        summary={workEntry.reasoning.summary}
+        truncated={workEntry.reasoning.summaryTruncated === true}
+      />
+    );
+  }
+  const commandExecution = typedCommandExecution(workEntry);
+  if (commandExecution) {
+    return (
+      <TypedCommandDetails
+        running={running}
+        view={buildTypedCommandView({
+          command: commandExecution,
+          status,
+          fallbackCommand: workEntry.rawCommand ?? workEntry.command,
+          fallbackOutput: workEntry.toolDetails?.output,
+          liveOutput: workEntry.liveOutput,
+        })}
+      />
+    );
+  }
+  if (workEntry.webSearch) {
+    return <TypedWebSearchDetails view={buildTypedWebSearchView(workEntry.webSearch)} />;
+  }
+  if (workEntry.toolCall) {
+    return (
+      <TypedToolCallDetails
+        view={buildTypedToolCallView(workEntry.toolCall)}
+        running={running}
+        markdownCwd={props.markdownCwd}
+        onImageExpand={props.onImageExpand}
+      />
+    );
+  }
+  return null;
+}
+
 function combineWorkEntryDisplayText(heading: string, preview: string | null): string {
   if (!preview) {
     return heading;
@@ -436,6 +701,15 @@ function workEntryDisplayParts(workEntry: TimelineWorkEntry): {
   preview: string | null;
   displayText: string;
 } {
+  const typedLabel = typedWorkEntryLabel(workEntry);
+  if (typedLabel) {
+    const typedPreview = [typedLabel.detail, typedLabel.suffix?.trim()].filter(Boolean).join(" ");
+    return {
+      heading: typedLabel.action,
+      preview: typedPreview.length > 0 ? typedPreview : null,
+      displayText: toolRowLabelText(typedLabel),
+    };
+  }
   const webFetchUrl = extractWebFetchUrl(workEntry);
   const heading = toolWorkEntryHeading(workEntry);
   const rawPreview = workEntryPreview(workEntry);
@@ -513,6 +787,42 @@ function ToolRowTooltip(props: { content: ReactNode; children: ReactElement }) {
         {props.content}
       </TooltipPopup>
     </Tooltip>
+  );
+}
+
+const LIVE_DURATION_PATTERN = /\b(?:\d+[dhms](?: \d+[hms])?|now)\b/g;
+
+function reserveLiveDurationWidth(duration: string): string {
+  if (duration.includes("d")) return "00d 00h";
+  if (duration.includes("h")) return "00h 00m";
+  return "00m 00s";
+}
+
+export function liveActivityMetaWidthTemplate(text: string): string {
+  return text.replace(LIVE_DURATION_PATTERN, (duration) =>
+    duration === "now" ? "00m 00s ago" : reserveLiveDurationWidth(duration),
+  );
+}
+
+function LiveActivityMeta({ text, ticking }: { text: string; ticking: boolean }) {
+  if (!ticking) {
+    return (
+      <span className="tabular-nums" data-live-activity-meta="true">
+        {" · "}
+        {text}
+      </span>
+    );
+  }
+  return (
+    <span
+      className="inline-grid tabular-nums before:invisible before:col-start-1 before:row-start-1 before:whitespace-pre before:content-[attr(data-width-template)]"
+      data-width-template={` · ${liveActivityMetaWidthTemplate(text)}`}
+    >
+      <span className="col-start-1 row-start-1 whitespace-pre" data-live-activity-meta="true">
+        {" · "}
+        {text}
+      </span>
+    </span>
   );
 }
 
@@ -596,8 +906,17 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
   const hoverText =
     rawCommand ?? (showInlineAgentTaskPreview ? heading : (webFetchUrl ?? displayText));
   const changedFiles = workEntry.changedFiles ?? [];
-  const showEditedRows = isFileChangeWorkEntry(workEntry) && changedFiles.length > 0;
-  const canOpenAgentActivity = Boolean(onOpenAgentActivity) && isAgentActivityWorkEntry(workEntry);
+  const typedFileChanges = workEntry.fileChanges?.changes ?? [];
+  const showTypedFileRows = typedFileChanges.length > 0;
+  const showEditedRows =
+    !showTypedFileRows && isFileChangeWorkEntry(workEntry) && changedFiles.length > 0;
+  const notice = workEntry.notice;
+  const noticeTone = notice ? transcriptNoticeTone(notice.severity, notice.status) : null;
+  const noticeStatusLabel = notice ? transcriptNoticeStatusLabel(notice.status) : null;
+  const hasTypedDetails = hasTypedWorkEntryDetails(workEntry);
+  const subagentLaunch = subagentLaunchView(workEntry);
+  const canOpenAgentActivity =
+    Boolean(onOpenAgentActivity) && isAgentActivityWorkEntry(workEntry) && !subagentLaunch;
   const openAgentActivity = canOpenAgentActivity
     ? () => onOpenAgentActivity?.(workEntry.id)
     : undefined;
@@ -618,11 +937,10 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
     [workEntry],
   );
   const liveActivityNowMs = useLiveActivityNow(workEntry.liveActivity);
-  const liveActivityMetaText = workEntry.liveActivity
-    ? formatLiveActivityMeta(workEntry.liveActivity, liveActivityNowMs, {
-        subagent: workEntry.itemType === "collab_agent_tool_call",
-      })
-    : null;
+  const liveActivityMetaText = workEntryOutcomeMeta(workEntry, liveActivityNowMs);
+  const liveActivityTicking =
+    workEntry.liveActivity !== undefined && isLiveActivityInProgress(workEntry.liveActivity);
+  const { resolvedTheme } = useTheme();
 
   // A computer-control denial renders as an actionable card (enable + retry)
   // instead of a buried tool-error line. Kept after the hooks above so the
@@ -653,6 +971,10 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
 
   // A created-automation row renders as its own card instead of a tool-call line.
   // Kept after the hooks above so the early return never changes hook order.
+  if (workEntry.modelReroute) {
+    return <ModelRerouteDivider reroute={workEntry.modelReroute} fallbackLabel={displayText} />;
+  }
+
   const automation = workEntry.automation;
   if (automation) {
     return (
@@ -670,19 +992,22 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
     );
   }
 
+  const readFileSource =
+    workEntry.requestKind === "file-read" || isFileReadToolEntry(workEntry)
+      ? (typedReadFilePath(workEntry) ?? workEntry.detail)
+      : undefined;
   const readFilePath =
-    opener !== null &&
-    !canOpenAgentActivity &&
-    workEntry.detail &&
-    (workEntry.requestKind === "file-read" || isFileReadToolEntry(workEntry))
-      ? extractFilePathFromDetail(workEntry.detail)
+    opener !== null && !canOpenAgentActivity && readFileSource
+      ? extractFilePathFromDetail(readFileSource)
       : null;
   const canOpenReadFile = readFilePath !== null;
   const canOpenToolDetails =
     !canOpenAgentActivity &&
     Boolean(
+      subagentLaunch ||
       providerContextLifecycle ||
       providerHandoff ||
+      (hasTypedDetails && !canOpenReadFile) ||
       workEntry.toolDetails ||
       (workEntry.liveActivity && !canOpenReadFile),
     );
@@ -696,8 +1021,27 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
   const rowFontSizePx = textFontSizePx;
 
   return (
-    <div className={cn(compact ? "py-0.5" : "rounded-lg py-1")}>
-      {showEditedRows ? (
+    <div className={cn(compact ? "py-0.5" : "rounded-lg py-1")} data-work-entry-id={workEntry.id}>
+      {showTypedFileRows ? (
+        <TypedFileChangeRows
+          workEntryId={workEntry.id}
+          changes={typedFileChanges}
+          cwd={markdownCwd}
+          status={toolWorkEntryStatus(workEntry)}
+          hiddenCount={Math.max(
+            0,
+            (workEntry.fileChanges?.totalFiles ?? typedFileChanges.length) -
+              typedFileChanges.length,
+          )}
+          compact={compact}
+          fontSizePx={rowFontSizePx}
+          fileDiffStatByPath={fileDiffStatByPath}
+          {...(turnId && onOpenTurnDiff
+            ? { onOpenTurnDiff: (filePath: string) => onOpenTurnDiff(turnId, filePath) }
+            : {})}
+          timestampFormat={timestampFormat}
+        />
+      ) : showEditedRows ? (
         <div className="space-y-0.5">
           {changedFiles.map((changedFilePath) => {
             // Prefer the turn-diff summary's per-file stat; fall back to the stat
@@ -739,6 +1083,13 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
                   summaryClassName={editedRowClassName}
                   dataFileChangeRow
                   timestampFormat={timestampFormat}
+                  footer={
+                    canOpenEditedDiff ? (
+                      <OpenTurnDiffButton
+                        onOpen={() => onOpenTurnDiff?.(turnId!, changedFilePath)}
+                      />
+                    ) : undefined
+                  }
                 >
                   {editedRowChildren}
                 </ToolDetailsDisclosure>
@@ -781,7 +1132,13 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
                   {webFetchUrl ? (
                     <LinkChipIcon url={webFetchUrl} className={compact ? "size-3.5" : "size-4"} />
                   ) : (
-                    renderWorkEntryIcon(LeftIcon, compact ? "size-3.5" : "size-4")
+                    renderWorkEntryIcon(
+                      LeftIcon,
+                      cn(
+                        compact ? "size-3.5" : "size-4",
+                        noticeTone && TRANSCRIPT_NOTICE_TONE_ICON_CLASS_NAME[noticeTone],
+                      ),
+                    )
                   )}
                 </span>
               ) : null}
@@ -802,7 +1159,10 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
                     >
                       <span data-work-entry-display-text="true">{heading}</span>
                       {liveActivityMetaText ? (
-                        <span data-live-activity-meta="true"> · {liveActivityMetaText}</span>
+                        <LiveActivityMeta
+                          text={liveActivityMetaText}
+                          ticking={liveActivityTicking}
+                        />
                       ) : null}
                     </p>
                     <ChatMarkdown
@@ -826,17 +1186,35 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
                       // brighten the whole row to foreground on hover/focus instead of a fill.
                       WORK_ROW_MUTED_HOVER_TONE["tool-row"],
                       isPlainRuntimeNoticeRow && "italic",
+                      noticeTone && TRANSCRIPT_NOTICE_TONE_TEXT_CLASS_NAME[noticeTone],
                     )}
                     data-runtime-notice-row={isPlainRuntimeNoticeRow ? "true" : undefined}
+                    data-transcript-notice-kind={notice?.noticeKind}
+                    data-transcript-notice-tone={noticeTone ?? undefined}
                     data-codex-status-row={isCodexStatusRow ? "true" : undefined}
                     style={{ fontSize: `${rowFontSizePx}px` }}
                   >
                     <span data-work-entry-display-text="true">{displayText}</span>
+                    {noticeStatusLabel ? (
+                      <span data-transcript-notice-status="true"> · {noticeStatusLabel}</span>
+                    ) : null}
                     {liveActivityMetaText ? (
-                      <span data-live-activity-meta="true"> · {liveActivityMetaText}</span>
+                      <LiveActivityMeta text={liveActivityMetaText} ticking={liveActivityTicking} />
                     ) : null}
                   </p>
                 )}
+                {workEntry.steeredMessage ? (
+                  <p
+                    className={cn(
+                      "line-clamp-3 whitespace-pre-wrap break-words",
+                      MUTED_LABEL_TEXT_CLASS_NAME,
+                    )}
+                    style={{ fontSize: `${rowFontSizePx}px` }}
+                    data-steered-message="true"
+                  >
+                    {workEntry.steeredMessage}
+                  </p>
+                ) : null}
               </div>
             </>
           );
@@ -846,15 +1224,33 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
                 details={workEntry.toolDetails}
                 activity={workEntry.liveActivity}
                 detailContent={
-                  providerContextLifecycle ? (
+                  subagentLaunch ? (
+                    <SubagentLaunchDetails view={subagentLaunch} />
+                  ) : providerContextLifecycle ? (
                     <ProviderContextLifecycleDetails info={providerContextLifecycle} />
                   ) : providerHandoff ? (
                     <ProviderHandoffDetails info={providerHandoff} />
+                  ) : hasTypedDetails ? (
+                    <TypedWorkEntryDetails
+                      workEntry={workEntry}
+                      markdownCwd={markdownCwd}
+                      onImageExpand={onImageExpand}
+                    />
                   ) : undefined
                 }
                 compact={compact}
                 timestampFormat={timestampFormat}
                 tooltip={toolRowTooltipContent(rawCommand, displayText, displayText)}
+                footer={
+                  subagentLaunch && onOpenAgentActivity ? (
+                    <DetailFooterLinkButton
+                      dataAttr="data-open-agent-activity"
+                      onClick={() => onOpenAgentActivity(workEntry.id)}
+                    >
+                      Open activity
+                    </DetailFooterLinkButton>
+                  ) : undefined
+                }
               >
                 {rowContentChildren}
               </ToolDetailsDisclosure>
@@ -880,9 +1276,99 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
           return rowContent;
         })()
       )}
+      {workEntry.outputFile ? (
+        <p
+          className={cn("flex min-w-0 items-center gap-1.5", compact ? "pl-5" : "pl-7")}
+          style={{ fontSize: `${rowFontSizePx}px` }}
+          data-task-output-file="true"
+        >
+          <span className={MUTED_LABEL_TEXT_CLASS_NAME}>Output</span>
+          <InlineMentionChip
+            path={workEntry.outputFile}
+            theme={resolvedTheme === "dark" ? "dark" : "light"}
+            href={workEntry.outputFile}
+            onActivate={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              openWorkspaceFileReference(
+                event.metaKey || event.ctrlKey ? null : opener,
+                workEntry.outputFile!,
+              );
+            }}
+          />
+        </p>
+      ) : null}
     </div>
   );
 });
+
+function modelRerouteNotes(reroute: NonNullable<TimelineWorkEntry["modelReroute"]>): string[] {
+  const refusal = [reroute.refusalCategory, reroute.refusalExplanation].filter(Boolean).join(": ");
+  const retracted = reroute.retractedMessageCount;
+  return [
+    reroute.reason,
+    refusal ? `Refusal: ${refusal}` : undefined,
+    retracted
+      ? `${retracted === 1 ? "1 earlier reply was" : `${retracted} earlier replies were`} withdrawn`
+      : undefined,
+  ].filter((note): note is string => Boolean(note));
+}
+
+function ModelRerouteDivider(props: {
+  reroute: NonNullable<TimelineWorkEntry["modelReroute"]>;
+  fallbackLabel: string;
+}) {
+  const { fromModel, toModel } = props.reroute;
+  const label =
+    fromModel && toModel
+      ? `Switched from ${fromModel} to ${toModel}`
+      : toModel
+        ? `Switched to ${toModel}`
+        : props.fallbackLabel;
+  const notes = modelRerouteNotes(props.reroute);
+  return (
+    <div data-model-reroute-divider="true" className="w-full py-3 font-system-ui">
+      <div className="flex w-full items-center gap-4">
+        <span aria-hidden className="h-px min-w-0 flex-1 bg-[color:var(--color-border-light)]" />
+        <span className="inline-flex min-w-0 shrink items-center gap-2 text-ui-sm text-muted-foreground">
+          <HistoryIcon className="size-3.5 shrink-0" aria-hidden />
+          <span className="truncate">{label}</span>
+        </span>
+        <span aria-hidden className="h-px min-w-0 flex-1 bg-[color:var(--color-border-light)]" />
+      </div>
+      {notes.length > 0 ? (
+        <div className="mt-1.5 space-y-0.5 text-center text-ui-xs text-muted-foreground/72">
+          {notes.map((note) => (
+            <p
+              key={note}
+              className="whitespace-pre-wrap break-words"
+              data-model-reroute-note="true"
+            >
+              {note}
+            </p>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function DetailFooterLinkButton(props: {
+  dataAttr: "data-open-turn-diff" | "data-open-agent-activity";
+  onClick: () => void;
+  children: string;
+}) {
+  return (
+    <button
+      type="button"
+      className="text-ui-sm text-muted-foreground/72 underline-offset-2 hover:text-foreground hover:underline"
+      {...{ [props.dataAttr]: "true" }}
+      onClick={props.onClick}
+    >
+      {props.children}
+    </button>
+  );
+}
 
 // Inner content for an "Edited <file> +n/-m" row. Mirrors the tool-call row treatment
 // (muted leading icon + label that brightens to foreground on hover/focus, same font
@@ -894,8 +1380,10 @@ export function EditedFileRowContent(props: {
   deletions: number | undefined;
   fontSizePx: number;
   compact: boolean;
+  verb?: string;
 }) {
   const { filePath, additions, deletions, fontSizePx, compact } = props;
+  const verb = props.verb ?? "Edited";
   const hasStat = (additions ?? 0) + (deletions ?? 0) > 0;
   return (
     <>
@@ -912,8 +1400,9 @@ export function EditedFileRowContent(props: {
       <span
         className={cn("font-system-ui shrink-0", WORK_ROW_MUTED_HOVER_TONE["file-row"])}
         style={{ fontSize: `${fontSizePx}px` }}
+        data-file-change-verb="true"
       >
-        Edited
+        {verb}
       </span>
       <span
         className={cn(
@@ -931,7 +1420,7 @@ export function EditedFileRowContent(props: {
           className="font-system-ui shrink-0 tabular-nums whitespace-nowrap"
           style={{ fontSize: `${fontSizePx}px` }}
         >
-          <DiffStatLabel additions={additions ?? 0} deletions={deletions ?? 0} />
+          <DiffStat insertions={additions ?? 0} deletions={deletions ?? 0} />
         </span>
       ) : null}
     </>
@@ -1108,6 +1597,7 @@ function ToolDetailsDisclosure(props: {
   summaryClassName?: string | undefined;
   timestampFormat: TimestampFormat;
   tooltip?: ReactNode;
+  footer?: ReactNode;
 }) {
   const summaryClassName =
     props.summaryClassName ??
@@ -1152,7 +1642,7 @@ function ToolDetailsDisclosure(props: {
       cleanupTimeoutRef.current = window.setTimeout(() => {
         cleanupTimeoutRef.current = null;
         setRenderDetails(false);
-      }, TRANSCRIPT_DISCLOSURE_TRANSITION_MS + TRANSCRIPT_DISCLOSURE_CLEANUP_BUFFER_MS);
+      }, DISCLOSURE_TRANSITION_MS + DISCLOSURE_CLEANUP_BUFFER_MS);
     },
     [clearMotionTimers],
   );
@@ -1194,8 +1684,100 @@ function ToolDetailsDisclosure(props: {
                 timestampFormat={props.timestampFormat}
               />
             )}
+            {props.footer ? <div className="pt-2">{props.footer}</div> : null}
           </div>
         </DisclosureRegion>
+      ) : null}
+    </div>
+  );
+}
+
+function OpenTurnDiffButton(props: { onOpen: () => void }) {
+  return (
+    <DetailFooterLinkButton dataAttr="data-open-turn-diff" onClick={props.onOpen}>
+      Open in turn diff
+    </DetailFooterLinkButton>
+  );
+}
+
+function TypedFileChangeRows(props: {
+  workEntryId: string;
+  changes: ReadonlyArray<FileChangeEntry>;
+  cwd: string | undefined;
+  status: TypedToolRowStatus;
+  hiddenCount: number;
+  compact: boolean;
+  fontSizePx: number;
+  fileDiffStatByPath?: ReadonlyMap<string, { additions: number; deletions: number }> | undefined;
+  onOpenTurnDiff?: ((filePath: string) => void) | undefined;
+  timestampFormat: TimestampFormat;
+}) {
+  const { compact, onOpenTurnDiff } = props;
+  return (
+    <div className="space-y-0.5" data-typed-file-change-rows="true">
+      {props.changes.map((change, index) => {
+        const displayPath = fileChangeDisplayPath(change, props.cwd);
+        const movePath = effectiveFileChangeMovePath(change, props.cwd);
+        const stat = resolveFileChangeStat(change) ??
+          props.fileDiffStatByPath?.get(displayPath) ??
+          props.fileDiffStatByPath?.get(change.path) ?? { additions: 0, deletions: 0 };
+        const hasDiff = Boolean(change.unifiedDiff?.trim());
+        const openDiff = onOpenTurnDiff ? () => onOpenTurnDiff(displayPath) : undefined;
+        const rowClassName = cn(
+          "group/file-row flex w-full max-w-full items-center text-left transition-colors duration-150",
+          compact ? "gap-1.5" : "gap-2",
+          hasDiff || openDiff ? "cursor-pointer focus-visible:outline-none" : "cursor-default",
+        );
+        const tooltipText = movePath ? `${change.path} → ${movePath}` : displayPath;
+        const rowChildren = (
+          <EditedFileRowContent
+            filePath={displayPath}
+            additions={stat.additions}
+            deletions={stat.deletions}
+            fontSizePx={props.fontSizePx}
+            compact={compact}
+            verb={fileChangeRowVerb(effectiveFileChangeKind(change, props.cwd), props.status)}
+          />
+        );
+        const key = `${props.workEntryId}:${index}:${change.path}`;
+        if (hasDiff) {
+          return (
+            <ToolDetailsDisclosure
+              key={key}
+              compact={compact}
+              tooltip={<span className="whitespace-pre-wrap">{tooltipText}</span>}
+              summaryClassName={rowClassName}
+              dataFileChangeRow
+              timestampFormat={props.timestampFormat}
+              detailContent={
+                <FileChangeDiffDetails change={change} cwd={props.cwd} onOpenTurnDiff={openDiff} />
+              }
+            >
+              {rowChildren}
+            </ToolDetailsDisclosure>
+          );
+        }
+        return (
+          <button
+            key={key}
+            type="button"
+            data-file-change-row="true"
+            className={rowClassName}
+            title={tooltipText}
+            disabled={!openDiff}
+            onClick={openDiff}
+          >
+            {rowChildren}
+          </button>
+        );
+      })}
+      {props.hiddenCount > 0 ? (
+        <p
+          className={cn(MUTED_LABEL_TEXT_CLASS_NAME, compact ? "pl-5" : "pl-7")}
+          style={{ fontSize: `${props.fontSizePx}px` }}
+        >
+          {props.hiddenCount === 1 ? "1 more file" : `${props.hiddenCount} more files`}
+        </p>
       ) : null}
     </div>
   );

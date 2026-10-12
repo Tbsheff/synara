@@ -9,6 +9,9 @@ import {
   revokeUserMessagePreviewUrls,
 } from "../ChatView.logic";
 import type { PendingAutomationConversation } from "./useChatAutomationSetup";
+import { applyTranscriptAnswerHints, deriveTranscriptAnswerHints } from "../../workLog";
+
+const EMPTY_ACTIVITIES: Thread["activities"] = [];
 const ATTACHMENT_PREVIEW_HANDOFF_TTL_MS = 5000;
 function revokeBlobPreviewUrlsAfterPaint(previewUrls: readonly string[]): void {
   if (previewUrls.length === 0 || typeof window === "undefined") {
@@ -22,6 +25,43 @@ function revokeBlobPreviewUrlsAfterPaint(previewUrls: readonly string[]): void {
     }, 0);
   });
 }
+interface StreamedLayoutMemory {
+  threadId: ThreadId | null;
+  streamedMessageIds: Set<MessageId>;
+  wholeByMessage: WeakMap<ChatMessage, ChatMessage>;
+}
+
+export function createStreamedLayoutMemory(): StreamedLayoutMemory {
+  return { threadId: null, streamedMessageIds: new Set(), wholeByMessage: new WeakMap() };
+}
+
+export function keepStreamedMessagesWhole(
+  messages: ChatMessage[],
+  memory: StreamedLayoutMemory,
+  threadId: ThreadId,
+): ChatMessage[] {
+  if (memory.threadId !== threadId) {
+    memory.threadId = threadId;
+    memory.streamedMessageIds.clear();
+  }
+  let result: ChatMessage[] | null = null;
+  messages.forEach((message, index) => {
+    if (message.streaming && message.role === "assistant") {
+      memory.streamedMessageIds.add(message.id);
+    }
+    if (!message.textSegments || !memory.streamedMessageIds.has(message.id)) return;
+    let whole = memory.wholeByMessage.get(message);
+    if (!whole) {
+      const { textSegments: _segments, ...rest } = message;
+      whole = rest;
+      memory.wholeByMessage.set(message, whole);
+    }
+    result ??= [...messages];
+    result[index] = whole;
+  });
+  return result ?? messages;
+}
+
 interface ChatTimelineMessagesInput {
   threadId: ThreadId;
   activeThread: Thread | undefined;
@@ -122,11 +162,23 @@ export function useChatTimelineMessages({
       }
     }, ATTACHMENT_PREVIEW_HANDOFF_TTL_MS);
   }, []);
+  const [streamedLayoutMemory] = useState(createStreamedLayoutMemory);
   const serverMessages = activeThread?.messages;
+  const answerHints = useMemo(
+    () => deriveTranscriptAnswerHints(activeThread?.activities ?? EMPTY_ACTIVITIES),
+    [activeThread?.activities],
+  );
   const timelineMessages = useMemo(() => {
-    const messages = filterSidechatTranscriptMessages(
-      serverMessages ?? [],
-      Boolean(activeThread?.sidechatSourceThreadId),
+    const messages = keepStreamedMessagesWhole(
+      applyTranscriptAnswerHints(
+        filterSidechatTranscriptMessages(
+          serverMessages ?? [],
+          Boolean(activeThread?.sidechatSourceThreadId),
+        ),
+        answerHints,
+      ),
+      streamedLayoutMemory,
+      threadId,
     );
     const serverMessagesWithPreviewHandoff =
       Object.keys(attachmentPreviewHandoffByMessageId).length === 0
@@ -191,7 +243,9 @@ export function useChatTimelineMessages({
     return setupBubbles.length === 0 ? withPending : [...withPending, ...setupBubbles];
   }, [
     activeThread?.sidechatSourceThreadId,
+    answerHints,
     serverMessages,
+    streamedLayoutMemory,
     attachmentPreviewHandoffByMessageId,
     optimisticUserMessages,
     pendingAutomationConversation,

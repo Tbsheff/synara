@@ -9,11 +9,17 @@
 
 import { type ApprovalRequestId, type ProviderApprovalDecision } from "@synara/contracts";
 import { pendingRequestInstanceKey } from "@synara/shared/threadSummary";
-import { type KeyboardEvent, useRef } from "react";
+import { type KeyboardEvent, type ReactNode, useRef } from "react";
 import { type PendingApproval } from "../../session-logic";
 import { cn } from "~/lib/utils";
 import { ComposerChoiceRow, type ComposerChoiceTone } from "./ComposerChoiceRow";
 import { COMPOSER_INPUT_SURFACE_CLASS_NAME } from "./composerPickerStyles";
+import { DiffStatLabel } from "./DiffStatLabel";
+import { FileChangeDiffDetails } from "./ToolCallDetailsDialog";
+import {
+  formatParsedActionLabel,
+  formatPermissionProfileLines,
+} from "./ComposerPendingApprovalPanel.logic";
 
 interface ComposerPendingApprovalPanelProps {
   approval: PendingApproval;
@@ -183,6 +189,7 @@ export const ComposerPendingApprovalPanel = function ComposerPendingApprovalPane
   const submittedRequestKeyRef = useRef<string | null>(null);
   const computerScope = computerScopeFor(approval);
   const actions = availableApprovalActions(approval);
+  const toolLabel = approval.displayName ?? approval.toolTitle ?? approval.toolName ?? parsed.tool;
 
   const respondOnce = (action: ApprovalAction) => {
     if (isResponding || submittedRequestKeyRef.current === submissionKey) return;
@@ -229,10 +236,10 @@ export const ComposerPendingApprovalPanel = function ComposerPendingApprovalPane
     >
       <div className="flex items-start justify-between gap-3">
         <p className="min-w-0 text-ui-lg font-medium leading-snug text-foreground/90">
-          {computerScope?.prompt ?? KIND_PROMPT[approval.requestKind]}
-          {!computerScope && (approval.toolName ?? parsed.tool) ? (
+          {computerScope?.prompt ?? approval.promptTitle ?? KIND_PROMPT[approval.requestKind]}
+          {!computerScope && toolLabel ? (
             <span className="ml-1.5 text-ui-sm font-normal text-muted-foreground/50">
-              {approval.toolName ?? parsed.tool}
+              {toolLabel}
             </span>
           ) : null}
         </p>
@@ -242,12 +249,22 @@ export const ComposerPendingApprovalPanel = function ComposerPendingApprovalPane
           </span>
         ) : null}
       </div>
-      <ApprovalDetail
-        parsed={parsed}
-        {...(approval.permissionProfile ? { permissionProfile: approval.permissionProfile } : {})}
-        {...(approval.toolName ? { toolName: approval.toolName } : {})}
-        {...(approval.toolParamsDisplay ? { toolParamsDisplay: approval.toolParamsDisplay } : {})}
-      />
+      {approval.description ? (
+        <p className="mt-1 text-ui-sm leading-snug text-muted-foreground/70">
+          {approval.description}
+        </p>
+      ) : null}
+      {approval.fileChanges ? (
+        <ApprovalFileChanges fileChanges={approval.fileChanges} />
+      ) : (
+        <ApprovalDetail
+          parsed={parsed}
+          {...(approval.permissionProfile ? { permissionProfile: approval.permissionProfile } : {})}
+          {...(approval.toolName ? { toolName: approval.toolName } : {})}
+          {...(approval.toolParamsDisplay ? { toolParamsDisplay: approval.toolParamsDisplay } : {})}
+        />
+      )}
+      <ApprovalContext approval={approval} />
       <div className="mt-2.5 space-y-0.5">
         {actions.map((action, index) => (
           <ComposerChoiceRow
@@ -284,12 +301,7 @@ function ApprovalDetail({
             {parsed.fallback}
           </p>
         ) : null}
-        <pre
-          className="max-h-36 overflow-auto whitespace-pre-wrap break-words rounded-md bg-[var(--color-background-elevated-secondary)] px-2.5 py-2 font-mono text-ui-sm leading-relaxed text-foreground/85"
-          title="Requested permission profile"
-        >
-          <code>{JSON.stringify(permissionProfile, null, 2)}</code>
-        </pre>
+        <PermissionProfileList permissionProfile={permissionProfile} />
       </div>
     );
   }
@@ -352,6 +364,127 @@ function ApprovalDetail({
   }
 
   return <p className="mt-2 text-ui text-muted-foreground/65">Review the request to continue.</p>;
+}
+
+function PermissionProfileList({
+  permissionProfile,
+}: {
+  permissionProfile: Record<string, unknown>;
+}) {
+  const lines = formatPermissionProfileLines(permissionProfile);
+  if (lines.length === 0) {
+    return (
+      <p className="text-ui-sm text-muted-foreground/65">
+        The agent asked for additional permissions.
+      </p>
+    );
+  }
+  return (
+    <ul
+      className="max-h-36 space-y-1 overflow-auto rounded-md bg-[var(--color-background-elevated-secondary)] px-2.5 py-2 text-ui-sm leading-snug"
+      aria-label="Requested permissions"
+    >
+      {lines.map((line) => (
+        <li key={line.label} className="min-w-0">
+          <span className="font-medium text-foreground/85">{line.label}</span>
+          {line.values.length > 0 ? (
+            <span className="ml-1.5 break-words font-mono text-ui-xs text-muted-foreground/75">
+              {line.values.join(", ")}
+            </span>
+          ) : null}
+          {line.rawJson ? (
+            <pre
+              className="mt-1 whitespace-pre-wrap break-words font-mono text-ui-xs text-muted-foreground/75"
+              data-approval-raw-permissions="true"
+            >
+              {line.rawJson}
+            </pre>
+          ) : null}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function ApprovalFileChanges({
+  fileChanges,
+}: {
+  fileChanges: NonNullable<PendingApproval["fileChanges"]>;
+}) {
+  const hiddenCount = Math.max(
+    0,
+    (fileChanges.totalFiles ?? fileChanges.changes.length) - fileChanges.changes.length,
+  );
+  return (
+    <div className="mt-2 max-h-72 space-y-2 overflow-auto" data-approval-file-changes="true">
+      {fileChanges.changes.map((change) => (
+        <div key={`${change.kind}:${change.path}`} className="min-w-0 space-y-1">
+          <div className="flex min-w-0 items-center gap-2 text-ui-sm">
+            <span className="min-w-0 truncate font-mono text-foreground/85" title={change.path}>
+              {change.path}
+            </span>
+            {change.additions !== undefined || change.deletions !== undefined ? (
+              <DiffStatLabel additions={change.additions ?? 0} deletions={change.deletions ?? 0} />
+            ) : null}
+          </div>
+          <FileChangeDiffDetails change={change} />
+        </div>
+      ))}
+      {fileChanges.changesTruncated || hiddenCount > 0 ? (
+        <p className="text-ui-xs text-muted-foreground/60">
+          {hiddenCount > 0 ? `${hiddenCount} more files not shown` : "More files not shown"}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+function ApprovalContext({ approval }: { approval: PendingApproval }) {
+  const reason = approval.decisionReason ?? approval.reason;
+  const parsedActions = approval.parsedActions ?? [];
+  if (!approval.cwd && !reason && !approval.blockedPath && parsedActions.length === 0) {
+    return null;
+  }
+  return (
+    <dl className="mt-2 space-y-1 text-ui-xs leading-snug">
+      {parsedActions.length > 0 ? (
+        <ApprovalContextRow label="Actions">
+          <ul className="space-y-0.5">
+            {parsedActions.map((action) => (
+              <li
+                key={[action.type, action.path, action.query, action.command].join(":")}
+                className="break-words"
+              >
+                {formatParsedActionLabel(action)}
+              </li>
+            ))}
+          </ul>
+        </ApprovalContextRow>
+      ) : null}
+      {approval.cwd ? (
+        <ApprovalContextRow label="Directory">
+          <span className="break-words font-mono" title={approval.cwd}>
+            {shortenPath(approval.cwd)}
+          </span>
+        </ApprovalContextRow>
+      ) : null}
+      {approval.blockedPath ? (
+        <ApprovalContextRow label="Blocked path">
+          <span className="break-words font-mono">{approval.blockedPath}</span>
+        </ApprovalContextRow>
+      ) : null}
+      {reason ? <ApprovalContextRow label="Reason">{reason}</ApprovalContextRow> : null}
+    </dl>
+  );
+}
+
+function ApprovalContextRow({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="grid grid-cols-[auto_1fr] gap-x-2">
+      <dt className="font-medium text-muted-foreground/65">{label}</dt>
+      <dd className="min-w-0 text-foreground/80">{children}</dd>
+    </div>
+  );
 }
 
 function formatToolParameterValue(value: unknown): string {

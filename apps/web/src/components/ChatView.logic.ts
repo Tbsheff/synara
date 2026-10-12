@@ -11,6 +11,7 @@ import {
   type GitWorktreeSetupProgressEvent,
   type ModelSelection,
   type ModelSlug,
+  type OrchestrationThreadActivity,
   type ProviderInstanceId,
   type ProviderApprovalDecision,
   type ProviderInteractionMode,
@@ -20,6 +21,7 @@ import {
   type RuntimeMode,
   type ServerProviderAuthStatus,
   type ThreadId as ThreadIdType,
+  type TurnId,
 } from "@synara/contracts";
 import { getDefaultModel, normalizeModelSlug } from "@synara/shared/model";
 import { approvalSessionGrantWidensSessionPolicy } from "@synara/shared/approvalSessionGrant";
@@ -62,8 +64,10 @@ import {
 import {
   hasLiveTurnTailWork,
   isProviderFileEditWorkLogEntry,
+  type TurnErrorContext,
   type WorkLogEntry,
 } from "../session-logic";
+import { deriveReasoningRowLabel } from "../lib/toolCallLabel";
 import { localSubagentThreadId } from "./ChatView.selectors";
 import { buildModelSelection, type ProviderModelOption } from "../providerModelOptions";
 
@@ -1420,15 +1424,25 @@ export function hasServerAcknowledgedLocalDispatch(input: {
   return false;
 }
 
+export type ThreadErrorBannerContext = TurnErrorContext;
+
+export function threadErrorBannerContextFor(
+  threadError: string | null | undefined,
+  context: ThreadErrorBannerContext | null | undefined,
+): TurnErrorContext | null {
+  const error = threadError?.trim();
+  return error && context?.cause?.trim() === error ? context : null;
+}
+
 /** Fail-open bound for the post-ack "awaiting turn start" Thinking bridge. */
 export const LOCAL_DISPATCH_TURN_TAKEOVER_TIMEOUT_MS = 60_000;
 
-/** The exact label set the transcript's working indicator can render. */
 export type WorkingLabel =
   | "Loading"
   | "Thinking"
   | "Checking message delivery…"
-  | `Starting ${string}…`;
+  | `Starting ${string}…`
+  | (string & {});
 
 export function resolveWorkingLabel(input: {
   isSendBusy: boolean;
@@ -1436,6 +1450,7 @@ export function resolveWorkingLabel(input: {
   isConnecting?: boolean;
   isSettlingTurnDispatch?: boolean;
   providerName?: string;
+  statusText?: string | null;
 }): WorkingLabel {
   if (input.isSettlingTurnDispatch) return "Checking message delivery…";
   if (input.isSendBusy && !input.turnTakenOver) {
@@ -1444,7 +1459,250 @@ export function resolveWorkingLabel(input: {
   if (input.isConnecting && input.providerName) {
     return `Starting ${input.providerName}…`;
   }
-  return "Thinking";
+  return input.statusText ?? "Thinking";
+}
+
+export const WORKING_LABEL_MIN_HOLD_MS = 600;
+export const WORKING_LABEL_REVERT_DELAY_MS = 3_000;
+
+export function isProgressStepWorkingLabel(label: WorkingLabel): boolean {
+  return label === "Loading" || (label.startsWith("Starting ") && label.endsWith("…"));
+}
+
+export function isFreeTextWorkingLabel(label: WorkingLabel): boolean {
+  return (
+    !isProgressStepWorkingLabel(label) &&
+    label !== "Thinking" &&
+    label !== "Checking message delivery…"
+  );
+}
+
+export interface WorkingLabelPacing {
+  shown: WorkingLabel;
+  shownAtMs: number;
+}
+
+export function paceWorkingLabel(
+  pacing: WorkingLabelPacing,
+  target: WorkingLabel,
+  nowMs: number,
+): { pacing: WorkingLabelPacing; retryAtMs: number | null } {
+  if (target === pacing.shown) return { pacing, retryAtMs: null };
+  const fallingBackFromStatus = target === "Thinking" && isFreeTextWorkingLabel(pacing.shown);
+  const holdMs = fallingBackFromStatus ? WORKING_LABEL_REVERT_DELAY_MS : WORKING_LABEL_MIN_HOLD_MS;
+  const earliestChangeAtMs = pacing.shownAtMs + holdMs;
+  if (nowMs >= earliestChangeAtMs) {
+    return { pacing: { shown: target, shownAtMs: nowMs }, retryAtMs: null };
+  }
+  return { pacing, retryAtMs: earliestChangeAtMs };
+}
+
+const SESSION_STATUS_ACTIVITY_KIND = "session.status";
+const WORKING_STATUS_TEXT_MAX_CHARS = 120;
+
+function activityPayloadRecord(
+  activity: Pick<OrchestrationThreadActivity, "payload">,
+): Record<string, unknown> | null {
+  return activity.payload &&
+    typeof activity.payload === "object" &&
+    !Array.isArray(activity.payload)
+    ? (activity.payload as Record<string, unknown>)
+    : null;
+}
+
+function collapsedStatusText(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const text = value.replace(/\s+/g, " ").trim();
+  return text.length > 0 ? text : null;
+}
+
+function capWorkingStatusText(text: string): string {
+  return text.length > WORKING_STATUS_TEXT_MAX_CHARS
+    ? `${text.slice(0, WORKING_STATUS_TEXT_MAX_CHARS - 1).trimEnd()}…`
+    : text;
+}
+
+function workingStatusText(value: unknown): string | null {
+  const text = collapsedStatusText(value);
+  return text === null ? null : capWorkingStatusText(text);
+}
+
+const BOLD_ONLY_REASONING_LINE = /^(?:\*\*|__)(.+?)(?:\*\*|__)[:.]?$/u;
+
+function stripInlineMarkdown(line: string): string {
+  return line
+    .replace(/^\s{0,3}#{1,6}\s+/u, "")
+    .replace(/^\s*(?:[-*+]|\d+[.)])\s+/u, "")
+    .replace(/^\s*>\s?/u, "")
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/gu, "$1")
+    .replace(/(\*\*|__)(.+?)\1/gu, "$2")
+    .replace(/(^|[^\w*])[*_]([^*_\s][^*_]*?)[*_](?=$|[^\w*])/gu, "$1$2")
+    .replace(/`([^`]*)`/gu, "$1")
+    .replace(/\s+/gu, " ")
+    .trim();
+}
+
+export function deriveReasoningStatusHeading(summary: string | null | undefined): string | null {
+  if (!summary) return null;
+  const firstLine = summary
+    .replace(/<!--[\s\S]*?-->/gu, "")
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .find((line) => line.length > 0);
+  if (firstLine === undefined) return null;
+  const boldMatch = BOLD_ONLY_REASONING_LINE.exec(firstLine);
+  const heading = stripInlineMarkdown(boldMatch ? boldMatch[1]! : firstLine);
+  return heading.length > 0 ? heading : null;
+}
+
+function reasoningActivityHeading(reasoning: unknown): string | null {
+  if (!reasoning || typeof reasoning !== "object" || Array.isArray(reasoning)) return null;
+  const record = reasoning as Record<string, unknown>;
+  if (record.redacted === true) return null;
+  return (
+    collapsedStatusText(record.heading) ??
+    (typeof record.summary === "string" ? deriveReasoningStatusHeading(record.summary) : null)
+  );
+}
+
+function reasoningHeadingMatchKey(heading: string): string {
+  return deriveReasoningRowLabel({ heading }, false)
+    .action.replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+export function collectVisibleReasoningHeadings(
+  entries: ReadonlyArray<Pick<WorkLogEntry, "turnId" | "reasoning">>,
+  turnId: TurnId | null,
+): ReadonlySet<string> {
+  const headings = new Set<string>();
+  if (turnId === null) return headings;
+  for (const entry of entries) {
+    if (entry.turnId !== turnId) continue;
+    const heading = entry.reasoning?.redacted
+      ? null
+      : collapsedStatusText(entry.reasoning?.heading);
+    if (heading !== null) headings.add(reasoningHeadingMatchKey(heading));
+  }
+  return headings;
+}
+
+function isMachineTokenStatusReason(reason: string): boolean {
+  return /^[a-z_]+:[a-z_]+$/u.test(reason);
+}
+
+function compareActivityRecency(
+  left: Pick<OrchestrationThreadActivity, "createdAt" | "sequence">,
+  right: Pick<OrchestrationThreadActivity, "createdAt" | "sequence">,
+): number {
+  if (left.createdAt !== right.createdAt) return left.createdAt < right.createdAt ? -1 : 1;
+  return (left.sequence ?? 0) - (right.sequence ?? 0);
+}
+
+function retryCounterText(payload: Record<string, unknown> | null): string | null {
+  const attempt = payload?.retryAttempt;
+  const maxAttempts = payload?.retryMaxAttempts;
+  if (
+    typeof attempt !== "number" ||
+    typeof maxAttempts !== "number" ||
+    !Number.isInteger(attempt) ||
+    !Number.isInteger(maxAttempts) ||
+    maxAttempts <= 0
+  ) {
+    return null;
+  }
+  return `Reconnecting ${attempt}/${maxAttempts}`;
+}
+
+export interface TurnWorkingStatus {
+  turnId: TurnId;
+  sessionReason: string | null;
+  retry: { text: string; createdAt: string } | null;
+  heading: string | null;
+}
+
+export function deriveTurnWorkingStatus(input: {
+  activities: ReadonlyArray<OrchestrationThreadActivity>;
+  turnId: TurnId | null;
+}): TurnWorkingStatus | null {
+  const { turnId } = input;
+  if (turnId === null) return null;
+
+  let sessionReason: string | null = null;
+  let latestActivity: OrchestrationThreadActivity | null = null;
+  let latestHeading: { activity: OrchestrationThreadActivity; heading: string } | null = null;
+  for (const activity of input.activities) {
+    if (activity.turnId !== turnId) continue;
+    const payload = activityPayloadRecord(activity);
+    if (activity.kind === SESSION_STATUS_ACTIVITY_KIND) {
+      const reason = workingStatusText(payload?.reason);
+      sessionReason = reason !== null && !isMachineTokenStatusReason(reason) ? reason : null;
+      continue;
+    }
+    if (latestActivity === null || compareActivityRecency(activity, latestActivity) > 0) {
+      latestActivity = activity;
+    }
+    if (activity.kind !== "task.progress") continue;
+    const heading = reasoningActivityHeading(payload?.reasoning);
+    if (
+      heading !== null &&
+      (latestHeading === null || compareActivityRecency(activity, latestHeading.activity) > 0)
+    ) {
+      latestHeading = { activity, heading };
+    }
+  }
+  const retryText =
+    latestActivity?.kind === "runtime.warning"
+      ? retryCounterText(activityPayloadRecord(latestActivity))
+      : null;
+  return {
+    turnId,
+    sessionReason,
+    retry:
+      retryText !== null && latestActivity !== null
+        ? { text: retryText, createdAt: latestActivity.createdAt }
+        : null,
+    heading: latestHeading?.heading ?? null,
+  };
+}
+
+export function resolveWorkingStatusText(
+  status: TurnWorkingStatus | null,
+  messages: ReadonlyArray<Pick<ChatMessage, "role" | "turnId" | "createdAt">>,
+  visibleReasoningHeadings?: ReadonlySet<string>,
+): string | null {
+  if (status === null) return null;
+  if (status.sessionReason !== null) return status.sessionReason;
+  const { retry } = status;
+  if (
+    retry !== null &&
+    !messages.some(
+      (message) =>
+        message.role === "assistant" &&
+        message.turnId === status.turnId &&
+        message.createdAt > retry.createdAt,
+    )
+  ) {
+    return retry.text;
+  }
+  if (status.heading === null) return null;
+  const headingShownInTranscript =
+    visibleReasoningHeadings?.has(reasoningHeadingMatchKey(status.heading)) === true;
+  return headingShownInTranscript ? null : capWorkingStatusText(status.heading);
+}
+
+export function deriveWorkingStatusText(input: {
+  activities: ReadonlyArray<OrchestrationThreadActivity>;
+  messages: ReadonlyArray<Pick<ChatMessage, "role" | "turnId" | "createdAt">>;
+  turnId: TurnId | null;
+  visibleReasoningHeadings?: ReadonlySet<string>;
+}): string | null {
+  return resolveWorkingStatusText(
+    deriveTurnWorkingStatus(input),
+    input.messages,
+    input.visibleReasoningHeadings,
+  );
 }
 
 /**
@@ -1665,6 +1923,19 @@ export function resolveQueuedComposerAutoDispatchHold(input: {
 }
 
 export const ACTIVE_TURN_LAYOUT_SETTLE_DELAY_MS = 180;
+
+export function resolveTranscriptLiveTurn(input: {
+  isWorking: boolean;
+  settleGraceActive: boolean;
+  activeWorkStartedAt: string | null;
+  latestTurnStartedAt: string | null;
+}): { showsLiveTurn: boolean; turnStartedAt: string | null } {
+  return {
+    showsLiveTurn: input.isWorking || input.settleGraceActive,
+    turnStartedAt:
+      input.activeWorkStartedAt ?? (input.settleGraceActive ? input.latestTurnStartedAt : null),
+  };
+}
 
 export function shouldStartActiveTurnLayoutGrace(options: {
   previousTurnLayoutLive: boolean;

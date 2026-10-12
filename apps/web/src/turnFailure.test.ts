@@ -10,7 +10,11 @@ import {
   makeThread,
   threadsOf,
 } from "./storeTestFixtures";
-import { deriveTimelineEntries, deriveWorkLogEntries } from "./workLog";
+import {
+  deriveLatestTurnErrorContext,
+  deriveTimelineEntries,
+  deriveWorkLogEntries,
+} from "./workLog";
 import { deriveMessagesTimelineRows } from "./components/chat/MessagesTimeline.logic";
 
 const turnId = TurnId.makeUnsafe("failed-turn");
@@ -245,5 +249,57 @@ describe("durable turn failure feedback", () => {
     expect(rows.filter((row) => row.kind === "work")).toMatchObject([
       { groupedEntries: [{ turnId, turnFailure: { cause } }] },
     ]);
+  });
+});
+
+describe("provider error detail", () => {
+  const maxTurnsFailure = makeActivity({
+    id: "max-turns-error",
+    turnId,
+    sequence: 2,
+    kind: "runtime.error",
+    tone: "error",
+    summary: "Provider runtime error",
+    payload: {
+      message: "Reached maximum number of turns (8)",
+      class: "provider_error",
+      errorCode: "error_max_turns",
+      detail: {
+        errors: ["Reached maximum number of turns (8)", "Bash denied: rm -rf build"],
+        permissionDenials: 2,
+      },
+    },
+  });
+  const maxTurnsCompletion = makeActivity({
+    id: "max-turns-completion",
+    turnId,
+    sequence: 3,
+    kind: "turn.completed",
+    tone: "error",
+    summary: "Turn failed",
+    payload: { state: "failed", errorMessage: "Reached maximum number of turns (8)" },
+  });
+
+  it("keeps the runtime error detail after the failed completion merges in", () => {
+    const [entry] = deriveWorkLogEntries([maxTurnsFailure, maxTurnsCompletion], turnId);
+    expect(entry?.turnFailure).toMatchObject({
+      errorCode: "error_max_turns",
+      detail: { errors: ["Bash denied: rm -rf build"], permissionDenials: 2 },
+    });
+  });
+
+  it("gives the session banner the latest turn's cause, stop reason and detail", () => {
+    expect(deriveLatestTurnErrorContext([maxTurnsFailure, maxTurnsCompletion], turnId)).toEqual({
+      cause: "Reached maximum number of turns (8)",
+      stopReason: "error_max_turns",
+      detail: { errors: ["Bash denied: rm -rf build"], permissionDenials: 2 },
+    });
+    expect(
+      deriveLatestTurnErrorContext(
+        [maxTurnsFailure, maxTurnsCompletion],
+        TurnId.makeUnsafe("next-turn"),
+      ),
+    ).toBeNull();
+    expect(deriveLatestTurnErrorContext([failure, completed], turnId)).toBeNull();
   });
 });

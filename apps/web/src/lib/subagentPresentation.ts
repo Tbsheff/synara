@@ -69,18 +69,21 @@ function basename(value: string): string {
   return slashIndex >= 0 ? value.slice(slashIndex + 1) : value;
 }
 
+const CLAUDE_TOOL_USE_ID_PATTERN = /^(?:srv)?toolu_[A-Za-z0-9]+$/;
+
 function fallbackSubagentLabel(value: string | null): string | null {
   const normalized = normalizeWhitespace(value);
   if (!normalized) {
     return null;
   }
 
-  if (normalized.startsWith("subagent:")) {
-    const segments = normalized.split(":").filter((segment) => segment.length > 0);
-    return segments.at(-1) ?? normalized;
-  }
-
-  return basename(normalized);
+  const label = normalized.startsWith("subagent:")
+    ? (normalized
+        .split(":")
+        .filter((segment) => segment.length > 0)
+        .at(-1) ?? normalized)
+    : basename(normalized);
+  return CLAUDE_TOOL_USE_ID_PATTERN.test(label) ? null : label;
 }
 
 function normalizeWhitespace(value: string | null | undefined): string | null {

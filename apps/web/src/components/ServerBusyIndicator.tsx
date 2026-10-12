@@ -1,4 +1,8 @@
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+
+import { usePresentedWithFade } from "../hooks/usePresentedWithFade";
+import { TRANSPORT_OUTAGE_NOTICE_DELAY_MS } from "../lib/composerTransportStatus";
+import { disclosureFadeClassName } from "../lib/disclosureMotion";
 import {
   getServerBusySnapshot,
   subscribeServerBusy,
@@ -51,33 +55,71 @@ export function ServerBusyNotice({
   );
 }
 
-export function ServerBusyIndicator() {
+const RECONNECT_NOTICE_MIN_VISIBLE_MS = 600;
+
+function useDelayedTransportOutage(): {
+  transportState: WsTransportState | null;
+  reconnecting: boolean;
+} {
   const [transportState, setTransportState] = useState<WsTransportState | null>(null);
   const [reconnecting, setReconnecting] = useState(false);
   useEffect(() => {
     let hasConnected = false;
-    return addWsTransportStateListener(
+    let outageTimer: ReturnType<typeof setTimeout> | undefined;
+    const unsubscribe = addWsTransportStateListener(
       (state) => {
         setTransportState(state);
         if (state === "open") hasConnected = true;
-        setReconnecting(hasConnected && (state === "connecting" || state === "closed"));
+        const outage = hasConnected && (state === "connecting" || state === "closed");
+        if (!outage) {
+          clearTimeout(outageTimer);
+          outageTimer = undefined;
+          setReconnecting(false);
+          return;
+        }
+        if (outageTimer === undefined) {
+          outageTimer = setTimeout(() => setReconnecting(true), TRANSPORT_OUTAGE_NOTICE_DELAY_MS);
+        }
       },
       { replayCurrent: true },
     );
+    return () => {
+      unsubscribe();
+      clearTimeout(outageTimer);
+    };
   }, []);
+  return { transportState, reconnecting };
+}
+
+export function ServerBusyIndicator() {
+  const { transportState, reconnecting } = useDelayedTransportOutage();
   const snapshot = useSyncExternalStore(
     subscribeServerBusy,
     getServerBusySnapshot,
     getServerBusySnapshot,
   );
-  if (
-    !reconnecting &&
-    (transportState !== "open" || (!snapshot.reason && snapshot.slowRequests === 0))
-  )
-    return null;
+  const showNotice =
+    reconnecting ||
+    (transportState === "open" && (snapshot.reason !== null || snapshot.slowRequests > 0));
+  const notice = useMemo(
+    () => (showNotice ? { snapshot, reconnecting } : null),
+    [showNotice, snapshot, reconnecting],
+  );
+  const presented = usePresentedWithFade(notice, {
+    minVisibleMs: RECONNECT_NOTICE_MIN_VISIBLE_MS,
+  });
+  if (!presented) return null;
   return (
-    <div className="pointer-events-none fixed top-12 left-1/2 z-50 max-w-[calc(100vw-2rem)] -translate-x-1/2">
-      <ServerBusyNotice snapshot={snapshot} reconnecting={reconnecting} />
+    <div
+      className={disclosureFadeClassName(
+        presented.open,
+        "pointer-events-none fixed top-12 left-1/2 z-50 max-w-[calc(100vw-2rem)] -translate-x-1/2",
+      )}
+    >
+      <ServerBusyNotice
+        snapshot={presented.value.snapshot}
+        reconnecting={presented.value.reconnecting}
+      />
     </div>
   );
 }

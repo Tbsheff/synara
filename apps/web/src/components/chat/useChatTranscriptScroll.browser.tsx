@@ -137,3 +137,130 @@ describe("transcript follow after switching threads", () => {
     }
   });
 });
+
+describe("transcript follow after a layout-driven upward move", () => {
+  function mountFollowingNode() {
+    const node = document.createElement("div");
+    document.body.append(node);
+    let scrollTop = 800;
+    Object.defineProperties(node, {
+      scrollHeight: { value: 1_000 },
+      clientHeight: { value: 200 },
+      scrollTop: {
+        get: () => scrollTop,
+        set: (value: number) => {
+          scrollTop = value;
+        },
+      },
+    });
+    const listRef = {
+      current: {
+        scrollToEnd: vi.fn(async () => {
+          scrollTop = 800;
+        }),
+        getScrollableNode: () => node,
+        getState: () => ({ isAtEnd: scrollTop >= 800 }),
+      } as unknown as LegendListRef,
+    };
+    let controls: ReturnType<typeof useChatTranscriptScroll> | undefined;
+    function Harness() {
+      controls = useChatTranscriptScroll({
+        activeThreadId: ThreadId.makeUnsafe("clamp"),
+        legendListRef: listRef,
+        timelineEntries: EMPTY_TIMELINE,
+        hasStreamingAssistantText: false,
+        composerTranscriptInsetPx: 0,
+        isInactiveSplitPane: false,
+      });
+      return null;
+    }
+    const moveUp = (px: number) => {
+      scrollTop -= px;
+      controls!.onIsAtEndChange(false);
+    };
+    return {
+      node,
+      controls: () => controls!,
+      moveUp,
+      scrollTop: () => scrollTop,
+      render: () => render(<Harness />),
+    };
+  }
+
+  it("restores the end when a layout change explains the move", async () => {
+    const mounted = mountFollowingNode();
+    const screen = await mounted.render();
+    try {
+      await waitForFrames();
+      mounted.controls().onIsAtEndChange(true);
+      mounted.node.append(document.createElement("span"));
+      await Promise.resolve();
+      mounted.moveUp(132);
+      expect(mounted.scrollTop()).toBe(800);
+      await waitForFrames();
+      expect(mounted.controls().isUserScrollDetached).toBe(false);
+      expect(mounted.controls().showScrollToBottom).toBe(false);
+    } finally {
+      await screen.unmount();
+      mounted.node.remove();
+    }
+  });
+
+  it("leaves the move to the reader after a wheel up", async () => {
+    const mounted = mountFollowingNode();
+    const screen = await mounted.render();
+    try {
+      await waitForFrames();
+      mounted.controls().onIsAtEndChange(true);
+      mounted.node.append(document.createElement("span"));
+      await Promise.resolve();
+      mounted.controls().onMessagesWheelBase({
+        ctrlKey: false,
+        deltaY: -120,
+      } as unknown as Parameters<
+        ReturnType<typeof useChatTranscriptScroll>["onMessagesWheelBase"]
+      >[0]);
+      mounted.moveUp(132);
+      expect(mounted.scrollTop()).toBe(668);
+    } finally {
+      await screen.unmount();
+      mounted.node.remove();
+    }
+  });
+
+  it("restores a move that no reader input explains, long after any layout change", async () => {
+    const mounted = mountFollowingNode();
+    const screen = await mounted.render();
+    try {
+      await waitForFrames();
+      mounted.controls().onIsAtEndChange(true);
+      await new Promise((resolve) => window.setTimeout(resolve, 450));
+      mounted.moveUp(132);
+      expect(mounted.scrollTop()).toBe(800);
+      await waitForFrames();
+      expect(mounted.controls().isUserScrollDetached).toBe(false);
+    } finally {
+      await screen.unmount();
+      mounted.node.remove();
+    }
+  });
+
+  it("leaves the move to the reader after an up key", async () => {
+    const mounted = mountFollowingNode();
+    const screen = await mounted.render();
+    try {
+      await waitForFrames();
+      mounted.controls().onIsAtEndChange(true);
+      mounted.node.tabIndex = 0;
+      mounted.node.focus();
+      mounted.node.dispatchEvent(new KeyboardEvent("keydown", { key: "PageUp", bubbles: true }));
+      mounted.moveUp(132);
+      expect(mounted.scrollTop()).toBe(668);
+      await waitForFrames();
+      expect(mounted.controls().isUserScrollDetached).toBe(true);
+    } finally {
+      await screen.unmount();
+      mounted.node.remove();
+    }
+  });
+});

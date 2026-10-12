@@ -13,6 +13,7 @@ import {
   type OrchestrationThreadActivity,
   type ProviderKind,
   ThreadId,
+  TRANSCRIPT_NOTICE_ACTIVITY_KIND,
   type TurnId,
 } from "@synara/contracts";
 import { resolveThreadBranchRegressionGuard } from "@synara/shared/git";
@@ -1150,6 +1151,7 @@ export function normalizeProposedPlans(
       existing.planMarkdown === plan.planMarkdown &&
       existing.implementedAt === plan.implementedAt &&
       existing.implementationThreadId === plan.implementationThreadId &&
+      existing.partial === plan.partial &&
       existing.createdAt === plan.createdAt &&
       existing.updatedAt === plan.updatedAt
     ) {
@@ -1161,6 +1163,7 @@ export function normalizeProposedPlans(
       planMarkdown: plan.planMarkdown,
       implementedAt: plan.implementedAt,
       implementationThreadId: plan.implementationThreadId,
+      ...(plan.partial ? { partial: true } : {}),
       createdAt: plan.createdAt,
       updatedAt: plan.updatedAt,
     };
@@ -1579,9 +1582,20 @@ function preferRicherActivity<TActivity extends Thread["activities"][number]>(
   if (activitiesEqual(previous, incoming)) {
     return previous;
   }
+  if (isUpsertedInPlaceActivity(incoming)) {
+    return incoming;
+  }
   const previousScore = activityPayloadDetailScore(previous);
   const incomingScore = activityPayloadDetailScore(incoming);
   return incomingScore < previousScore ? previous : incoming;
+}
+
+function isUpsertedInPlaceActivity(activity: Thread["activities"][number]): boolean {
+  return (
+    activity.kind === TRANSCRIPT_NOTICE_ACTIVITY_KIND ||
+    activity.id.startsWith("provider-retry:") ||
+    activity.id.startsWith("provider-reasoning:")
+  );
 }
 
 function activitiesEqual(

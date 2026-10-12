@@ -198,6 +198,7 @@ import {
   deriveActiveBackgroundTasksState,
   deriveActiveTaskListState,
   deriveActiveWorkStartedAt,
+  deriveLatestTurnErrorContext,
   derivePendingBackgroundWork,
   derivePhase,
   deriveTimelineEntries,
@@ -261,7 +262,11 @@ import {
   resolveSettledThreadBranchMismatch,
   resolveThreadArtifactWorkspaceRoot,
   resolveThreadDetailHydration,
+  resolveTranscriptLiveTurn,
   resolveWorkingLabel,
+  deriveTurnWorkingStatus,
+  resolveWorkingStatusText,
+  collectVisibleReasoningHeadings,
   shouldEnableComposerPastedTextCollapse,
   shouldRenderProviderHealthBanner,
   shouldShowComposerProviderInstancePicker,
@@ -1031,6 +1036,10 @@ export default function ChatView({
     () => deriveLatestContextWindowState(threadActivities),
     [threadActivities],
   );
+  const threadErrorContext = useMemo(
+    () => deriveLatestTurnErrorContext(threadActivities, activeLatestTurnId),
+    [activeLatestTurnId, threadActivities],
+  );
   const activeContextWindow = activeContextWindowState.snapshot;
   const activeCumulativeCostUsd = useMemo(
     () => deriveCumulativeCostUsd(threadActivities),
@@ -1657,7 +1666,7 @@ export default function ChatView({
     pendingUserInputs.length === 0 &&
     interactionMode === "plan" &&
     latestTurnSettled &&
-    hasActionableProposedPlan(activeProposedPlan);
+    hasActionableProposedPlan(activeProposedPlan, activeLatestTurn);
 
   const {
     localDispatch,
@@ -1694,6 +1703,31 @@ export default function ChatView({
   const activeTurnIdForTranscript = latestTurnSettled
     ? null
     : (activeThread?.session?.activeTurnId ?? activeLatestTurnId);
+  const turnWorkingStatus = useMemo(
+    () =>
+      deriveTurnWorkingStatus({
+        activities: activeThread?.activities ?? [],
+        turnId: activeTurnIdForTranscript,
+      }),
+    [activeThread?.activities, activeTurnIdForTranscript],
+  );
+  const visibleReasoningHeadings = useMemo(
+    () =>
+      collectVisibleReasoningHeadings(
+        agentActivityTimelineState.timelineWorkEntries,
+        activeTurnIdForTranscript,
+      ),
+    [agentActivityTimelineState.timelineWorkEntries, activeTurnIdForTranscript],
+  );
+  const workingStatusText = useMemo(
+    () =>
+      resolveWorkingStatusText(
+        turnWorkingStatus,
+        activeThread?.messages ?? [],
+        visibleReasoningHeadings,
+      ),
+    [activeThread?.messages, turnWorkingStatus, visibleReasoningHeadings],
+  );
   // The edit affordance must mirror the exact policy the server decider applies:
   // resolve the editable target from the raw sequence-ordered thread messages and
   // the running-session turn id — never from the createdAt-sorted timeline rows,
@@ -1758,9 +1792,6 @@ export default function ChatView({
     activeThread?.messages.some((message) => message.role === "assistant" && message.streaming) ??
     false;
   const activeTurnLayoutLive = isWorking || !latestTurnSettled;
-  const [keepSettledActiveTurnLayout, setKeepSettledActiveTurnLayout] = useState(false);
-  const previousActiveTurnLayoutLiveRef = useRef(activeTurnLayoutLive);
-  const previousActiveTurnLayoutKeyRef = useRef<string | null>(null);
   const activeWorkStartedAt = hasLiveTurnTail
     ? (activeLatestTurn?.startedAt ?? null)
     : hasLiveTurn
@@ -1768,7 +1799,35 @@ export default function ChatView({
       : null;
   const activeTurnLayoutKey =
     activeThreadId === null ? null : `${activeThreadId}:${activeLatestTurn?.turnId ?? "idle"}`;
+  const [activeTurnLayoutGrace, setActiveTurnLayoutGrace] = useState(() => ({
+    key: activeTurnLayoutKey,
+    live: activeTurnLayoutLive,
+    grace: false,
+  }));
+  if (
+    activeTurnLayoutGrace.key !== activeTurnLayoutKey ||
+    activeTurnLayoutGrace.live !== activeTurnLayoutLive
+  ) {
+    setActiveTurnLayoutGrace({
+      key: activeTurnLayoutKey,
+      live: activeTurnLayoutLive,
+      grace:
+        activeTurnLayoutGrace.key === activeTurnLayoutKey &&
+        shouldStartActiveTurnLayoutGrace({
+          previousTurnLayoutLive: activeTurnLayoutGrace.live,
+          currentTurnLayoutLive: activeTurnLayoutLive,
+          latestTurnStartedAt: activeLatestTurn?.startedAt ?? null,
+        }),
+    });
+  }
+  const keepSettledActiveTurnLayout = activeTurnLayoutGrace.grace;
   const activeTurnInProgress = activeTurnLayoutLive || keepSettledActiveTurnLayout;
+  const transcriptLiveTurn = resolveTranscriptLiveTurn({
+    isWorking,
+    settleGraceActive: keepSettledActiveTurnLayout,
+    activeWorkStartedAt,
+    latestTurnStartedAt: activeLatestTurn?.startedAt ?? null,
+  });
   const hasRunningSubagents = useMemo(
     () => collectRunningSubagentStripItems(composerSubagentStripItems).length > 0,
     [composerSubagentStripItems],
@@ -1783,45 +1842,17 @@ export default function ChatView({
     showPlanFollowUpPrompt,
   });
   const composerFooterHasWideActions = showPlanFollowUpPrompt || composerPendingProgress !== null;
-  useLayoutEffect(() => {
-    if (previousActiveTurnLayoutKeyRef.current !== activeTurnLayoutKey) {
-      previousActiveTurnLayoutKeyRef.current = activeTurnLayoutKey;
-      previousActiveTurnLayoutLiveRef.current = activeTurnLayoutLive;
-      setKeepSettledActiveTurnLayout(false);
-      return;
-    }
-
-    const shouldStartGrace = shouldStartActiveTurnLayoutGrace({
-      previousTurnLayoutLive: previousActiveTurnLayoutLiveRef.current,
-      currentTurnLayoutLive: activeTurnLayoutLive,
-      latestTurnStartedAt: activeLatestTurn?.startedAt ?? null,
-    });
-    previousActiveTurnLayoutLiveRef.current = activeTurnLayoutLive;
-
-    if (activeTurnLayoutLive) {
-      setKeepSettledActiveTurnLayout(false);
-      return;
-    }
-
-    if (!shouldStartGrace) {
-      return;
-    }
-
-    setKeepSettledActiveTurnLayout(true);
+  useEffect(() => {
+    if (!activeTurnLayoutGrace.grace) return;
     const timeoutId = window.setTimeout(() => {
-      setKeepSettledActiveTurnLayout(false);
+      setActiveTurnLayoutGrace((current) =>
+        current === activeTurnLayoutGrace ? { ...current, grace: false } : current,
+      );
     }, ACTIVE_TURN_LAYOUT_SETTLE_DELAY_MS);
     return () => {
       window.clearTimeout(timeoutId);
     };
-  }, [
-    setKeepSettledActiveTurnLayout,
-    previousActiveTurnLayoutLiveRef,
-    previousActiveTurnLayoutKeyRef,
-    activeLatestTurn?.startedAt,
-    activeTurnLayoutKey,
-    activeTurnLayoutLive,
-  ]);
+  }, [activeTurnLayoutGrace]);
 
   const { timelineMessages, optimisticUserMessages, setOptimisticUserMessages } =
     useChatTimelineMessages({
@@ -6674,13 +6705,14 @@ export default function ChatView({
                     activeTurnId={activeTurnIdForTranscript}
                     agentActivityDetail={openAgentActivityDetail}
                     hasMessages={timelineEntries.length > 0}
-                    isWorking={isWorking}
+                    isWorking={transcriptLiveTurn.showsLiveTurn}
                     workingLabel={resolveWorkingLabel({
                       isSettlingTurnDispatch,
                       isSendBusy,
                       turnTakenOver,
                       isConnecting,
                       providerName: providerDisplayName,
+                      statusText: workingStatusText,
                     })}
                     worktreeSetup={activeWorktreeSetup}
                     worktreeSetupPendingAction={worktreeSetupPendingAction}
@@ -6688,7 +6720,7 @@ export default function ChatView({
                     activeTurnInProgress={activeTurnInProgress}
                     subagentsRunning={hasRunningSubagents}
                     collapseFinishedTurns={settings.collapseFinishedTurns}
-                    activeTurnStartedAt={activeWorkStartedAt}
+                    activeTurnStartedAt={transcriptLiveTurn.turnStartedAt}
                     listRef={legendListRef}
                     timelineControllerRef={timelineControllerRef}
                     findHighlightStore={threadFindHighlightStore}
@@ -6717,6 +6749,7 @@ export default function ChatView({
                     conversationOnly={isCoordinatorConversation}
                     hubWorkItemsByMessageId={hubWorkItemsByMessageId}
                     threadError={activeThread?.error ?? null}
+                    threadErrorContext={threadErrorContext}
                     recoverableTurnId={
                       activeLatestTurnState === "error" ? activeLatestTurnId : null
                     }

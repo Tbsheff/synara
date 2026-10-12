@@ -1719,6 +1719,14 @@ async function recordTranscriptScrollTravel(durationMs: number): Promise<{
   return { downwardTravelPx, maxDistanceFromBottomPx, visibleFrames };
 }
 
+function scrollTranscriptAsReader(scrollContainer: HTMLElement, top: number): void {
+  if (top < scrollContainer.scrollTop) {
+    scrollContainer.dispatchEvent(new WheelEvent("wheel", { bubbles: true, deltaY: -100 }));
+  }
+  scrollContainer.scrollTop = top;
+  scrollContainer.dispatchEvent(new Event("scroll"));
+}
+
 function installImmediateScrollToSpy(
   scrollContainer: HTMLElement,
   config?: { readonly suspendSmoothScroll?: boolean },
@@ -2059,8 +2067,7 @@ async function measureUserRow(options: {
   let row: HTMLElement | null = null;
   await vi.waitFor(
     async () => {
-      scrollContainer.scrollTop = 0;
-      scrollContainer.dispatchEvent(new Event("scroll"));
+      scrollTranscriptAsReader(scrollContainer, 0);
       await waitForLayout();
       row = host.querySelector<HTMLElement>(rowSelector);
       expect(row, "Unable to locate targeted user message row.").toBeTruthy();
@@ -2072,16 +2079,14 @@ async function measureUserRow(options: {
   );
 
   await waitForImagesToLoad(row!);
-  scrollContainer.scrollTop = 0;
-  scrollContainer.dispatchEvent(new Event("scroll"));
+  scrollTranscriptAsReader(scrollContainer, 0);
   await nextFrame();
 
   let timelineWidthMeasuredPx = 0;
   let measuredRowHeightPx = 0;
   await vi.waitFor(
     async () => {
-      scrollContainer.scrollTop = 0;
-      scrollContainer.dispatchEvent(new Event("scroll"));
+      scrollTranscriptAsReader(scrollContainer, 0);
       await nextFrame();
       const measuredRow = host.querySelector<HTMLElement>(rowSelector);
       expect(measuredRow, "Unable to measure targeted user row height.").toBeTruthy();
@@ -5092,8 +5097,7 @@ describe("ChatView transcript geometry (full app)", () => {
         "Unable to find message scroll container.",
       );
       await waitForLayout();
-      scrollContainer.scrollTop = 100;
-      scrollContainer.dispatchEvent(new Event("scroll"));
+      scrollTranscriptAsReader(scrollContainer, 100);
       await waitForLayout();
       const previousTop = scrollContainer.scrollTop;
       emitWsTransportState("connecting");
@@ -5499,8 +5503,7 @@ describe("ChatView transcript geometry (full app)", () => {
         () => document.querySelector<HTMLElement>("[data-chat-scroll-container='true']"),
         "Unable to find message scroll container.",
       );
-      scrollContainer.scrollTop = 0;
-      scrollContainer.dispatchEvent(new Event("scroll"));
+      scrollTranscriptAsReader(scrollContainer, 0);
       await waitForLayout();
       expect(getScrollContainerDistanceFromBottom(scrollContainer)).toBeGreaterThan(
         AUTO_SCROLL_BOTTOM_THRESHOLD_PX,
@@ -5563,8 +5566,7 @@ describe("ChatView transcript geometry (full app)", () => {
           "Unable to find message scroll container.",
         );
         // Sending must return to the live edge even if the reader was looking at history.
-        scrollContainer.scrollTop = 0;
-        scrollContainer.dispatchEvent(new Event("scroll"));
+        scrollTranscriptAsReader(scrollContainer, 0);
         await waitForLayout();
 
         const prompt = "Keep this message at the bottom";
@@ -6921,7 +6923,7 @@ describe("ChatView transcript geometry (full app)", () => {
         await nextFrame();
         expect(findDisclosure()?.getAttribute("aria-expanded")).toBe("false");
         expect(document.querySelector("[data-settled-turn-collapse-transition='true']")).toBeNull();
-        expect(document.body.textContent).not.toContain("Used 6 tools");
+        expect(document.body.textContent).not.toContain("Called tools");
       }
     } finally {
       releaseSend();
@@ -7001,6 +7003,7 @@ describe("ChatView transcript geometry (full app)", () => {
         expect(getScrollContainerDistanceFromBottom(scrollContainer)).toBeGreaterThan(100),
       );
       await waitForTranscriptLayoutToSettle(scrollContainer);
+      const detachedScrollTop = scrollContainer.scrollTop;
       scrollSpy.calls.length = 0;
 
       // Buffering/connecting changes turn chrome but must not reclaim the
@@ -7018,6 +7021,7 @@ describe("ChatView transcript geometry (full app)", () => {
       }));
       await waitForLayout();
       expect(scrollSpy.calls).toHaveLength(0);
+      expect(Math.abs(scrollContainer.scrollTop - detachedScrollTop)).toBeLessThanOrEqual(1);
 
       for (const status of ["error", "starting", "ready"] as const) {
         syncActiveThread((thread) => ({
@@ -7032,6 +7036,7 @@ describe("ChatView transcript geometry (full app)", () => {
         }));
         await waitForLayout();
         expect(scrollSpy.calls).toHaveLength(0);
+        expect(Math.abs(scrollContainer.scrollTop - detachedScrollTop)).toBeLessThanOrEqual(1);
       }
 
       const activeTurnId = TurnId.makeUnsafe("turn-auto-follow-wiring");
@@ -7073,6 +7078,7 @@ describe("ChatView transcript geometry (full app)", () => {
       }));
       await waitForLayout();
       expect(scrollSpy.calls).toHaveLength(0);
+      expect(Math.abs(scrollContainer.scrollTop - detachedScrollTop)).toBeLessThanOrEqual(1);
 
       syncActiveThread((thread) => ({
         ...thread,
@@ -7095,6 +7101,7 @@ describe("ChatView transcript geometry (full app)", () => {
       }));
       await waitForLayout();
       expect(scrollSpy.calls).toHaveLength(0);
+      expect(Math.abs(scrollContainer.scrollTop - detachedScrollTop)).toBeLessThanOrEqual(1);
 
       scrollContainer.scrollTop = scrollContainer.scrollHeight;
       scrollContainer.dispatchEvent(new Event("scroll"));
@@ -7113,10 +7120,13 @@ describe("ChatView transcript geometry (full app)", () => {
         messages: [...thread.messages, liveAssistantMessage],
         updatedAt: isoAt(1_206),
       }));
-      await vi.waitFor(() => expect(scrollSpy.calls.length).toBeGreaterThan(0), {
-        timeout: 4_000,
-        interval: 16,
-      });
+      await vi.waitFor(
+        () => expect(getScrollContainerDistanceFromBottom(scrollContainer)).toBeLessThanOrEqual(1),
+        {
+          timeout: 4_000,
+          interval: 16,
+        },
+      );
 
       scrollSpy.calls.length = 0;
       syncActiveThread((thread) => ({
@@ -7132,10 +7142,13 @@ describe("ChatView transcript geometry (full app)", () => {
         ),
         updatedAt: isoAt(1_207),
       }));
-      await vi.waitFor(() => expect(scrollSpy.calls.length).toBeGreaterThan(0), {
-        timeout: 4_000,
-        interval: 16,
-      });
+      await vi.waitFor(
+        () => expect(getScrollContainerDistanceFromBottom(scrollContainer)).toBeLessThanOrEqual(1),
+        {
+          timeout: 4_000,
+          interval: 16,
+        },
+      );
 
       scrollSpy.calls.length = 0;
       syncActiveThread((thread) => ({
@@ -7152,10 +7165,13 @@ describe("ChatView transcript geometry (full app)", () => {
         ),
         updatedAt: isoAt(1_208),
       }));
-      await vi.waitFor(() => expect(scrollSpy.calls.length).toBeGreaterThan(0), {
-        timeout: 4_000,
-        interval: 16,
-      });
+      await vi.waitFor(
+        () => expect(getScrollContainerDistanceFromBottom(scrollContainer)).toBeLessThanOrEqual(1),
+        {
+          timeout: 4_000,
+          interval: 16,
+        },
+      );
     } finally {
       restoreScrollTo();
       await mounted.cleanup();
@@ -14047,8 +14063,7 @@ describe("ChatView transcript geometry (full app)", () => {
         expect(readStackLayout().taskCardHeightPx).toBeLessThan(expanded.taskCardHeightPx - 20);
       });
 
-      scrollContainer.scrollTop = 0;
-      scrollContainer.dispatchEvent(new Event("scroll"));
+      scrollTranscriptAsReader(scrollContainer, 0);
       await vi.waitFor(() => {
         expect(getScrollContainerDistanceFromBottom(scrollContainer)).toBeGreaterThan(
           AUTO_SCROLL_BOTTOM_THRESHOLD_PX,
@@ -14202,7 +14217,7 @@ describe("ChatView transcript geometry (full app)", () => {
         () => {
           const summaryTrigger = Array.from(
             document.querySelectorAll<HTMLButtonElement>("button[aria-expanded]"),
-          ).find((element) => element.textContent?.includes("Used 6 tools"));
+          ).find((element) => element.textContent?.includes("Called tools"));
           expect(summaryTrigger).not.toBeUndefined();
           expect(summaryTrigger!.getAttribute("aria-expanded")).toBe("false");
           expect(document.body.textContent).not.toContain("Tool 1");
@@ -14218,7 +14233,7 @@ describe("ChatView transcript geometry (full app)", () => {
 
       // The first settled paint keeps the live layout: no "Worked for" fold yet.
       expect(document.querySelector("[data-settled-turn-collapse-transition='true']")).toBeNull();
-      expect(document.body.textContent).toContain("Used 6 tools");
+      expect(document.body.textContent).toContain("Called tools");
 
       await new Promise<void>((resolve) => {
         window.setTimeout(() => resolve(), 260);
@@ -14236,7 +14251,7 @@ describe("ChatView transcript geometry (full app)", () => {
           expect(transitionClone).not.toBeNull();
           expect(transitionClone?.hasAttribute("inert")).toBe(true);
           expect(transitionClone?.querySelector("[aria-hidden='true'][inert]")).not.toBeNull();
-          expect(transitionClone?.textContent).toContain("Used 6 tools");
+          expect(transitionClone?.textContent).toContain("Called tools");
         },
         { timeout: 8_000, interval: 16 },
       );
@@ -14334,7 +14349,7 @@ describe("ChatView transcript geometry (full app)", () => {
       await vi.waitFor(
         () => {
           expect(document.body.textContent).toContain("Wrapped up the inline tool review.");
-          expect(document.body.textContent).toContain("Used 6 tools");
+          expect(document.body.textContent).toContain("Called tools");
         },
         { timeout: 8_000, interval: 16 },
       );

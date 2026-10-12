@@ -101,3 +101,35 @@ describe("shared question form with blocking prompts", () => {
     expect(callbacks.onToggleOption).not.toHaveBeenCalled();
   });
 });
+
+describe("option previews", () => {
+  it("shows the selected option's preview as plain text", async () => {
+    const callbacks = props();
+    const previewPrompt = {
+      ...prompt,
+      questions: [
+        {
+          ...prompt.questions[0]!,
+          options: [
+            { label: "First", description: "First", preview: "<b>first</b>" },
+            { label: "Second", description: "Second", preview: "second layout" },
+          ],
+        },
+      ],
+    };
+    const screen = await render(
+      <ComposerPendingUserInputPanel
+        {...callbacks}
+        pendingUserInputs={[previewPrompt]}
+        answers={{ question: { selectedOptionLabels: ["Second"] } }}
+      />,
+    );
+    const preview = screen.getByTestId("user-input-option-preview");
+    await expect.element(preview).toHaveTextContent("second layout");
+    await screen.rerender(
+      <ComposerPendingUserInputPanel {...callbacks} pendingUserInputs={[previewPrompt]} />,
+    );
+    await expect.element(preview).toHaveTextContent("<b>first</b>");
+    expect(preview.element().querySelector("b")).toBeNull();
+  });
+});

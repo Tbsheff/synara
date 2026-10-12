@@ -46,6 +46,53 @@ function subagentRows(rows: ComposerSubagentStripRow[]): ComposerSubagentStripIt
 }
 
 describe("deriveComposerSubagentStripItems", () => {
+  it("shows the latest task progress per subagent without mixing tasks", () => {
+    const progress = (id: string, taskId: string, createdAt: string, detail: string) =>
+      workEntry({
+        id,
+        turnId: "turn-1",
+        createdAt,
+        label: "Task progress",
+        tone: "info",
+        activityKind: "task.progress",
+        taskId,
+        detail,
+      });
+    const items = subagentRows(
+      deriveComposerSubagentStripItems({
+        workEntries: [
+          workEntry({
+            id: "agents",
+            turnId: "turn-1",
+            subagents: [
+              subagent({
+                threadId: "task-a",
+                nickname: "Ada",
+                rawStatus: "running",
+                isActive: true,
+              }),
+              subagent({
+                threadId: "task-b",
+                nickname: "Bo",
+                rawStatus: "running",
+                isActive: true,
+              }),
+            ],
+          }),
+          progress("a-1", "task-a", "2026-07-14T00:00:01.000Z", "Reading the adapter"),
+          progress("b-1", "task-b", "2026-07-14T00:00:02.000Z", "Running tests"),
+          progress("a-2", "task-a", "2026-07-14T00:00:03.000Z", "Editing ClaudeAdapter.ts"),
+        ],
+        liveTurnId: TurnId.makeUnsafe("turn-1"),
+      }),
+    );
+
+    expect(items.map((item) => [item.threadId, item.latestUpdate])).toEqual([
+      ["task-a", "Editing ClaudeAdapter.ts"],
+      ["task-b", "Running tests"],
+    ]);
+  });
+
   it("keeps prior running background rows alongside subagents from the live turn", () => {
     const items = deriveComposerSubagentStripItems({
       workEntries: [
@@ -489,5 +536,62 @@ describe("collectForegroundRunningSubagentStripItems", () => {
 
     const foreground = collectForegroundRunningSubagentStripItems(rows);
     expect(foreground.map((item) => item.primaryLabel)).toEqual(["Ada"]);
+  });
+});
+
+describe("subagent strip labels", () => {
+  it("never shows the raw tool-use id before the subagent has a name", () => {
+    const [item] = subagentRows(
+      deriveComposerSubagentStripItems({
+        workEntries: [
+          workEntry({
+            id: "entry-raw-id",
+            turnId: "turn-1",
+            subagents: [
+              subagent({
+                threadId: "toolu_01CnAygTvFHQpyFHpP7ZJ9Bs",
+                providerThreadId: "toolu_01CnAygTvFHQpyFHpP7ZJ9Bs",
+                rawStatus: "running",
+                isActive: true,
+              }),
+            ],
+          }),
+        ],
+        liveTurnId: TurnId.makeUnsafe("turn-1"),
+      }),
+    );
+
+    expect(item).toMatchObject({ primaryLabel: "Subagent", fullLabel: "Subagent" });
+    expect(JSON.stringify([item?.primaryLabel, item?.fullLabel])).not.toContain("toolu_");
+  });
+
+  it("switches to the description once a later snapshot carries it", () => {
+    const [item] = subagentRows(
+      deriveComposerSubagentStripItems({
+        workEntries: [
+          workEntry({
+            id: "entry-spawn",
+            turnId: "turn-1",
+            subagents: [subagent({ threadId: "toolu_abc", rawStatus: "running", isActive: true })],
+          }),
+          workEntry({
+            id: "entry-described",
+            turnId: "turn-1",
+            createdAt: "2026-07-14T00:00:01.000Z",
+            subagents: [
+              subagent({
+                threadId: "toolu_abc",
+                title: "Audit the parser",
+                rawStatus: "running",
+                isActive: true,
+              }),
+            ],
+          }),
+        ],
+        liveTurnId: TurnId.makeUnsafe("turn-1"),
+      }),
+    );
+
+    expect(item?.primaryLabel).toBe("Audit the parser");
   });
 });

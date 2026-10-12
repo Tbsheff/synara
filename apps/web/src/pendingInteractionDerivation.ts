@@ -1,10 +1,13 @@
 import {
   ApprovalRequestId,
+  CommandParsedAction,
+  FileChangeDetails,
   type OrchestrationPendingInteraction,
   type OrchestrationThreadActivity,
   type TurnId,
   type UserInputQuestion,
 } from "@synara/contracts";
+import { Schema } from "effect";
 import {
   createStalePendingInteractionMatcher,
   isPendingInteractionResponseClaimable,
@@ -29,6 +32,16 @@ export interface PendingApproval {
   approvalScope?: "computer-task" | "computer-foreground" | "device-task";
   toolName?: string;
   toolParamsDisplay?: ReadonlyArray<PendingToolParamDisplay>;
+  toolTitle?: string;
+  promptTitle?: string;
+  description?: string;
+  displayName?: string;
+  blockedPath?: string;
+  decisionReason?: string;
+  reason?: string;
+  cwd?: string;
+  parsedActions?: ReadonlyArray<CommandParsedAction>;
+  fileChanges?: FileChangeDetails;
 }
 
 export interface PendingToolParamDisplay {
@@ -256,6 +269,7 @@ export function derivePendingApprovals(
   settlements?: ReadonlyArray<OrchestrationPendingInteraction>,
   options?: PendingInteractionDerivationOptions,
 ): PendingApproval[] {
+  let fileChangeItemsByTurn: FileChangeItemsByTurn | undefined;
   const approvals = replayPendingInteractions(
     activities,
     settlements,
@@ -288,6 +302,16 @@ export function derivePendingApprovals(
             : undefined;
         const toolName = typeof payload?.toolName === "string" ? payload.toolName : undefined;
         const toolParamsDisplay = parseToolParamsDisplay(payload?.toolParamsDisplay);
+        const presentation = parseApprovalPresentation(payload);
+        const fileChanges =
+          requestKind === "file-change"
+            ? (decodeFileChanges(payload?.fileChanges) ??
+              findApprovalFileChanges(
+                (fileChangeItemsByTurn ??= indexFileChangeItemsByTurn(activities)),
+                activity,
+                payload,
+              ))
+            : undefined;
         return {
           requestId,
           ...(lifecycleGeneration !== undefined ? { lifecycleGeneration } : {}),
@@ -303,6 +327,8 @@ export function derivePendingApprovals(
               : {}),
           ...(toolName ? { toolName } : {}),
           ...(toolParamsDisplay ? { toolParamsDisplay } : {}),
+          ...presentation,
+          ...(fileChanges ? { fileChanges } : {}),
         };
       },
     },
@@ -329,6 +355,121 @@ export function derivePendingApprovals(
     );
     return responseAttemptKey === undefined ? approval : { ...approval, responseAttemptKey };
   });
+}
+
+const APPROVAL_TEXT_FIELDS = [
+  "promptTitle",
+  "description",
+  "displayName",
+  "blockedPath",
+  "decisionReason",
+  "reason",
+  "cwd",
+] as const;
+
+type ApprovalPresentation = Pick<
+  PendingApproval,
+  (typeof APPROVAL_TEXT_FIELDS)[number] | "parsedActions" | "toolTitle"
+>;
+
+const decodeParsedActions = Schema.decodeUnknownOption(Schema.Array(CommandParsedAction));
+const decodeFileChangeDetails = Schema.decodeUnknownOption(FileChangeDetails);
+
+function nonEmptyText(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function parseApprovalPresentation(payload: Record<string, unknown> | null): ApprovalPresentation {
+  const presentation: { -readonly [Key in keyof ApprovalPresentation]: ApprovalPresentation[Key] } =
+    {};
+  for (const field of APPROVAL_TEXT_FIELDS) {
+    const value = nonEmptyText(payload?.[field]);
+    if (value !== undefined) presentation[field] = value;
+  }
+  const toolTitle = nonEmptyText(payload?.title);
+  if (toolTitle !== undefined) presentation.toolTitle = toolTitle;
+  const parsedActions = decodeParsedActions(payload?.parsedActions);
+  if (parsedActions._tag === "Some" && parsedActions.value.length > 0) {
+    presentation.parsedActions = parsedActions.value;
+  }
+  return presentation;
+}
+
+function decodeFileChanges(value: unknown): FileChangeDetails | undefined {
+  const decoded = decodeFileChangeDetails(value);
+  return decoded._tag === "Some" && decoded.value.changes.length > 0 ? decoded.value : undefined;
+}
+
+function recordField(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function toolActivityItemId(payload: Record<string, unknown> | null): string | undefined {
+  const data = recordField(payload?.data);
+  return nonEmptyText(
+    data?.toolCallId ?? data?.toolUseId ?? data?.callId ?? recordField(data?.item)?.id,
+  );
+}
+
+const SETTLED_TOOL_STATUSES: ReadonlySet<unknown> = new Set([
+  "completed",
+  "failed",
+  "declined",
+  "cancelled",
+]);
+
+interface FileChangeItemState {
+  fileChanges?: FileChangeDetails;
+  settled: boolean;
+}
+
+type FileChangeItemsByTurn = Map<string | null, Map<string, FileChangeItemState>>;
+
+function indexFileChangeItemsByTurn(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+): FileChangeItemsByTurn {
+  const itemsByTurn: FileChangeItemsByTurn = new Map();
+  for (const activity of orderedActivities(activities)) {
+    if (!activity.kind.startsWith("tool.")) continue;
+    const payload = activityPayload(activity);
+    if (payload?.itemType !== "file_change") continue;
+    const itemId = toolActivityItemId(payload);
+    if (itemId === undefined) continue;
+    let turnItems = itemsByTurn.get(activity.turnId);
+    if (turnItems === undefined) {
+      turnItems = new Map();
+      itemsByTurn.set(activity.turnId, turnItems);
+    }
+    const previous = turnItems.get(itemId);
+    const fileChanges = decodeFileChanges(payload?.fileChanges) ?? previous?.fileChanges;
+    turnItems.set(itemId, {
+      ...(fileChanges ? { fileChanges } : {}),
+      settled: activity.kind === "tool.completed" || SETTLED_TOOL_STATUSES.has(payload.status),
+    });
+  }
+  return itemsByTurn;
+}
+
+function findApprovalFileChanges(
+  itemsByTurn: FileChangeItemsByTurn,
+  approval: OrchestrationThreadActivity,
+  approvalPayload: Record<string, unknown> | null,
+): FileChangeDetails | undefined {
+  const turnItems = itemsByTurn.get(approval.turnId);
+  if (turnItems === undefined) return undefined;
+  const approvalItemId = nonEmptyText(approvalPayload?.itemId);
+  if (approvalItemId !== undefined) return turnItems.get(approvalItemId)?.fileChanges;
+  let inFlight: FileChangeItemState | undefined;
+  for (const item of turnItems.values()) {
+    if (item.settled) continue;
+    if (inFlight !== undefined) return undefined;
+    inFlight = item;
+  }
+  return inFlight?.fileChanges;
 }
 
 function parseToolParamsDisplay(
@@ -383,10 +524,50 @@ export function derivePendingUserInputs(
           requestId,
           ...(lifecycleGeneration !== undefined ? { lifecycleGeneration } : {}),
           createdAt: activity.createdAt,
-          questions,
+          questions: withOptionPreviews(questions, payload),
         };
       },
     },
     options,
   );
+}
+
+function optionPreviewsByQuestion(
+  payload: Record<string, unknown> | null,
+): Map<string, Map<string, string>> {
+  const previews = new Map<string, Map<string, string>>();
+  const rawQuestions = Array.isArray(payload?.questions) ? payload.questions : [];
+  for (const rawQuestion of rawQuestions) {
+    const question = recordField(rawQuestion);
+    const questionId = typeof question?.id === "string" ? question.id : undefined;
+    if (questionId === undefined || !Array.isArray(question?.options)) continue;
+    for (const rawOption of question.options) {
+      const option = recordField(rawOption);
+      if (typeof option?.label !== "string" || typeof option.preview !== "string") continue;
+      if (option.preview.trim().length === 0) continue;
+      const byLabel = previews.get(questionId) ?? new Map<string, string>();
+      byLabel.set(option.label, option.preview);
+      previews.set(questionId, byLabel);
+    }
+  }
+  return previews;
+}
+
+function withOptionPreviews(
+  questions: ReadonlyArray<UserInputQuestion>,
+  payload: Record<string, unknown> | null,
+): ReadonlyArray<UserInputQuestion> {
+  const previews = optionPreviewsByQuestion(payload);
+  if (previews.size === 0) return questions;
+  return questions.map((question) => {
+    const byLabel = previews.get(question.id);
+    if (byLabel === undefined) return question;
+    return {
+      ...question,
+      options: question.options.map((option) => {
+        const preview = option.preview ?? byLabel.get(option.label);
+        return preview === undefined ? option : { ...option, preview };
+      }),
+    };
+  });
 }

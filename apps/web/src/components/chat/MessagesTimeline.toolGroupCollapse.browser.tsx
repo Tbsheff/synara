@@ -1,7 +1,4 @@
 // FILE: MessagesTimeline.toolGroupCollapse.browser.tsx
-// Purpose: Browser regressions for collapsing settled tool-call runs into
-//          summary rows ("Ran 4 commands") once a newer narration block starts,
-//          and for folding the live run to one line wearing its newest call.
 // Layer: Vitest browser tests
 
 import "../../index.css";
@@ -132,7 +129,7 @@ async function expectLiveRunFoldedToNewestCall(): Promise<HTMLButtonElement> {
   await expect.poll(() => findSummaryTrigger(newestCommand) !== null).toBe(true);
   const liveTrigger = findSummaryTrigger(newestCommand)!;
   expect(liveTrigger.getAttribute("aria-expanded")).toBe("false");
-  expect(findSummaryTrigger("Ran 2 commands")).toBeNull();
+  expect(liveTrigger.textContent).not.toContain("Ran commands");
   expect(document.body.textContent ?? "").not.toContain(earlierCommand);
   return liveTrigger;
 }
@@ -212,7 +209,7 @@ describe("MessagesTimeline tool group collapse", () => {
       );
 
       try {
-        await expect.poll(() => findSummaryTrigger("Ran 4 commands") !== null).toBe(true);
+        await expect.poll(() => findSummaryTrigger("Ran commands") !== null).toBe(true);
         await expectLiveRunFoldedToNewestCall();
         expect(isVisibleOutsideClosedDisclosure("Then verify cancellation.")).toBe(true);
         if (kind === "reasoning") {
@@ -382,8 +379,8 @@ describe("MessagesTimeline tool group collapse", () => {
     );
 
     try {
-      await expect.poll(() => findSummaryTrigger("Ran 4 commands") !== null).toBe(true);
-      const trigger = findSummaryTrigger("Ran 4 commands")!;
+      await expect.poll(() => findSummaryTrigger("Ran commands") !== null).toBe(true);
+      const trigger = findSummaryTrigger("Ran commands")!;
       expect(trigger.getAttribute("aria-expanded")).toBe("false");
 
       // Closed groups do not mount every tool row; this keeps large settled
@@ -432,8 +429,8 @@ describe("MessagesTimeline tool group collapse", () => {
     );
 
     try {
-      await expect.poll(() => findSummaryTrigger("Ran 4 commands") !== null).toBe(true);
-      expect(findSummaryTrigger("Ran 4 commands")!.getAttribute("aria-expanded")).toBe("false");
+      await expect.poll(() => findSummaryTrigger("Ran commands") !== null).toBe(true);
+      expect(findSummaryTrigger("Ran commands")!.getAttribute("aria-expanded")).toBe("false");
       for (const command of SETTLED_COMMANDS) {
         expect(document.body.textContent ?? "").not.toContain(command);
       }

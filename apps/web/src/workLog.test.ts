@@ -2,14 +2,24 @@ import { MessageId, TurnId, type OrchestrationThreadActivity } from "@synara/con
 import { describe, expect, it } from "vitest";
 
 import {
+  applyTranscriptAnswerHints,
   deriveTimelineEntries,
+  deriveTranscriptAnswerHints,
   deriveWorkLogEntries,
   isFileChangeWorkLogEntry,
   isProviderFileEditWorkLogEntry,
   omitRoutedSubagentWorkEntries,
+  parseUserInputQuestions,
+  providerItemIdFromToolActivity,
 } from "./workLog";
 import type { ChatMessage } from "./types";
 import { makeActivity } from "./storeTestFixtures";
+import { withOrchestrationEventSequence } from "./storeNormalization";
+import {
+  collapsedRepliesActivities,
+  collapsedRepliesMessages,
+  collapsedRepliesVisibleTurnIds,
+} from "./collapsedRepliesFixture";
 import { isComputerToolName } from "./lib/computerToolPresentation";
 
 describe("deriveWorkLogEntries", () => {
@@ -1786,26 +1796,33 @@ describe("deriveWorkLogEntries", () => {
     expect(entries.map((entry) => entry.id)).toEqual(["first-started", "second-started"]);
   });
 
-  it("orders work log by activity sequence when present", () => {
+  it("orders work log by createdAt and uses sequence only inside one millisecond", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
-        id: "second",
-        createdAt: "2026-02-23T00:00:03.000Z",
-        sequence: 2,
-        summary: "Tool call complete",
-        kind: "tool.completed",
-      }),
-      makeActivity({
-        id: "first",
+        id: "later",
         createdAt: "2026-02-23T00:00:04.000Z",
         sequence: 1,
         summary: "Tool call complete",
         kind: "tool.completed",
       }),
+      makeActivity({
+        id: "same-ms-second",
+        createdAt: "2026-02-23T00:00:03.000Z",
+        sequence: 8,
+        summary: "Read file",
+        kind: "tool.completed",
+      }),
+      makeActivity({
+        id: "same-ms-first",
+        createdAt: "2026-02-23T00:00:03.000Z",
+        sequence: 7,
+        summary: "Ran command",
+        kind: "tool.completed",
+      }),
     ];
 
     const entries = deriveWorkLogEntries(activities, undefined);
-    expect(entries.map((entry) => entry.id)).toEqual(["first", "second"]);
+    expect(entries.map((entry) => entry.id)).toEqual(["same-ms-first", "same-ms-second", "later"]);
   });
 
   it("keeps full command output details for command tool activities", () => {
@@ -5163,5 +5180,485 @@ describe("deriveTimelineEntries coordinator check-in suppression", () => {
         "ordinary-reply",
       ]),
     );
+  });
+});
+
+describe("transcript parity ordering and typed entries", () => {
+  it("orders stored rows with mixed sequence counters by time (collapsed replies regression)", () => {
+    const workEntries = deriveWorkLogEntries(collapsedRepliesActivities, undefined, {
+      visibleTurnIds: collapsedRepliesVisibleTurnIds,
+    });
+    const order = deriveTimelineEntries(collapsedRepliesMessages, [], workEntries).map((entry) =>
+      entry.kind === "work" ? entry.entry.id : entry.id,
+    );
+    expect(order).toEqual([
+      "u1",
+      "a132",
+      "agent-started",
+      "moved-to-background",
+      "skip-child-1",
+      "a894",
+      "completion-add708e",
+      "skip-wake-1",
+      "wake-1-read",
+      "a971",
+      "skip-child-2",
+      "completion-a8ab72",
+      "a231",
+      "skip-wake-2",
+    ]);
+  });
+
+  it("sorts a live-normalized activity like its snapshot copy", () => {
+    const snapshotOrder = deriveWorkLogEntries(collapsedRepliesActivities, undefined, {
+      visibleTurnIds: collapsedRepliesVisibleTurnIds,
+    }).map((entry) => entry.id);
+    const liveActivities = collapsedRepliesActivities.map((activity, index) =>
+      withOrchestrationEventSequence(
+        activity.kind === "checkpoint.baseline.skipped"
+          ? { ...activity, sequence: undefined }
+          : activity,
+        664_500 + index,
+      ),
+    );
+    const liveOrder = deriveWorkLogEntries(liveActivities.toReversed(), undefined, {
+      visibleTurnIds: collapsedRepliesVisibleTurnIds,
+    }).map((entry) => entry.id);
+    expect(liveOrder).toEqual(snapshotOrder);
+  });
+
+  it("keeps compaction progress before its terminal row in the same millisecond", () => {
+    const createdAt = "2026-02-23T00:00:01.000Z";
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "compacted",
+          createdAt,
+          kind: "context-compaction",
+          summary: "Context compacted",
+          tone: "info",
+        }),
+        makeActivity({
+          id: "compacting",
+          createdAt,
+          kind: "context-compaction",
+          summary: "Compacting context",
+          tone: "info",
+        }),
+      ],
+      undefined,
+    );
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.label).toBe("Context compacted");
+  });
+
+  it("decodes typed tool details and keeps legacy display fields", () => {
+    const [entry] = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "cmd",
+          kind: "tool.completed",
+          summary: "Ran command",
+          payload: {
+            itemType: "command_execution",
+            command: { command: "ls -la", cwd: "/repo", exitCode: 0, durationMs: 1200 },
+            fileChanges: { changes: [{ path: "a.ts", kind: "update", additions: 1 }] },
+            toolCall: { toolName: "Read", resultText: "ok" },
+            webSearch: { query: "synara" },
+            reasoning: { heading: "Planning" },
+            data: { item: { id: "item-1", command: "ls -la" } },
+          },
+        }),
+      ],
+      undefined,
+    );
+    expect(entry?.commandExecution).toEqual({
+      command: "ls -la",
+      cwd: "/repo",
+      exitCode: 0,
+      durationMs: 1200,
+    });
+    expect(entry?.fileChanges?.changes[0]?.path).toBe("a.ts");
+    expect(entry?.toolCall?.resultText).toBe("ok");
+    expect(entry?.webSearch?.query).toBe("synara");
+    expect(entry?.reasoning?.heading).toBe("Planning");
+    expect(entry?.command).toBe("ls -la");
+    expect(entry?.toolCallId).toBe("item-1");
+  });
+
+  it("ignores a malformed typed field without dropping the row", () => {
+    const [entry] = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "legacy",
+          kind: "tool.completed",
+          summary: "Ran command",
+          payload: { itemType: "command_execution", command: "echo hi", fileChanges: "bad" },
+        }),
+      ],
+      undefined,
+    );
+    expect(entry?.id).toBe("legacy");
+    expect(entry?.commandExecution).toBeUndefined();
+    expect(entry?.fileChanges).toBeUndefined();
+  });
+
+  it("derives one notice entry per dedupe key, latest content first-position", () => {
+    const notice = (id: string, createdAt: string, title: string, status: string) =>
+      makeActivity({
+        id,
+        createdAt,
+        kind: "transcript.notice",
+        summary: title,
+        tone: "info",
+        payload: { noticeKind: "hook", severity: "info", title, status, dedupeKey: "hook:a" },
+      });
+    const entries = deriveWorkLogEntries(
+      [
+        notice("n1", "2026-02-23T00:00:01.000Z", "Running PreToolUse hook", "running"),
+        notice("n2", "2026-02-23T00:00:02.000Z", "Ran PreToolUse hook", "completed"),
+      ],
+      undefined,
+    );
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.id).toBe("n1");
+    expect(entries[0]?.label).toBe("Ran PreToolUse hook");
+    expect(entries[0]?.notice?.status).toBe("completed");
+  });
+
+  it("keeps thread-scoped notices when the transcript has turn-scoped messages", () => {
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "mcp",
+          kind: "transcript.notice",
+          summary: "MCP servers ready: github",
+          tone: "info",
+          payload: {
+            noticeKind: "mcp-server-status",
+            severity: "info",
+            title: "MCP servers ready: github",
+          },
+        }),
+      ],
+      undefined,
+      { visibleTurnIds: new Set([TurnId.makeUnsafe("turn-1")]) },
+    );
+    expect(entries.map((entry) => entry.notice?.noticeKind)).toEqual(["mcp-server-status"]);
+  });
+
+  it("renders nothing for legacy output-delta rows and dropped unmapped methods", () => {
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({ id: "delta", kind: "tool.output.delta", summary: "Tool output" }),
+        makeActivity({
+          id: "dropped",
+          kind: "provider.event.unmapped",
+          summary: "thread/realtime/started",
+          tone: "info",
+          payload: { nativeEventType: "thread/realtime/started" },
+        }),
+        makeActivity({
+          id: "kept",
+          kind: "provider.event.unmapped",
+          summary: "thread/goal/updated",
+          tone: "info",
+          payload: { nativeEventType: "thread/goal/updated" },
+        }),
+      ],
+      undefined,
+    );
+    expect(entries.map((entry) => entry.id)).toEqual(["kept"]);
+    expect(entries[0]?.unmappedMethod).toBe("thread/goal/updated");
+    expect(entries[0]?.label).not.toBe("thread/goal/updated");
+    expect(entries[0]?.toolTitle).toBe(entries[0]?.label);
+  });
+
+  it("folds retries of one turn into one Reconnecting row, latest attempt wins", () => {
+    const retry = (id: string, createdAt: string, attempt: number) =>
+      makeActivity({
+        id,
+        createdAt,
+        kind: "runtime.warning",
+        summary: "Provider retrying",
+        tone: "info",
+        turnId: "turn-1",
+        payload: {
+          message: `overloaded ${attempt}`,
+          willRetry: true,
+          retryAttempt: attempt,
+          retryMaxAttempts: 10,
+        },
+      });
+    const entries = deriveWorkLogEntries(
+      [
+        retry("r1", "2026-02-23T00:00:01.000Z", 1),
+        retry("r2", "2026-02-23T00:00:03.000Z", 2),
+        retry("r3", "2026-02-23T00:00:09.000Z", 3),
+      ],
+      undefined,
+    );
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.id).toBe("r1");
+    expect(entries[0]?.label).toBe("Reconnecting 3/10");
+    expect(entries[0]?.retry).toEqual({ attempt: 3, maxAttempts: 10 });
+  });
+
+  it("merges consecutive image views of one turn", () => {
+    const view = (id: string, createdAt: string) =>
+      makeActivity({
+        id,
+        createdAt,
+        kind: "tool.completed",
+        summary: "Viewed image",
+        turnId: "turn-1",
+        payload: { itemType: "image_view", data: { item: { id, path: `/tmp/${id}.png` } } },
+      });
+    const entries = deriveWorkLogEntries(
+      [
+        view("img-1", "2026-02-23T00:00:01.000Z"),
+        view("img-2", "2026-02-23T00:00:02.000Z"),
+        view("img-3", "2026-02-23T00:00:03.000Z"),
+      ],
+      undefined,
+    );
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.id).toBe("img-1");
+    expect(entries[0]?.toolTitle).toBe("Viewed 3 images");
+  });
+
+  it("carries turn completion hints and retracted ids onto messages", () => {
+    const activities = [
+      makeActivity({
+        id: "done",
+        kind: "turn.completed",
+        summary: "Turn completed",
+        tone: "info",
+        turnId: "turn-1",
+        payload: { finalAssistantMessageId: "assistant:final", origin: "provider" },
+      }),
+      makeActivity({
+        id: "reroute",
+        kind: "model.rerouted",
+        summary: "Model switched",
+        tone: "info",
+        turnId: "turn-1",
+        payload: { retractedMessageIds: ["assistant:retracted"] },
+      }),
+    ];
+    const hints = deriveTranscriptAnswerHints(activities);
+    expect(deriveTranscriptAnswerHints([...activities])).toBe(hints);
+    const messages: ChatMessage[] = [
+      "assistant:final",
+      "assistant:retracted",
+      "assistant:other",
+    ].map((id) => ({
+      id: MessageId.makeUnsafe(id),
+      role: "assistant",
+      text: id,
+      createdAt: "2026-02-23T00:00:01.000Z",
+      streaming: false,
+    }));
+    const annotated = applyTranscriptAnswerHints(messages, hints);
+    expect(annotated.map((m) => [m.finalAnswer === true, m.retracted === true])).toEqual([
+      [true, false],
+      [false, true],
+      [false, false],
+    ]);
+    expect(annotated[2]).toBe(messages[2]);
+    expect(applyTranscriptAnswerHints(messages, hints)[0]).toBe(annotated[0]);
+    expect(applyTranscriptAnswerHints(messages, deriveTranscriptAnswerHints([]))).toBe(messages);
+  });
+  it("hides approval requests that cannot open a panel", () => {
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "no-id",
+          kind: "approval.requested",
+          summary: "Approval requested",
+          tone: "approval",
+          payload: { requestType: "command_execution_approval" },
+        }),
+        makeActivity({
+          id: "unsupported",
+          kind: "approval.requested",
+          summary: "Approval requested",
+          tone: "approval",
+          payload: { requestId: "req-1", requestType: "auth_tokens_refresh" },
+        }),
+        makeActivity({
+          id: "command",
+          kind: "approval.requested",
+          summary: "Command approval requested",
+          tone: "approval",
+          payload: { requestId: "req-2", requestType: "command_execution_approval" },
+        }),
+      ],
+      undefined,
+    );
+    expect(entries.map((entry) => entry.id)).toEqual(["command"]);
+  });
+
+  it("keeps option previews on parsed user input questions", () => {
+    expect(
+      parseUserInputQuestions({
+        questions: [
+          {
+            id: "q1",
+            header: "Layout",
+            question: "Which layout?",
+            options: [{ label: "Grid", description: "Cards", preview: "+--+--+" }],
+          },
+        ],
+      })?.[0]?.options[0],
+    ).toEqual({ label: "Grid", description: "Cards", preview: "+--+--+" });
+  });
+
+  it("merges typed command details across tool lifecycle events", () => {
+    const [entry] = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "start",
+          createdAt: "2026-02-23T00:00:01.000Z",
+          kind: "tool.started",
+          summary: "Running command",
+          payload: {
+            itemType: "command_execution",
+            command: { command: "ls", cwd: "/repo" },
+            data: { item: { id: "item-1", command: "ls" } },
+          },
+        }),
+        makeActivity({
+          id: "done",
+          createdAt: "2026-02-23T00:00:02.000Z",
+          kind: "tool.completed",
+          summary: "Ran command",
+          payload: {
+            itemType: "command_execution",
+            command: { exitCode: 0, output: "a.ts" },
+            data: { item: { id: "item-1", command: "ls" } },
+          },
+        }),
+      ],
+      undefined,
+    );
+    expect(entry?.commandExecution).toEqual({
+      command: "ls",
+      cwd: "/repo",
+      exitCode: 0,
+      output: "a.ts",
+    });
+  });
+
+  it("hides a settled web search with no query", () => {
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "empty-search",
+          kind: "tool.completed",
+          summary: "Web search",
+          payload: { itemType: "web_search", webSearch: { query: " " } },
+        }),
+        makeActivity({
+          id: "search",
+          kind: "tool.completed",
+          summary: "Web search",
+          payload: { itemType: "web_search", webSearch: { query: "synara" } },
+        }),
+      ],
+      undefined,
+    );
+    expect(entries.map((entry) => entry.id)).toEqual(["search"]);
+  });
+
+  it("exposes reroute, compaction trigger, and steer fields", () => {
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "reroute",
+          createdAt: "2026-02-23T00:00:01.000Z",
+          kind: "model.rerouted",
+          summary: "Model switched",
+          tone: "info",
+          payload: {
+            fromModel: "fable",
+            toModel: "opus",
+            refusalCategory: "cyber",
+            retractedMessageIds: ["assistant:1", "assistant:2"],
+          },
+        }),
+        makeActivity({
+          id: "compact",
+          createdAt: "2026-02-23T00:00:02.000Z",
+          kind: "context-compaction",
+          summary: "Context compacted",
+          tone: "info",
+          payload: { data: { compact_metadata: { trigger: "auto" } } },
+        }),
+        makeActivity({
+          id: "steer",
+          createdAt: "2026-02-23T00:00:03.000Z",
+          kind: "turn.steered",
+          summary: "Message delivered to subagent",
+          tone: "info",
+          payload: { detail: "Also check the tests" },
+        }),
+      ],
+      undefined,
+    );
+    const byId = new Map(entries.map((entry) => [entry.id, entry]));
+    expect(byId.get("reroute")?.modelReroute).toEqual({
+      fromModel: "fable",
+      toModel: "opus",
+      refusalCategory: "cyber",
+      retractedMessageCount: 2,
+    });
+    expect(byId.get("compact")?.compactionTrigger).toBe("automatic");
+    expect(byId.get("steer")?.steeredMessage).toBe("Also check the tests");
+  });
+  it("never merges task progress into the parent Agent tool row", () => {
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "agent-tool",
+          createdAt: "2026-02-23T00:00:01.000Z",
+          kind: "tool.started",
+          summary: "Agent",
+          payload: { itemType: "collab_agent_tool_call", data: { toolUseId: "toolu_agent" } },
+        }),
+        makeActivity({
+          id: "task-progress",
+          createdAt: "2026-02-23T00:00:02.000Z",
+          kind: "task.progress",
+          summary: "Reasoning update",
+          tone: "info",
+          payload: {
+            taskId: "task-1",
+            detail: "Reading files",
+            data: { toolUseId: "toolu_agent" },
+          },
+        }),
+      ],
+      undefined,
+    );
+    const progress = entries.find((entry) => entry.id === "task-progress");
+    expect(entries.map((entry) => entry.id)).toContain("agent-tool");
+    expect(progress?.toolCallId).toBeUndefined();
+    expect(progress?.parentToolUseId).toBe("toolu_agent");
+    expect(progress?.taskId).toBe("task-1");
+  });
+  it("resolves the live output item id from a Codex command payload", () => {
+    expect(
+      providerItemIdFromToolActivity({
+        payload: {
+          itemType: "command_execution",
+          data: {
+            threadId: "codex-thread",
+            turnId: "codex-turn",
+            item: { id: "call_live", type: "commandExecution", command: "bun run test" },
+          },
+        },
+      }),
+    ).toBe("call_live");
   });
 });

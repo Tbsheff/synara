@@ -1,7 +1,4 @@
 // FILE: ToolCallGroupSummaryRow.tsx
-// Purpose: One-line disclosure for a run of tool calls. Settled runs read as a
-//          summary ("Ran 2 commands, Edited 2 files"); a live run wears its
-//          latest status or call instead. Both expand to the individual rows.
 // Layer: Web chat presentation component
 // Exports: ToolCallGroupSummaryRow
 // Depends on: DisclosureRegion/DisclosureChevron (shared disclosure motion)
@@ -60,6 +57,7 @@ export function ToolCallGroupSummaryRow(props: {
       <button
         type="button"
         aria-expanded={open}
+        data-tool-group-summary="true"
         className={cn(
           "inline-flex max-w-full items-center gap-1.5 py-0.5 text-left transition-colors duration-200 hover:text-foreground",
           MUTED_LABEL_TEXT_CLASS_NAME,

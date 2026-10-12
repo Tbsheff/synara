@@ -20,6 +20,42 @@ describe("ThreadErrorBanner", () => {
     vi.restoreAllMocks();
   });
 
+  it("names a Claude result stop reason in the title", async () => {
+    await render(
+      <ThreadErrorBanner
+        title="Task interrupted"
+        stopReason="error_max_turns"
+        error="Reached maximum number of turns (25)"
+      />,
+    );
+    await expect.element(page.getByText("Stopped: max turns reached")).toBeVisible();
+    expect(document.body.textContent).not.toContain("Task interrupted");
+  });
+
+  it("lists provider error detail behind Show details", async () => {
+    await render(
+      <ThreadErrorBanner
+        stopReason="error_max_turns"
+        error="Reached maximum number of turns (8)"
+        detail={{ errors: ["Bash denied: rm -rf build"], permissionDenials: 2 }}
+      />,
+    );
+    await expect.element(page.getByText("Stopped: max turns reached")).toBeVisible();
+    expect(document.querySelector("[data-thread-error-detail]")).toBeNull();
+
+    await page.getByRole("button", { name: "Show details" }).click();
+    const detail = document.querySelector("[data-thread-error-detail]");
+    expect(detail?.textContent).toContain("Bash denied: rm -rf build");
+    expect(detail?.textContent).toContain("2 tool calls were denied permission.");
+  });
+
+  it("keeps the given title for an unknown stop reason", async () => {
+    await render(
+      <ThreadErrorBanner title="Task interrupted" stopReason="server_overloaded" error="Busy" />,
+    );
+    await expect.element(page.getByText("Task interrupted")).toBeVisible();
+  });
+
   it("expands the full multiline error and collapses it accessibly", async () => {
     await render(<ThreadErrorBanner error={LONG_ERROR} />);
     const show = page.getByRole("button", { name: "Show details" });

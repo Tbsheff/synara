@@ -12,6 +12,7 @@ import {
 import { useDebouncedValue } from "@tanstack/react-pacer";
 import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
+import { useRefreshComposerDiscoveryOnSkillsChanged } from "~/hooks/useRefreshComposerDiscoveryOnSkillsChanged";
 import { isLocalFolderMentionQuery } from "~/lib/localFolderMentions";
 import { projectSearchEntriesQueryOptions } from "~/lib/projectReactQuery";
 import {
@@ -83,6 +84,7 @@ export function useComposerDiscovery({
   );
   const effectiveMentionQuery = mentionTriggerQuery.length > 0 ? debouncedPathQuery : "";
   const composerSkillCwd = providerModelDiscoveryCwd;
+  useRefreshComposerDiscoveryOnSkillsChanged({ threadId, provider: selectedProvider });
   const providerComposerCapabilitiesQuery = useQuery(
     providerComposerCapabilitiesQueryOptions(selectedProvider, selectedProviderInstanceId),
   );

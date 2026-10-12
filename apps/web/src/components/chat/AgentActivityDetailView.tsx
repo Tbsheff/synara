@@ -10,6 +10,8 @@ import { cn } from "~/lib/utils";
 import type { WorkLogEntry } from "../../session-logic";
 import { formatShortTimestamp } from "../../timestampFormat";
 import type { TimestampFormat } from "../../appSettings";
+import { deriveReasoningRowLabel, toolRowLabelText } from "../../lib/toolCallLabel";
+import { transcriptNoticeTitle } from "../../lib/transcriptNoticeLabels";
 import ChatMarkdown from "../ChatMarkdown";
 import { getChatMessageFooterTextStyle, getChatTranscriptTextStyle } from "./chatTypography";
 import {
@@ -162,12 +164,24 @@ function AgentActivityEventRow(props: {
   onImageExpand: (preview: ExpandedImagePreview) => void;
   timestampFormat: TimestampFormat;
 }) {
-  const preview = formatAgentActivityEntryPreview(props.entry);
-  const title = formatAgentActivityEntryTitle(props.entry);
-  const body =
-    isReasoningUpdateWorkEntry(props.entry) || props.entry.activityKind === "tool.summary"
-      ? (props.entry.detail ?? preview)
-      : (preview ?? props.entry.detail);
+  const { entry } = props;
+  const preview = formatAgentActivityEntryPreview(entry);
+  const reasoning = entry.reasoning;
+  const notice = entry.notice;
+  const title = notice
+    ? transcriptNoticeTitle(notice)
+    : reasoning
+      ? toolRowLabelText(deriveReasoningRowLabel(reasoning, false))
+      : formatAgentActivityEntryTitle(entry);
+  const reasoningSummary = reasoning?.redacted ? null : reasoning?.summary?.trim() || null;
+  const body = notice
+    ? null
+    : reasoning
+      ? reasoningSummary
+      : isReasoningUpdateWorkEntry(entry) || entry.activityKind === "tool.summary"
+        ? (entry.detail ?? preview)
+        : (preview ?? entry.detail);
+  const noticeBody = notice ? [notice.detail, notice.body].filter(Boolean).join("\n\n") : null;
 
   return (
     <div className="py-3 first:pt-0 last:pb-0">
@@ -179,6 +193,15 @@ function AgentActivityEventRow(props: {
           {formatShortTimestamp(props.entry.createdAt, props.timestampFormat)}
         </p>
       </div>
+      {noticeBody ? (
+        <p
+          className="mt-1 whitespace-pre-wrap break-words text-muted-foreground/70"
+          style={props.chatTypographyStyle}
+          data-agent-activity-notice-body="true"
+        >
+          {noticeBody}
+        </p>
+      ) : null}
       {body ? (
         <div className="mt-1 text-muted-foreground/70">
           <ChatMarkdown

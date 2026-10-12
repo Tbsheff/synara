@@ -625,6 +625,37 @@ describe("hasActionableProposedPlan", () => {
   });
 });
 
+describe("hasActionableProposedPlan for unfinished plans", () => {
+  const plan = {
+    turnId: TurnId.makeUnsafe("turn-1"),
+    implementedAt: null,
+  };
+
+  it("never offers a streamed preview", () => {
+    expect(hasActionableProposedPlan({ ...plan, partial: true })).toBe(false);
+  });
+
+  it("hides the plan of a latest turn that was interrupted or failed", () => {
+    for (const state of ["interrupted", "error", "running"] as const) {
+      expect(hasActionableProposedPlan(plan, { turnId: TurnId.makeUnsafe("turn-1"), state })).toBe(
+        false,
+      );
+    }
+    expect(
+      hasActionableProposedPlan(plan, { turnId: TurnId.makeUnsafe("turn-1"), state: "completed" }),
+    ).toBe(true);
+  });
+
+  it("does not judge an older plan by a newer turn's state", () => {
+    expect(
+      hasActionableProposedPlan(plan, {
+        turnId: TurnId.makeUnsafe("turn-2"),
+        state: "interrupted",
+      }),
+    ).toBe(true);
+  });
+});
+
 describe("buildSourceProposedPlanReference", () => {
   it("returns source plan metadata for implementation turns", () => {
     expect(

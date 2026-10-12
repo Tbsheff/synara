@@ -10,6 +10,8 @@ import type { ProviderKind } from "@synara/contracts";
 import {
   capThreadActivities,
   createThreadActivityAccumulator,
+  dedupeActivitiesById,
+  withOrchestrationEventSequence,
   mergeReadModelThreadDetailWithLiveHotPath,
   normalizeActivities,
   normalizeChatMessage,
@@ -391,9 +393,90 @@ describe("createThreadActivityAccumulator", () => {
   });
 });
 
-describe("dedupeActivitiesByIdAfterAppend", () => {
-  const byIdOf = (activities: readonly ThreadActivity[]) =>
-    Object.fromEntries(activities.map((activity) => [activity.id, activity]));
+describe("dedupeActivitiesById", () => {
+  const richCommand = makeActivity({
+    id: "tool-1",
+    kind: "tool.updated",
+    summary: "Ran command",
+    payload: { itemType: "command_execution", detail: "ls", data: { item: { command: "ls" } } },
+  });
+
+  it("keeps the richer row when a replay carries less detail", () => {
+    const sparse = makeActivity({ id: "tool-1", kind: "tool.updated", summary: "Ran command" });
+    expect(dedupeActivitiesById([richCommand, sparse])).toEqual([richCommand]);
+  });
+
+  it.each([
+    [
+      "transcript notice",
+      makeActivity({
+        id: "transcript-notice:thread-1:hook:a",
+        kind: "transcript.notice",
+        summary: "Running PreToolUse hook",
+        payload: {
+          noticeKind: "hook",
+          severity: "info",
+          title: "Running PreToolUse hook",
+          body: "x".repeat(200),
+          status: "running",
+        },
+      }),
+      makeActivity({
+        id: "transcript-notice:thread-1:hook:a",
+        kind: "transcript.notice",
+        summary: "Ran PreToolUse hook",
+        createdAt: "2026-02-23T00:00:05.000Z",
+        payload: { noticeKind: "hook", severity: "info", title: "Ran PreToolUse hook" },
+      }),
+    ],
+    [
+      "provider retry",
+      makeActivity({
+        id: "provider-retry:thread-1:turn-1",
+        kind: "runtime.warning",
+        summary: "Reconnecting 1/5",
+        payload: { message: "overloaded", detail: "overloaded", willRetry: true, data: {} },
+      }),
+      makeActivity({
+        id: "provider-retry:thread-1:turn-1",
+        kind: "runtime.warning",
+        summary: "Reconnecting 2/5",
+        payload: { message: "overloaded", retryAttempt: 2, retryMaxAttempts: 5 },
+      }),
+    ],
+    [
+      "reasoning",
+      makeActivity({
+        id: "provider-reasoning:thread-1:rs-1",
+        kind: "task.progress",
+        summary: "Reasoning update",
+        payload: { detail: "long draft", data: { toolCallId: "rs-1" } },
+      }),
+      makeActivity({
+        id: "provider-reasoning:thread-1:rs-1",
+        kind: "task.progress",
+        summary: "Reasoning update",
+        payload: { reasoning: { heading: "Planning" } },
+      }),
+    ],
+  ])("takes the incoming %s payload in place", (_label, previous, incoming) => {
+    expect(dedupeActivitiesById([previous, incoming])).toEqual([incoming]);
+  });
+});
+
+describe("withOrchestrationEventSequence", () => {
+  it("keeps the runtime sequence, so live and snapshot rows sort the same way", () => {
+    const snapshotActivity = makeActivity({
+      id: "tool-1",
+      createdAt: "2026-02-23T00:00:01.000Z",
+      sequence: 872_000,
+    });
+    const liveActivity = withOrchestrationEventSequence({ ...snapshotActivity }, 664_000);
+    expect(liveActivity.sequence).toBe(snapshotActivity.sequence);
+    const serverRow = makeActivity({ id: "checkpoint-1", createdAt: "2026-02-23T00:00:02.000Z" });
+    const liveServerRow = withOrchestrationEventSequence(serverRow, 664_001);
+    expect(liveServerRow.sequence).toBe(664_001);
+  });
 });
 
 describe("mergeReadModelThreadDetailWithLiveHotPath", () => {

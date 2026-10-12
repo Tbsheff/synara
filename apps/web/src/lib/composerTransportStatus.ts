@@ -1,5 +1,7 @@
 import { addWsTransportStateListener } from "../wsTransportEvents";
 
+export const TRANSPORT_OUTAGE_NOTICE_DELAY_MS = 1_500;
+
 /** Delay outage notices, but clear them immediately on recovery. Only owns UI timers. */
 export function subscribeComposerTransportStatus(listener: (message: string | null) => void) {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -31,7 +33,7 @@ export function subscribeComposerTransportStatus(listener: (message: string | nu
           timer = undefined;
           visible = true;
           listener(message);
-        }, 1500);
+        }, TRANSPORT_OUTAGE_NOTICE_DELAY_MS);
       }
     },
     { replayCurrent: true },

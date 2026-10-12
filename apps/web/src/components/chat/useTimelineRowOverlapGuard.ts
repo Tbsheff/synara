@@ -5,7 +5,14 @@
 //          undo a resize correction and leave the transcript permanently overlapped.
 // Layer: React hooks (chat timeline)
 
-import { useCallback, useEffect, useRef } from "react";
+import type { LegendListRef } from "@legendapp/list/react";
+import { useCallback, useEffect, useLayoutEffect, useRef, type RefObject } from "react";
+import { getScrollContainerDistanceFromBottom } from "../../chat-scroll";
+import {
+  isTranscriptListRevealing,
+  PINNED_END_SLACK_PX,
+  pinScrollContainerToEnd,
+} from "./transcriptScroll";
 
 // LegendList parks recycled containers at top: -10000000; anything that far up
 // is not part of the visible layout.
@@ -16,6 +23,11 @@ const OVERLAP_EPSILON_PX = 1;
 // A row's positioned container is expected within a few wrappers; walking to
 // the document root would mean the row is not inside a LegendList container.
 const MAX_CONTAINER_ANCESTOR_DEPTH = 8;
+
+interface SameFrameTailFollow {
+  listRef: RefObject<Pick<LegendListRef, "getScrollableNode"> | null>;
+  enabled: boolean;
+}
 
 /**
  * Finds the LegendList container that positions this row: the nearest ancestor
@@ -42,13 +54,31 @@ function resolvePositionedContainer(row: HTMLElement): HTMLElement | null {
  *
  * Returns a ref callback to attach to every timeline row wrapper.
  */
-export function useTimelineRowOverlapGuard(): (element: HTMLElement | null) => (() => void) | void {
+export function useTimelineRowOverlapGuard(
+  tailFollow?: SameFrameTailFollow,
+): (element: HTMLElement | null) => (() => void) | void {
   const observerRef = useRef<ResizeObserver | null>(null);
   const observedRowsRef = useRef(new Set<HTMLElement>());
   const positionObserversRef = useRef(new Set<MutationObserver>());
   const containerTopsRef = useRef(new WeakMap<HTMLElement, number>());
 
-  const closeOverlaps = useCallback((entries?: readonly ResizeObserverEntry[]) => {
+  const tailFollowListRef = tailFollow?.listRef;
+  const tailFollowEnabled = tailFollow?.enabled === true;
+  const tailFollowRef = useRef({ listRef: tailFollowListRef, enabled: tailFollowEnabled });
+  useLayoutEffect(() => {
+    tailFollowRef.current = { listRef: tailFollowListRef, enabled: tailFollowEnabled };
+  }, [tailFollowListRef, tailFollowEnabled]);
+  const followTailBeforePaint = useCallback(function followTail(): void {
+    if (!tailFollowRef.current.enabled) return;
+    const node: unknown = tailFollowRef.current.listRef?.current?.getScrollableNode?.();
+    if (!(node instanceof HTMLElement) || isTranscriptListRevealing(node)) return;
+    if (getScrollContainerDistanceFromBottom(node) <= PINNED_END_SLACK_PX) return;
+    if (pinScrollContainerToEnd(node) === "frame-already-written") {
+      window.requestAnimationFrame(followTail);
+    }
+  }, []);
+
+  const pushOverlappingRowsDown = useCallback((entries?: readonly ResizeObserverEntry[]) => {
     // Inline-style reads only — no forced layout yet.
     const containerTops = new Map<HTMLElement, number>();
     for (const row of observedRowsRef.current) {
@@ -138,6 +168,70 @@ export function useTimelineRowOverlapGuard(): (element: HTMLElement | null) => (
     }
   }, []);
 
+  const rowHeightsRef = useRef(new WeakMap<Element, number>());
+  const endContentAtShrunkTailBeforePaint = useCallback(
+    (entries: readonly ResizeObserverEntry[] | undefined): void => {
+      if (!entries) return;
+      let shrunkTail: { container: HTMLElement; previousHeight: number } | null = null;
+      for (const entry of entries) {
+        const height = entry.borderBoxSize?.[0]?.blockSize ?? entry.contentRect.height;
+        const previousHeight = rowHeightsRef.current.get(entry.target);
+        rowHeightsRef.current.set(entry.target, height);
+        if (
+          previousHeight === undefined ||
+          height >= previousHeight - OVERLAP_EPSILON_PX ||
+          !(entry.target instanceof HTMLElement) ||
+          !entry.target.isConnected
+        ) {
+          continue;
+        }
+        const container = resolvePositionedContainer(entry.target);
+        if (container) shrunkTail = { container, previousHeight };
+      }
+      if (!shrunkTail || !tailFollowRef.current.enabled) return;
+      const scroller: unknown = tailFollowRef.current.listRef?.current?.getScrollableNode?.();
+      const contentBox = shrunkTail.container.parentElement;
+      if (
+        !(scroller instanceof HTMLElement) ||
+        !contentBox ||
+        isTranscriptListRevealing(scroller) ||
+        getScrollContainerDistanceFromBottom(scroller) > PINNED_END_SLACK_PX
+      ) {
+        return;
+      }
+      const contentHeight = Number.parseFloat(contentBox.style.height);
+      const top = Number.parseFloat(shrunkTail.container.style.top);
+      const shrunkRowEndedContent =
+        Number.isFinite(contentHeight) &&
+        Number.isFinite(top) &&
+        Math.abs(top + shrunkTail.previousHeight - contentHeight) <= OVERLAP_EPSILON_PX;
+      if (!shrunkRowEndedContent) return;
+      const settledEnd = top + shrunkTail.container.getBoundingClientRect().height;
+      if (settledEnd < contentHeight - OVERLAP_EPSILON_PX) {
+        contentBox.style.height = `${settledEnd}px`;
+      }
+    },
+    [],
+  );
+
+  const onRowLayoutChange = useCallback(
+    (entries?: readonly ResizeObserverEntry[]) => {
+      pushOverlappingRowsDown(entries);
+      endContentAtShrunkTailBeforePaint(entries);
+      followTailBeforePaint();
+    },
+    [endContentAtShrunkTailBeforePaint, followTailBeforePaint, pushOverlappingRowsDown],
+  );
+
+  useEffect(() => {
+    if (!tailFollowEnabled) return;
+    const scroller: unknown = tailFollowListRef?.current?.getScrollableNode?.();
+    if (!(scroller instanceof HTMLElement)) return;
+    const viewportResizes = new ResizeObserver(followTailBeforePaint);
+    viewportResizes.observe(scroller);
+    return () => viewportResizes.disconnect();
+  }, [followTailBeforePaint, tailFollowEnabled, tailFollowListRef]);
+
   useEffect(() => {
     const observedRows = observedRowsRef.current;
     const positionObservers = positionObserversRef.current;
@@ -157,7 +251,7 @@ export function useTimelineRowOverlapGuard(): (element: HTMLElement | null) => (
       }
       // ResizeObserver callbacks run after layout but before paint, so the
       // correction below lands in the same frame as the size change.
-      observerRef.current ??= new ResizeObserver((entries) => closeOverlaps(entries));
+      observerRef.current ??= new ResizeObserver((entries) => onRowLayoutChange(entries));
       const observer = observerRef.current;
       observer.observe(element, { box: "border-box" });
       observedRowsRef.current.add(element);
@@ -169,7 +263,7 @@ export function useTimelineRowOverlapGuard(): (element: HTMLElement | null) => (
             if (
               Number.parseFloat(container.style.top) !== containerTopsRef.current.get(container)
             ) {
-              closeOverlaps();
+              onRowLayoutChange();
             }
           })
         : null;
@@ -184,6 +278,6 @@ export function useTimelineRowOverlapGuard(): (element: HTMLElement | null) => (
         observedRowsRef.current.delete(element);
       };
     },
-    [closeOverlaps],
+    [onRowLayoutChange],
   );
 }

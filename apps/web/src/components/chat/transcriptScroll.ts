@@ -73,3 +73,69 @@ export async function scrollTranscriptToSettledEnd(input: {
   await input.target.scrollToEnd({ animated: false });
   return input.isCurrent();
 }
+
+export const FOLLOW_ZONE_PX = 2;
+export const PINNED_END_SLACK_PX = 1;
+const WHEEL_UP_EXPLAINS_MS = 200;
+const UP_KEY_EXPLAINS_MS = 500;
+const TOUCH_RELEASE_EXPLAINS_MS = 2_500;
+const POINTER_HOLD_EXPLAINS_MS = 15_000;
+
+export interface FollowMoveEvidence {
+  readonly now: number;
+  readonly lastWheelUpAt: number;
+  readonly lastUpKeyAt: number;
+  readonly touchActive: boolean;
+  readonly lastTouchEndAt: number;
+  readonly pointerDownAt: number | null;
+}
+
+export function isUpwardMoveFromUserInput(evidence: FollowMoveEvidence): boolean {
+  const { now } = evidence;
+  const pointerHeld =
+    evidence.pointerDownAt !== null && now - evidence.pointerDownAt < POINTER_HOLD_EXPLAINS_MS;
+  return (
+    evidence.touchActive ||
+    pointerHeld ||
+    now - evidence.lastWheelUpAt <= WHEEL_UP_EXPLAINS_MS ||
+    now - evidence.lastUpKeyAt <= UP_KEY_EXPLAINS_MS ||
+    now - evidence.lastTouchEndAt <= TOUCH_RELEASE_EXPLAINS_MS
+  );
+}
+
+const lastFollowWriteByContainer = new WeakMap<HTMLElement, { frameTime: number; endPx: number }>();
+const containersScrollingToEndOnTheirOwn = new WeakSet<HTMLElement>();
+
+export function setScrollingToEndOnItsOwn(container: HTMLElement, scrolling: boolean): void {
+  if (scrolling) containersScrollingToEndOnTheirOwn.add(container);
+  else containersScrollingToEndOnTheirOwn.delete(container);
+}
+
+function currentFrameTime(): number | null {
+  const time = document.timeline?.currentTime;
+  return typeof time === "number" ? time : null;
+}
+
+export type PinToEndResult = "pinned" | "frame-already-written" | "scrolling-to-end-on-its-own";
+
+export function pinScrollContainerToEnd(container: HTMLElement): PinToEndResult {
+  if (containersScrollingToEndOnTheirOwn.has(container)) return "scrolling-to-end-on-its-own";
+  const endPx = container.scrollHeight - container.clientHeight;
+  const frameTime = currentFrameTime();
+  const lastWrite = lastFollowWriteByContainer.get(container);
+  if (frameTime !== null && lastWrite?.frameTime === frameTime && lastWrite.endPx === endPx) {
+    return "frame-already-written";
+  }
+  if (frameTime !== null) lastFollowWriteByContainer.set(container, { frameTime, endPx });
+  container.scrollTop = endPx;
+  return "pinned";
+}
+
+export function isTranscriptListRevealing(scroller: HTMLElement): boolean {
+  const content = scroller.firstElementChild;
+  if (!content) return true;
+  for (const child of content.children) {
+    if (child instanceof HTMLElement && child.style.opacity === "0") return true;
+  }
+  return false;
+}

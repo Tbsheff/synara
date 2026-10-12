@@ -76,6 +76,19 @@ async function mountApprovalPanel(input?: {
   };
 }
 
+function collectText(node: Node): string {
+  const shadowText = node instanceof Element && node.shadowRoot ? collectText(node.shadowRoot) : "";
+  const childText = Array.from(node.childNodes, (child) =>
+    child.nodeType === Node.TEXT_NODE ? (child.textContent ?? "") : collectText(child),
+  ).join("");
+  return shadowText + childText;
+}
+
+function renderedDiffText(): string {
+  const container = document.querySelector('[data-approval-file-changes="true"]');
+  return container ? collectText(container) : "";
+}
+
 describe("ComposerPendingApprovalPanel", () => {
   it("explains task consent and keeps it separate from provider session approval", async () => {
     const mounted = await mountApprovalPanel({
@@ -162,6 +175,124 @@ describe("ComposerPendingApprovalPanel", () => {
     try {
       await expect.element(page.getByText("Approve this command?")).toBeInTheDocument();
       await expect.element(page.getByText("bun run test")).toBeInTheDocument();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("formats the requested permission profile for people instead of raw JSON", async () => {
+    const mounted = await mountApprovalPanel({
+      approval: makeApproval({
+        requestKind: "permissions",
+        detail: "Needs to fetch release notes",
+        permissionProfile: {
+          network: { enabled: true },
+          fileSystem: { write: ["/repo/src"] },
+        },
+      }),
+    });
+
+    try {
+      const list = page.getByRole("list", { name: "Requested permissions" });
+      await expect.element(list).toBeInTheDocument();
+      await expect.element(page.getByText("Internet access")).toBeInTheDocument();
+      await expect.element(page.getByText("Edit files")).toBeInTheDocument();
+      await expect.element(page.getByText("/repo/src")).toBeInTheDocument();
+      expect(list.element().textContent).not.toMatch(/[{}"]/u);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("shows dropped permission parts as plain raw JSON text", async () => {
+    const mounted = await mountApprovalPanel({
+      approval: makeApproval({
+        requestKind: "permissions",
+        permissionProfile: {
+          network: { enabled: true },
+          rules: [{ pattern: "<img src=x onerror=alert(1)>" }],
+        },
+      }),
+    });
+
+    try {
+      await expect.element(page.getByText("More permissions")).toBeInTheDocument();
+      const raw = document.querySelector('[data-approval-raw-permissions="true"]');
+      expect(raw?.textContent).toContain('"pattern": "<img src=x onerror=alert(1)>"');
+      expect(raw?.querySelector("img")).toBeNull();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("shows the provider prompt, context, and blocked path", async () => {
+    const mounted = await mountApprovalPanel({
+      approval: makeApproval({
+        requestKind: "command",
+        promptTitle: "Claude wants to run bun run test",
+        displayName: "Bash",
+        description: "Runs the unit tests",
+        cwd: "/repo",
+        decisionReason: "Command is not in the allow list",
+        blockedPath: "/etc/hosts",
+        parsedActions: [{ type: "read", path: "src/a.ts", name: "a.ts" }],
+      }),
+    });
+
+    try {
+      await expect.element(page.getByText("Claude wants to run bun run test")).toBeInTheDocument();
+      await expect.element(page.getByText("Runs the unit tests")).toBeInTheDocument();
+      await expect.element(page.getByText("Read a.ts")).toBeInTheDocument();
+      await expect.element(page.getByText("/repo", { exact: true })).toBeInTheDocument();
+      await expect.element(page.getByText("/etc/hosts")).toBeInTheDocument();
+      await expect.element(page.getByText("Command is not in the allow list")).toBeInTheDocument();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("keeps the kind prompt and shows a tool title as the tool label", async () => {
+    const mounted = await mountApprovalPanel({
+      approval: makeApproval({
+        requestKind: "tool",
+        detail: "Create an issue",
+        toolName: "create_issue",
+        toolTitle: "Create issue",
+      }),
+    });
+
+    try {
+      await expect.element(page.getByText("Approve this tool call?")).toBeInTheDocument();
+      await expect.element(page.getByText("Create issue", { exact: true })).toBeInTheDocument();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("shows the per-file diff of a file-change approval", async () => {
+    const mounted = await mountApprovalPanel({
+      approval: makeApproval({
+        requestKind: "file-change",
+        fileChanges: {
+          changes: [
+            {
+              path: "src/app.ts",
+              kind: "update",
+              unifiedDiff:
+                "diff --git a/src/app.ts b/src/app.ts\n--- a/src/app.ts\n+++ b/src/app.ts\n@@ -1 +1 @@\n-old\n+new\n",
+              additions: 1,
+              deletions: 1,
+            },
+          ],
+        },
+      }),
+    });
+
+    try {
+      await expect.element(page.getByText("Approve this file change?")).toBeInTheDocument();
+      await expect.element(page.getByText("src/app.ts", { exact: true })).toBeInTheDocument();
+      await expect.poll(() => renderedDiffText().includes("new")).toBe(true);
+      expect(document.body.textContent).not.toContain("No diff available");
     } finally {
       await mounted.cleanup();
     }

@@ -311,7 +311,7 @@ describe("MessagesTimeline tool details", () => {
     }
   });
 
-  it("keeps agent activity as the primary action when live metadata is present", async () => {
+  it("expands an agent launch row inline and keeps agent activity one click away", async () => {
     const onOpenAgentActivity = vi.fn();
     const nowMs = Date.now();
     const host = createTimelineHost();
@@ -343,12 +343,19 @@ describe("MessagesTimeline tool details", () => {
     );
 
     try {
-      expect(document.querySelector("[data-tool-detail-trigger='true']")).toBeNull();
-      document.querySelector<HTMLButtonElement>("button")?.click();
-      expect(onOpenAgentActivity).toHaveBeenCalledWith("agent-live-activity");
-      expect(document.querySelector("[data-tool-details-inline='true']")).toBeNull();
       expect(document.body.textContent ?? "").toContain("Agent task");
       expect(document.body.textContent ?? "").toContain("Subagent working");
+      const trigger = document.querySelector<HTMLButtonElement>(
+        "[data-tool-detail-trigger='true']",
+      );
+      expect(trigger).not.toBeNull();
+      trigger?.click();
+      await expect
+        .poll(() => document.querySelector<HTMLButtonElement>("[data-open-agent-activity]"))
+        .not.toBeNull();
+      expect(onOpenAgentActivity).not.toHaveBeenCalled();
+      document.querySelector<HTMLButtonElement>("[data-open-agent-activity]")?.click();
+      expect(onOpenAgentActivity).toHaveBeenCalledWith("agent-live-activity");
     } finally {
       await screen.unmount();
       host.remove();

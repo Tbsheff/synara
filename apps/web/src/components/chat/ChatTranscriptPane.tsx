@@ -37,6 +37,7 @@ import { createThreadFindHighlightStore, type ThreadFindHighlightStore } from ".
 import { AgentActivityDetailView } from "./AgentActivityDetailView";
 import type { AgentActivityDetail } from "./agentActivity.logic";
 import { ThreadErrorBanner } from "./ThreadErrorBanner";
+import { threadErrorBannerContextFor, type ThreadErrorBannerContext } from "../ChatView.logic";
 import { ImportedHistoryButton, useImportedHistory } from "~/projectImport/ImportedHistoryButton";
 
 interface ChatTranscriptPaneProps {
@@ -124,6 +125,7 @@ interface ChatTranscriptPaneProps {
   conversationOnly?: boolean;
   /** Stored thread-level error, rendered in flow above the transcript. */
   threadError?: string | null;
+  threadErrorContext?: ThreadErrorBannerContext | null;
   recoverableTurnId?: ComponentProps<typeof MessagesTimeline>["recoverableTurnId"];
   turnRecoveryDisabled?: boolean;
   onContinueFailedTurn?: ComponentProps<typeof MessagesTimeline>["onContinueFailedTurn"];
@@ -220,6 +222,7 @@ export function ChatTranscriptPane({
   turnDiffSummaryByAssistantMessageId,
   conversationOnly,
   threadError,
+  threadErrorContext,
   recoverableTurnId,
   turnRecoveryDisabled,
   onContinueFailedTurn,
@@ -307,6 +310,7 @@ export function ChatTranscriptPane({
   };
 
   const agentDetailOpen = Boolean(agentActivityDetail && onCloseAgentActivityDetail);
+  const matchingThreadErrorContext = threadErrorBannerContextFor(threadError, threadErrorContext);
 
   return (
     <div
@@ -327,6 +331,12 @@ export function ChatTranscriptPane({
         <div className="flex shrink-0 justify-center px-3 pt-2">
           <ThreadErrorBanner
             error={threadError}
+            {...(matchingThreadErrorContext?.stopReason
+              ? { stopReason: matchingThreadErrorContext.stopReason }
+              : {})}
+            {...(matchingThreadErrorContext?.detail
+              ? { detail: matchingThreadErrorContext.detail }
+              : {})}
             unblocking={unblockingThread === true}
             {...(onDismissThreadError ? { onDismiss: onDismissThreadError } : {})}
             {...(onUnblockThread ? { onUnblock: onUnblockThread } : {})}
@@ -345,6 +355,7 @@ export function ChatTranscriptPane({
         >
           <MessagesTimeline
             key={activeThreadId}
+            threadId={activeThreadId}
             historyHeader={
               importedHistory.nextCursor || importedHistory.error || importedHistory.loading ? (
                 <ImportedHistoryButton history={importedHistory} />

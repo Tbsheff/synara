@@ -8,6 +8,7 @@ import {
   isCodexActivityStatusWorkEntry,
   isPlainRuntimeNoticeWorkEntry,
   isReasoningUpdateWorkEntry,
+  isSubagentTaskProgressWorkEntry,
   isUnmappedProviderEventWorkEntry,
 } from "./agentActivity.logic";
 import { deriveTimelineEntries } from "../../workLog";
@@ -22,6 +23,73 @@ function workEntry(overrides: Partial<WorkLogEntry> & Pick<WorkLogEntry, "id">):
 }
 
 describe("deriveAgentActivityTimelineState", () => {
+  it("keeps Claude task progress out of the transcript", () => {
+    const state = deriveAgentActivityTimelineState([
+      workEntry({
+        id: "progress-a",
+        label: "Task progress",
+        tone: "info",
+        activityKind: "task.progress",
+        taskId: "task-a",
+        detail: "Reading the adapter",
+      }),
+      workEntry({
+        id: "progress-b",
+        label: "Task progress",
+        tone: "info",
+        activityKind: "task.progress",
+        taskId: "task-b",
+        detail: "Running tests",
+      }),
+      workEntry({ id: "tool-1", label: "Read", tone: "tool" }),
+    ]);
+
+    expect(state.timelineWorkEntries.map((entry) => entry.id)).toEqual(["tool-1"]);
+    expect(state.timelineWorkEntries.some((entry) => entry.label === "Reasoning trace")).toBe(
+      false,
+    );
+  });
+
+  it("never folds reasoning updates from two tasks into one row", () => {
+    const state = deriveAgentActivityTimelineState([
+      workEntry({
+        id: "a-1",
+        label: "Reasoning update",
+        tone: "info",
+        activityKind: "task.progress",
+        taskId: "task-a",
+        detail: "Agent A step 1",
+      }),
+      workEntry({
+        id: "b-1",
+        label: "Reasoning update",
+        tone: "info",
+        activityKind: "task.progress",
+        taskId: "task-b",
+        detail: "Agent B step 1",
+      }),
+      workEntry({
+        id: "b-2",
+        label: "Reasoning update",
+        tone: "info",
+        activityKind: "task.progress",
+        taskId: "task-b",
+        detail: "Agent B step 2",
+      }),
+    ]);
+
+    expect(state.timelineWorkEntries.map((entry) => entry.id)).toEqual([
+      "agent-reasoning:a-1",
+      "agent-reasoning:b-1",
+    ]);
+    expect(
+      state.detailById.get("agent-reasoning:a-1")?.entries.map((entry) => entry.taskId),
+    ).toEqual(["task-a"]);
+    expect(
+      state.detailById.get("agent-reasoning:b-1")?.entries.map((entry) => entry.taskId),
+    ).toEqual(["task-b", "task-b"]);
+  });
+
   it("compacts consecutive reasoning updates while preserving detail entries", () => {
     const state = deriveAgentActivityTimelineState([
       workEntry({
@@ -275,5 +343,27 @@ describe("isPlainRuntimeNoticeWorkEntry", () => {
       }),
     ).toBe(false);
     expect(isPlainRuntimeNoticeWorkEntry(workEntry({ id: "tool-1" }))).toBe(false);
+  });
+});
+
+describe("isSubagentTaskProgressWorkEntry", () => {
+  it("matches task progress rows and leaves reasoning rows alone", () => {
+    expect(
+      isSubagentTaskProgressWorkEntry({
+        activityKind: "task.progress",
+        taskId: "task-a",
+        label: "Task progress",
+      }),
+    ).toBe(true);
+    expect(
+      isSubagentTaskProgressWorkEntry({
+        activityKind: "task.progress",
+        taskId: "task-a",
+        label: "Reasoning update",
+      }),
+    ).toBe(false);
+    expect(
+      isSubagentTaskProgressWorkEntry({ activityKind: "task.progress", label: "Reasoning trace" }),
+    ).toBe(false);
   });
 });

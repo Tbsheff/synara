@@ -616,7 +616,7 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("Tasks updated");
     expect(markup).toContain("Thinking");
     expect(markup).not.toContain(formatShortTimestamp(assistantCreatedAt, "locale"));
-    expect(markup).toMatch(/class="[^"]*\bpb-1\b[^"]*" data-timeline-row-kind="message"/);
+    expect(markup).toMatch(/class="[^"]*\bpb-2\b[^"]*" data-timeline-row-kind="message"/);
   });
 
   it("folds work log summaries above the next assistant message footer", async () => {
@@ -655,7 +655,7 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain(formatShortTimestamp("2026-03-17T19:12:29.000Z", "locale"));
-    expect(markup).toContain("Worked for 1.0s");
+    expect(markup).toContain("Worked for 1s");
     expect(markup).not.toContain("data-scroll-anchor-ignore");
     expect(markup).not.toContain(
       `${formatShortTimestamp("2026-03-17T19:12:29.000Z", "locale")} • 1.0s`,
@@ -1564,7 +1564,8 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("Edited 1 file");
     expect(markup).toContain("Undo");
     expect(markup).toContain("Review");
-    expect(markup).toContain('aria-expanded="true"');
+    expect(markup).toContain('aria-expanded="false"');
+    expect(markup).toContain('aria-label="Expand changed files list"');
     expect(markup).toContain('data-edited-file-row="true"');
     expect(markup).toContain('aria-label="Open apps/web/src/components/Sidebar.tsx options"');
     expect(markup).toContain("apps/web/src/components/Sidebar.tsx");

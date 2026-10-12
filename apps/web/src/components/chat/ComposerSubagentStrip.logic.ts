@@ -28,6 +28,7 @@ export interface ComposerSubagentStripItem {
   modelLabel: string | undefined;
   statusLabel: string | undefined;
   statusKind: SubagentStatusKind | null;
+  latestUpdate: string | undefined;
   isActive: boolean;
   // True when this row is the thread currently open in the chat pane (viewing a
   // sibling from inside a subagent thread).
@@ -74,17 +75,47 @@ function mergeSubagentSnapshots(previous: WorkLogSubagent, next: WorkLogSubagent
   };
 }
 
+type TaskProgressByKey = ReadonlyMap<string, string>;
+
+function collectLatestTaskProgress(entries: ReadonlyArray<WorkLogEntry>): TaskProgressByKey {
+  const latestByKey = new Map<string, { createdAt: string; text: string }>();
+  for (const entry of entries) {
+    if (entry.activityKind !== "task.progress" || entry.taskId === undefined) continue;
+    const text = entry.detail?.replace(/\s+/g, " ").trim();
+    if (!text) continue;
+    for (const key of [entry.taskId, entry.toolCallId]) {
+      if (key === undefined) continue;
+      const previous = latestByKey.get(key);
+      if (previous === undefined || previous.createdAt <= entry.createdAt) {
+        latestByKey.set(key, { createdAt: entry.createdAt, text });
+      }
+    }
+  }
+  return new Map([...latestByKey].map(([key, value]) => [key, value.text] as const));
+}
+
+function subagentTaskProgress(
+  subagent: WorkLogSubagent,
+  taskProgress: TaskProgressByKey,
+): string | undefined {
+  for (const key of [subagent.providerThreadId, subagent.threadId, subagent.agentId]) {
+    const text = key === undefined ? undefined : taskProgress.get(key);
+    if (text !== undefined) return text;
+  }
+  return undefined;
+}
+
 function toStripItem(
   key: string,
   subagent: WorkLogSubagent,
   backgroundedThreadIds: ReadonlySet<string>,
   viewedThreadId: ThreadId | null,
+  taskProgress: TaskProgressByKey,
 ): ComposerSubagentStripItem {
   const presentation = resolveSubagentPresentation({
     nickname: subagent.nickname,
     role: subagent.role,
     title: subagent.title,
-    fallbackId: subagent.threadId,
   });
   const statusLabel =
     subagent.statusLabel ?? humanizeSubagentStatus(subagent.rawStatus, subagent.isActive);
@@ -109,6 +140,7 @@ function toStripItem(
         : (modelLabel ?? subagent.effort),
     statusLabel,
     statusKind,
+    latestUpdate: subagentTaskProgress(subagent, taskProgress) ?? subagent.latestUpdate,
     isActive: statusKind === "running",
     isViewed: viewedThreadId !== null && threadId === viewedThreadId,
     // Confirmed patches key by the Task tool_use_id — the same handle the
@@ -124,6 +156,7 @@ function collectStripItems(
   entries: ReadonlyArray<WorkLogEntry>,
   backgroundedThreadIds: ReadonlySet<string>,
   viewedThreadId: ThreadId | null,
+  taskProgress: TaskProgressByKey,
 ): ComposerSubagentStripItem[] {
   const subagentByKey = new Map<string, WorkLogSubagent>();
   for (const entry of entries) {
@@ -134,7 +167,7 @@ function collectStripItems(
     }
   }
   return [...subagentByKey.entries()].map(([key, subagent]) =>
-    toStripItem(key, subagent, backgroundedThreadIds, viewedThreadId),
+    toStripItem(key, subagent, backgroundedThreadIds, viewedThreadId, taskProgress),
   );
 }
 
@@ -194,12 +227,13 @@ export function deriveComposerSubagentStripItems(input: {
 
   const backgroundedThreadIds = input.backgroundedProviderThreadIds ?? NO_BACKGROUNDED_THREAD_IDS;
   const viewedThreadId = input.viewedThreadId ?? null;
+  const taskProgress = collectLatestTaskProgress(input.workEntries);
   const liveTurnEntries = input.liveTurnId
     ? entriesWithSubagents.filter((entry) => entry.turnId === input.liveTurnId)
     : [];
   if (liveTurnEntries.length > 0) {
     const liveTurnProviderThreadIds = new Set(
-      collectStripItems(liveTurnEntries, backgroundedThreadIds, viewedThreadId).map(
+      collectStripItems(liveTurnEntries, backgroundedThreadIds, viewedThreadId, taskProgress).map(
         (item) => item.providerThreadId,
       ),
     );
@@ -207,6 +241,7 @@ export function deriveComposerSubagentStripItems(input: {
       entriesWithSubagents,
       backgroundedThreadIds,
       viewedThreadId,
+      taskProgress,
     ).filter(
       (item) =>
         liveTurnProviderThreadIds.has(item.providerThreadId) ||
@@ -218,7 +253,12 @@ export function deriveComposerSubagentStripItems(input: {
 
   // No subagents spawned by the live turn: keep the latest known set visible only
   // while some subagent is still running or queued, then let the strip retire.
-  const items = collectStripItems(entriesWithSubagents, backgroundedThreadIds, viewedThreadId);
+  const items = collectStripItems(
+    entriesWithSubagents,
+    backgroundedThreadIds,
+    viewedThreadId,
+    taskProgress,
+  );
   return items.some((item) => item.statusKind === "running" || item.statusKind === "queued")
     ? withParentRow(items, input.parentRow)
     : [];

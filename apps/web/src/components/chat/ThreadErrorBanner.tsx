@@ -8,6 +8,7 @@
 // session errors via useThreadErrorToast.
 
 import { isProviderDeliveryBlockDetail } from "@synara/shared/providerDeliveryBlock";
+import { pluralize } from "@synara/shared/text";
 import { useId, useLayoutEffect, useRef, useState } from "react";
 
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "../ui/alert";
@@ -17,10 +18,38 @@ import { DisclosureChevron } from "../ui/DisclosureChevron";
 import { IconButton } from "../ui/icon-button";
 import { CircleAlertIcon, XIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
+import type { ProviderErrorDetail } from "../../workLog";
+
+const PROVIDER_STOP_REASON_TITLES: Readonly<Record<string, string>> = {
+  error_max_turns: "Stopped: max turns reached",
+  error_max_budget_usd: "Stopped: budget limit reached",
+  error_max_structured_output_retries: "Stopped: structured output retries exhausted",
+  error_during_execution: "Stopped: error during execution",
+};
+
+export function providerStopReasonTitle(stopReason: string | undefined): string | undefined {
+  return stopReason === undefined ? undefined : PROVIDER_STOP_REASON_TITLES[stopReason];
+}
+
+function providerErrorDetailLines(detail: ProviderErrorDetail | undefined): string[] {
+  if (!detail) return [];
+  const lines = [...(detail.errors ?? [])];
+  if (detail.errorsTruncated) lines.push("More errors were omitted.");
+  if (detail.permissionDenials) {
+    const count = detail.permissionDenials;
+    lines.push(
+      `${count} ${pluralize(count, "tool call was", "tool calls were")} denied permission.`,
+    );
+  }
+  if (detail.terminalReason) lines.push(`Reason: ${detail.terminalReason}`);
+  return lines;
+}
 
 type ThreadErrorBannerProps = {
   error: string | null;
   title?: string;
+  stopReason?: string;
+  detail?: ProviderErrorDetail;
   onContinue?: () => void;
   onChangeModel?: () => void;
   recoveryDisabled?: boolean;
@@ -39,7 +68,9 @@ export function ThreadErrorBanner(props: ThreadErrorBannerProps) {
 
 function ThreadErrorBannerContent({
   error,
-  title,
+  title: fallbackTitle,
+  stopReason,
+  detail,
   onContinue,
   onChangeModel,
   recoveryDisabled,
@@ -63,6 +94,9 @@ function ThreadErrorBannerContent({
     return () => observer.disconnect();
   }, [error, expanded]);
   const canUnblock = onUnblock !== undefined && isProviderDeliveryBlockDetail(error);
+  const title = providerStopReasonTitle(stopReason) ?? fallbackTitle;
+  const detailLines = providerErrorDetailLines(detail);
+  const copyText = detailLines.length > 0 ? [error, ...detailLines].join("\n") : error;
   return (
     <Alert variant="error" className={cn("w-full max-w-[36rem] shadow-sm", className)}>
       <CircleAlertIcon />
@@ -79,8 +113,17 @@ function ThreadErrorBannerContent({
         >
           {error}
         </p>
+        {expanded && detailLines.length > 0 ? (
+          <ul className="space-y-0.5 text-ui-xs" data-thread-error-detail="true">
+            {detailLines.map((line, index) => (
+              <li key={index} className="whitespace-pre-wrap [overflow-wrap:anywhere]">
+                {line}
+              </li>
+            ))}
+          </ul>
+        ) : null}
         <div className="flex flex-wrap items-center gap-1">
-          {clamped || expanded ? (
+          {clamped || expanded || detailLines.length > 0 ? (
             <Button
               size="xs"
               variant="ghost"
@@ -92,7 +135,7 @@ function ThreadErrorBannerContent({
               {expanded ? "Hide details" : "Show details"}
             </Button>
           ) : null}
-          <CopyTextButton text={error} label="error" />
+          <CopyTextButton text={copyText} label="error" />
           {onContinue ? (
             <Button
               size="xs"

@@ -60,7 +60,7 @@ describe("live activity presentation", () => {
         nowMs,
         { subagent: true },
       ),
-    ).toBe("Failed · 4m 55s elapsed");
+    ).toBe("Failed in 4m 55s");
   });
 
   it("keeps progress and terminal states provider-agnostic", () => {
@@ -79,7 +79,7 @@ describe("live activity presentation", () => {
         { ...completed, state: "failed" },
         Date.parse("2026-07-26T14:03:00.000Z"),
       ),
-    ).toBe("Failed · 2m 14s elapsed · 100%");
+    ).toBe("Failed in 2m 14s · 100%");
   });
 
   it("does not invent elapsed time when a terminal event has no known start", () => {
@@ -91,5 +91,41 @@ describe("live activity presentation", () => {
 
     expect(liveActivityElapsedMs(activity, Date.parse("2026-07-26T14:03:00.000Z"))).toBeNull();
     expect(formatLiveActivityMeta(activity, Date.parse("2026-07-26T14:03:00.000Z"))).toBeNull();
+  });
+
+  it("states a settled outcome with its duration, preferring the tool's own duration", () => {
+    const failed: WorkLogLiveActivity = {
+      state: "failed",
+      label: "Bash",
+      startedAt: STARTED_AT,
+      lastActivityAt: "2026-07-26T14:00:00.400Z",
+    };
+    const nowMs = Date.parse("2026-07-26T14:03:00.000Z");
+
+    expect(formatLiveActivityMeta(failed, nowMs)).toBe("Failed in 0s");
+    expect(formatLiveActivityMeta(failed, nowMs, { settledDurationMs: 65_000 })).toBe(
+      "Failed in 1m 5s",
+    );
+    expect(formatLiveActivityMeta({ ...failed, state: "cancelled" }, nowMs)).toBe(
+      "Cancelled after 0s",
+    );
+    expect(
+      formatLiveActivityMeta({ state: "failed", label: "Grep", lastActivityAt: STARTED_AT }, nowMs),
+    ).toBe("Failed");
+  });
+
+  it("counts idle time from the newest live output, not only lifecycle events", () => {
+    const activity = runningActivity({ lastActivityAt: "2026-07-26T14:01:00.000Z" });
+    const nowMs = Date.parse("2026-07-26T14:02:14.000Z");
+
+    expect(
+      formatLiveActivityMeta(activity, nowMs, { lastOutputAt: "2026-07-26T14:02:14.000Z" }),
+    ).toBe("Active now · 3m 25s elapsed");
+    expect(
+      formatLiveActivityMeta(activity, nowMs, { lastOutputAt: "2026-07-26T14:02:10.000Z" }),
+    ).toBe("Active 4s ago · 3m 25s elapsed");
+    expect(
+      formatLiveActivityMeta(activity, nowMs, { lastOutputAt: "2026-07-26T13:00:00.000Z" }),
+    ).toBe("No activity for 1m 14s · 3m 25s elapsed");
   });
 });

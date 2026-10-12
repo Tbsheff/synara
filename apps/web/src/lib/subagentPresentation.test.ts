@@ -87,6 +87,14 @@ describe("resolveSubagentPresentation", () => {
 
     expect(presentation.primaryLabel).toBe("019d8cae-0628-7bf1-bf86-5cbc31cd582c");
   });
+
+  it("never labels a subagent with a raw Claude tool-use id", () => {
+    const presentation = resolveSubagentPresentation({
+      fallbackId: "subagent:thread-1:toolu_01CnAyXq7b2Lk",
+    });
+
+    expect(presentation.primaryLabel).toBe("Subagent");
+  });
 });
 
 describe("resolveSubagentPresentationForThread", () => {

@@ -1,14 +1,8 @@
 // FILE: toolCallGroup.logic.ts
 // Purpose: Summarizes a settled run of tool-call work entries into one compact
-//          label ("Ran 2 commands, Edited 2 files, Searched 3 files") for the
 //          collapsed tool-group disclosure in the transcript.
 // Layer: Web chat presentation helpers
-// Exports: MIN_COLLAPSIBLE_TOOL_GROUP_SIZE, workEntryRowCount,
-//          multiFileEditLabel, ToolCallSummaryCategory,
-//          ToolCallGroupSummary, isSummarizableToolCallEntry,
-//          classifyToolCallSummaryCategory, summarizeToolCallGroup
 
-import { pluralize } from "@synara/shared/text";
 import { isFileChangeWorkLogEntry, type WorkLogEntry } from "../../session-logic";
 import { deriveReadableCommandDisplay } from "../../lib/toolCallLabel";
 import { isReasoningUpdateWorkEntry } from "./agentActivity.logic";
@@ -26,7 +20,7 @@ export function workEntryRowCount(entry: WorkLogEntry): number {
 // One-line label for a call that would list several edited-file rows.
 export function multiFileEditLabel(entry: WorkLogEntry): string | null {
   const rowCount = workEntryRowCount(entry);
-  return rowCount > 1 ? summaryPartLabel("edit", rowCount, true) : null;
+  return rowCount > 1 ? summaryPartLabel("edit", rowCount) : null;
 }
 
 export type ToolCallSummaryCategory =
@@ -34,6 +28,7 @@ export type ToolCallSummaryCategory =
   | "edit"
   | "read"
   | "search"
+  | "web"
   | "agent"
   | "tool"
   | "other";
@@ -89,7 +84,7 @@ export function classifyToolCallSummaryCategory(entry: WorkLogEntry): ToolCallSu
     return "tool";
   }
   if (entry.itemType === "web_search") {
-    return "search";
+    return "web";
   }
   const command = entry.command ?? entry.rawCommand;
   if (entry.itemType === "command_execution" || entry.requestKind === "command" || command) {
@@ -137,38 +132,49 @@ function entryFileKeys(entry: WorkLogEntry): ReadonlyArray<string> {
 }
 
 const CATEGORY_ORDER: ReadonlyArray<ToolCallSummaryCategory> = [
-  "command",
+  "tool",
+  "other",
   "edit",
   "read",
   "search",
+  "command",
+  "web",
   "agent",
-  "tool",
-  "other",
 ];
 
-function summaryPartLabel(
-  category: ToolCallSummaryCategory,
-  count: number,
-  isSolePart: boolean,
+const SUMMARY_PART_PHRASES: Record<
+  ToolCallSummaryCategory,
+  { readonly one: string; readonly many: string }
+> = {
+  tool: { one: "Called a tool", many: "Called tools" },
+  other: { one: "Called a tool", many: "Called tools" },
+  edit: { one: "Edited a file", many: "Edited files" },
+  read: { one: "Read a file", many: "Read files" },
+  search: { one: "Searched files", many: "Searched files" },
+  command: { one: "Ran a command", many: "Ran commands" },
+  web: { one: "Searched the web", many: "Searched the web" },
+  agent: { one: "Ran an agent task", many: "Ran agent tasks" },
+};
+
+const EMPTY_TOOL_GROUP_LABEL = "Worked";
+
+function summaryPartLabel(category: ToolCallSummaryCategory, count: number): string {
+  const phrases = SUMMARY_PART_PHRASES[category];
+  return count === 1 ? phrases.one : phrases.many;
+}
+
+function lowercaseLeadingLetter(value: string): string {
+  return `${value.charAt(0).toLowerCase()}${value.slice(1)}`;
+}
+
+export function formatToolCallGroupLabel(
+  parts: ReadonlyArray<Pick<ToolCallGroupSummaryPart, "label">>,
 ): string {
-  switch (category) {
-    case "command":
-      return `Ran ${count} ${pluralize(count, "command")}`;
-    case "edit":
-      return `Edited ${count} ${pluralize(count, "file")}`;
-    case "read":
-      return `Read ${count} ${pluralize(count, "file")}`;
-    case "search":
-      return `Searched ${count} ${pluralize(count, "file")}`;
-    case "agent":
-      return `Ran ${count} agent ${pluralize(count, "task")}`;
-    case "tool":
-      return `Used ${count} ${pluralize(count, "tool")}`;
-    case "other":
-      return isSolePart
-        ? `Ran ${count} tool ${pluralize(count, "call")}`
-        : `${count} other tool ${pluralize(count, "call")}`;
-  }
+  const labels = [...new Set(parts.map((part) => part.label))];
+  if (labels.length === 0) return EMPTY_TOOL_GROUP_LABEL;
+  return labels
+    .map((label, index) => (index === 0 ? label : lowercaseLeadingLetter(label)))
+    .join(", ");
 }
 
 export function summarizeToolCallGroup(
@@ -211,17 +217,19 @@ export function summarizeToolCallGroup(
   }
 
   const populated = CATEGORY_ORDER.filter((category) => (countByCategory.get(category) ?? 0) > 0);
+  const toolCallCount = (countByCategory.get("tool") ?? 0) + (countByCategory.get("other") ?? 0);
   const parts = populated.map((category) => {
     const count = countByCategory.get(category)!;
+    const labelCount = category === "tool" || category === "other" ? toolCallCount : count;
     return {
       category,
       count,
-      label: summaryPartLabel(category, count, populated.length === 1),
+      label: summaryPartLabel(category, labelCount),
     };
   });
 
   return {
-    label: parts.map((part) => part.label).join(", "),
+    label: formatToolCallGroupLabel(parts),
     parts,
     entryCount: summarizable.length,
     hasRunningEntry,

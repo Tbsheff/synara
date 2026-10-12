@@ -194,6 +194,13 @@ import {
 } from "./-rootEventInvalidation";
 import { createDesktopProjectRecoveryAttemptGate } from "./-desktopProjectRecoveryAttempt";
 import { isSidechatThread } from "@synara/shared/sidechatThread";
+import {
+  applyLiveToolOutputUpdate,
+  clearAllLiveToolOutput,
+  clearLiveToolOutputForCompletedTools,
+  clearLiveToolOutputForEvents,
+  clearLiveToolOutputThread,
+} from "../liveToolOutputStore";
 
 const SHELL_SNAPSHOT_BOOTSTRAP_FALLBACK_DELAY_MS = 1_500;
 const THREAD_DETAIL_CATCHUP_INTERVAL_MS = 1_500;
@@ -1590,6 +1597,7 @@ function EventRouter() {
         nextThreadProjectionReconcileAtById.delete(threadId);
         threadCatchupBackoffById.delete(threadId);
         subscribedThreadIds.delete(threadId);
+        clearLiveToolOutputThread(threadId);
       }
       // A retention eviction can refresh a thread whose lease is dropping in the
       // same tick, so the refreshed snapshot may already have landed. Retention
@@ -2304,6 +2312,7 @@ function EventRouter() {
     const unsubThreadEvent = api.orchestration.onThreadEvent((item) => {
       if (item.kind === "snapshot") {
         const threadId = item.snapshot.thread.id;
+        clearLiveToolOutputForCompletedTools(threadId, item.snapshot.thread.activities);
         threadSnapshotRequestInFlight.delete(threadId);
         // The lease can drop while its refreshed snapshot is in flight. Applying it
         // then would restore detail slices that no retention entry owns, and since
@@ -2347,6 +2356,7 @@ function EventRouter() {
         // stale cached turn does not flicker through its intermediate states.
         queueingThreadReplayBatch = true;
         try {
+          clearLiveToolOutputForEvents(item.events);
           for (const event of item.events) {
             applyThreadStreamEvent(event);
           }
@@ -2357,6 +2367,13 @@ function EventRouter() {
         flushPendingDomainEvents();
         return;
       }
+      if (item.kind === "live") {
+        if (subscribedThreadIds.has(ThreadId.makeUnsafe(item.live.threadId))) {
+          applyLiveToolOutputUpdate(item.live);
+        }
+        return;
+      }
+      clearLiveToolOutputForEvents([item.event]);
       applyThreadStreamEvent(item.event);
     });
     const unsubShellStreamFailure = onShellStreamFailure(() => {
@@ -2405,6 +2422,7 @@ function EventRouter() {
       }
       threadSnapshotRequestInFlight.delete(threadId);
       threadSnapshotRefreshPending.delete(threadId);
+      clearLiveToolOutputThread(threadId);
       useStore.getState().markThreadDetailSyncFailed(threadId);
       if (failure.code === ORCHESTRATION_STREAM_OVERFLOW_CODE) {
         const toastId = threadOverflowToastId(threadId);
@@ -2737,6 +2755,7 @@ function EventRouter() {
       threadSubscriptionGenerationById.clear();
       nextThreadProjectionReconcileAtById.clear();
       threadCatchupBackoffById.clear();
+      clearAllLiveToolOutput();
       domainEventFlushThrottler.cancel();
       reconcileThreadSubscriptionsRef.current = null;
       unregisterEmptyRouteRestoreRefresh();

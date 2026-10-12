@@ -55,13 +55,17 @@ export function isLiveActivityInProgress(activity: WorkLogLiveActivity): boolean
   );
 }
 
-export function useLiveActivityNow(activity: WorkLogLiveActivity | undefined): number {
-  const inProgress = activity ? isLiveActivityInProgress(activity) : false;
-  const nowMs = useSyncExternalStore(
-    inProgress ? subscribeLiveActivityClock : subscribeInactiveLiveActivityClock,
+export function useLiveClockNowMs(enabled: boolean): number {
+  return useSyncExternalStore(
+    enabled ? subscribeLiveActivityClock : subscribeInactiveLiveActivityClock,
     getLiveActivityClockSnapshot,
     getLiveActivityClockSnapshot,
   );
+}
+
+export function useLiveActivityNow(activity: WorkLogLiveActivity | undefined): number {
+  const inProgress = activity ? isLiveActivityInProgress(activity) : false;
+  const nowMs = useLiveClockNowMs(inProgress);
   return inProgress ? nowMs : Date.now();
 }
 
@@ -133,6 +137,30 @@ export interface LiveActivityMetaOptions {
   // Subagent rows (Cursor/Claude `Task`, Codex collab) only hear back from the child
   // agent when it finishes, so quiet time is the expected state — never idleness.
   readonly subagent?: boolean;
+  readonly settledDurationMs?: number | undefined;
+  readonly lastOutputAt?: string | undefined;
+}
+
+export function formatSettledActivityOutcome(
+  state: "failed" | "cancelled",
+  durationMs: number | null,
+): string {
+  const label = formatLiveActivityStateLabel(state);
+  if (durationMs === null) return label;
+  const duration = formatClockDuration(durationMs);
+  return state === "failed" ? `${label} in ${duration}` : `${label} after ${duration}`;
+}
+
+function latestActivityAtMs(activity: WorkLogLiveActivity, lastOutputAt: string | undefined) {
+  const lastActivityAtMs = parseTimestamp(activity.lastActivityAt);
+  const lastOutputAtMs = parseTimestamp(lastOutputAt);
+  if (lastOutputAtMs === null) return lastActivityAtMs;
+  return lastActivityAtMs === null ? lastOutputAtMs : Math.max(lastActivityAtMs, lastOutputAtMs);
+}
+
+function formatIdleTime(idleMs: number): string {
+  if (idleMs >= NO_ACTIVITY_THRESHOLD_MS) return `No activity for ${formatClockDuration(idleMs)}`;
+  return idleMs < 1_000 ? "Active now" : `Active ${formatClockDuration(idleMs)} ago`;
 }
 
 // Live meta only exists to explain work the row can't state on its own: how long
@@ -149,29 +177,24 @@ export function formatLiveActivityMeta(
   }
 
   const parts: string[] = [];
-  const elapsed = formatLiveActivityElapsed(activity, nowMs);
-  const lastActivityAtMs = parseTimestamp(activity.lastActivityAt);
 
   if (isLiveActivityInProgress(activity)) {
+    const activityAtMs = latestActivityAtMs(activity, options?.lastOutputAt);
     if (options?.subagent) {
       parts.push("Subagent working");
-    } else if (lastActivityAtMs !== null) {
-      const idleMs = Math.max(0, nowMs - lastActivityAtMs);
-      parts.push(
-        idleMs >= NO_ACTIVITY_THRESHOLD_MS
-          ? `No activity for ${formatClockDuration(idleMs)}`
-          : idleMs < 1_000
-            ? "Active now"
-            : `Active ${formatClockDuration(idleMs)} ago`,
-      );
+    } else if (activityAtMs !== null) {
+      parts.push(formatIdleTime(Math.max(0, nowMs - activityAtMs)));
+    }
+    const elapsed = formatLiveActivityElapsed(activity, nowMs);
+    if (elapsed !== null) {
+      parts.push(`${elapsed} elapsed`);
     }
   } else {
-    parts.push(formatLiveActivityStateLabel(activity.state));
+    const settledState = activity.state === "cancelled" ? "cancelled" : "failed";
+    const durationMs = options?.settledDurationMs ?? liveActivityElapsedMs(activity, nowMs);
+    parts.push(formatSettledActivityOutcome(settledState, durationMs));
   }
 
-  if (elapsed !== null) {
-    parts.push(`${elapsed} elapsed`);
-  }
   if (activity.progress !== undefined) {
     parts.push(formatLiveActivityProgress(activity.progress));
   }

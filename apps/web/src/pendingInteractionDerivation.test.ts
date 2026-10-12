@@ -429,6 +429,245 @@ describe("derivePendingApprovals", () => {
   });
 });
 
+function fileChanges(path: string) {
+  return {
+    changes: [
+      { path, kind: "update", unifiedDiff: `@@ -1 +1 @@\n-a\n+b`, additions: 1, deletions: 1 },
+    ],
+  };
+}
+
+describe("derivePendingApprovals transcript parity", () => {
+  it("creates no panel for requests that cannot render one", () => {
+    const approvals = derivePendingApprovals([
+      makeActivity({
+        kind: "approval.requested",
+        tone: "approval",
+        payload: { requestId: "auth-refresh", requestType: "auth_tokens_refresh" },
+      }),
+      makeActivity({
+        kind: "approval.requested",
+        tone: "approval",
+        payload: { requestId: "unknown-kind", requestType: "attestation_generate" },
+      }),
+      makeActivity({
+        kind: "approval.requested",
+        tone: "approval",
+        payload: { requestType: "dynamic_tool_call", toolName: "Read" },
+      }),
+    ]);
+    expect(approvals).toEqual([]);
+  });
+
+  it("passes through the provider approval presentation fields", () => {
+    const approvals = derivePendingApprovals([
+      makeActivity({
+        kind: "approval.requested",
+        tone: "approval",
+        payload: {
+          requestId: "claude-read",
+          requestKind: "file-read",
+          promptTitle: "Claude wants to read secrets.txt",
+          title: "Read file",
+          description: "Reads a file outside the workspace",
+          displayName: "Read",
+          blockedPath: "/etc/secrets.txt",
+          decisionReason: "Path is outside the allowed directories",
+          cwd: "  ",
+        },
+      }),
+      makeActivity({
+        kind: "approval.requested",
+        tone: "approval",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        payload: {
+          requestId: "codex-command",
+          requestKind: "command",
+          cwd: "/repo",
+          reason: "Needs network",
+          parsedActions: [
+            { type: "read", path: "src/a.ts", name: "a.ts" },
+            { type: "search", query: "foo", path: "src" },
+          ],
+        },
+      }),
+    ]);
+    expect(approvals[0]).toMatchObject({
+      promptTitle: "Claude wants to read secrets.txt",
+      toolTitle: "Read file",
+      description: "Reads a file outside the workspace",
+      displayName: "Read",
+      blockedPath: "/etc/secrets.txt",
+      decisionReason: "Path is outside the allowed directories",
+    });
+    expect(approvals[0]).not.toHaveProperty("cwd");
+    expect(approvals[1]).toMatchObject({
+      cwd: "/repo",
+      reason: "Needs network",
+      parsedActions: [
+        { type: "read", path: "src/a.ts", name: "a.ts" },
+        { type: "search", query: "foo", path: "src" },
+      ],
+    });
+  });
+
+  it("uses the approval's own file changes first", () => {
+    const approvals = derivePendingApprovals([
+      makeActivity({
+        kind: "approval.requested",
+        tone: "approval",
+        turnId: "turn-1",
+        payload: {
+          requestId: "patch",
+          requestKind: "file-change",
+          fileChanges: fileChanges("src/own.ts"),
+        },
+      }),
+    ]);
+    expect(approvals[0]?.fileChanges?.changes.map((change) => change.path)).toEqual(["src/own.ts"]);
+  });
+
+  it("joins the diff of the only in-flight file change in the turn", () => {
+    const fileChangeActivity = (id: string, kind: string, path: string, createdAt: string) =>
+      makeActivity({
+        id,
+        kind,
+        createdAt,
+        turnId: "turn-1",
+        payload: {
+          itemType: "file_change",
+          fileChanges: fileChanges(path),
+          data: { item: { id: `item-${path}` } },
+        },
+      });
+    const approval = makeActivity({
+      kind: "approval.requested",
+      tone: "approval",
+      turnId: "turn-1",
+      createdAt: "2026-02-23T00:00:05.000Z",
+      payload: { requestId: "patch", requestKind: "file-change" },
+    });
+    const settledEarlier = [
+      fileChangeActivity("old-start", "tool.started", "src/old.ts", "2026-02-23T00:00:01.000Z"),
+      fileChangeActivity("old-done", "tool.completed", "src/old.ts", "2026-02-23T00:00:02.000Z"),
+    ];
+    const inFlight = fileChangeActivity(
+      "new-start",
+      "tool.started",
+      "src/new.ts",
+      "2026-02-23T00:00:04.000Z",
+    );
+
+    expect(
+      derivePendingApprovals([...settledEarlier, inFlight, approval])[0]?.fileChanges?.changes[0]
+        ?.path,
+    ).toBe("src/new.ts");
+
+    const secondInFlight = fileChangeActivity(
+      "other-start",
+      "tool.started",
+      "src/other.ts",
+      "2026-02-23T00:00:04.500Z",
+    );
+    expect(
+      derivePendingApprovals([...settledEarlier, inFlight, secondInFlight, approval])[0],
+    ).not.toHaveProperty("fileChanges");
+  });
+});
+
+function scaleTestTimestamp(turn: number, step: number): string {
+  return new Date(Date.UTC(2026, 1, 23) + turn * 10_000 + step * 1_000).toISOString();
+}
+
+describe("derivePendingApprovals file-change lookup at scale", () => {
+  it("joins every open approval to its own turn's diff across many activities", () => {
+    const turnCount = 400;
+    const activities: OrchestrationThreadActivity[] = [];
+    const expectedPathByRequestId = new Map<string, string | undefined>();
+    for (let turn = 0; turn < turnCount; turn += 1) {
+      const turnId = `turn-${turn}`;
+      const fileChange = (step: number, kind: string, itemId: string, path: string) =>
+        makeActivity({
+          id: `${turnId}-${itemId}-${kind}`,
+          kind,
+          createdAt: scaleTestTimestamp(turn, step),
+          turnId,
+          payload: {
+            itemType: "file_change",
+            fileChanges: fileChanges(path),
+            data: { toolCallId: itemId },
+          },
+        });
+      const approval = (step: number, requestId: string, itemId?: string) =>
+        makeActivity({
+          id: `${turnId}-${requestId}`,
+          kind: "approval.requested",
+          tone: "approval",
+          createdAt: scaleTestTimestamp(turn, step),
+          turnId,
+          payload: {
+            requestId,
+            requestKind: "file-change",
+            ...(itemId ? { itemId } : {}),
+          },
+        });
+      switch (turn % 4) {
+        case 0:
+          activities.push(
+            fileChange(0, "tool.started", "linked", `src/${turnId}/linked.ts`),
+            fileChange(1, "tool.started", "other", `src/${turnId}/other.ts`),
+            approval(2, `${turnId}-linked`, "linked"),
+          );
+          expectedPathByRequestId.set(`${turnId}-linked`, `src/${turnId}/linked.ts`);
+          break;
+        case 1:
+          activities.push(
+            fileChange(0, "tool.started", "done", `src/${turnId}/done.ts`),
+            fileChange(1, "tool.completed", "done", `src/${turnId}/done.ts`),
+            fileChange(2, "tool.started", "live", `src/${turnId}/live.ts`),
+            approval(3, `${turnId}-single`),
+          );
+          expectedPathByRequestId.set(`${turnId}-single`, `src/${turnId}/live.ts`);
+          break;
+        case 2:
+          activities.push(
+            fileChange(0, "tool.started", "a", `src/${turnId}/a.ts`),
+            fileChange(1, "tool.started", "b", `src/${turnId}/b.ts`),
+            approval(2, `${turnId}-ambiguous`),
+          );
+          expectedPathByRequestId.set(`${turnId}-ambiguous`, undefined);
+          break;
+        default:
+          activities.push(
+            approval(0, `${turnId}-resolved`),
+            makeActivity({
+              id: `${turnId}-resolved-done`,
+              kind: "approval.resolved",
+              createdAt: scaleTestTimestamp(turn, 1),
+              turnId,
+              payload: { requestId: `${turnId}-resolved` },
+            }),
+            approval(2, `${turnId}-no-diff`),
+          );
+          expectedPathByRequestId.set(`${turnId}-no-diff`, undefined);
+      }
+    }
+
+    const approvals = derivePendingApprovals(activities);
+
+    expect(approvals.map((approval) => approval.requestId)).toEqual([
+      ...expectedPathByRequestId.keys(),
+    ]);
+    for (const approval of approvals) {
+      expect(approval.fileChanges?.changes.map((change) => change.path)).toEqual(
+        expectedPathByRequestId.get(approval.requestId) === undefined
+          ? undefined
+          : [expectedPathByRequestId.get(approval.requestId)],
+      );
+    }
+  });
+});
+
 describe("derivePendingUserInputs", () => {
   it.each([
     {
@@ -1000,5 +1239,36 @@ describe("derivePendingUserInputs", () => {
     ];
 
     expect(derivePendingUserInputs(activities)[0]?.questions[0]?.options).toEqual([]);
+  });
+});
+
+describe("derivePendingUserInputs option previews", () => {
+  it("keeps option previews matched by question id and option label", () => {
+    const inputs = derivePendingUserInputs([
+      makeActivity({
+        kind: "user-input.requested",
+        tone: "info",
+        payload: {
+          requestId: "ask",
+          questions: [
+            { id: "broken", header: 3, question: "skip", options: [] },
+            {
+              id: "layout",
+              header: "Layout",
+              question: "Which layout?",
+              options: [
+                { label: "Grid", description: "Cards", preview: "[ ][ ]\n[ ][ ]" },
+                { label: "List", description: "Rows" },
+              ],
+            },
+          ],
+        },
+      }),
+    ]);
+    expect(inputs[0]?.questions).toHaveLength(1);
+    expect(inputs[0]?.questions[0]?.options).toEqual([
+      { label: "Grid", description: "Cards", preview: "[ ][ ]\n[ ][ ]" },
+      { label: "List", description: "Rows" },
+    ]);
   });
 });

@@ -4,9 +4,11 @@
 // Exports: row derivation, structural sharing, copy/timer helpers
 
 import { type MessageId, type TurnId } from "@synara/contracts";
-import { type TimelineEntry, type WorkLogEntry, formatElapsed } from "../../session-logic";
+import { type TimelineEntry, type WorkLogEntry, formatClockDuration } from "../../session-logic";
 import type { WorkLogUserInputExchangeItem } from "../../workLog";
 import { normalizeCompactToolLabel as normalizeCompactToolLabelValue } from "../../lib/toolCallLabel";
+import { isLiveActivityInProgress } from "../../lib/liveActivityPresentation";
+import { deepEqualJson } from "../../storeNormalization";
 import { isCodexActivityStatusWorkEntry } from "./agentActivity.logic";
 import {
   isSummarizableToolCallEntry,
@@ -24,6 +26,22 @@ import {
 } from "../../types";
 
 export const MAX_VISIBLE_WORK_LOG_ENTRIES = 6;
+
+const TURN_ELAPSED_MIN_MS = 1_000;
+
+export function formatTurnElapsed(startIso: string, endIso: string | undefined): string | null {
+  if (!endIso) return null;
+  const startedAt = Date.parse(startIso);
+  const endedAt = Date.parse(endIso);
+  if (Number.isNaN(startedAt) || Number.isNaN(endedAt) || endedAt < startedAt) return null;
+  return formatClockDuration(Math.max(TURN_ELAPSED_MIN_MS, endedAt - startedAt));
+}
+
+export function formatLiveTurnHeader(startIso: string | null, nowMs: number): string {
+  const startedAt = startIso ? Date.parse(startIso) : Number.NaN;
+  if (Number.isNaN(startedAt) || nowMs - startedAt < TURN_ELAPSED_MIN_MS) return "Working";
+  return `Working for ${formatClockDuration(nowMs - startedAt)}`;
+}
 
 export function canSubmitUserMessageEdit(input: {
   draft: string;
@@ -151,10 +169,40 @@ export function isFoldedWorkEntryChunk(chunk: WorkEntryRenderPlanChunk): boolean
   return chunk.summary !== null || chunk.liveEntry !== null;
 }
 
+const SETTLED_TOOL_STATUSES: ReadonlySet<WorkLogEntry["toolStatus"]> = new Set([
+  "completed",
+  "failed",
+  "cancelled",
+]);
+
+export function isRunningToolEntry(entry: WorkLogEntry): boolean {
+  return (
+    entry.activityKind !== "tool.completed" &&
+    !SETTLED_TOOL_STATUSES.has(entry.toolStatus) &&
+    (entry.liveActivity === undefined || isLiveActivityInProgress(entry.liveActivity))
+  );
+}
+
+export function canStreamLiveToolOutput(entry: WorkLogEntry): boolean {
+  if (!entry.toolCallId || !isRunningToolEntry(entry)) return false;
+  return (
+    entry.itemType === "command_execution" ||
+    entry.itemType === "file_change" ||
+    entry.commandExecution !== undefined ||
+    Boolean(entry.command ?? entry.rawCommand)
+  );
+}
+
 // How a folded chunk renders: the line's summary, the rows its disclosure
 // reveals, and a suffix for the open-state key. A live line reveals only the
 // other entries, and keeps its own open state so the run
 // settles collapsed even when the live line was opened.
+function liveEntryKeepsRowBehindLine(entry: WorkLogEntry): boolean {
+  const multiFileEditKeepsFileRows = workEntryRowCount(entry) > 1;
+  const rowHostsLiveOutputTail = canStreamLiveToolOutput(entry);
+  return multiFileEditKeepsFileRows || rowHostsLiveOutputTail;
+}
+
 export function resolveWorkEntryChunkFold(
   chunk: WorkEntryRenderPlanChunk,
 ): { summary: ToolCallGroupSummary; entries: WorkLogEntry[]; keySuffix: string } | null {
@@ -165,10 +213,8 @@ export function resolveWorkEntryChunkFold(
   if (!liveSummary) return null;
   return {
     summary: liveSummary,
-    // A multi-file edit wears a count ("Edited 9 files"), so its own file rows
-    // still belong behind the line.
     entries: chunk.entries.filter(
-      (entry) => entry !== chunk.liveEntry || workEntryRowCount(entry) > 1,
+      (entry) => entry !== chunk.liveEntry || liveEntryKeepsRowBehindLine(entry),
     ),
     keySuffix: ":live",
   };
@@ -255,6 +301,8 @@ export interface TimelineDurationMessage {
   createdAt: string;
   turnId?: string | null;
   completedAt?: string | undefined;
+  finalAnswer?: boolean | undefined;
+  retracted?: boolean | undefined;
 }
 
 interface TimelineDiffMessage {
@@ -321,7 +369,8 @@ export type MessagesTimelineRow =
       // the turn is still running. Sits at the top of the active turn.
       kind: "working-header";
       id: string;
-      createdAt: string;
+      createdAt: string | null;
+      closing?: boolean;
     }
   | {
       // Transient "Preparing worktree..." step card shown during the New
@@ -424,6 +473,23 @@ export function computeMessageDurationStart(
 
 export function normalizeCompactToolLabel(value: string): string {
   return normalizeCompactToolLabelValue(value);
+}
+
+export function resolveMessageSegmentText(message: ChatMessage, segmentIndex: number): string {
+  const segments = message.textSegments;
+  const segment = segments?.[segmentIndex];
+  if (!segments || !segment) return message.text;
+  if (segmentIndex < segments.length - 1) return segment.text;
+  const earlierText = segments
+    .slice(0, -1)
+    .map((earlier) => earlier.text)
+    .join("");
+  const liveTail = message.text.startsWith(earlierText)
+    ? message.text.slice(earlierText.length)
+    : "";
+  return liveTail.length > segment.text.length && liveTail.startsWith(segment.text)
+    ? liveTail
+    : segment.text;
 }
 
 export function resolveAssistantMessageCopyState({
@@ -587,22 +653,38 @@ export function deriveTerminalAssistantMessageIds(
   messages: ReadonlyArray<TimelineDurationMessage>,
 ): Set<string> {
   const terminalAssistantMessageIds = new Set<string>();
-  let latestAssistantMessageId: string | null = null;
+  let latestAssistant: TimelineDurationMessage | null = null;
+  let pinnedTurnIds: Set<string> | null = null;
+
+  const closeResponse = () => {
+    if (
+      latestAssistant &&
+      !(latestAssistant.turnId != null && pinnedTurnIds?.has(latestAssistant.turnId))
+    ) {
+      terminalAssistantMessageIds.add(latestAssistant.id);
+    }
+    latestAssistant = null;
+    pinnedTurnIds = null;
+  };
 
   for (const message of messages) {
     if (message.role !== "assistant") {
-      if (latestAssistantMessageId) {
-        terminalAssistantMessageIds.add(latestAssistantMessageId);
-        latestAssistantMessageId = null;
-      }
+      closeResponse();
       continue;
     }
-    latestAssistantMessageId = message.id;
+    if (message.retracted) {
+      continue;
+    }
+    if (message.finalAnswer) {
+      terminalAssistantMessageIds.add(message.id);
+      if (message.turnId != null) {
+        pinnedTurnIds ??= new Set();
+        pinnedTurnIds.add(message.turnId);
+      }
+    }
+    latestAssistant = message;
   }
-
-  if (latestAssistantMessageId) {
-    terminalAssistantMessageIds.add(latestAssistantMessageId);
-  }
+  closeResponse();
 
   return terminalAssistantMessageIds;
 }
@@ -613,6 +695,12 @@ export function isStandaloneWorkEntry(
   entry: Pick<WorkLogEntry, "synaraWorkerNotice" | "providerHandoff" | "turnFailure">,
 ): boolean {
   return Boolean(entry.synaraWorkerNotice || entry.providerHandoff || entry.turnFailure);
+}
+
+function isResponseWakeEntry(
+  entry: Pick<WorkLogEntry, "backgroundTaskCompletion" | "turnId">,
+): boolean {
+  return Boolean(entry.backgroundTaskCompletion) && entry.turnId == null;
 }
 
 // Derives transcript rows from timeline entries while keeping live narration and
@@ -641,7 +729,7 @@ export function deriveMessagesTimelineRows(input: {
   const responseMessages = input.timelineEntries.flatMap((entry): TimelineDurationMessage[] =>
     entry.kind === "message"
       ? [entry.message]
-      : entry.kind === "work" && entry.entry.backgroundTaskCompletion
+      : entry.kind === "work" && isResponseWakeEntry(entry.entry)
         ? [{ id: entry.id, role: "user", createdAt: entry.createdAt }]
         : [],
   );
@@ -723,10 +811,7 @@ export function deriveMessagesTimelineRows(input: {
             createdAt: runEntry.createdAt,
             entry: { ...runEntry.entry, userInputExchange },
           });
-        } else if (
-          isStandaloneWorkEntry(runEntry.entry) ||
-          runEntry.entry.backgroundTaskCompletion
-        ) {
+        } else if (isStandaloneWorkEntry(runEntry.entry) || isResponseWakeEntry(runEntry.entry)) {
           flushPendingWorkGroup();
           nextRows.push({
             kind: "work",
@@ -846,21 +931,21 @@ export function deriveMessagesTimelineRows(input: {
     });
   }
 
-  // The live turn wears a "Working for Xs" header + divider — the counting-up
-  // twin of a settled turn's "Worked for Xs" disclosure. It anchors to the top
-  // of the active turn (right after the user message that opened it) and needs a
-  // real start time to count from; the trailing "Thinking" shimmer covers the
-  // gap before one exists. Inserted after collapse so folding is untouched.
   if (
     input.conversationOnly !== true &&
     input.isWorking &&
-    input.activeTurnStartedAt &&
     !(input.worktreeSetup && input.worktreeSetupOpen)
   ) {
-    nextRows.splice(findLiveTurnHeaderInsertIndex(nextRows), 0, {
+    const headerIndex = findLiveTurnHeaderInsertIndex(nextRows);
+    const turnUserRow = nextRows[headerIndex - 1];
+    const sentAt =
+      turnUserRow?.kind === "message" && turnUserRow.message.role === "user"
+        ? turnUserRow.message.createdAt
+        : null;
+    nextRows.splice(headerIndex, 0, {
       kind: "working-header",
       id: "working-header-row",
-      createdAt: input.activeTurnStartedAt,
+      createdAt: input.activeTurnStartedAt ? (sentAt ?? input.activeTurnStartedAt) : null,
     });
   }
 
@@ -883,7 +968,7 @@ function findLiveTurnHeaderInsertIndex(rows: ReadonlyArray<MessagesTimelineRow>)
 // Returns the terminal assistant only when it is still the transcript tail.
 // A newer user message means the next turn has begun but has not produced text yet.
 function isBackgroundTaskCompletionRow(row: MessagesTimelineRow): boolean {
-  return row.kind === "work" && row.groupedEntries.some((entry) => entry.backgroundTaskCompletion);
+  return row.kind === "work" && row.groupedEntries.some(isResponseWakeEntry);
 }
 
 function findTailTerminalAssistantMessageId(
@@ -975,6 +1060,8 @@ function collapseSettledTurns(
       }
       if (prev.kind === "message" && prev.message.role === "assistant") {
         if (prev.message.asyncUserInput) break;
+        const isEarlierTurnFinalAnswer = terminalAssistantMessageIds.has(prev.message.id);
+        if (isEarlierTurnFinalAnswer) break;
         foldIndices.push(scan);
         continue;
       }
@@ -983,6 +1070,7 @@ function collapseSettledTurns(
       // narration, so they fold too instead of stranding everything earlier
       // outside the disclosure.
       if (prev.kind === "message-segment" && !prev.message.streaming) {
+        if (terminalAssistantMessageIds.has(prev.message.id)) break;
         foldIndices.push(scan);
         continue;
       }
@@ -1040,7 +1128,7 @@ function collapseSettledTurns(
     if (row.inlineWorkEntries) collectWorkItems(row.inlineWorkEntries, collapsedItems);
 
     if (collapsedItems.length > 0) {
-      const elapsed = formatElapsed(collapsedStart, message.completedAt);
+      const elapsed = formatTurnElapsed(collapsedStart, message.completedAt);
       row.collapsedTurnItems = collapsedItems;
       row.collapsedWorkElapsed = elapsed ?? null;
       delete row.leadingWorkEntries;
@@ -1056,8 +1144,119 @@ function collapseSettledTurns(
   }
 }
 
-// Reuses stable row references so streaming updates only invalidate rows whose
-// visible content actually changed.
+const MAX_FRESH_TAIL_ROWS = 4;
+const TRANSIENT_ROW_KINDS: ReadonlySet<MessagesTimelineRow["kind"]> = new Set([
+  "working",
+  "working-header",
+  "worktree-setup",
+]);
+
+function rowContentKeys(row: MessagesTimelineRow): string[] {
+  switch (row.kind) {
+    case "work":
+      return row.groupedEntries.map((entry) => `work:${entry.id}`);
+    case "message":
+      return [
+        `message:${row.message.id}`,
+        ...(row.leadingWorkEntries ?? []).map((entry) => `work:${entry.id}`),
+        ...(row.inlineWorkEntries ?? []).map((entry) => `work:${entry.id}`),
+      ];
+    case "message-segment":
+      return [`message:${row.message.id}`];
+    default:
+      return [`row:${row.id}`];
+  }
+}
+
+function collectRowContentKeys(rows: ReadonlyArray<MessagesTimelineRow>): Set<string> {
+  const keys = new Set<string>();
+  for (const row of rows) {
+    for (const key of rowContentKeys(row)) keys.add(key);
+  }
+  return keys;
+}
+
+export function findFreshLiveTailContent(
+  previousRows: ReadonlyArray<MessagesTimelineRow> | null,
+  rows: ReadonlyArray<MessagesTimelineRow>,
+): { rowIds: string[]; messageIds: string[] } {
+  const none = { rowIds: [], messageIds: [] };
+  if (previousRows === null) return none;
+  if (!previousRows.some((row) => !TRANSIENT_ROW_KINDS.has(row.kind))) return none;
+  const previousRowIds = new Set(previousRows.map((row) => row.id));
+  let tailBoundary = -1;
+  rows.forEach((row, index) => {
+    if (previousRowIds.has(row.id) && !TRANSIENT_ROW_KINDS.has(row.kind)) tailBoundary = index;
+  });
+  const candidates = rows
+    .slice(tailBoundary + 1)
+    .filter(
+      (row) =>
+        !previousRowIds.has(row.id) && !(row.kind === "message" && row.message.role === "user"),
+    );
+  if (candidates.length === 0 || candidates.length > MAX_FRESH_TAIL_ROWS) return none;
+  const previousContentKeys = collectRowContentKeys(previousRows);
+  const rowIds: string[] = [];
+  const messageIds: string[] = [];
+  for (const row of candidates) {
+    if (!rowContentKeys(row).some((key) => previousContentKeys.has(key))) {
+      rowIds.push(row.id);
+    } else if (row.kind === "message" && !previousContentKeys.has(`message:${row.message.id}`)) {
+      messageIds.push(row.message.id);
+    }
+  }
+  return { rowIds, messageIds };
+}
+
+export function enteringWorkEntryKey(entryId: string): string {
+  return `work:${entryId}`;
+}
+
+export function enteringChangesCardKey(messageId: string): string {
+  return `changes-card:${messageId}`;
+}
+
+function showsChangesCard(row: MessagesTimelineRow): boolean {
+  return (
+    row.kind === "message" &&
+    row.message.role === "assistant" &&
+    !row.assistantTurnInProgress &&
+    (row.assistantTurnDiffSummary?.files.length ?? 0) > 0
+  );
+}
+
+function rowWorkEntries(row: MessagesTimelineRow): ReadonlyArray<WorkLogEntry> {
+  if (row.kind === "work") return row.groupedEntries;
+  if (row.kind !== "message") return [];
+  return [...(row.leadingWorkEntries ?? []), ...(row.inlineWorkEntries ?? [])];
+}
+
+export function findEnteringRowContent(
+  previousRows: ReadonlyArray<MessagesTimelineRow> | null,
+  rows: ReadonlyArray<MessagesTimelineRow>,
+): string[] {
+  if (previousRows === null) return [];
+  const previousById = new Map(previousRows.map((row) => [row.id, row]));
+  let previousWorkIds: Set<string> | null = null;
+  const entering: string[] = [];
+  for (const row of rows) {
+    const previous = previousById.get(row.id);
+    if (!previous || previous === row) continue;
+    if (showsChangesCard(row) && !showsChangesCard(previous) && row.kind === "message") {
+      entering.push(enteringChangesCardKey(row.message.id));
+    }
+    const entries = rowWorkEntries(row);
+    if (entries.length === 0) continue;
+    previousWorkIds ??= new Set(
+      previousRows.flatMap((candidate) => rowWorkEntries(candidate).map((entry) => entry.id)),
+    );
+    for (const entry of entries) {
+      if (!previousWorkIds.has(entry.id)) entering.push(enteringWorkEntryKey(entry.id));
+    }
+  }
+  return entering;
+}
+
 export function computeStableMessagesTimelineRows(
   rows: MessagesTimelineRow[],
   previous: StableMessagesTimelineRowsState,
@@ -1078,190 +1277,8 @@ export function computeStableMessagesTimelineRows(
   return anyChanged ? { byId: next, result } : previous;
 }
 
-function stringArraysEqual(
-  left: ReadonlyArray<string> | undefined,
-  right: ReadonlyArray<string> | undefined,
-): boolean {
-  if (left === right) return true;
-  if (!left || !right) return false;
-  return left.length === right.length && left.every((entry, index) => entry === right[index]);
-}
-
-function workLogSubagentActionsEqual(
-  a: WorkLogEntry["subagentAction"],
-  b: WorkLogEntry["subagentAction"],
-): boolean {
-  if (a === b) return true;
-  if (!a || !b) return false;
-  return (
-    a.tool === b.tool &&
-    a.status === b.status &&
-    a.summaryText === b.summaryText &&
-    a.model === b.model &&
-    a.prompt === b.prompt
-  );
-}
-
-function workLogSubagentsEqual(
-  left: WorkLogEntry["subagents"],
-  right: WorkLogEntry["subagents"],
-): boolean {
-  if (left === right) return true;
-  if (!left || !right) return false;
-  if (left.length !== right.length) return false;
-  return left.every((a, index) => {
-    const b = right[index];
-    return (
-      b !== undefined &&
-      a.threadId === b.threadId &&
-      a.providerThreadId === b.providerThreadId &&
-      a.resolvedThreadId === b.resolvedThreadId &&
-      a.agentId === b.agentId &&
-      a.nickname === b.nickname &&
-      a.role === b.role &&
-      a.model === b.model &&
-      a.prompt === b.prompt &&
-      a.rawStatus === b.rawStatus &&
-      a.latestUpdate === b.latestUpdate &&
-      a.title === b.title &&
-      a.statusLabel === b.statusLabel &&
-      a.isActive === b.isActive
-    );
-  });
-}
-
-// Automation card fields are visible row content, so stale equality would freeze the transcript UI.
-function workLogAutomationsEqual(a: WorkLogEntry["automation"], b: WorkLogEntry["automation"]) {
-  if (a === b) return true;
-  if (!a || !b) return false;
-  return (
-    a.id === b.id &&
-    a.name === b.name &&
-    a.cadenceLabel === b.cadenceLabel &&
-    a.proposalState === b.proposalState
-  );
-}
-
-function workLogSynaraThreadCreationsEqual(
-  a: WorkLogEntry["synaraThreadCreation"],
-  b: WorkLogEntry["synaraThreadCreation"],
-) {
-  if (a === b) return true;
-  if (!a || !b) return false;
-  if (
-    a.operationId !== b.operationId ||
-    a.requestedCount !== b.requestedCount ||
-    a.createdCount !== b.createdCount ||
-    a.threads.length !== b.threads.length
-  ) {
-    return false;
-  }
-  return a.threads.every((thread, index) => {
-    const other = b.threads[index];
-    return (
-      other !== undefined &&
-      thread.threadId === other.threadId &&
-      thread.title === other.title &&
-      thread.provider === other.provider &&
-      thread.model === other.model &&
-      thread.environment === other.environment &&
-      thread.status === other.status
-    );
-  });
-}
-
-function workLogToolOutputsEqual(
-  a: NonNullable<WorkLogEntry["toolDetails"]>["output"],
-  b: NonNullable<WorkLogEntry["toolDetails"]>["output"],
-) {
-  if (a === b) return true;
-  if (!a || !b) return false;
-  return (
-    a.output === b.output &&
-    a.stdout === b.stdout &&
-    a.stderr === b.stderr &&
-    a.exitCode === b.exitCode &&
-    a.truncated === b.truncated
-  );
-}
-
-function workLogToolEditsEqual(
-  left: NonNullable<WorkLogEntry["toolDetails"]>["edits"],
-  right: NonNullable<WorkLogEntry["toolDetails"]>["edits"],
-) {
-  if (left === right) return true;
-  if (!left || !right) return false;
-  if (left.length !== right.length) return false;
-  return left.every((edit, index) => {
-    const other = right[index];
-    return (
-      other !== undefined &&
-      edit.path === other.path &&
-      edit.oldText === other.oldText &&
-      edit.newText === other.newText
-    );
-  });
-}
-
-function workLogToolDetailsEqual(a: WorkLogEntry["toolDetails"], b: WorkLogEntry["toolDetails"]) {
-  if (a === b) return true;
-  if (!a || !b) return false;
-  return (
-    a.kind === b.kind &&
-    a.title === b.title &&
-    a.command === b.command &&
-    a.diff === b.diff &&
-    a.content === b.content &&
-    stringArraysEqual(a.files, b.files) &&
-    workLogToolOutputsEqual(a.output, b.output) &&
-    workLogToolEditsEqual(a.edits, b.edits)
-  );
-}
-
-function workLogLiveActivitiesEqual(
-  a: WorkLogEntry["liveActivity"],
-  b: WorkLogEntry["liveActivity"],
-): boolean {
-  if (a === b) return true;
-  if (!a || !b) return false;
-  return (
-    a.state === b.state &&
-    a.label === b.label &&
-    a.startedAt === b.startedAt &&
-    a.lastActivityAt === b.lastActivityAt &&
-    a.detail === b.detail &&
-    a.progress === b.progress &&
-    a.elapsedSeconds === b.elapsedSeconds
-  );
-}
-
 function workLogEntryContentEqual(a: WorkLogEntry, b: WorkLogEntry): boolean {
-  return (
-    a.id === b.id &&
-    a.createdAt === b.createdAt &&
-    a.turnId === b.turnId &&
-    a.label === b.label &&
-    a.detail === b.detail &&
-    a.toolTitle === b.toolTitle &&
-    a.command === b.command &&
-    a.rawCommand === b.rawCommand &&
-    a.preview === b.preview &&
-    a.tone === b.tone &&
-    a.itemType === b.itemType &&
-    a.requestKind === b.requestKind &&
-    a.activityKind === b.activityKind &&
-    a.toolName === b.toolName &&
-    a.toolCallId === b.toolCallId &&
-    a.toolStatus === b.toolStatus &&
-    stringArraysEqual(a.changedFiles, b.changedFiles) &&
-    workLogSubagentActionsEqual(a.subagentAction, b.subagentAction) &&
-    workLogSubagentsEqual(a.subagents, b.subagents) &&
-    workLogAutomationsEqual(a.automation, b.automation) &&
-    workLogSynaraThreadCreationsEqual(a.synaraThreadCreation, b.synaraThreadCreation) &&
-    workLogLiveActivitiesEqual(a.liveActivity, b.liveActivity) &&
-    workLogToolDetailsEqual(a.toolDetails, b.toolDetails) &&
-    a.userInputExchange === b.userInputExchange
-  );
+  return a === b || deepEqualJson(a, b);
 }
 
 function workLogEntryArraysEqual(
@@ -1302,7 +1319,7 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
       return a.createdAt === (b as typeof a).createdAt;
 
     case "working-header":
-      return a.createdAt === (b as typeof a).createdAt;
+      return a.createdAt === (b as typeof a).createdAt && a.closing === (b as typeof a).closing;
 
     case "worktree-setup": {
       const bw = b as typeof a;

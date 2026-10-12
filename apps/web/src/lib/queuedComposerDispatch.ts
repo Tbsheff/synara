@@ -84,7 +84,9 @@ async function dispatchQueuedComposerTurnOnce(
       queuedTurn.interactionMode === "default"
         ? buildSourceProposedPlanReference({
             threadId: input.threadId,
-            proposedPlan: hasActionableProposedPlan(latestProposedPlan) ? latestProposedPlan : null,
+            proposedPlan: hasActionableProposedPlan(latestProposedPlan, thread.latestTurn)
+              ? latestProposedPlan
+              : null,
           })
         : undefined;
 

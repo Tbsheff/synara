@@ -707,6 +707,7 @@ export function resolveThreadStatusPill(input: {
     (thread.hasActionableProposedPlan ??
       hasActionableProposedPlan(
         findLatestProposedPlan(thread.proposedPlans ?? [], thread.latestTurn?.turnId ?? null),
+        thread.latestTurn,
       ));
   if (hasPlanReadyPrompt) {
     const dismissalKey = createThreadStatusDismissalKey("Plan Ready", thread);

@@ -20,6 +20,9 @@ export const DISCLOSURE_SHELL_CLOSED_CLASS = "grid-rows-[0fr] opacity-0";
 /** Required inner wrapper so grid-row collapse measures correctly. */
 export const DISCLOSURE_INNER_CLASS = "min-h-0 overflow-hidden";
 
+export const DISCLOSURE_HEIGHT_MOTION_CLASS =
+  "overflow-hidden transition-[height] duration-220 ease-out motion-reduce:transition-none";
+
 /** Optional content drift/fade layered on top of the shell animation. */
 export const DISCLOSURE_CONTENT_MOTION_CLASS =
   "transition-[opacity,translate] duration-220 ease-out motion-reduce:transition-none";

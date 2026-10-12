@@ -107,6 +107,42 @@ describe("ChatTranscriptPane", () => {
     expect(markup).not.toContain("Unblock thread");
   });
 
+  it("names the stop reason on the session error banner", () => {
+    const markup = renderTranscriptPaneMarkup({
+      threadError: "Reached maximum number of turns (8)",
+      threadErrorContext: {
+        stopReason: "error_max_turns",
+        cause: "Reached maximum number of turns (8)",
+      },
+    });
+
+    expect(markup).toContain("Stopped: max turns reached");
+  });
+
+  it("omits the latest turn's stop reason when the session error has another cause", () => {
+    const markup = renderTranscriptPaneMarkup({
+      threadError: "Provider adapter request failed (claude): socket hang up",
+      threadErrorContext: {
+        stopReason: "error_max_turns",
+        cause: "Reached maximum number of turns (8)",
+        detail: { errors: ["turn limit"] },
+      },
+    });
+
+    expect(markup).toContain("socket hang up");
+    expect(markup).not.toContain("Stopped: max turns reached");
+    expect(markup).not.toContain("turn limit");
+  });
+
+  it("omits the stop reason when the turn's failure cause is unknown", () => {
+    const markup = renderTranscriptPaneMarkup({
+      threadError: "Reached maximum number of turns (8)",
+      threadErrorContext: { stopReason: "error_max_turns" },
+    });
+
+    expect(markup).not.toContain("Stopped: max turns reached");
+  });
+
   it("keeps the transcript clean when no thread error is stored", () => {
     const markup = renderTranscriptPaneMarkup({ threadError: null });
 

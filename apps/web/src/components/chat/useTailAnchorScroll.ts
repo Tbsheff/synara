@@ -40,10 +40,7 @@ const STEER_ANCHOR_MIN_SETTLE_MS = 500;
 // A freshly appended anchor row can take a few frames to be committed. Until it
 // exists there is nothing to measure, so the loop waits rather than giving up.
 const ANCHOR_MOUNT_MAX_WAIT_MS = 1_000;
-// Consecutive frames the response has to overflow the reserve before the hold
-// hands off to follow-the-tail, so a one-frame reserve recompute in the middle
-// of a stream cannot end the hold early.
-const ANCHOR_OVERFLOW_HANDOFF_FRAMES = 3;
+const ANCHOR_OVERFLOW_HANDOFF_FRAMES = 1;
 // How far past the viewport bottom the transcript may sit while the anchor is
 // held before that counts as overflow. While the reserve is doing its job the
 // tail sits exactly at the viewport bottom, so this only has to cover

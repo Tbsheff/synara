@@ -42,6 +42,10 @@ export function UserInputQuestionForm({
   const progress = derivePendingUserInputProgress(questions, answers, questionIndex);
   const activeQuestion = progress.activeQuestion;
   const selectedOptionLabelSet = new Set(progress.selectedOptionLabels);
+  const previewOption =
+    activeQuestion?.options.findLast(
+      (option) => option.preview && selectedOptionLabelSet.has(option.label),
+    ) ?? activeQuestion?.options.find((option) => option.preview);
   const autoAdvanceTimerRef = useRef<number | null>(null);
   const onAdvanceRef = useRef(onAdvance);
   useEffect(() => {
@@ -182,6 +186,14 @@ export function UserInputQuestionForm({
               />
             );
           })}
+        </div>
+      ) : null}
+      {previewOption?.preview ? (
+        <div className="mt-2" data-testid="user-input-option-preview">
+          <p className="mb-1 text-ui-xs text-muted-foreground/60">Preview: {previewOption.label}</p>
+          <pre className="max-h-48 overflow-auto whitespace-pre rounded-md bg-[var(--color-background-elevated-secondary)] px-2.5 py-2 font-mono text-ui-xs leading-snug text-foreground/85">
+            {previewOption.preview}
+          </pre>
         </div>
       ) : null}
       {onCancel ? (
