@@ -20,8 +20,10 @@ interface RevealFragment {
 }
 
 interface PaintedRange {
-  readonly highlight: Highlight;
+  highlight: Highlight;
   readonly range: Range;
+  readonly end: number;
+  readonly startedAt: number;
 }
 
 export function supportsStreamingTextReveal(): boolean {
@@ -164,12 +166,12 @@ function lastIndexAtOrBefore(sortedStarts: readonly number[], offset: number): n
   return found;
 }
 
-class StreamingTextRevealController {
+export class StreamingTextRevealController {
   private text: string | null = null;
   private nodes: Text[] = [];
   private nodeStarts: number[] = [];
   private schedule: RevealSchedule = emptyRevealSchedule();
-  private painted: PaintedRange[] = [];
+  private painted = new Map<Text, Map<number, PaintedRange>>();
   private frame = 0;
   private root: HTMLElement | null = null;
   private colors = new WeakMap<Element, string>();
@@ -209,8 +211,10 @@ class StreamingTextRevealController {
   };
 
   private clearPainted(): void {
-    for (const { highlight, range } of this.painted) highlight.delete(range);
-    this.painted = [];
+    for (const ranges of this.painted.values()) {
+      for (const { highlight, range } of ranges.values()) highlight.delete(range);
+    }
+    this.painted.clear();
   }
 
   private colorOf(element: Element): string {
@@ -222,13 +226,16 @@ class StreamingTextRevealController {
   }
 
   private paint(now: number): void {
-    this.clearPainted();
     const fragments = this.schedule.fragments.filter(
       (fragment) => now - fragment.startedAt < STREAMING_REVEAL_FADE_MS,
     );
     this.schedule = { ...this.schedule, fragments };
     const root = this.root;
-    if (fragments.length === 0 || !root) return;
+    if (fragments.length === 0 || !root) {
+      this.clearPainted();
+      return;
+    }
+    const nextPainted = new Map<Text, Map<number, PaintedRange>>();
     const firstStart = Math.min(...fragments.map((fragment) => fragment.start));
     const registry = revealRegistry();
     for (
@@ -244,18 +251,38 @@ class StreamingTextRevealController {
           const from = Math.max(fragment.start, nodeStart);
           const to = Math.min(fragment.end, nodeEnd);
           if (from >= to) continue;
-          const range = new Range();
-          range.setStart(node, from - nodeStart);
-          range.setEnd(node, to - nodeStart);
+          const start = from - nodeStart;
+          const end = to - nodeStart;
+          const previous = this.painted.get(node)?.get(start);
+          const reusable = previous?.end === end && previous.startedAt === fragment.startedAt;
+          const range = reusable ? previous.range : new Range();
+          if (range.startContainer !== node || range.startOffset !== start)
+            range.setStart(node, start);
+          if (range.endContainer !== node || range.endOffset !== end) range.setEnd(node, end);
           const highlight = registry.highlightFor(
             this.colorOf(node.parentElement),
             revealLevelForAge(now - fragment.startedAt),
           );
-          highlight.add(range);
-          this.painted.push({ highlight, range });
+          const painted = reusable
+            ? previous
+            : { highlight, range, end, startedAt: fragment.startedAt };
+          if (!reusable || painted.highlight !== highlight) {
+            if (reusable) painted.highlight.delete(range);
+            highlight.add(range);
+            painted.highlight = highlight;
+          }
+          if (reusable) this.painted.get(node)!.delete(start);
+          let nodeRanges = nextPainted.get(node);
+          if (!nodeRanges) {
+            nodeRanges = new Map();
+            nextPainted.set(node, nodeRanges);
+          }
+          nodeRanges.set(start, painted);
         }
       }
     }
+    this.clearPainted();
+    this.painted = nextPainted;
     if (!this.frame) this.frame = requestAnimationFrame(this.tick);
   }
 }
