@@ -24,7 +24,7 @@ Quality buckets: **CLEAN** purpose-built UI. **GENERIC** generic row (name / tit
 Cross-cutting facts that drive many rows:
 
 1. **Unknown system subtypes / message types** go to `warnUnhandledSdkKind` (CA:2871-2883, called at CA:5121 and CA:5276). It emits one `runtime.warning` per kind per session: text "Unhandled Claude system message subtype 'X'." The payload content is not shown (PRAP:803-856 renders `message` only).
-2. **Tool item type is name-heuristic** (`classifyToolItemType`, CA:1184-1235). Check order: todo/task* → `plan`; contains "agent" → `collab_agent_tool_call`; bash/command/shell/terminal → `command_execution`; edit/write/file/patch/replace/create/delete → `file_change`; mcp → `mcp_tool_call`; websearch → `web_search`; image → `image_view`; else `dynamic_tool_call`. The `mcp__` short-circuit exists only for approvals (CA:1254). So `mcp__github__create_issue` → `file_change`, and `mcp__x__list_agents` → `collab_agent_tool_call`, which spawns a child thread (PRI:2321-2341).
+2. **Tool item type is name-heuristic** (`classifyToolItemType`, CA:1184-1235). Check order: todo/task* → `plan`; contains "agent" → `collab_agent_tool_call`; bash/command/shell/terminal → `command_execution`; edit/write/file/patch/replace/create/delete → `file_change`; mcp → `mcp_tool_call`; websearch → `web_search`; image → `image_view`; else `dynamic_tool_call`. The `mcp__` short-circuit exists only for approvals (CA:1254). So `mcp__github__create_issue` → `file_change`, and `ListAgents` → `collab_agent_tool_call`. A misclassified call has no `receiverThreadId` (only `Task`/`Agent` get `subagentReceiverData`, CA:1310, 1318-1336), so ingestion creates no child thread (PRI:2321-2341, `packages/shared/src/subagents.ts:400-430`). It renders as an agent-task row with the agent icon (TWER:591-594) and is not filtered by WL:370-387. Observed in local data: `ListAgents` → `collab_agent_tool_call` ×2; `mcp__plugin_context-mode_context-mode__ctx_execute_file` → `file_change` ×5.
 3. **Structured tool results are dropped.** `tool_use_result` (structuredPatch, originalFile, stdout/stderr, interrupted, etc.) is read only for TaskCreate/TaskUpdate and Workflow (CA:1877, 4024-4049). It is never put on `item.*.data`. No code in `apps/` or `packages/` references `structuredPatch`.
 4. **Tool output body** appears only for `command_execution` and `file_change` (`toolResultStreamKind`, CA:1822-1831; `deriveWorkLogToolDetails`, TCD:336-371). Other types show result text only as the row detail, and only when there was no detail or the call failed (WL:1156-1160). The expanded view is an "Activity" block (state/time) with no input or result (`ToolCallDetailsDialog.tsx:131-187`).
 5. **Tool-result text is text-only.** `extractTextContent` (CA:1744-1766) drops image, document, and search_result blocks. Activity data is capped: when it serializes over 16k chars, strings are cut to 2,000 (PRAP:22-23, 293-336).
@@ -87,8 +87,8 @@ Cross-cutting facts that drive many rows:
 | assistant `thinking` | `item.*{reasoning}` + `content.delta{reasoning_text}` | collapsed "Reasoning trace" rows → `AgentActivityDetailView` | PARTIAL | not inline; text capped at 8,000 chars per block | CA:3671-3748, 4309-4336; PRAP:24, 664-696 |
 | assistant `redacted_thinking` | none | none | DROPPED | no "redacted reasoning" marker | CA:3763 (only `thinking`), 3894-3899 (early return), 4313 |
 | assistant `tool_use` | `item.started/updated/completed` | per tool, see §D | (§D) | see §D | CA:3886-3918, 3603-3668 |
-| assistant `server_tool_use` (advisor, web_search, web_fetch, code_execution, tool_search) | `item.started` via name heuristic (`web_search` → `dynamic_tool_call`; `text_editor_code_execution` → `file_change`) | generic row, closed only at turn end | PARTIAL | result never attached; status forced at `completeTurn` | CA:3894-3897, 4238-4241, 3370-3397 |
-| assistant `web_search_tool_result` | none | none | DROPPED | results/citations | no handler (CA:1865 reads user `tool_result` only) |
+| assistant `server_tool_use` (advisor, web_search, web_fetch, code_execution, tool_search) | `item.started` via name heuristic (`web_search` → `dynamic_tool_call`; `text_editor_code_execution` → `file_change`) | generic row, closed only at turn end | PARTIAL | result never attached; status forced at `completeTurn`. Observed: `advisor` → `dynamic_tool_call` ×11 | CA:3894-3897, 4238-4241, 3370-3397 |
+| assistant `web_search_tool_result` | none | none | DROPPED | results/citations | stream: early return CA:3894-3899; snapshot loop CA:4228-4336 handles only tool_use types, ExitPlanMode, `thinking` |
 | assistant `web_fetch_tool_result` | none | none | DROPPED | fetched content | same |
 | assistant `advisor_tool_result` | none | none | DROPPED | advisor answer | same |
 | assistant `code_execution_tool_result` | none | none | DROPPED | stdout/stderr/files | same |
@@ -96,9 +96,9 @@ Cross-cutting facts that drive many rows:
 | assistant `text_editor_code_execution_tool_result` | none | none | DROPPED | edit result | same |
 | assistant `tool_search_tool_result` | none | none | DROPPED | tool references | same |
 | assistant `mcp_tool_use` | `item.*` via name heuristic | per §D MCP row | PARTIAL | misclassification risk (fact 2) | CA:3896, 4241 |
-| assistant `mcp_tool_result` | none | none | DROPPED | result; item closes at turn end | same as `web_search_tool_result` |
-| assistant `container_upload` | none | none | DROPPED | file id | no handler |
-| assistant `compaction` | none | none | DROPPED | summary content (compaction is shown via `compact_boundary`) | no handler |
+| assistant `mcp_tool_result` | none | none | DROPPED | result; item closes at turn end | CA:3894-3899, 4228-4336 |
+| assistant `container_upload` | none | none | DROPPED | file id | CA:3894-3899, 4228-4336 |
+| assistant `compaction` | none | none | DROPPED | summary content (compaction is shown via `compact_boundary`) | CA:3894-3899, 4228-4336 |
 | user prompt text (Synara-originated) | orchestration user message (not from SDK stream) | user bubble | CLEAN | — | MT:1642-1688 |
 | user prompt `image` / file attachment (Synara-originated) | orchestration attachments | `UserImageAttachmentThumbnail`, `FileAttachmentChip` | CLEAN | — | MT:1642-1649, 1777-1800, 3305-3345 |
 | `tool_result` text, cmd / file_change tools | `content.delta{command_output\|file_change_output}` → `data.rawOutput.output` | shell transcript / file details | CLEAN | 24k buffer cap | CA:4000-4022, PRI:506-550, 2755-2766 |
@@ -121,7 +121,9 @@ Cross-cutting facts that drive many rows:
 | `compaction` delta | none | none | DROPPED | — | same |
 | `content_block_stop` | completes text block / reasoning item | — | CLEAN | — | CA:3771-3773, 3921-3936 |
 
-## D. Built-in tools (SDKT `ToolInputSchemas`, SDKT:11-57; names inferred from input types; untyped runtime tools marked *)
+## D. Built-in tools (SDKT `ToolInputSchemas`, SDKT:11-57; untyped runtime tools marked *)
+
+Names checked against the stored `system:init` `tools` list (Claude Code 2.1.296, `~/.synara/userdata/state.sqlite` copy, read-only): Task, AskUserQuestion, Bash, CronCreate, CronDelete, CronList, DesignSync, Edit, EnterPlanMode, EnterWorktree, ExitPlanMode, ExitWorktree, ListAgents, ListMcpResourcesTool, LSP, Monitor, NotebookEdit, PushNotification, Read, ReadMcpResourceDirTool, ReadMcpResourceTool, RemoteTrigger, ReportFindings, ScheduleWakeup, SendMessage, Skill, TaskStop, ToolSearch, WebFetch, WebSearch, Workflow, Write, + 306 `mcp__*`. **Glob, Grep, TodoWrite, TaskCreate/Get/Update/List, TaskOutput are not in that default toolset** (rows kept for other CLI configs). Observed `tool.started` counts: Bash 2264, Read 197, Edit 145, Agent 52, Write 22, ToolSearch 18, advisor 11, WebFetch 6, SendMessage 4, Monitor 3, Skill 3, ListAgents 2, TaskStop 2, WebSearch 1, Workflow 1.
 
 Classification column = `classifyToolItemType` result (CA:1184-1235).
 
@@ -149,7 +151,8 @@ Classification column = `classifyToolItemType` result (CA:1184-1235).
 | `Workflow` (script, name, args, scriptPath, resumeFromRunId) | `dynamic_tool_call` + `task.*` workflow lifecycle | `WorkflowRunCard` (+ generic row) | CLEAN | — | CA:4040-4085, 4919-4947; `WorkflowRunCard.logic.ts:298-380` |
 | `Monitor` (description, command, timeout_ms, persistent) | `dynamic_tool_call` | generic row | GENERIC | command, streamed events | CA:1235 |
 | `CronCreate` / `CronDelete` | `file_change` (misclassified: "create"/"delete") | "Edited" row with no file | PARTIAL | cron, prompt; wrong type | CA:1215-1225 |
-| `CronList`, `ScheduleWakeup`, `RemoteTrigger`, `PushNotification`, `REPL`, `Artifact`, `Projects`, `ClaudeDesign`, `SendFeedback`, `ReportFindings`, `ProposeSkills`, `ProposeGoal`, `ReadNotifications`, `ShowOnboardingRolePicker`, `EnterWorktree`, `ExitWorktree` | `dynamic_tool_call` | generic row (name only) | GENERIC | all inputs (e.g. REPL code, findings, worktree path) and results | CA:1235; TWER:203-209 |
+| `ListAgents` (no inputs) | `collab_agent_tool_call` (misclassified: "agent") | agent-task row, no child thread | PARTIAL | wrong type/icon; agent list result | CA:1196-1198; observed ×2 |
+| `DesignSync`*, `CronList`, `ScheduleWakeup`, `RemoteTrigger`, `PushNotification`, `REPL`, `Artifact`, `Projects`, `ClaudeDesign`, `SendFeedback`, `ReportFindings`, `ProposeSkills`, `ProposeGoal`, `ReadNotifications`, `ShowOnboardingRolePicker`, `EnterWorktree`, `ExitWorktree` | `dynamic_tool_call` | generic row (name only) | GENERIC | all inputs (e.g. REPL code, findings, worktree path) and results | CA:1235; TWER:203-209 |
 | `Skill`* (skill, args) | `dynamic_tool_call` | generic row "Skill" | GENERIC | skill name hidden with args | CA:1235 |
 | `ToolSearch`*, `SendMessage`*, `LSP`* | `dynamic_tool_call` | generic row | GENERIC | inputs/results | CA:1235 |
 | legacy `MultiEdit` (file_path, edits[]) — absent from 0.3.259 types | `file_change` | Edits panes (TCD reads `edits[]`) | CLEAN | — | TCD:321-329 |
@@ -176,17 +179,17 @@ Counted from the Quality column. The §B `tool_use` row points to §D and is not
 |---|---|---|---|---|---|---|
 | CLEAN | 10 | 5 | 4 | 9 | 3 | 31 |
 | GENERIC | 3 | 0 | 0 | 12 | 1 | 16 |
-| PARTIAL | 6 | 4 | 1 | 6 | 1 | 18 |
+| PARTIAL | 6 | 4 | 1 | 7 | 1 | 19 |
 | DROPPED | 19 | 13 | 3 | 0 | 1 | 36 |
 | STATE | 4 | 0 | 1 | 0 | 2 | 7 |
-| Rows | 42 | 22 | 9 | 27 | 8 | 108 |
+| Rows | 42 | 22 | 9 | 28 | 8 | 109 |
 
 Of the 36 DROPPED rows, 5 are intended (user replay, `thinking_tokens`, `signature_delta`, plus `mirror_error` and `worker_shutting_down`, which Synara's setup never triggers). 13 system subtypes / types fall to `warnUnhandledSdkKind`.
 
 ## Top gaps (by user impact)
 
 1. **Generic tool bodies.** Read, Grep, Glob, WebSearch, WebFetch, Skill, MCP and every dynamic tool show name-only rows. Their inputs are hidden (TWER:203-209) and their results are not viewable (TCD:336-371). Read is the most frequent Claude tool after Bash and Edit (event-frequency.md:116-118).
-2. **Item-type heuristic bugs** (CA:1184-1235). MCP tools named create/edit/file/delete become `file_change`. Tools containing "agent" become `collab_agent_tool_call` and spawn child threads. CronCreate/CronDelete become `file_change`. `tool.progress` relabels Bash/Agent as `mcp_tool_call` (PRAP:347).
+2. **Item-type heuristic bugs** (CA:1184-1235). MCP tools named create/edit/file/delete become `file_change`. `ListAgents` (observed) and any tool containing "agent" become `collab_agent_tool_call` agent rows (no child thread). Observed: `ctx_execute_file` MCP tool shown as `file_change`. CronCreate/CronDelete become `file_change`. `tool.progress` relabels Bash/Agent as `mcp_tool_call` (PRAP:347).
 3. **Dropped user-visible text.** `informational`, `local_command_output`, `notification`, `model_refusal_no_fallback`, `memory_recall`, and SDK-originated user messages (peer / task-notification). Each unhandled kind adds one content-free "Unhandled …" warning row.
 4. **Images and documents in tool results** are stripped (CA:1744-1766), so screenshots and Read of images or PDFs are invisible.
 5. **Structured results unused.** Edit/Write `structuredPatch`, Bash stdout/stderr/exit status (fact 3).

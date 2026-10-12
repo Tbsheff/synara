@@ -1,0 +1,989 @@
+<!doctype html>
+<html lang="en" class="dark">
+<head>
+<meta charset="utf-8" />
+<title>Synara subagent UX: current vs proposed</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+/* ------------------------------------------------------------------
+   Tokens. Values are the resolved output of buildThemeCssVariables()
+   for the default theme (apps/web/src/theme/theme.logic.ts) plus the
+   static tokens in apps/web/src/index.css. Variable names match the app,
+   so arbitrary classes like bg-[var(--color-background-button-secondary-hover)]
+   resolve to the same thing they do in the product.
+   ------------------------------------------------------------------ */
+:root {
+  --app-font-size-ui: 13px;      /* getAppTypographyScale(13): ui */
+  --app-font-size-ui-lg: 14px;   /* round(13*1.08) */
+  --app-font-size-ui-sm: 12px;   /* round(13*0.92) */
+  --app-font-size-ui-xs: 11px;   /* round(13*0.84) */
+  --app-font-size-chat: 13px;    /* DEFAULT_CHAT_FONT_SIZE_PX */
+  --radius: 0.625rem;
+  --composer-radius: 1.2rem;
+  --font-ui-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --font-mono-family: "JetBrains Mono", "SF Mono", "SFMono-Regular", Menlo, monospace;
+
+  /* status hues: tailwind 4.2 theme.css */
+  --color-sky-300: oklch(82.8% 0.111 230.318);
+  --color-emerald-300: oklch(84.5% 0.143 164.978);
+  --color-rose-300: oklch(81% 0.117 11.638);
+  --color-amber-300: oklch(87.9% 0.169 91.605);
+  --color-violet-300: oklch(81.1% 0.111 293.571);
+
+  /* light */
+  --background: #ffffff;
+  --foreground: #0d0d0d;
+  --muted: rgba(13, 13, 13, 0.04);
+  --muted-foreground: rgba(13, 13, 13, 0.598);
+  --border: rgba(13, 13, 13, 0.069);
+  --color-border-heavy: rgba(13, 13, 13, 0.059);
+  --color-background-button-secondary: rgba(13, 13, 13, 0.03);
+  --color-background-button-secondary-hover: rgba(13, 13, 13, 0.03);
+  --color-text-foreground-secondary: rgba(13, 13, 13, 0.598);
+  --color-text-foreground-tertiary: rgba(13, 13, 13, 0.398);
+  --composer-surface: rgba(255, 255, 255, 0.96);
+  --surface-border: color-mix(in srgb, color-mix(in srgb, var(--color-border-heavy) 95%, var(--foreground) 5%) 55%, transparent);
+  --composer-stacked-border: var(--surface-border);
+  --composer-stacked-fill: color-mix(in srgb, #ffffff 80%, transparent);
+  --user-bubble: rgba(13, 13, 13, 0.045);
+
+  /* mockup-only chrome (not product UI) */
+  --m-page: #f4f4f4;
+  --m-ink: #333;
+  --m-note: #9a6b00;
+  --m-note-bg: #fff4d1;
+}
+html.dark {
+  --background: #101010;
+  --foreground: #fcfcfc;
+  --muted: rgba(252, 252, 252, 0.04);
+  --muted-foreground: rgba(252, 252, 252, 0.58);
+  --border: rgba(252, 252, 252, 0.072);
+  --color-border-heavy: rgba(252, 252, 252, 0.118);
+  --color-background-button-secondary: rgba(252, 252, 252, 0.026);
+  --color-background-button-secondary-hover: rgba(252, 252, 252, 0.039);
+  --color-text-foreground-secondary: rgba(252, 252, 252, 0.58);
+  --color-text-foreground-tertiary: rgba(252, 252, 252, 0.329);
+  --composer-surface: rgb(23, 23, 23);
+  --surface-border: color-mix(in srgb, var(--border) 55%, transparent);
+  --composer-stacked-border: color-mix(in srgb, color-mix(in srgb, var(--color-border-heavy) 50%, transparent) 55%, transparent);
+  --composer-stacked-fill: color-mix(in srgb, #131313 80%, transparent);
+  --user-bubble: rgba(252, 252, 252, 0.06);
+
+  --m-page: #070707;
+  --m-ink: #bdbdbd;
+  --m-note: #f0c75e;
+  --m-note-bg: rgba(240, 199, 94, 0.09);
+}
+
+/* ------------------------------------------------------------------
+   Tailwind subset. Class names are the real ones used by
+   TimelineWorkEntryRow / WorkflowRunCard / ComposerSubagentStrip, so the
+   markup below can be lifted into TSX unchanged.
+   ------------------------------------------------------------------ */
+*, *::before, *::after { box-sizing: border-box; border: 0 solid var(--border); margin: 0; padding: 0; }
+html { line-height: 1.5; -webkit-font-smoothing: antialiased; }
+body { font-family: var(--font-ui-family); background: var(--m-page); color: var(--foreground); }
+button { font: inherit; color: inherit; background: none; cursor: pointer; text-align: inherit; }
+svg { display: block; }
+.flex{display:flex}.inline-flex{display:inline-flex}.block{display:block}.grid{display:grid}
+.items-center{align-items:center}.items-baseline{align-items:baseline}.items-start{align-items:flex-start}
+.justify-between{justify-content:space-between}.justify-center{justify-content:center}.justify-end{justify-content:flex-end}
+.flex-1{flex:1 1 0%}.shrink-0{flex-shrink:0}.shrink{flex-shrink:1}.min-w-0{min-width:0}.w-full{width:100%}
+.overflow-hidden{overflow:hidden}.truncate{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.text-left{text-align:left}.relative{position:relative}
+.gap-1{gap:.25rem}.gap-1\.5{gap:.375rem}.gap-2{gap:.5rem}.gap-3{gap:.75rem}.gap-x-2{column-gap:.5rem}
+.space-y-0\.5>*+*{margin-top:.125rem}.space-y-1>*+*{margin-top:.25rem}.space-y-1\.5>*+*{margin-top:.375rem}
+.ml-1{margin-left:.25rem}.ml-1\.5{margin-left:.375rem}.ml-7{margin-left:1.75rem}.ml-\[14px\]{margin-left:14px}.-ml-0\.5{margin-left:-.125rem}
+.mt-0\.5{margin-top:.125rem}.mt-1{margin-top:.25rem}.mt-1\.5{margin-top:.375rem}.mt-2{margin-top:.5rem}.mt-3{margin-top:.75rem}
+.mb-1{margin-bottom:.25rem}.mb-2{margin-bottom:.5rem}.mb-3{margin-bottom:.75rem}.-mx-1{margin-left:-.25rem;margin-right:-.25rem}
+.px-1{padding-left:.25rem;padding-right:.25rem}.px-1\.5{padding-left:.375rem;padding-right:.375rem}.px-2{padding-left:.5rem;padding-right:.5rem}
+.px-2\.5{padding-left:.625rem;padding-right:.625rem}.px-3{padding-left:.75rem;padding-right:.75rem}
+.py-0\.5{padding-top:.125rem;padding-bottom:.125rem}.py-1{padding-top:.25rem;padding-bottom:.25rem}.py-1\.5{padding-top:.375rem;padding-bottom:.375rem}
+.py-2{padding-top:.5rem;padding-bottom:.5rem}.py-2\.5{padding-top:.625rem;padding-bottom:.625rem}.py-3{padding-top:.75rem;padding-bottom:.75rem}.py-4{padding-top:1rem;padding-bottom:1rem}
+.pb-1\.5{padding-bottom:.375rem}.pb-2{padding-bottom:.5rem}.pb-4{padding-bottom:1rem}.pt-0\.5{padding-top:.125rem}
+.rounded-md{border-radius:calc(var(--radius) * .8)}.rounded-lg{border-radius:var(--radius)}.rounded-full{border-radius:9999px}
+.border{border-width:1px}.border-b{border-bottom-width:1px}.border-t{border-top-width:1px}
+.border-border\/40{border-color:color-mix(in oklab,var(--border) 40%,transparent)}
+.border-border\/45{border-color:color-mix(in oklab,var(--border) 45%,transparent)}
+.border-border\/55{border-color:color-mix(in oklab,var(--border) 55%,transparent)}
+.bg-background\/60{background:color-mix(in oklab,var(--background) 60%,transparent)}
+.bg-background\/65{background:color-mix(in oklab,var(--background) 65%,transparent)}
+.bg-muted\/20{background:color-mix(in oklab,var(--muted) 20%,transparent)}
+.bg-border{background:var(--border)}
+.bg-\[var\(--color-background-button-secondary\)\]{background:var(--color-background-button-secondary)}
+.hover\:bg-\[var\(--color-background-button-secondary-hover\)\]:hover{background:var(--color-background-button-secondary-hover)}
+.size-1\.5{width:.375rem;height:.375rem}.size-3{width:.75rem;height:.75rem}.size-3\.5{width:.875rem;height:.875rem}
+.size-4{width:1rem;height:1rem}.size-5{width:1.25rem;height:1.25rem}.size-7{width:1.75rem;height:1.75rem}
+.h-5{height:1.25rem}.h-px{height:1px}
+.w-\[calc\(100\%\+0\.5rem\)\]{width:calc(100% + .5rem)}.max-w-\[45\%\]{max-width:45%}
+.text-ui{font-size:var(--app-font-size-ui)}.text-ui-sm{font-size:var(--app-font-size-ui-sm)}
+.text-ui-xs{font-size:var(--app-font-size-ui-xs)}.text-ui-lg{font-size:var(--app-font-size-ui-lg)}
+.leading-4{line-height:1rem}.leading-5{line-height:1.25rem}.leading-6{line-height:1.5rem}.leading-snug{line-height:1.375}.leading-relaxed{line-height:1.625}
+.font-medium{font-weight:500}.font-normal{font-weight:400}.font-mono{font-family:var(--font-mono-family)}
+.tabular-nums{font-variant-numeric:tabular-nums}.uppercase{text-transform:uppercase}.tracking-wide{letter-spacing:.025em}
+.whitespace-pre-wrap{white-space:pre-wrap}.break-words{overflow-wrap:break-word}.italic{font-style:italic}
+.line-clamp-2{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.line-clamp-4{display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden}
+.text-foreground{color:var(--foreground)}
+.text-foreground\/78{color:color-mix(in oklab,var(--foreground) 78%,transparent)}
+.text-foreground\/85{color:color-mix(in oklab,var(--foreground) 85%,transparent)}
+.text-foreground\/92{color:color-mix(in oklab,var(--foreground) 92%,transparent)}
+.text-muted-foreground{color:var(--muted-foreground)}
+.text-muted-foreground\/35{color:color-mix(in oklab,var(--muted-foreground) 35%,transparent)}
+.text-muted-foreground\/38{color:color-mix(in oklab,var(--muted-foreground) 38%,transparent)}
+.text-muted-foreground\/40{color:color-mix(in oklab,var(--muted-foreground) 40%,transparent)}
+.text-muted-foreground\/45{color:color-mix(in oklab,var(--muted-foreground) 45%,transparent)}
+.text-muted-foreground\/48{color:color-mix(in oklab,var(--muted-foreground) 48%,transparent)}
+.text-muted-foreground\/55{color:color-mix(in oklab,var(--muted-foreground) 55%,transparent)}
+.text-muted-foreground\/56{color:color-mix(in oklab,var(--muted-foreground) 56%,transparent)}
+.text-muted-foreground\/58{color:color-mix(in oklab,var(--muted-foreground) 58%,transparent)}
+.text-muted-foreground\/60{color:color-mix(in oklab,var(--muted-foreground) 60%,transparent)}
+.text-muted-foreground\/65{color:color-mix(in oklab,var(--muted-foreground) 65%,transparent)}
+.text-muted-foreground\/70{color:color-mix(in oklab,var(--muted-foreground) 70%,transparent)}
+.text-\[var\(--color-text-foreground-secondary\)\]{color:var(--color-text-foreground-secondary)}
+.text-\[var\(--color-text-foreground-tertiary\)\]{color:var(--color-text-foreground-tertiary)}
+.text-sky-300\/85{color:color-mix(in oklab,var(--color-sky-300) 85%,transparent)}
+.text-rose-300\/85{color:color-mix(in oklab,var(--color-rose-300) 85%,transparent)}
+.bg-sky-300\/95{background:color-mix(in oklab,var(--color-sky-300) 95%,transparent)}
+.bg-emerald-300\/80{background:color-mix(in oklab,var(--color-emerald-300) 80%,transparent)}
+.bg-rose-300\/90{background:color-mix(in oklab,var(--color-rose-300) 90%,transparent)}
+.bg-amber-300\/85{background:color-mix(in oklab,var(--color-amber-300) 85%,transparent)}
+.bg-violet-300\/80{background:color-mix(in oklab,var(--color-violet-300) 80%,transparent)}
+.opacity-0{opacity:0}
+.group:hover .group-hover\:opacity-100,.group:focus-within .group-focus-within\:opacity-100{opacity:1}
+.transition-colors{transition:color .15s,background-color .15s}
+.group\/tool-row:hover .group-hover\/tool-row\:text-foreground{color:var(--foreground)}
+.rotate-90{transform:rotate(90deg)}
+@keyframes spin-stepped{to{transform:rotate(360deg)}}
+.animate-spin-stepped{animation:spin-stepped 1.3s steps(26,end) infinite}
+@media (prefers-reduced-motion: reduce){.animate-spin-stepped{animation:none}}
+/* Light mode: status hues are the -300 tints in both themes in the product
+   (subagentPresentation.ts). They are low contrast on white; see open questions. */
+
+/* product composites that are CSS classes in index.css */
+.chat-composer-stacked-top{background:var(--composer-stacked-fill);border:1px solid var(--composer-stacked-border);border-bottom:0;
+  border-top-left-radius:calc(var(--composer-radius) - 1px);border-top-right-radius:calc(var(--composer-radius) - 1px);
+  width:calc(100% * 14 / 15);margin:0 auto -1px;overflow:hidden;position:relative}
+.chat-composer-surface{background:var(--composer-surface);border:1px solid var(--surface-border);border-radius:var(--composer-radius)}
+.chat-user-bubble{background:var(--user-bubble);border-radius:1rem;padding:.625rem .875rem;max-width:80%;font-size:var(--app-font-size-chat);color:var(--foreground)}
+.chat-md{font-size:var(--app-font-size-chat);line-height:1.6;color:color-mix(in oklab,var(--foreground) 92%,transparent)}
+.chat-md p+p,.chat-md p+ul,.chat-md ul+p{margin-top:.6em}
+.chat-md ul{padding-left:1.2em}.chat-md li+li{margin-top:.2em}
+.chat-md code,.inline-code{font-family:var(--font-mono-family);font-size:.92em;background:var(--muted);border-radius:4px;padding:.05em .3em}
+.chat-md strong{font-weight:600}
+
+/* ------------------------------------------------------------------
+   Mockup chrome (NOT product UI)
+   ------------------------------------------------------------------ */
+.m-top{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:16px;padding:12px 28px;background:var(--m-page);border-bottom:1px solid var(--border)}
+.m-top h1{font-size:15px;font-weight:600;color:var(--foreground)}
+.m-top .m-sub{font-size:12px;color:var(--muted-foreground)}
+.m-top button{margin-left:auto;font-size:12px;border:1px solid var(--border);border-radius:6px;padding:4px 10px;color:var(--foreground)}
+.m-nav{display:flex;gap:10px;font-size:12px}.m-nav a{color:var(--muted-foreground);text-decoration:none}.m-nav a:hover{color:var(--foreground)}
+.m-state{padding:28px 28px 36px;border-bottom:1px solid var(--border);width:1600px}
+.m-state>h2{font-size:15px;font-weight:600;color:var(--foreground);margin-bottom:4px}
+.m-state>p.m-lede{font-size:12.5px;color:var(--muted-foreground);margin-bottom:16px;max-width:1100px}
+.m-cols{display:grid;grid-template-columns:768px 768px;gap:8px}
+.m-col>h3{font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--muted-foreground);margin:0 0 6px 2px}
+.m-col.m-proposed>h3{color:var(--color-sky-300)}
+.m-pane{background:var(--background);border:1px solid var(--border);border-radius:12px;padding:18px 16px 16px;min-height:120px}
+.m-col-frame{max-width:46rem;margin:0 auto}
+.m-notes{margin-top:10px;font-size:12px;color:var(--m-ink);line-height:1.5}
+.m-notes li{margin-left:18px;margin-top:3px}
+.m-notes b{color:var(--foreground);font-weight:600}
+.m-mk{display:inline-flex;align-items:center;justify-content:center;min-width:16px;height:16px;padding:0 4px;border-radius:8px;
+  background:var(--m-note);color:#111;font-size:10px;font-weight:700;margin-left:6px;vertical-align:middle;font-family:var(--font-ui-family);flex-shrink:0}
+.m-flag{outline:1.5px dashed var(--m-note);outline-offset:2px;border-radius:6px}
+.m-ghost{font-size:11.5px;color:var(--m-note);background:var(--m-note-bg);border:1px dashed var(--m-note);border-radius:6px;padding:4px 8px;margin:4px 0}
+.m-sep{height:10px}
+.m-turn{font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--color-text-foreground-tertiary);margin:10px 0 4px}
+.m-ref{margin:28px;max-width:1540px;font-size:12.5px;line-height:1.55;color:var(--m-ink)}
+.m-ref h2{font-size:15px;color:var(--foreground);margin:22px 0 8px}
+.m-ref h3{font-size:13px;color:var(--foreground);margin:14px 0 6px}
+.m-ref table{border-collapse:collapse;width:100%;margin-top:6px}
+.m-ref th,.m-ref td{border:1px solid var(--border);padding:5px 8px;text-align:left;vertical-align:top}
+.m-ref th{color:var(--foreground);font-weight:600;background:var(--muted)}
+.m-ref code{font-family:var(--font-mono-family);font-size:11.5px}
+.m-ref li{margin-left:18px;margin-top:3px}
+.ok{color:var(--color-emerald-300)}.gap{color:var(--color-rose-300)}.part{color:var(--color-amber-300)}
+</style>
+</head>
+<body>
+
+<!-- Icons: Central icon assets (apps/web/public/central-icons-*) and Tabler/Hugeicons paths, copied verbatim. -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <!-- BotIcon = central robot-3 -->
+    <symbol id="i-robot" viewBox="0 0 24 24" fill="none"><path d="M3.75 13.016C3.75 10.9516 3.75 9.91947 4.16733 9.07897C4.52046 8.3678 5.14979 7.71632 5.84834 7.33883C6.67391 6.8927 7.6385 6.85934 9.56767 6.79263C11.2113 6.73579 12.7887 6.73579 14.4323 6.79263C16.3615 6.85934 17.3261 6.8927 18.1517 7.33883C18.8502 7.71632 19.4795 8.3678 19.8327 9.07897C20.25 9.91947 20.25 10.9516 20.25 13.016V13.984C20.25 16.0484 20.25 17.0805 19.8327 17.921C19.4795 18.6322 18.8502 19.2837 18.1517 19.6612C17.3261 20.1073 16.3615 20.1407 14.4323 20.2074C12.7887 20.2642 11.2113 20.2642 9.56767 20.2074C7.6385 20.1407 6.67391 20.1073 5.84834 19.6612C5.14979 19.2837 4.52046 18.6322 4.16733 17.921C3.75 17.0805 3.75 16.0484 3.75 13.984V13.016Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="12" cy="3.5" r="1.5" fill="currentColor"/><path d="M9.5 13.125V11.375C9.5 11.1679 9.33211 11 9.125 11C8.91789 11 8.75 11.1679 8.75 11.375V13.125C8.75 13.3321 8.91789 13.5 9.125 13.5C9.33211 13.5 9.5 13.3321 9.5 13.125Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M15.25 13.125V11.375C15.25 11.1679 15.0821 11 14.875 11C14.6679 11 14.5 11.1679 14.5 11.375V13.125C14.5 13.3321 14.6679 13.5 14.875 13.5C15.0821 13.5 15.25 13.3321 15.25 13.125Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M3.5 10.75C3.08579 10.75 2.75 11.0858 2.75 11.5V13.5C2.75 13.9142 3.08579 14.25 3.5 14.25" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M20.5 10.75C20.9142 10.75 21.25 11.0858 21.25 11.5V13.5C21.25 13.9142 20.9142 14.25 20.5 14.25" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M12 6.5V3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <!-- BackgroundTrayIcon = central arrow-down-wall -->
+    <symbol id="i-tray" viewBox="0 0 24 24" fill="none"><path d="M19.25 3.75L4.75 3.75" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="M16.5 15.75L12 20.25L7.5 15.75" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M12 7.75V19.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <!-- BackToParentIcon = central arrow-share-left -->
+    <symbol id="i-back" viewBox="0 0 24 24" fill="none"><path d="M1.84521 11.4494L9.99071 3.91478C10.471 3.47055 11.25 3.81116 11.25 4.46535V7.99994C11.25 8.27608 11.478 8.49949 11.7541 8.50388C19.8394 8.63247 22 11.9205 22 20.2499C20.5303 17.3105 19.7806 15.5711 11.7551 15.5021C11.4789 15.4997 11.25 15.7238 11.25 15.9999V19.5345C11.25 20.1887 10.471 20.5293 9.99071 20.0851L1.84521 12.5505C1.52425 12.2536 1.52425 11.7463 1.84521 11.4494Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></symbol>
+    <!-- WorkflowIcon = central agents -->
+    <symbol id="i-agents" viewBox="0 0 24 24" fill="none"><circle cx="6" cy="5" r="2.25" stroke="currentColor" stroke-width="1.5"/><circle cx="18" cy="19" r="2.25" stroke="currentColor" stroke-width="1.5"/><path d="M10.4142 10.5858L10.5858 10.4142C11.3668 9.63316 12.6332 9.63317 13.4142 10.4142L13.5858 10.5858C14.3668 11.3668 14.3668 12.6332 13.5858 13.4142L13.4142 13.5858C12.6332 14.3668 11.3668 14.3668 10.5858 13.5858L10.4142 13.4142C9.63316 12.6332 9.63317 11.3668 10.4142 10.5858Z" stroke="currentColor" stroke-width="1.5"/><path d="M8.5 5H16.75C18.683 5 20.25 6.567 20.25 8.5C20.25 10.433 18.683 12 16.75 12H15" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M9 12H7.25C5.317 12 3.75 13.567 3.75 15.5C3.75 17.433 5.317 19 7.25 19H15.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <!-- SearchIcon = central magnifying-glass -->
+    <symbol id="i-search" viewBox="0 0 24 24" fill="none"><path d="M20.25 20.25L16.1265 16.1265M16.1265 16.1265C17.4385 14.8145 18.25 13.002 18.25 11C18.25 6.99594 15.0041 3.75 11 3.75C6.99594 3.75 3.75 6.99594 3.75 11C3.75 15.0041 6.99594 18.25 11 18.25C13.002 18.25 14.8145 17.4385 16.1265 16.1265Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <!-- PencilIcon = central pencil -->
+    <symbol id="i-pencil" viewBox="0 0 24 24" fill="none"><path d="M18.9142 3.41415L20.5858 5.08573C21.3668 5.86678 21.3668 7.13311 20.5858 7.91416L17.75 10.7499L7.83579 20.6642C7.46071 21.0392 6.95201 21.2499 6.42157 21.2499H2.75V17.5784C2.75 17.0479 2.96071 16.5392 3.33579 16.1642L13.25 6.24994L16.0858 3.41416C16.8668 2.63311 18.1332 2.63311 18.9142 3.41415Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M13.25 6.25L17.75 10.75" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <!-- StopIcon = central stop (fill) -->
+    <symbol id="i-stop" viewBox="0 0 24 24"><path fill="currentColor" d="M15.4821 3H8.5179C7.70506 2.99999 7.04944 2.99999 6.51853 3.04336C5.9719 3.08803 5.49175 3.18239 5.04754 3.40873C4.34193 3.76825 3.76825 4.34193 3.40873 5.04754C3.18239 5.49175 3.08803 5.9719 3.04336 6.51853C2.99999 7.04944 2.99999 7.70505 3 8.51789V15.4821C2.99999 16.2949 2.99999 16.9506 3.04336 17.4815C3.08803 18.0281 3.18239 18.5082 3.40873 18.9525C3.76825 19.6581 4.34193 20.2318 5.04754 20.5913C5.49175 20.8176 5.9719 20.912 6.51853 20.9566C7.04944 21 7.70505 21 8.51788 21H15.4821C16.295 21 16.9506 21 17.4815 20.9566C18.0281 20.912 18.5082 20.8176 18.9525 20.5913C19.6581 20.2318 20.2318 19.6581 20.5913 18.9525C20.8176 18.5082 20.912 18.0281 20.9566 17.4815C21 16.9506 21 16.295 21 15.4821V8.51788C21 7.70505 21 7.04944 20.9566 6.51853C20.912 5.9719 20.8176 5.49175 20.5913 5.04754C20.2318 4.34193 19.6581 3.76825 18.9525 3.40873C18.5082 3.18239 18.0281 3.08803 17.4815 3.04336C16.9506 2.99999 16.2949 2.99999 15.4821 3Z"/></symbol>
+    <!-- Tabler (stroke 2): ChevronRightIcon, LoaderIcon(loader-2), ArrowUpRightIcon, ArrowUp -->
+    <symbol id="i-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6l-6 6"/></symbol>
+    <symbol id="i-chev-left" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6l6 6"/></symbol>
+    <symbol id="i-loader" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a9 9 0 1 0 9 9"/></symbol>
+    <symbol id="i-arrow-ur" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 7l-10 10"/><path d="M8 7l9 0l0 9"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 18 0a9 9 0 0 0 -18 0"/><path d="M12 8v4"/><path d="M12 16h.01"/></symbol>
+    <symbol id="i-arrow-up" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5l0 14"/><path d="M18 11l-6 -6"/><path d="M6 11l6 -6"/></symbol>
+    <!-- Hugeicons inlined in apps/web/src/lib/hugeicons.tsx: ExpandIcon / CollapseIcon -->
+    <symbol id="i-expand" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M19 12L19 8.99996C19 7.11435 18.9999 6.17155 18.4142 5.58577C17.8284 4.99999 16.8856 4.99999 15 5L12 5.00001"/><path d="M5 12L5.00003 15C5.00004 16.8856 5.00005 17.8284 5.58584 18.4142C6.17163 19 7.11443 19 9.00004 19L12 19"/></symbol>
+    <symbol id="i-collapse" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M13 4L13 7.00002C13 8.88563 13.0001 9.82843 13.5858 10.4142C14.1716 11 15.1144 11 17 11L20 11"/><path d="M11.0001 20L11 17C11 15.1144 11 14.1715 10.4142 13.5858C9.82843 13 8.88563 13 7.00002 13L4.00006 13"/></symbol>
+  </defs>
+</svg>
+
+<header class="m-top">
+  <div>
+    <h1>Subagent UX: current vs proposed</h1>
+    <div class="m-sub">Synara chat transcript · default theme tokens · 13px UI/chat font · branch feat/transcript-parity · 2026-10-10</div>
+  </div>
+  <nav class="m-nav">
+    <a href="#state-a">a · spawn</a><a href="#state-b">b · mixed</a><a href="#state-c">c · wake</a><a href="#state-d">d · expanded</a><a href="#state-e">e · strip</a><a href="#reference">mapping</a>
+  </nav>
+  <button type="button" onclick="document.documentElement.classList.toggle('dark')">Toggle light / dark</button>
+</header>
+
+<!-- =====================================================================
+     STATE A: parent spawns 3 subagents in parallel
+     ===================================================================== -->
+<section class="m-state" id="state-a">
+  <h2>a · Parent spawns 3 subagents in parallel (all running)</h2>
+  <p class="m-lede">Claude <code>Agent</code> ×3 with <code>run_in_background: true</code>, plus a Codex <code>spawn_agent</code> turn. Yellow badges are mockup notes, not UI.</p>
+  <div class="m-cols">
+    <!-- CURRENT -->
+    <div class="m-col">
+      <h3>Current</h3>
+      <div class="m-pane"><div class="m-col-frame">
+        <div class="flex justify-end py-1"><div class="chat-user-bubble">Reconnects sometimes drop the last tool rows until I refresh. Find where the resume path loses events, check the projection cursor, and propose a fix.</div></div>
+        <div class="m-sep"></div>
+        <div class="chat-md"><p>I'll split this into three parallel investigations and keep reading the RPC layer myself.</p></div>
+        <div class="m-ghost">3 × <code>Agent</code> rows are dropped here by <code>omitRoutedSubagentWorkEntries</code> (useChatWorkLog.ts:102) <span class="m-mk">1</span></div>
+        <!-- "Moved to background" row: TimelineWorkEntryRow, tray icon -->
+        <div class="rounded-lg py-1">
+          <div class="group/tool-row flex w-full items-center text-left gap-2">
+            <span class="flex shrink-0 items-center justify-center text-muted-foreground transition-colors group-hover/tool-row:text-foreground size-5"><svg class="size-4"><use href="#i-tray"/></svg></span>
+            <div class="min-w-0 overflow-hidden"><p class="truncate leading-6 text-muted-foreground transition-colors group-hover/tool-row:text-foreground" style="font-size:13px"><span>Moved to background 3 tasks: Map reconnect flow, Trace projection cursor, Review reconnect tests</span></p></div>
+            <span class="m-mk">2</span>
+          </div>
+        </div>
+        <!-- Reasoning trace group: codex status row (no icon) -->
+        <div class="rounded-lg py-1">
+          <div class="group/tool-row flex w-full items-center text-left gap-2">
+            <div class="min-w-0 overflow-hidden"><p class="truncate leading-6 text-muted-foreground" style="font-size:13px" data-codex-status-row="true"><span>7 updates - Using Grep</span></p></div>
+            <span class="m-mk">3</span>
+          </div>
+        </div>
+        <div class="rounded-lg py-1">
+          <div class="group/tool-row flex w-full items-center text-left gap-2">
+            <span class="flex shrink-0 items-center justify-center text-muted-foreground size-5"><svg class="size-4"><use href="#i-search"/></svg></span>
+            <div class="min-w-0 overflow-hidden"><p class="truncate leading-6 text-muted-foreground" style="font-size:13px"><span>Read wsRpc.ts</span></p></div>
+          </div>
+        </div>
+        <div class="m-turn">Codex thread · spawn_agent ×2</div>
+        <div class="chat-md"><p>Spawning an explorer for the cursor store and a worker to draft the replay test.</p></div>
+        <div class="m-ghost">Collab <code>spawnAgent</code> row dropped too (has receiver threads) <span class="m-mk">1</span></div>
+        <div class="rounded-lg py-1"><div class="group/tool-row flex w-full items-center text-left gap-2">
+          <span class="flex shrink-0 items-center justify-center text-muted-foreground size-5"><svg class="size-4"><use href="#i-robot"/></svg></span>
+          <div class="min-w-0 overflow-hidden"><p class="truncate leading-6 text-muted-foreground" style="font-size:13px">Halley started working · GPT-5.2-Codex</p></div>
+          <span class="m-mk">5</span>
+        </div></div>
+        <div class="m-sep"></div>
+        <!-- composer strip (current) -->
+        <div class="chat-composer-stacked-top" data-testid="composer-subagent-strip">
+          <div class="flex items-center justify-between gap-2 px-2.5 py-1.5">
+            <div class="flex min-w-0 flex-1 items-center gap-1.5">
+              <svg class="size-3.5 shrink-0 text-[var(--color-text-foreground-secondary)]"><use href="#i-robot"/></svg>
+              <span class="truncate text-ui text-muted-foreground/80" style="color:color-mix(in oklab,var(--muted-foreground) 80%,transparent)">3 of 3 subagents running</span>
+            </div>
+            <button class="flex size-5 shrink-0 items-center justify-center rounded-md text-[var(--color-text-foreground-tertiary)]"><svg class="size-3"><use href="#i-stop"/></svg></button>
+            <button class="flex size-5 shrink-0 items-center justify-center rounded-md text-[var(--color-text-foreground-tertiary)]"><svg class="size-3"><use href="#i-collapse"/></svg></button>
+          </div>
+          <div class="px-2.5 pb-1.5">
+            <div class="group -mx-1 flex w-[calc(100%+0.5rem)] min-w-0 items-center gap-1 rounded-md px-1 py-1">
+              <div class="flex min-w-0 flex-1 items-center gap-2">
+                <span class="size-1.5 shrink-0 rounded-full bg-sky-300/95"></span>
+                <span class="min-w-0 flex-1 truncate text-ui font-medium text-foreground/85"><span>Map reconnect flow</span><span class="ml-1 text-ui-sm font-normal text-muted-foreground/55">(explore)</span><span class="ml-1.5 text-ui-sm font-normal text-muted-foreground/45">Haiku 4.5</span><span class="ml-1.5 text-ui-sm font-normal text-muted-foreground/45">background</span></span>
+                <span class="min-w-0 max-w-[45%] shrink truncate text-ui-sm text-muted-foreground/55">Using Grep</span>
+                <span class="shrink-0 text-ui-sm text-sky-300/85">Running</span>
+              </div>
+            </div>
+            <div class="group -mx-1 flex w-[calc(100%+0.5rem)] min-w-0 items-center gap-1 rounded-md px-1 py-1">
+              <div class="flex min-w-0 flex-1 items-center gap-2">
+                <span class="size-1.5 shrink-0 rounded-full bg-sky-300/95"></span>
+                <span class="min-w-0 flex-1 truncate text-ui font-medium text-foreground/85"><span>Trace projection cursor</span><span class="ml-1 text-ui-sm font-normal text-muted-foreground/55">(general-purpose)</span><span class="ml-1.5 text-ui-sm font-normal text-muted-foreground/45">Opus 4.5 · high</span><span class="ml-1.5 text-ui-sm font-normal text-muted-foreground/45">background</span></span>
+                <span class="min-w-0 max-w-[45%] shrink truncate text-ui-sm text-muted-foreground/55">Using Read</span>
+                <span class="shrink-0 text-ui-sm text-sky-300/85">Running</span>
+              </div>
+            </div>
+            <div class="group -mx-1 flex w-[calc(100%+0.5rem)] min-w-0 items-center gap-1 rounded-md px-1 py-1">
+              <div class="flex min-w-0 flex-1 items-center gap-2">
+                <span class="size-1.5 shrink-0 rounded-full bg-sky-300/95"></span>
+                <span class="min-w-0 flex-1 truncate text-ui font-medium text-foreground/85"><span>Review reconnect tests</span><span class="ml-1 text-ui-sm font-normal text-muted-foreground/55">(explore)</span><span class="ml-1.5 text-ui-sm font-normal text-muted-foreground/45">Haiku 4.5</span><span class="ml-1.5 text-ui-sm font-normal text-muted-foreground/45">background</span></span>
+                <span class="min-w-0 max-w-[45%] shrink truncate text-ui-sm text-muted-foreground/55">Using Bash</span>
+                <span class="shrink-0 text-ui-sm text-sky-300/85">Running</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="chat-composer-surface px-3 py-2.5"><div class="text-ui text-muted-foreground/55" style="min-height:34px">Ask for follow-up changes</div></div>
+      </div></div>
+      <ol class="m-notes">
+        <li><b>No row at the spawn point.</b> The routed Agent / spawnAgent entry is removed from the transcript, so you cannot see where the agents started or what they were asked.</li>
+        <li><b>"Moved to background"</b> comes from the session-wide <code>background_tasks_changed</code> set. It also lists background tasks of nested subagents and has turnId null.</li>
+        <li><b>Mixed "N updates" row</b> (pre-fix). Progress from several agents was folded into one "Reasoning trace". The working tree now skips Claude <code>task.progress</code> rows in <code>deriveAgentActivityTimelineState</code>, so this row is gone for Claude but nothing replaced it in the transcript.</li>
+        <li>No elapsed time anywhere. Progress is only in the strip, and it shows the bare word "background".</li>
+        <li><b>Codex lifecycle notices</b>: <code>subAgentActivity</code> is mapped to a transcript notice row per agent ("X started working", "X finished"; CodexAdapter.ts ~1946). It is the Codex version of the "Subagent finished" clutter.</li>
+      </ol>
+    </div>
+
+    <!-- PROPOSED -->
+    <div class="m-col m-proposed">
+      <h3>Proposed</h3>
+      <div class="m-pane"><div class="m-col-frame">
+        <div class="flex justify-end py-1"><div class="chat-user-bubble">Reconnects sometimes drop the last tool rows until I refresh. Find where the resume path loses events, check the projection cursor, and propose a fix.</div></div>
+        <div class="m-sep"></div>
+        <div class="chat-md"><p>I'll split this into three parallel investigations and keep reading the RPC layer myself.</p></div>
+
+        <!-- TranscriptSubagentCard: header = tool-row shell; body = AgentRow list -->
+        <div class="rounded-lg py-1" data-maps="TranscriptSubagentCard">
+          <button type="button" class="group/tool-row flex w-full items-center gap-2 text-left" aria-expanded="true">
+            <span class="flex size-5 shrink-0 items-center justify-center text-muted-foreground transition-colors group-hover/tool-row:text-foreground"><svg class="size-4 animate-spin-stepped"><use href="#i-loader"/></svg></span>
+            <p class="truncate leading-6 text-ui text-muted-foreground transition-colors group-hover/tool-row:text-foreground"><span>Running 3 agents</span><span class="tabular-nums"> · 1:12</span></p>
+            <svg class="size-3.5 shrink-0 text-muted-foreground/70 rotate-90"><use href="#i-chev"/></svg>
+          </button>
+          <div class="ml-7 mt-0.5 rounded-lg border border-border/45 bg-background/60 px-2 py-1">
+            <!-- AgentRow (extracted from WorkflowAgentRowView) -->
+            <button type="button" class="group -mx-1 flex w-[calc(100%+0.5rem)] min-w-0 items-center gap-2 rounded-md px-1 py-1 text-left hover:bg-[var(--color-background-button-secondary-hover)]">
+              <span class="size-1.5 shrink-0 rounded-full bg-sky-300/95"></span>
+              <span class="min-w-0 shrink truncate text-ui font-medium text-foreground/85">Map reconnect flow<span class="ml-1 text-ui-sm font-normal text-muted-foreground/55">(explore)</span><span class="ml-1.5 text-ui-sm font-normal text-muted-foreground/45">Haiku 4.5</span></span>
+              <span class="min-w-0 flex-1 truncate text-ui-sm text-muted-foreground/55">Using Grep</span>
+              <svg class="size-3 shrink-0 text-muted-foreground/45" aria-label="Background"><use href="#i-tray"/></svg>
+              <span class="shrink-0 text-ui-sm tabular-nums text-muted-foreground/60">1:12</span>
+              <span class="shrink-0 text-ui-sm text-sky-300/85">Running</span>
+            </button>
+            <button type="button" class="group -mx-1 flex w-[calc(100%+0.5rem)] min-w-0 items-center gap-2 rounded-md px-1 py-1 text-left hover:bg-[var(--color-background-button-secondary-hover)]">
+              <span class="size-1.5 shrink-0 rounded-full bg-sky-300/95"></span>
+              <span class="min-w-0 shrink truncate text-ui font-medium text-foreground/85">Trace projection cursor<span class="ml-1 text-ui-sm font-normal text-muted-foreground/55">(general-purpose)</span><span class="ml-1.5 text-ui-sm font-normal text-muted-foreground/45">Opus 4.5 · high</span></span>
+              <span class="min-w-0 flex-1 truncate text-ui-sm text-muted-foreground/55">Using Read</span>
+              <svg class="size-3 shrink-0 text-muted-foreground/45"><use href="#i-tray"/></svg>
+              <span class="shrink-0 text-ui-sm tabular-nums text-muted-foreground/60">1:12</span>
+              <span class="shrink-0 text-ui-sm text-sky-300/85">Running</span>
+            </button>
+            <button type="button" class="group -mx-1 flex w-[calc(100%+0.5rem)] min-w-0 items-center gap-2 rounded-md px-1 py-1 text-left hover:bg-[var(--color-background-button-secondary-hover)]">
+              <span class="size-1.5 shrink-0 rounded-full bg-sky-300/95"></span>
+              <span class="min-w-0 shrink truncate text-ui font-medium text-foreground/85">Review reconnect tests<span class="ml-1 text-ui-sm font-normal text-muted-foreground/55">(explore)</span><span class="ml-1.5 text-ui-sm font-normal text-muted-foreground/45">Haiku 4.5</span></span>
+              <span class="min-w-0 flex-1 truncate text-ui-sm text-muted-foreground/55">Using Bash</span>
+              <svg class="size-3 shrink-0 text-muted-foreground/45"><use href="#i-tray"/></svg>
+              <span class="shrink-0 text-ui-sm tabular-nums text-muted-foreground/60">1:11</span>
+              <span class="shrink-0 text-ui-sm text-sky-300/85">Running</span>
+            </button>
+          </div>
+        </div>
+        <div class="rounded-lg py-1">
+          <div class="group/tool-row flex w-full items-center text-left gap-2">
+            <span class="flex shrink-0 items-center justify-center text-muted-foreground size-5"><svg class="size-4"><use href="#i-search"/></svg></span>
+            <div class="min-w-0 overflow-hidden"><p class="truncate leading-6 text-muted-foreground" style="font-size:13px"><span>Read wsRpc.ts</span></p></div>
+          </div>
+        </div>
+
+        <div class="m-turn">Codex thread · spawn_agent ×2</div>
+        <div class="chat-md"><p>Spawning an explorer for the cursor store and a worker to draft the replay test.</p></div>
+        <div class="rounded-lg py-1" data-maps="TranscriptSubagentCard (Codex)">
+          <button type="button" class="group/tool-row flex w-full items-center gap-2 text-left">
+            <span class="flex size-5 shrink-0 items-center justify-center text-muted-foreground"><svg class="size-4 animate-spin-stepped"><use href="#i-loader"/></svg></span>
+            <p class="truncate leading-6 text-ui text-muted-foreground"><span>Running 2 agents</span><span class="tabular-nums"> · 0:38</span></p>
+            <svg class="size-3.5 shrink-0 text-muted-foreground/70 rotate-90"><use href="#i-chev"/></svg>
+          </button>
+          <div class="ml-7 mt-0.5 rounded-lg border border-border/45 bg-background/60 px-2 py-1">
+            <button type="button" class="group -mx-1 flex w-[calc(100%+0.5rem)] min-w-0 items-center gap-2 rounded-md px-1 py-1 text-left">
+              <span class="size-1.5 shrink-0 rounded-full bg-sky-300/95"></span>
+              <span class="min-w-0 shrink truncate text-ui font-medium text-foreground/85">Halley<span class="ml-1 text-ui-sm font-normal text-muted-foreground/55">(explorer)</span><span class="ml-1.5 text-ui-sm font-normal text-muted-foreground/45">GPT-5.2-Codex · medium</span></span>
+              <span class="min-w-0 flex-1 truncate text-ui-sm text-muted-foreground/55">Searched for cursor in apps/server/src/persistence <span class="m-mk">gap</span></span>
+              <span class="shrink-0 text-ui-sm tabular-nums text-muted-foreground/60">0:38</span>
+              <span class="shrink-0 text-ui-sm text-sky-300/85">Running</span>
+            </button>
+            <button type="button" class="group -mx-1 flex w-[calc(100%+0.5rem)] min-w-0 items-center gap-2 rounded-md px-1 py-1 text-left">
+              <span class="size-1.5 shrink-0 rounded-full bg-violet-300/80"></span>
+              <span class="min-w-0 shrink truncate text-ui font-medium text-foreground/85">Kepler<span class="ml-1 text-ui-sm font-normal text-muted-foreground/55">(worker)</span><span class="ml-1.5 text-ui-sm font-normal text-muted-foreground/45">GPT-5.2-Codex · medium</span></span>
+              <span class="min-w-0 flex-1 truncate text-ui-sm text-muted-foreground/55">Waiting to start</span>
+              <span class="shrink-0 text-ui-sm tabular-nums text-muted-foreground/60">0:02</span>
+              <span class="shrink-0 text-ui-sm text-muted-foreground/55">Queued</span>
+            </button>
+          </div>
+        </div>
+        <div class="m-sep"></div>
+        <!-- strip compacts to its header while the spawn card is on screen -->
+        <div class="chat-composer-stacked-top">
+          <div class="flex items-center justify-between gap-2 px-2.5 py-1.5">
+            <div class="flex min-w-0 flex-1 items-center gap-1.5">
+              <svg class="size-3.5 shrink-0 text-[var(--color-text-foreground-secondary)] animate-spin-stepped"><use href="#i-loader"/></svg>
+              <span class="truncate text-ui" style="color:color-mix(in oklab,var(--muted-foreground) 80%,transparent)">3 running</span>
+            </div>
+            <button class="flex size-5 shrink-0 items-center justify-center rounded-md text-[var(--color-text-foreground-tertiary)]"><svg class="size-3"><use href="#i-stop"/></svg></button>
+            <button class="flex size-5 shrink-0 items-center justify-center rounded-md text-[var(--color-text-foreground-tertiary)]"><svg class="size-3"><use href="#i-expand"/></svg></button>
+          </div>
+        </div>
+        <div class="chat-composer-surface px-3 py-2.5"><div class="text-ui text-muted-foreground/55" style="min-height:34px">Ask for follow-up changes</div></div>
+      </div></div>
+      <ul class="m-notes">
+        <li><b>One card per spawn call</b>, anchored where the agents started. The header uses the tool-row shell: a live spinner, "Running N agents", and the elapsed time of the group.</li>
+        <li><b>One AgentRow per agent:</b> status dot, name, (role), model · effort, latest progress, background glyph, elapsed, status. Progress is the provider summary, else "Using &lt;tool&gt;".</li>
+        <li>The Codex spawn uses the same card. Codex sends lifecycle only (<code>subAgentActivity</code>: started / interacted / interrupted / finished, plus <code>agentsStates</code> status and message), with no progress text (<span class="m-mk">gap</span>). Derive progress from the child thread's latest work row, or leave it empty.</li>
+        <li>No "Moved to background" row. The tray glyph on the row carries that state.</li>
+        <li>The strip compacts to its header while the card is on screen (open question 2).</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- =====================================================================
+     STATE B: one finished, one failed, one running; parent keeps working
+     ===================================================================== -->
+<section class="m-state" id="state-b">
+  <h2>b · One finished, one failed, one still running. The parent keeps working</h2>
+  <p class="m-lede">Background agents settle at different times while the parent turn keeps calling tools.</p>
+  <div class="m-cols">
+    <div class="m-col">
+      <h3>Current</h3>
+      <div class="m-pane"><div class="m-col-frame">
+        <div class="chat-md"><p>I'll split this into three parallel investigations and keep reading the RPC layer myself.</p></div>
+        <div class="rounded-lg py-1"><div class="group/tool-row flex w-full items-center text-left gap-2">
+          <span class="flex shrink-0 items-center justify-center text-muted-foreground size-5"><svg class="size-4"><use href="#i-tray"/></svg></span>
+          <div class="min-w-0 overflow-hidden"><p class="truncate leading-6 text-muted-foreground" style="font-size:13px">Moved to background 3 tasks: Map reconnect flow, Trace projection cursor, Review reconnect tests</p></div>
+        </div></div>
+        <div class="rounded-lg py-1"><div class="group/tool-row flex w-full items-center text-left gap-2">
+          <span class="flex shrink-0 items-center justify-center text-muted-foreground size-5"><svg class="size-4"><use href="#i-search"/></svg></span>
+          <div class="min-w-0 overflow-hidden"><p class="truncate leading-6 text-muted-foreground" style="font-size:13px">Read wsRpc.ts</p></div>
+        </div></div>
+        <div class="rounded-lg py-1"><div class="group/tool-row flex w-full items-center text-left gap-2">
+          <span class="flex shrink-0 items-center justify-center text-muted-foreground size-5"><svg class="size-4"><use href="#i-robot"/></svg></span>
+          <div class="min-w-0 overflow-hidden"><p class="truncate leading-6 text-muted-foreground" style="font-size:13px">Subagent finished: Map reconnect flow</p></div>
+          <span class="m-mk">1</span>
+        </div></div>
+        <div class="rounded-lg py-1"><div class="group/tool-row flex w-full items-center text-left gap-2">
+          <span class="flex shrink-0 items-center justify-center text-muted-foreground size-5"><svg class="size-4"><use href="#i-search"/></svg></span>
+          <div class="min-w-0 overflow-hidden"><p class="truncate leading-6 text-muted-foreground" style="font-size:13px">Searched for replayFrom in apps/server/src</p></div>
+        </div></div>
+        <div class="rounded-lg py-1"><div class="group/tool-row flex w-full items-center text-left gap-2">
+          <span class="flex shrink-0 items-center justify-center text-muted-foreground size-5"><svg class="size-4"><use href="#i-robot"/></svg></span>
+          <div class="min-w-0 overflow-hidden"><p class="truncate leading-6 text-muted-foreground" style="font-size:13px">Subagent failed: Review reconnect tests</p></div>
+          <span class="m-mk">1</span>
+        </div></div>
+        <div class="rounded-lg py-1"><div class="group/file-row flex w-full items-center gap-2">
+          <span class="flex shrink-0 items-center justify-center text-muted-foreground size-5"><svg class="size-4"><use href="#i-pencil"/></svg></span>
+          <span class="text-muted-foreground" style="font-size:13px">Edited</span><span class="text-muted-foreground" style="font-size:13px">wsRpc.ts</span>
+          <span class="tabular-nums" style="font-size:13px"><span style="color:var(--color-emerald-300)">+12</span> <span style="color:var(--color-rose-300)">−3</span></span>
+        </div></div>
+        <div class="m-ghost">Results and errors are not in the transcript. You must open each child thread to see what it found or why it failed. <span class="m-mk">2</span></div>
+        <div class="m-sep"></div>
+        <div class="chat-composer-stacked-top">
+          <div class="flex items-center justify-between gap-2 px-2.5 py-1.5">
+            <div class="flex min-w-0 flex-1 items-center gap-1.5">
+              <svg class="size-3.5 shrink-0 text-[var(--color-text-foreground-secondary)]"><use href="#i-robot"/></svg>
+              <span class="truncate text-ui" style="color:color-mix(in oklab,var(--muted-foreground) 80%,transparent)">1 of 3 subagents running</span>
+            </div>
+            <button class="flex size-5 shrink-0 items-center justify-center rounded-md text-[var(--color-text-foreground-tertiary)]"><svg class="size-3"><use href="#i-collapse"/></svg></button>
+          </div>
+          <div class="px-2.5 pb-1.5">
+            <div class="-mx-1 flex w-[calc(100%+0.5rem)] min-w-0 items-center gap-2 rounded-md px-1 py-1">
+              <span class="size-1.5 shrink-0 rounded-full bg-emerald-300/80"></span>
+              <span class="min-w-0 flex-1 truncate text-ui font-medium text-foreground/85">Map reconnect flow<span class="ml-1 text-ui-sm font-normal text-muted-foreground/55">(explore)</span><span class="ml-1.5 text-ui-sm font-normal text-muted-foreground/45">Haiku 4.5</span><span class="ml-1.5 text-ui-sm font-normal text-muted-foreground/45">background</span></span>
+              <span class="shrink-0 text-ui-sm text-muted-foreground/55">Completed</span>
+            </div>
+            <div class="-mx-1 flex w-[calc(100%+0.5rem)] min-w-0 items-center gap-2 rounded-md px-1 py-1">
+              <span class="size-1.5 shrink-0 rounded-full bg-sky-300/95"></span>
+              <span class="min-w-0 flex-1 truncate text-ui font-medium text-foreground/85">Trace projection cursor<span class="ml-1 text-ui-sm font-normal text-muted-foreground/55">(general-purpose)</span><span class="ml-1.5 text-ui-sm font-normal text-muted-foreground/45">Opus 4.5 · high</span><span class="ml-1.5 text-ui-sm font-normal text-muted-foreground/45">background</span></span>
+              <span class="min-w-0 max-w-[45%] shrink truncate text-ui-sm text-muted-foreground/55">Using Read</span>
+              <span class="shrink-0 text-ui-sm text-sky-300/85">Running</span>
+            </div>
+            <div class="-mx-1 flex w-[calc(100%+0.5rem)] min-w-0 items-center gap-2 rounded-md px-1 py-1">
+              <span class="size-1.5 shrink-0 rounded-full bg-rose-300/90"></span>
+              <span class="min-w-0 flex-1 truncate text-ui font-medium text-foreground/85">Review reconnect tests<span class="ml-1 text-ui-sm font-normal text-muted-foreground/55">(explore)</span><span class="ml-1.5 text-ui-sm font-normal text-muted-foreground/45">Haiku 4.5</span><span class="ml-1.5 text-ui-sm font-normal text-muted-foreground/45">background</span></span>
+              <span class="shrink-0 text-ui-sm text-rose-300/85">Failed</span>
+            </div>
+          </div>
+        </div>
+        <div class="chat-composer-surface px-3 py-2.5"><div class="text-ui text-muted-foreground/55" style="min-height:34px">Ask for follow-up changes</div></div>
+      </div></div>
+      <ol class="m-notes">
+        <li><b>"Subagent finished / failed: X" rows</b> (<code>deriveBackgroundTaskCompletionEntries</code>) land between unrelated parent tool rows. Each one is also a <b>response boundary</b> in <code>MessagesTimeline.logic.ts</code>, which is the root of the folded-reply bug in state c.</li>
+        <li>The strip shows the outcome words but no result text, no error, and no elapsed time. When all agents settle and no live turn spawned them, the strip retires and that information is gone.</li>
+      </ol>
+    </div>
+
+    <div class="m-col m-proposed">
+      <h3>Proposed</h3>
+      <div class="m-pane"><div class="m-col-frame">
+        <div class="chat-md"><p>I'll split this into three parallel investigations and keep reading the RPC layer myself.</p></div>
+        <div class="rounded-lg py-1">
+          <button type="button" class="group/tool-row flex w-full items-center gap-2 text-left">
+            <span class="flex size-5 shrink-0 items-center justify-center text-muted-foreground"><svg class="size-4 animate-spin-stepped"><use href="#i-loader"/></svg></span>
+            <p class="truncate leading-6 text-ui text-muted-foreground"><span>Running 1 of 3 agents</span><span class="tabular-nums"> · 2:41</span><span> · 1 failed</span></p>
+            <svg class="size-3.5 shrink-0 text-muted-foreground/70 rotate-90"><use href="#i-chev"/></svg>
+          </button>
+          <div class="ml-7 mt-0.5 rounded-lg border border-border/45 bg-background/60 px-2 py-1">
+            <div>
+              <button type="button" class="group -mx-1 flex w-[calc(100%+0.5rem)] min-w-0 items-center gap-2 rounded-md px-1 py-1 text-left hover:bg-[var(--color-background-button-secondary-hover)]">
+                <span class="size-1.5 shrink-0 rounded-full bg-emerald-300/80"></span>
+                <span class="min-w-0 shrink truncate text-ui font-medium text-foreground/85">Map reconnect flow<span class="ml-1 text-ui-sm font-normal text-muted-foreground/55">(explore)</span><span class="ml-1.5 text-ui-sm font-normal text-muted-foreground/45">Haiku 4.5</span></span>
+                <span class="min-w-0 flex-1"></span>
+                <span class="shrink-0 text-ui-sm tabular-nums text-muted-foreground/60">2:03</span>
+                <span class="shrink-0 text-ui-sm text-muted-foreground/55">Completed</span>
+              </button>
+              <p class="ml-[14px] mb-1 line-clamp-2 text-ui-sm leading-snug text-muted-foreground/70" data-maps="result preview">Resume calls <span class="inline-code">replayFrom(cursor)</span> with the last <em>acked</em> sequence, so events received after the last ack and before the drop are never replayed.</p>
+            </div>
+            <div>
+              <button type="button" class="group -mx-1 flex w-[calc(100%+0.5rem)] min-w-0 items-center gap-2 rounded-md px-1 py-1 text-left hover:bg-[var(--color-background-button-secondary-hover)]">
+                <span class="size-1.5 shrink-0 rounded-full bg-sky-300/95"></span>
+                <span class="min-w-0 shrink truncate text-ui font-medium text-foreground/85">Trace projection cursor<span class="ml-1 text-ui-sm font-normal text-muted-foreground/55">(general-purpose)</span><span class="ml-1.5 text-ui-sm font-normal text-muted-foreground/45">Opus 4.5 · high</span></span>
+                <span class="min-w-0 flex-1 truncate text-ui-sm text-muted-foreground/55">Using Read</span>
+                <span class="shrink-0 text-ui-sm tabular-nums text-muted-foreground/60">2:41</span>
+                <span class="shrink-0 text-ui-sm text-sky-300/85">Running</span>
+              </button>
+            </div>
+            <div>
+              <button type="button" class="group -mx-1 flex w-[calc(100%+0.5rem)] min-w-0 items-center gap-2 rounded-md px-1 py-1 text-left hover:bg-[var(--color-background-button-secondary-hover)]">
+                <span class="size-1.5 shrink-0 rounded-full bg-rose-300/90"></span>
+                <span class="min-w-0 shrink truncate text-ui font-medium text-foreground/85">Review reconnect tests<span class="ml-1 text-ui-sm font-normal text-muted-foreground/55">(explore)</span><span class="ml-1.5 text-ui-sm font-normal text-muted-foreground/45">Haiku 4.5</span></span>
+                <span class="min-w-0 flex-1"></span>
+                <span class="shrink-0 text-ui-sm tabular-nums text-muted-foreground/60">0:48</span>
+                <span class="shrink-0 text-ui-sm text-rose-300/85">Failed</span>
+              </button>
+              <p class="ml-[14px] mb-1 line-clamp-2 text-ui-sm leading-snug text-muted-foreground/70">vitest exited 1: no test files found in apps/server (ran from repo root)</p>
+            </div>
+          </div>
+        </div>
+        <div class="rounded-lg py-1"><div class="group/tool-row flex w-full items-center text-left gap-2">
+          <span class="flex shrink-0 items-center justify-center text-muted-foreground size-5"><svg class="size-4"><use href="#i-search"/></svg></span>
+          <div class="min-w-0 overflow-hidden"><p class="truncate leading-6 text-muted-foreground" style="font-size:13px">Read wsRpc.ts</p></div>
+        </div></div>
+        <div class="rounded-lg py-1"><div class="group/tool-row flex w-full items-center text-left gap-2">
+          <span class="flex shrink-0 items-center justify-center text-muted-foreground size-5"><svg class="size-4"><use href="#i-search"/></svg></span>
+          <div class="min-w-0 overflow-hidden"><p class="truncate leading-6 text-muted-foreground" style="font-size:13px">Searched for replayFrom in apps/server/src</p></div>
+        </div></div>
+        <div class="rounded-lg py-1"><div class="group/file-row flex w-full items-center gap-2">
+          <span class="flex shrink-0 items-center justify-center text-muted-foreground size-5"><svg class="size-4"><use href="#i-pencil"/></svg></span>
+          <span class="text-muted-foreground" style="font-size:13px">Edited</span><span class="text-muted-foreground" style="font-size:13px">wsRpc.ts</span>
+          <span class="tabular-nums" style="font-size:13px"><span style="color:var(--color-emerald-300)">+12</span> <span style="color:var(--color-rose-300)">−3</span></span>
+        </div></div>
+        <div class="m-sep"></div>
+        <div class="chat-composer-stacked-top">
+          <div class="flex items-center justify-between gap-2 px-2.5 py-1.5">
+            <div class="flex min-w-0 flex-1 items-center gap-1.5">
+              <svg class="size-3.5 shrink-0 text-[var(--color-text-foreground-secondary)] animate-spin-stepped"><use href="#i-loader"/></svg>
+              <span class="truncate text-ui" style="color:color-mix(in oklab,var(--muted-foreground) 80%,transparent)">1 running · 1 done · 1 failed</span>
+            </div>
+            <button class="flex size-5 shrink-0 items-center justify-center rounded-md text-[var(--color-text-foreground-tertiary)]"><svg class="size-3"><use href="#i-expand"/></svg></button>
+          </div>
+        </div>
+        <div class="chat-composer-surface px-3 py-2.5"><div class="text-ui text-muted-foreground/55" style="min-height:34px">Ask for follow-up changes</div></div>
+      </div></div>
+      <ul class="m-notes">
+        <li>Settlement <b>updates the card in place</b>: the dot, the status, a frozen elapsed time, and a two-line result or error preview under the row. No new transcript rows appear.</li>
+        <li>The parent's own tool rows flow on below the card. The card stays where the agents were spawned.</li>
+        <li>The header counts: "Running 1 of 3 agents · 2:41 · 1 failed". It changes to "Ran 3 agents · 3:12" when all are done (see c).</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- =====================================================================
+     STATE C: background subagent finishes after the parent turn ended (wake)
+     ===================================================================== -->
+<section class="m-state" id="state-c">
+  <h2>c · A background subagent finishes after the parent's turn ended (wake turn)</h2>
+  <p class="m-lede">Turn 1 ends with the agents still running. When the last one finishes, Claude starts a synthetic wake turn (<code>claude/synthetic-turn-start</code>) and writes the real report. That report must stay visible.</p>
+  <div class="m-cols">
+    <div class="m-col">
+      <h3>Current</h3>
+      <div class="m-pane"><div class="m-col-frame">
+        <div class="m-turn">Turn 1 (user send)</div>
+        <div class="flex justify-end py-1"><div class="chat-user-bubble">Reconnects sometimes drop the last tool rows until I refresh. Find where the resume path loses events…</div></div>
+        <div class="m-sep"></div>
+        <!-- "Worked for" collapsed disclosure that swallowed the replies -->
+        <div class="mb-3">
+          <button class="-ml-0.5 inline-flex items-center gap-1 pb-2 text-left text-muted-foreground m-flag" style="font-size:13px">
+            <span>Worked for 6m 03s</span><svg class="size-3.5 shrink-0 text-muted-foreground/70"><use href="#i-chev"/></svg>
+          </button>
+          <span class="m-mk">1</span>
+          <div class="h-px w-full bg-border"></div>
+        </div>
+        <div class="m-ghost">Folded inside: the 894-char turn-1 reply, the wake turn's tool rows, and the 971-char root-cause report. <span class="m-mk">1</span></div>
+        <div class="rounded-lg py-1"><div class="group/tool-row flex w-full items-center text-left gap-2">
+          <span class="flex shrink-0 items-center justify-center text-muted-foreground size-5"><svg class="size-4"><use href="#i-robot"/></svg></span>
+          <div class="min-w-0 overflow-hidden"><p class="truncate leading-6 text-muted-foreground" style="font-size:13px">Subagent finished: Trace projection cursor</p></div>
+          <span class="m-mk">2</span>
+        </div></div>
+        <div class="rounded-lg py-1"><div class="group/tool-row flex w-full items-center text-left gap-2">
+          <span class="flex shrink-0 items-center justify-center text-muted-foreground size-5"><svg class="size-4"><use href="#i-alert"/></svg></span>
+          <div class="min-w-0 overflow-hidden"><p class="truncate leading-6 text-muted-foreground" style="font-size:13px">Checkpoint baseline unavailable for this turn</p></div>
+          <span class="m-mk">3</span>
+        </div></div>
+        <div class="chat-md"><p>All three agents are done. The fix is applied in <span class="inline-code">wsRpc.ts</span>.</p></div>
+        <div class="m-ghost">Only the last 231-char reply is visible. The actual root cause and the patch rationale are hidden.</div>
+      </div></div>
+      <ol class="m-notes">
+        <li><b>Replies fold into "Worked for".</b> The work rows sort by sequence and the messages sort by time, so the completion boundary rows move to the end and only the last reply counts as terminal (collapsed-replies-rootcause.md).</li>
+        <li>A "Subagent finished" row is the only wake marker. It is also the response boundary, so if it moves, the grouping breaks.</li>
+        <li>Child and wake turns write "Checkpoint baseline unavailable" rows (CheckpointReactor has no child-turn guard).</li>
+      </ol>
+    </div>
+
+    <div class="m-col m-proposed">
+      <h3>Proposed</h3>
+      <div class="m-pane"><div class="m-col-frame">
+        <div class="m-turn">Turn 1 (user send)</div>
+        <div class="flex justify-end py-1"><div class="chat-user-bubble">Reconnects sometimes drop the last tool rows until I refresh. Find where the resume path loses events…</div></div>
+        <div class="m-sep"></div>
+        <div class="mb-3">
+          <button class="-ml-0.5 inline-flex items-center gap-1 pb-2 text-left text-muted-foreground" style="font-size:13px"><span>Worked for 1m 20s</span><svg class="size-3.5 shrink-0 text-muted-foreground/70"><use href="#i-chev"/></svg></button>
+          <div class="h-px w-full bg-border"></div>
+        </div>
+        <!-- spawn card stays in turn 1, settled -->
+        <div class="rounded-lg py-1">
+          <button type="button" class="group/tool-row flex w-full items-center gap-2 text-left">
+            <span class="flex size-5 shrink-0 items-center justify-center text-muted-foreground"><svg class="size-4"><use href="#i-robot"/></svg></span>
+            <p class="truncate leading-6 text-ui text-muted-foreground"><span>Ran 3 agents</span><span class="tabular-nums"> · 6:03</span><span> · 1 failed</span></p>
+            <svg class="size-3.5 shrink-0 text-muted-foreground/70"><use href="#i-chev"/></svg>
+          </button>
+        </div>
+        <div class="chat-md"><p>Three agents are running in the background. I'll pick up their results when they finish. So far, <span class="inline-code">wsRpc.resume</span> replays from the last acked sequence. That is the first suspect.</p></div>
+
+        <div class="m-turn">Turn 2 (wake, no user message)</div>
+        <!-- WakeMarker: divider row -->
+        <div class="flex items-center gap-2 py-2 text-ui-sm text-muted-foreground/70" data-maps="SubagentWakeMarker">
+          <span class="h-px flex-1 bg-border"></span>
+          <svg class="size-3.5 shrink-0"><use href="#i-robot"/></svg>
+          <span class="shrink-0">Resumed after <span class="text-foreground/78 font-medium">Trace projection cursor</span> finished</span>
+          <button class="inline-flex shrink-0 items-center gap-1 rounded-md px-1.5 text-muted-foreground/55 hover:bg-[var(--color-background-button-secondary-hover)]"><svg class="size-3"><use href="#i-arrow-up"/></svg>Show agents</button>
+          <span class="h-px flex-1 bg-border"></span>
+        </div>
+        <div class="mb-3">
+          <button class="-ml-0.5 inline-flex items-center gap-1 pb-2 text-left text-muted-foreground" style="font-size:13px"><span>Worked for 41s</span><svg class="size-3.5 shrink-0 text-muted-foreground/70"><use href="#i-chev"/></svg></button>
+          <div class="h-px w-full bg-border"></div>
+        </div>
+        <div class="chat-md">
+          <p><strong>Root cause.</strong> On reconnect, <span class="inline-code">wsRpc.resume</span> replays from <span class="inline-code">ackedSeq</span>, but <span class="inline-code">ProjectionPipeline.applyBatch</span> advances the thread cursor when an event is <em>received</em>. Events that arrive after the last ack and before the socket drops are skipped on replay.</p>
+          <ul><li>Replay from <span class="inline-code">min(ackedSeq, projectionCursor)</span> and dedupe by sequence on the client.</li><li>Added a reconnect test that drops the socket between receive and ack.</li></ul>
+          <p>The test agent failed because it ran vitest from the repo root. I re-ran it with <span class="inline-code">bun run test</span> in apps/server: 41 passed.</p>
+        </div>
+      </div></div>
+      <ul class="m-notes">
+        <li><b>Group by turn, not by completion rows.</b> The wake turn is its own response and gets its own "Worked for" and final reply. This needs the server-side wake flag (data gap 7).</li>
+        <li>A <b>wake marker</b> replaces the "Subagent finished" row and explains why the agent spoke again. "Show agents" scrolls to the card in turn 1. Codex shows a standalone "{name} finished" row for the same reason.</li>
+        <li>The turn-1 card settles in place ("Ran 3 agents · 6:03 · 1 failed") and closes by default once all agents settle.</li>
+        <li>When turn 1 settles, its work folds into "Worked for". The spawn card is <b>lifted out</b> of that disclosure and stays visible, as settled turns already do for computer-control cards and thread-creation recaps (<code>MessagesTimeline.tsx</code> ~2059-2072). It sits after the fold and before the reply.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- =====================================================================
+     STATE D: expanded subagent card
+     ===================================================================== -->
+<section class="m-state" id="state-d">
+  <h2>d · Expanded subagent: prompt, model, tool steps, result preview, "Open thread"</h2>
+  <p class="m-lede">Click a row in the card to expand it in place. The detail block is WorkflowRunCard's <code>WorkflowAgentDetail</code> with a new Result section.</p>
+  <div class="m-cols">
+    <div class="m-col">
+      <h3>Current: AgentActivityDetailView (fallback, not reachable for routed agents)</h3>
+      <div class="m-pane"><div class="m-col-frame px-1" data-agent-activity-detail="true">
+        <button type="button" class="inline-flex items-center gap-1.5 rounded-md px-1.5 py-1 text-muted-foreground/70" style="font-size:12px"><svg class="size-3.5"><use href="#i-chev-left"/></svg><span>Back</span></button>
+        <div class="mt-3 border-b border-border/55 pb-4">
+          <div class="flex min-w-0 items-start gap-3">
+            <span class="mt-1 flex size-7 shrink-0 items-center justify-center rounded-md border border-border/45 bg-background/65 text-muted-foreground/58"><svg class="size-3.5"><use href="#i-robot"/></svg></span>
+            <div class="min-w-0 flex-1">
+              <div class="flex items-center gap-x-2">
+                <h2 class="truncate text-ui-lg font-medium leading-6 text-foreground/92">Agent</h2>
+                <span class="rounded-full border border-border/45 px-2 py-0.5 text-ui-xs font-medium text-muted-foreground/56">1 update</span>
+              </div>
+              <p class="mt-1 text-muted-foreground/58" style="font-size:13px">Trace how ProjectionPipeline advances the per-thread cursor during a websocket reconnect…</p>
+            </div>
+          </div>
+        </div>
+        <section class="border-b border-border/45 py-4"><h3 class="mb-2 text-ui-sm font-medium text-muted-foreground/48">Prompt</h3>
+          <div class="chat-md"><p>Trace how ProjectionPipeline advances the per-thread cursor during a websocket reconnect. Report the exact function where the cursor moves past events the client never received, with file:line references.</p></div></section>
+        <section class="border-b border-border/45 py-4"><h3 class="mb-2 text-ui-sm font-medium text-muted-foreground/48">Result</h3>
+          <div class="chat-md"><p>Async agent launched successfully. agentId: a9b4c1 (the agent runs in the background; you will be notified when it completes)</p></div></section>
+        <section class="py-4"><h3 class="mb-2 text-ui-sm font-medium text-muted-foreground/48">Activity</h3>
+          <div class="flex items-baseline justify-between gap-3"><p class="truncate font-medium text-foreground/78" style="font-size:13px">Agent</p><p class="shrink-0 tabular-nums text-muted-foreground/38" style="font-size:11px">14:02</p></div>
+        </section>
+      </div></div>
+      <ol class="m-notes">
+        <li>Routed agents never reach this view: their row is omitted, and a strip click navigates to the child thread instead.</li>
+        <li>For background agents, "Result" is the launch placeholder text, not the real result. The real result arrives later in <code>task_notification.summary</code>.</li>
+        <li>A full-width transcript replacement loses your place. There is no model, status, elapsed time, or tool count.</li>
+      </ol>
+    </div>
+
+    <div class="m-col m-proposed">
+      <h3>Proposed: inline expansion (AgentRow + AgentRowDetail)</h3>
+      <div class="m-pane"><div class="m-col-frame">
+        <div class="rounded-lg py-1">
+          <button type="button" class="group/tool-row flex w-full items-center gap-2 text-left">
+            <span class="flex size-5 shrink-0 items-center justify-center text-muted-foreground"><svg class="size-4"><use href="#i-robot"/></svg></span>
+            <p class="truncate leading-6 text-ui text-muted-foreground"><span>Ran 3 agents</span><span class="tabular-nums"> · 6:03</span><span> · 1 failed</span></p>
+            <svg class="size-3.5 shrink-0 text-muted-foreground/70 rotate-90"><use href="#i-chev"/></svg>
+          </button>
+          <div class="ml-7 mt-0.5 rounded-lg border border-border/45 bg-background/60 px-2 py-1">
+            <button type="button" class="group -mx-1 flex w-[calc(100%+0.5rem)] min-w-0 items-center gap-2 rounded-md px-1 py-1 text-left hover:bg-[var(--color-background-button-secondary-hover)]">
+              <span class="size-1.5 shrink-0 rounded-full bg-emerald-300/80"></span>
+              <span class="min-w-0 shrink truncate text-ui font-medium text-foreground/85">Map reconnect flow<span class="ml-1 text-ui-sm font-normal text-muted-foreground/55">(explore)</span><span class="ml-1.5 text-ui-sm font-normal text-muted-foreground/45">Haiku 4.5</span></span>
+              <span class="min-w-0 flex-1"></span>
+              <span class="shrink-0 text-ui-sm tabular-nums text-muted-foreground/60">2:03</span>
+              <span class="shrink-0 text-ui-sm text-muted-foreground/55">Completed</span>
+              <svg class="size-3.5 shrink-0 text-muted-foreground/40 opacity-0"><use href="#i-chev"/></svg>
+            </button>
+            <!-- expanded row -->
+            <div>
+              <button type="button" class="group -mx-1 flex w-[calc(100%+0.5rem)] min-w-0 items-center gap-2 rounded-md px-1 py-1 text-left bg-[var(--color-background-button-secondary)]" aria-expanded="true">
+                <span class="size-1.5 shrink-0 rounded-full bg-emerald-300/80"></span>
+                <span class="min-w-0 shrink truncate text-ui font-medium text-foreground/85">Trace projection cursor<span class="ml-1 text-ui-sm font-normal text-muted-foreground/55">(general-purpose)</span><span class="ml-1.5 text-ui-sm font-normal text-muted-foreground/45">Opus 4.5 · high</span></span>
+                <span class="min-w-0 flex-1"></span>
+                <span class="shrink-0 text-ui-sm tabular-nums text-muted-foreground/60">6:03</span>
+                <span class="shrink-0 text-ui-sm text-muted-foreground/55">Completed</span>
+                <svg class="size-3.5 shrink-0 text-muted-foreground/40 rotate-90"><use href="#i-chev"/></svg>
+              </button>
+              <!-- AgentRowDetail (= WorkflowAgentDetail + Result) -->
+              <div data-testid="subagent-detail" class="mb-1 mt-1 ml-[14px] space-y-1.5 rounded-md border border-border/40 bg-muted/20 px-2 py-1.5">
+                <div class="flex min-w-0 items-center gap-2">
+                  <span class="min-w-0 flex-1 truncate text-ui-sm text-muted-foreground/70">Completed · Opus 4.5 · high effort · 200k window · background</span>
+                  <button type="button" class="inline-flex h-5 shrink-0 items-center gap-1 rounded-md px-1.5 text-ui-xs text-muted-foreground/70 hover:bg-[var(--color-background-button-secondary-hover)]">Open thread<svg class="size-3"><use href="#i-arrow-ur"/></svg></button>
+                </div>
+                <div class="text-ui-sm tabular-nums text-muted-foreground/55">61.4k tokens · 23 tool calls · 6:03</div>
+                <div>
+                  <button type="button" class="flex w-full min-w-0 items-center gap-1 text-left" aria-expanded="false">
+                    <svg class="size-3.5 shrink-0 text-muted-foreground"><use href="#i-chev"/></svg>
+                    <span class="text-ui-xs font-medium uppercase tracking-wide text-muted-foreground/45">Prompt</span>
+                  </button>
+                  <div class="line-clamp-2 whitespace-pre-wrap font-mono text-ui-sm leading-4 text-muted-foreground/65">Trace how ProjectionPipeline advances the per-thread cursor during a websocket reconnect. Report the exact function where the cursor moves past events the client never received, with file:line references.</div>
+                </div>
+                <div class="min-w-0 truncate text-ui-sm text-muted-foreground/55">
+                  <span class="text-ui-xs font-medium uppercase tracking-wide text-muted-foreground/45">Recent</span> <span class="font-mono">Read · Grep · Read · Read · Bash</span>
+                </div>
+                <div data-maps="new: Result section">
+                  <div class="flex items-center gap-1">
+                    <svg class="size-3.5 shrink-0 text-muted-foreground rotate-90"><use href="#i-chev"/></svg>
+                    <span class="text-ui-xs font-medium uppercase tracking-wide text-muted-foreground/45">Result</span>
+                  </div>
+                  <div class="line-clamp-4 text-ui-sm leading-snug text-muted-foreground/70">
+                    <span class="inline-code">ProjectionPipeline.applyBatch</span> (ProjectionPipeline.ts:1279) writes <span class="inline-code">projection_threads.cursor</span> as soon as a batch is received, before the client acks. <span class="inline-code">wsRpc.resume</span> (wsRpc.ts:412) then replays from <span class="inline-code">ackedSeq</span>, which skips the gap between receive and ack. Suggested fix: replay from <span class="inline-code">min(ackedSeq, cursor)</span> and dedupe on the client by sequence.
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div>
+              <button type="button" class="group -mx-1 flex w-[calc(100%+0.5rem)] min-w-0 items-center gap-2 rounded-md px-1 py-1 text-left hover:bg-[var(--color-background-button-secondary-hover)]">
+                <span class="size-1.5 shrink-0 rounded-full bg-rose-300/90"></span>
+                <span class="min-w-0 shrink truncate text-ui font-medium text-foreground/85">Review reconnect tests<span class="ml-1 text-ui-sm font-normal text-muted-foreground/55">(explore)</span><span class="ml-1.5 text-ui-sm font-normal text-muted-foreground/45">Haiku 4.5</span></span>
+                <span class="min-w-0 flex-1"></span>
+                <span class="shrink-0 text-ui-sm tabular-nums text-muted-foreground/60">0:48</span>
+                <span class="shrink-0 text-ui-sm text-rose-300/85">Failed</span>
+              </button>
+              <p class="ml-[14px] mb-1 line-clamp-2 text-ui-sm leading-snug text-muted-foreground/70">vitest exited 1: no test files found in apps/server (ran from repo root)</p>
+            </div>
+          </div>
+        </div>
+      </div></div>
+      <ul class="m-notes">
+        <li>The identity line, stats line, Prompt disclosure, Recent tools, and "Open thread" button are <b>WorkflowAgentDetail markup</b>. The only change is the ArrowUpRight glyph on "Open thread". Extract them as <code>AgentRowDetail</code> and use them in both places.</li>
+        <li><b>Result</b> is the only new section: <code>ChatMarkdown</code>, clamped to 4 lines, with a disclosure for the full text. The source is <code>task.completed.detail</code> (background) or the Agent tool result (foreground), or the Codex <code>agentsStates[id].message</code>.</li>
+        <li>"Open thread" navigates to <code>resolvedThreadId</code>. The strip row click does the same.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- =====================================================================
+     STATE E: composer strip with active subagents
+     ===================================================================== -->
+<section class="m-state" id="state-e">
+  <h2>e · Composer strip with active subagents (expanded)</h2>
+  <p class="m-lede">The strip stays the live control surface (stop, background, open). It adds elapsed time, a background glyph, a "Show in transcript" action, and Codex-style counts in the header.</p>
+  <div class="m-cols">
+    <div class="m-col">
+      <h3>Current: ComposerSubagentStrip</h3>
+      <div class="m-pane"><div class="m-col-frame">
+        <div class="chat-composer-stacked-top" data-testid="composer-subagent-strip">
+          <div class="flex items-center justify-between gap-2 px-2.5 py-1.5">
+            <div class="flex min-w-0 flex-1 items-center gap-1.5">
+              <svg class="size-3.5 shrink-0 text-[var(--color-text-foreground-secondary)]"><use href="#i-robot"/></svg>
+              <span class="truncate text-ui" style="color:color-mix(in oklab,var(--muted-foreground) 80%,transparent)">2 of 3 subagents running</span>
+            </div>
+            <button class="flex size-5 shrink-0 items-center justify-center rounded-md text-[var(--color-text-foreground-tertiary)]" title="Stop all running subagents"><svg class="size-3"><use href="#i-stop"/></svg></button>
+            <button class="flex size-5 shrink-0 items-center justify-center rounded-md text-[var(--color-text-foreground-tertiary)]"><svg class="size-3"><use href="#i-collapse"/></svg></button>
+          </div>
+          <div class="px-2.5 pb-1.5">
+            <div class="group -mx-1 flex w-[calc(100%+0.5rem)] min-w-0 items-center gap-1 rounded-md px-1 py-1 hover:bg-[var(--color-background-button-secondary-hover)]">
+              <div class="flex min-w-0 flex-1 items-center gap-2">
+                <span class="size-1.5 shrink-0 rounded-full bg-emerald-300/80"></span>
+                <span class="min-w-0 flex-1 truncate text-ui font-medium text-foreground/85">Map reconnect flow<span class="ml-1 text-ui-sm font-normal text-muted-foreground/55">(explore)</span><span class="ml-1.5 text-ui-sm font-normal text-muted-foreground/45">Haiku 4.5</span><span class="ml-1.5 text-ui-sm font-normal text-muted-foreground/45">background</span></span>
+                <span class="shrink-0 text-ui-sm text-muted-foreground/55">Completed</span>
+              </div>
+            </div>
+            <div class="group -mx-1 flex w-[calc(100%+0.5rem)] min-w-0 items-center gap-1 rounded-md px-1 py-1 bg-[var(--color-background-button-secondary-hover)]">
+              <div class="flex min-w-0 flex-1 items-center gap-2">
+                <span class="size-1.5 shrink-0 rounded-full bg-sky-300/95"></span>
+                <span class="min-w-0 flex-1 truncate text-ui font-medium text-foreground/85">Trace projection cursor<span class="ml-1 text-ui-sm font-normal text-muted-foreground/55">(general-purpose)</span><span class="ml-1.5 text-ui-sm font-normal text-muted-foreground/45">Opus 4.5 · high</span></span>
+                <span class="min-w-0 max-w-[45%] shrink truncate text-ui-sm text-muted-foreground/55">Using Read</span>
+                <span class="shrink-0 text-ui-sm text-sky-300/85">Running</span>
+              </div>
+              <button class="flex size-5 shrink-0 items-center justify-center rounded-md text-[var(--color-text-foreground-tertiary)]" title="Run in background (ctrl+b)"><svg class="size-3"><use href="#i-tray"/></svg></button>
+              <button class="flex size-5 shrink-0 items-center justify-center rounded-md text-[var(--color-text-foreground-tertiary)]" title="Stop subagent"><svg class="size-3"><use href="#i-stop"/></svg></button>
+            </div>
+            <div class="group -mx-1 flex w-[calc(100%+0.5rem)] min-w-0 items-center gap-1 rounded-md px-1 py-1">
+              <div class="flex min-w-0 flex-1 items-center gap-2">
+                <span class="size-1.5 shrink-0 rounded-full bg-sky-300/95"></span>
+                <span class="min-w-0 flex-1 truncate text-ui font-medium text-foreground/85">Halley<span class="ml-1 text-ui-sm font-normal text-muted-foreground/55">(explorer)</span><span class="ml-1.5 text-ui-sm font-normal text-muted-foreground/45">GPT-5.2-Codex · medium</span></span>
+                <span class="shrink-0 text-ui-sm text-sky-300/85">Running</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="chat-composer-surface px-3 py-2.5">
+          <div class="text-ui text-muted-foreground/55" style="min-height:34px">Ask for follow-up changes</div>
+          <div class="flex items-center justify-between"><span class="text-ui-sm text-muted-foreground/70">Opus 4.5 · high</span><span class="flex size-7 items-center justify-center rounded-full" style="background:var(--foreground);color:var(--background)"><svg class="size-4"><use href="#i-arrow-up"/></svg></span></div>
+        </div>
+      </div></div>
+      <ol class="m-notes">
+        <li>"background" is a bare word that reads like part of the model label.</li>
+        <li>No elapsed time. You cannot tell a stuck agent from a busy one.</li>
+        <li>A row click opens the child thread. There is no way to find the spawn point in the parent transcript.</li>
+        <li>The header counts only running agents. A failure is not visible until you expand the strip.</li>
+      </ol>
+    </div>
+
+    <div class="m-col m-proposed">
+      <h3>Proposed: same component, new props</h3>
+      <div class="m-pane"><div class="m-col-frame">
+        <div class="chat-composer-stacked-top" data-testid="composer-subagent-strip">
+          <div class="flex items-center justify-between gap-2 px-2.5 py-1.5">
+            <div class="flex min-w-0 flex-1 items-center gap-1.5">
+              <svg class="size-3.5 shrink-0 text-[var(--color-text-foreground-secondary)] animate-spin-stepped"><use href="#i-loader"/></svg>
+              <span class="truncate text-ui" style="color:color-mix(in oklab,var(--muted-foreground) 80%,transparent)">2 running · 1 done</span>
+            </div>
+            <button class="flex size-5 shrink-0 items-center justify-center rounded-md text-[var(--color-text-foreground-tertiary)]" title="Stop all running subagents"><svg class="size-3"><use href="#i-stop"/></svg></button>
+            <button class="flex size-5 shrink-0 items-center justify-center rounded-md text-[var(--color-text-foreground-tertiary)]"><svg class="size-3"><use href="#i-collapse"/></svg></button>
+          </div>
+          <div class="px-2.5 pb-1.5">
+            <div class="group -mx-1 flex w-[calc(100%+0.5rem)] min-w-0 items-center gap-1 rounded-md px-1 py-1 hover:bg-[var(--color-background-button-secondary-hover)]">
+              <div class="flex min-w-0 flex-1 items-center gap-2">
+                <span class="size-1.5 shrink-0 rounded-full bg-emerald-300/80"></span>
+                <span class="min-w-0 flex-1 truncate text-ui font-medium text-foreground/85">Map reconnect flow<span class="ml-1 text-ui-sm font-normal text-muted-foreground/55">(explore)</span><span class="ml-1.5 text-ui-sm font-normal text-muted-foreground/45">Haiku 4.5</span></span>
+                <svg class="size-3 shrink-0 text-muted-foreground/45"><use href="#i-tray"/></svg>
+                <span class="shrink-0 text-ui-sm tabular-nums text-muted-foreground/60">2:03</span>
+                <span class="shrink-0 text-ui-sm text-muted-foreground/55">Completed</span>
+              </div>
+            </div>
+            <div class="group -mx-1 flex w-[calc(100%+0.5rem)] min-w-0 items-center gap-1 rounded-md px-1 py-1 bg-[var(--color-background-button-secondary-hover)]">
+              <div class="flex min-w-0 flex-1 items-center gap-2">
+                <span class="size-1.5 shrink-0 rounded-full bg-sky-300/95"></span>
+                <span class="min-w-0 flex-1 truncate text-ui font-medium text-foreground/85">Trace projection cursor<span class="ml-1 text-ui-sm font-normal text-muted-foreground/55">(general-purpose)</span><span class="ml-1.5 text-ui-sm font-normal text-muted-foreground/45">Opus 4.5 · high</span></span>
+                <span class="min-w-0 max-w-[45%] shrink truncate text-ui-sm text-muted-foreground/55">Using Read</span>
+                <svg class="size-3 shrink-0 text-muted-foreground/45"><use href="#i-tray"/></svg>
+                <span class="shrink-0 text-ui-sm tabular-nums text-muted-foreground/60">2:41</span>
+                <span class="shrink-0 text-ui-sm text-sky-300/85">Running</span>
+              </div>
+              <button class="flex size-5 shrink-0 items-center justify-center rounded-md text-[var(--color-text-foreground-tertiary)]" title="Show in transcript"><svg class="size-3"><use href="#i-arrow-up"/></svg></button>
+              <button class="flex size-5 shrink-0 items-center justify-center rounded-md text-[var(--color-text-foreground-tertiary)]" title="Stop subagent"><svg class="size-3"><use href="#i-stop"/></svg></button>
+            </div>
+            <div class="group -mx-1 flex w-[calc(100%+0.5rem)] min-w-0 items-center gap-1 rounded-md px-1 py-1">
+              <div class="flex min-w-0 flex-1 items-center gap-2">
+                <span class="size-1.5 shrink-0 rounded-full bg-sky-300/95"></span>
+                <span class="min-w-0 flex-1 truncate text-ui font-medium text-foreground/85">Halley<span class="ml-1 text-ui-sm font-normal text-muted-foreground/55">(explorer)</span><span class="ml-1.5 text-ui-sm font-normal text-muted-foreground/45">GPT-5.2-Codex · medium</span></span>
+                <span class="min-w-0 max-w-[45%] shrink truncate text-ui-sm text-muted-foreground/55">Searched for cursor</span>
+                <span class="shrink-0 text-ui-sm tabular-nums text-muted-foreground/60">0:38</span>
+                <span class="shrink-0 text-ui-sm text-sky-300/85">Running</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="chat-composer-surface px-3 py-2.5">
+          <div class="text-ui text-muted-foreground/55" style="min-height:34px">Ask for follow-up changes</div>
+          <div class="flex items-center justify-between"><span class="text-ui-sm text-muted-foreground/70">Opus 4.5 · high</span><span class="flex size-7 items-center justify-center rounded-full" style="background:var(--foreground);color:var(--background)"><svg class="size-4"><use href="#i-arrow-up"/></svg></span></div>
+        </div>
+      </div></div>
+      <ul class="m-notes">
+        <li>The header shows Codex-style counts: "2 running · 1 done", plus "· 1 failed" when one fails. The spinner replaces the robot while any agent runs.</li>
+        <li>Each row adds a background glyph (the word is removed), a tabular elapsed time, and a "Show in transcript" hover action that scrolls to the spawn card and expands the row.</li>
+        <li>The "Run in background" hover action stays for foreground agents (not shown, because all three here are background agents).</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- =====================================================================
+     REFERENCE: principles, mapping, data, questions (mirrors notes.md)
+     ===================================================================== -->
+<section class="m-ref" id="reference">
+  <h2>Design principles</h2>
+  <ol>
+    <li><b>One card per spawn call, at the spawn point.</b> State changes update the card in place. The transcript gets no "Moved to background", "Subagent finished", or "N updates" rows.</li>
+    <li><b>Compact group header</b> uses the tool-row shell: "Running 3 agents · 1:12", then "Running 1 of 3 agents · 2:41 · 1 failed", then "Ran 3 agents · 6:03". One agent reads "Running 1 agent" (Codex: "Created an agent").</li>
+    <li><b>Progress line</b> is the latest provider summary, else "Using &lt;tool&gt;". It is never the task description again.</li>
+    <li><b>Status is the only hue</b> (subagentPresentation.ts): a dot, status text tinted only when Running or Failed, and a tabular elapsed time.</li>
+    <li><b>On completion</b>, the row keeps a two-line result or error preview. Expand the row for the full detail and "Open thread".</li>
+    <li><b>Wake turns are their own response</b>, with a quiet marker. The final reply is never folded.</li>
+    <li>All new chrome uses <code>text-ui*</code> sizes. Motion uses <code>DisclosureRegion</code> / <code>DisclosureChevron</code> (220 ms ease-out, reduced-motion safe).</li>
+  </ol>
+
+  <h2>Component mapping</h2>
+  <table>
+    <tr><th>Mockup piece</th><th>Existing component</th><th>Change / new props</th></tr>
+    <tr><td>Spawn card (header + rows)</td><td>New <code>TranscriptSubagentCard</code>, rendered from <code>TimelineWorkEntryRow</code> for routed <code>collab_agent_tool_call</code> entries</td><td>Replace the <code>omitRoutedSubagentWorkEntries</code> drop in <code>useChatWorkLog.ts:102</code> with a card at the entry. The header reuses the tool-row shell (<code>AgentActivityOpenSurface</code> classes, <code>WORK_ROW_MUTED_HOVER_TONE</code>), <code>LiveStatusSpinner</code>/<code>BotIcon</code>, and <code>DisclosureChevron</code>. The body uses <code>DisclosureRegion</code>. Body container: <code>ml-7 rounded-lg border border-border/45 bg-background/60</code> (same as the typed-details box).</td></tr>
+    <tr><td>Agent row</td><td><code>WorkflowAgentRowView</code> (WorkflowRunCard.tsx)</td><td>Extract to <code>chat/AgentRow.tsx</code>. New props: <code>progress?: string</code>, <code>isBackground?: boolean</code> (tray glyph), <code>preview?: {kind: "result" | "error", text}</code>. WorkflowRunCard, ComposerSubagentStrip, and the card all use it.</td></tr>
+    <tr><td>Expanded detail</td><td><code>WorkflowAgentDetail</code></td><td>Extract to <code>AgentRowDetail</code>. New optional <code>result?: string</code> section (ChatMarkdown, 4-line clamp plus disclosure). Keep identity, stats, Prompt, Recent, and Open thread unchanged.</td></tr>
+    <tr><td>Status dot / text</td><td><code>StatusDot</code>, <code>subagentStatusDotClassName</code>, <code>subagentStatusTextToneClassName</code></td><td>None</td></tr>
+    <tr><td>Elapsed ticker</td><td><code>useNowMs</code> + <code>formatClockDuration</code> (WorkflowRunCard)</td><td>Tick locally inside the card, as WorkflowRunCard does, never in ChatView.</td></tr>
+    <tr><td>Roster derivation</td><td><code>ComposerSubagentStrip.logic.ts</code> (<code>mergeSubagentSnapshots</code>, <code>collectLatestTaskProgress</code>)</td><td>Extract to <code>subagentRoster.logic.ts</code>: <code>deriveSubagentRoster(entries) → Map&lt;spawnEntryId, AgentRowModel[]&gt;</code>. The strip and the card read the same model.</td></tr>
+    <tr><td>Card in a settled turn</td><td><code>collapsedComputerActionEntries</code> / <code>synaraThreadCreationRecaps</code> (MessagesTimeline.tsx ~2059-2072)</td><td>Add spawn cards to the same "lift out of the collapsed Worked for" list, so the card stays visible after the turn folds.</td></tr>
+    <tr><td>Wake marker</td><td>None. The closest is the "Worked for" divider in <code>MessagesTimeline.tsx</code></td><td>New small <code>SubagentWakeMarker</code> row. It needs a turn-level <code>wake</code> flag.</td></tr>
+    <tr><td>"Subagent finished" rows</td><td><code>deriveBackgroundTaskCompletionEntries</code> (workLog.ts)</td><td>Stop rendering <code>local_agent</code> completions. Move the response boundary to turnId plus the wake flag first (MessagesTimeline.logic.ts:638-649).</td></tr>
+    <tr><td>Codex "X started working / finished" notices</td><td><code>subAgentActivityNotice</code> (CodexAdapter.ts ~1946, notice kind <code>subagent-activity</code>)</td><td>Hide in the transcript when the agent has a card. Feed the lifecycle into the card status instead.</td></tr>
+    <tr><td>"Moved to background" rows</td><td><code>background_tasks_changed</code> runtime.warning row</td><td>Hide for <code>local_agent</code> tasks that have a card. Keep for <code>local_bash</code>, or route it to the background-work row.</td></tr>
+    <tr><td>Composer strip</td><td><code>ComposerSubagentStrip</code></td><td>New item fields: <code>elapsedLabel</code>, <code>spawnEntryId</code>. New prop: <code>onRevealInTranscript(item)</code>. Header label from counts. Replace the "background" word with <code>BackgroundTrayIcon</code>.</td></tr>
+    <tr><td>Fallback detail view</td><td><code>AgentActivityDetailView</code></td><td>Keep for non-routed collab rows (OpenCode task, <code>ListAgents</code> misclassification). Not used by the card.</td></tr>
+  </table>
+
+  <h2>Data per field</h2>
+  <table>
+    <tr><th>Field</th><th>Source today</th><th>Status</th></tr>
+    <tr><td>Name, role, model, effort, prompt</td><td><code>WorkLogSubagent</code> (receiver metadata, identity directory)</td><td class="ok">Have</td></tr>
+    <tr><td>Status (running / completed / failed / stopped / queued)</td><td><code>WorkLogSubagent.isActive/rawStatus/statusLabel</code> (child session plus agentsStates)</td><td class="ok">Have</td></tr>
+    <tr><td>Open thread target</td><td><code>resolvedThreadId</code></td><td class="ok">Have</td></tr>
+    <tr><td>Progress line (Claude)</td><td><code>task.progress</code> detail = summary or "Using &lt;lastToolName&gt;", keyed by taskId and toolUseId</td><td class="part">Partial: model summaries need the SDK option <code>agentProgressSummaries</code>, which is off (0 hits in apps/server and packages)</td></tr>
+    <tr><td>Progress line (Codex)</td><td>Lifecycle only: <code>subAgentActivity</code> (started / interacted / interrupted / finished) becomes a notice row. <code>agentsStates[id]</code> has status and message. No progress text.</td><td class="gap">Gap: derive from the child thread's latest work entry. That needs the detail subscription, which only exists while running.</td></tr>
+    <tr><td>Elapsed / start time</td><td><code>task.started</code> createdAt (Claude, has toolUseId). The collab spawn entry createdAt (Codex). <code>usage.duration_ms</code> on progress and completion.</td><td class="gap">Gap: <code>WorkLogSubagent</code> has no <code>startedAt</code>/<code>endedAt</code>. Web-only join.</td></tr>
+    <tr><td>Tokens, tool calls</td><td><code>usage {total_tokens, tool_uses, duration_ms}</code> on the task.progress/completed activity payload</td><td class="gap">Gap (web only): projected but not read into the roster</td></tr>
+    <tr><td>Recent tools</td><td><code>lastToolName</code> on each task.progress payload</td><td class="gap">Gap (web only): keep the last 5 per toolUseId</td></tr>
+    <tr><td>Result preview</td><td>Background: <code>task.completed</code> detail (= SDK summary). Foreground: collab entry <code>detail</code> (Agent tool_result). Codex: <code>agentsStates[id].message</code></td><td class="part">Partial: the task.completed payload has <b>no toolUseId</b>. The SDK sends <code>tool_use_id</code> but ClaudeAdapter drops it. Join via task.started (taskId → toolUseId), or add it server-side (small change).</td></tr>
+    <tr><td>Error text</td><td>Same as the result, with <code>status: failed</code></td><td class="part">Partial (same join)</td></tr>
+    <tr><td>Wake turn flag</td><td><code>raw.method = "claude/synthetic-turn-start"</code> on the server</td><td class="gap">Gap: not on the projected turn or messages</td></tr>
+    <tr><td>Which agent woke the parent</td><td>The task.completed just before the wake turn start</td><td class="part">Partial: infer it by order, or have the server stamp it</td></tr>
+  </table>
+
+  <h2>Open questions</h2>
+  <ol>
+    <li><b>Reverse a design decision.</b> <code>isRoutedSubagentWorkEntry</code> says "the transcript never renders a subagent roster". This proposal renders one card per spawn. Is that change approved?</li>
+    <li><b>Strip and card duplication.</b> Should the strip compact to its header while the card is on screen (IntersectionObserver), or stay as it is?</li>
+    <li><b>Wake marker.</b> Use a quiet divider (proposed), a Codex-style "{name} finished" row, or nothing?</li>
+    <li><b>Sizing.</b> Transcript tool rows size from the chat font prop (<code>textFontSizePx</code>), but the card uses <code>text-ui*</code> as asked. These differ when the chat and UI font sizes differ. Which one should the card follow?</li>
+    <li>Enable <code>agentProgressSummaries</code> for model-written progress lines? This costs extra tokens per agent.</li>
+    <li>Nested subagents (an agent's own background tasks). Show them only in the child thread? Today they leak into the parent's "Moved to background".</li>
+    <li>Light mode: the -300 status hues have low contrast on white. Use -500 in light?</li>
+    <li>In a settled turn, should the card be lifted out of "Worked for" (shown here) or stay inside the fold?</li>
+    <li>Default open state: open while any agent runs, closed when all settle? (Codex multi-agent-action rows are collapsible.)</li>
+  </ol>
+</section>
+
+</body>
+</html>
