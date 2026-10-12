@@ -457,6 +457,7 @@ const CODEX_SPARK_DISABLED_PLAN_TYPES = new Set<CodexPlanType>(["free", "go", "p
 const CODEX_DISCOVERY_SESSION_IDLE_MS = 15_000;
 const CODEX_VOICE_AUTH_CACHE_TTL_MS = 60_000;
 const CODEX_PENDING_SETTLE_DEADLINE_MS = 2_000;
+const CODEX_MAX_PENDING_HUMAN_REQUESTS_PER_SESSION = 64;
 
 // Bounds the best-effort answers written to parked server requests: a child that
 // stopped draining stdin must never hold session teardown hostage.
@@ -4717,6 +4718,32 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     }
   }
 
+  private pendingHumanRequestRefusal(
+    context: CodexSessionContext,
+    jsonRpcId: string | number,
+  ):
+    | { readonly kind: "duplicate" }
+    | { readonly kind: "refuse"; readonly message: string }
+    | undefined {
+    if (context.discovery) {
+      return {
+        kind: "refuse",
+        message: "Synara discovery sessions cannot answer approvals or questions.",
+      };
+    }
+    const pending = [...context.pendingApprovals.values(), ...context.pendingUserInputs.values()];
+    if (pending.some((entry) => entry.jsonRpcId === jsonRpcId)) {
+      return { kind: "duplicate" };
+    }
+    if (pending.length >= CODEX_MAX_PENDING_HUMAN_REQUESTS_PER_SESSION) {
+      return {
+        kind: "refuse",
+        message: `Synara already has ${CODEX_MAX_PENDING_HUMAN_REQUESTS_PER_SESSION} unanswered approvals or questions for this session.`,
+      };
+    }
+    return undefined;
+  }
+
   private async handleServerRequest(
     context: CodexSessionContext,
     request: JsonRpcRequest,
@@ -4783,6 +4810,28 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       return;
     }
     const requestKind = isMcpToolCallApproval ? "tool" : this.requestKindForMethod(request.method);
+    if (requestKind || request.method === "item/tool/requestUserInput") {
+      const refusal = this.pendingHumanRequestRefusal(context, request.id);
+      if (refusal?.kind === "duplicate") {
+        log.warn("ignoring a repeated Codex human-response request id", {
+          threadId: context.session.threadId,
+          method: request.method,
+        });
+        return;
+      }
+      if (refusal) {
+        log.warn("refusing a Codex human-response request", {
+          threadId: context.session.threadId,
+          method: request.method,
+          reason: refusal.message,
+        });
+        await this.writeMessage(context, {
+          id: request.id,
+          error: { code: -32000, message: refusal.message },
+        });
+        return;
+      }
+    }
     let requestId: ApprovalRequestId | undefined;
     const mcpSessionPersistenceAdvertised = isMcpToolCallApproval
       ? [this.readObject(request.params, "_meta")?.persist].flat().includes("session")
