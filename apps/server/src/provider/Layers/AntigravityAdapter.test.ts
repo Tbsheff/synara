@@ -692,11 +692,90 @@ describe("Antigravity CLI integration helpers", () => {
     try {
       await fs.writeFile(file, '{"first":true}\n{"second"');
       const first = await readCompleteAntigravityLines(file, 0);
-      expect(first).toEqual({ lines: ['{"first":true}'], nextOffset: 15 });
+      expect(first).toMatchObject({ lines: ['{"first":true}'], nextOffset: 15 });
 
       await fs.appendFile(file, ":true}\n");
       const second = await readCompleteAntigravityLines(file, first.nextOffset);
-      expect(second).toEqual({ lines: ['{"second":true}'], nextOffset: 31 });
+      expect(second).toMatchObject({ lines: ['{"second":true}'], nextOffset: 31 });
+    } finally {
+      await fs.rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("reads appended lines in bounded polls and yields every complete line", async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "synara-antigravity-test-"));
+    const file = path.join(directory, "transcript.jsonl");
+    const limits = { chunkBytes: 4096, maxRecordBytes: 8192, maxPollBytes: 64 * 1024 };
+    try {
+      const expected = Array.from({ length: 2000 }, (_, index) =>
+        JSON.stringify({ index, pad: "p".repeat(200) }),
+      );
+      await fs.writeFile(file, `${expected.join("\n")}\n`);
+      const seen: string[] = [];
+      let offset = 0;
+      let polls = 0;
+      let batch: Awaited<ReturnType<typeof readCompleteAntigravityLines>>;
+      do {
+        batch = await readCompleteAntigravityLines(file, offset, limits);
+        expect(batch.nextOffset - offset).toBeLessThanOrEqual(limits.maxPollBytes);
+        seen.push(...batch.lines);
+        offset = batch.nextOffset;
+        polls += 1;
+      } while (batch.hasMore);
+      expect(seen).toEqual(expected);
+      expect(polls).toBeGreaterThan(1);
+    } finally {
+      await fs.rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("decodes multi-byte characters split across read chunks", async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "synara-antigravity-test-"));
+    const file = path.join(directory, "transcript.jsonl");
+    const limits = { chunkBytes: 3, maxRecordBytes: 64, maxPollBytes: 128 };
+    try {
+      const expected = ["€uro", "café ü", "日本語のテキスト", "a€b€c"];
+      await fs.writeFile(file, `${expected.join("\r\n")}\n`);
+      const seen: string[] = [];
+      let offset = 0;
+      let batch: Awaited<ReturnType<typeof readCompleteAntigravityLines>>;
+      do {
+        batch = await readCompleteAntigravityLines(file, offset, limits);
+        seen.push(...batch.lines);
+        offset = batch.nextOffset;
+      } while (batch.hasMore);
+      expect(seen).toEqual(expected);
+      expect(offset).toBe(Buffer.byteLength(`${expected.join("\r\n")}\n`));
+    } finally {
+      await fs.rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("skips an oversized unterminated record without buffering it", async () => {
+    const directory = await fs.mkdtemp(path.join(os.tmpdir(), "synara-antigravity-test-"));
+    const file = path.join(directory, "events.ndjson");
+    const limits = { chunkBytes: 4096, maxRecordBytes: 8192, maxPollBytes: 64 * 1024 };
+    try {
+      await fs.writeFile(file, `{"before":true}\n${"o".repeat(20_000)}`);
+      const first = await readCompleteAntigravityLines(file, 0, limits);
+      expect(first).toMatchObject({
+        lines: ['{"before":true}'],
+        nextOffset: 16 + 20_000,
+        oversizedRecords: 1,
+        discarding: true,
+      });
+
+      await fs.appendFile(file, `${"o".repeat(5000)}\n{"after":true}\n`);
+      const second = await readCompleteAntigravityLines(file, first.nextOffset, {
+        ...limits,
+        discarding: first.discarding,
+      });
+      expect(second).toMatchObject({
+        lines: ['{"after":true}'],
+        oversizedRecords: 0,
+        discarding: false,
+        hasMore: false,
+      });
     } finally {
       await fs.rm(directory, { recursive: true, force: true });
     }
