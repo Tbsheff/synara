@@ -1,5 +1,6 @@
 import { CommandId, type ProviderRuntimeEvent, type ThreadId } from "@synara/contracts";
-import { makeDrainableWorker, startDrainableWorkerProducers } from "@synara/shared/DrainableWorker";
+import { startDrainableWorkerProducers } from "@synara/shared/DrainableWorker";
+import { makeKeyedDrainableWorker } from "@synara/shared/KeyedDrainableWorker";
 import { Cause, Effect, Layer, Option, Stream } from "effect";
 
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
@@ -19,6 +20,8 @@ import {
 } from "../threadGitMetadata.ts";
 
 const THREAD_GIT_METADATA_REACTOR_CAPACITY = 128;
+const THREAD_GIT_METADATA_REACTOR_CONCURRENCY = 4;
+const PULL_REQUEST_LOOKUP_TIMEOUT = "15 seconds";
 
 type StartedEvent = Extract<ProviderRuntimeEvent, { type: "turn.started" }>;
 type TerminalEvent = Extract<
@@ -243,7 +246,18 @@ const make = Effect.gen(function* () {
         upstreamRef: captured.upstreamRef,
       })
       .pipe(
-        Effect.map((pullRequest): ThreadPullRequestLookup => ({ status: "resolved", pullRequest })),
+        Effect.timeoutOption(PULL_REQUEST_LOOKUP_TIMEOUT),
+        Effect.flatMap(
+          Option.match({
+            onSome: (pullRequest) =>
+              Effect.succeed<ThreadPullRequestLookup>({ status: "resolved", pullRequest }),
+            onNone: () =>
+              Effect.logWarning("thread git metadata PR lookup timed out", {
+                threadId: captured.threadId,
+                branch: captured.observedBranch,
+              }).pipe(Effect.as<ThreadPullRequestLookup>({ status: "unavailable" })),
+          }),
+        ),
         Effect.catch((error) =>
           Effect.logDebug("thread git metadata PR lookup unavailable", {
             threadId: captured.threadId,
@@ -315,7 +329,9 @@ const make = Effect.gen(function* () {
       ),
     );
 
-  const worker = yield* makeDrainableWorker(processCapturedMetadataSafely, {
+  const worker = yield* makeKeyedDrainableWorker(processCapturedMetadataSafely, {
+    key: (captured) => captured.cwd,
+    concurrency: THREAD_GIT_METADATA_REACTOR_CONCURRENCY,
     capacity: THREAD_GIT_METADATA_REACTOR_CAPACITY,
   });
 
