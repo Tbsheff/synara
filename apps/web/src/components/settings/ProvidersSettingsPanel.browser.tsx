@@ -19,8 +19,25 @@ const harness = vi.hoisted(() => ({
   reconciled: true,
   refresh: vi.fn(),
   invalidate: vi.fn(async () => {}),
+  clearPermissionsCache: () => {},
   terminalListener: null as ((event: TerminalEvent) => void) | null,
   api: {
+    provider: {
+      getPermissions: vi.fn(async () => ({
+        supported: true,
+        configPath: null,
+        requirementsRead: true,
+        rows: [
+          {
+            key: "sandbox_mode",
+            label: "Filesystem mode",
+            value: "read-only",
+            source: "Administrator policy",
+            managed: true,
+          },
+        ],
+      })),
+    },
     terminal: {
       open: vi.fn(),
       write: vi.fn(async () => {}),
@@ -38,17 +55,25 @@ const harness = vi.hoisted(() => ({
 }));
 
 vi.mock("@tanstack/react-query", async (importOriginal) => {
+  const original = await importOriginal<typeof import("@tanstack/react-query")>();
   const queryClient = { invalidateQueries: harness.invalidate };
+  const permissionsClient = new original.QueryClient();
+  harness.clearPermissionsCache = () => permissionsClient.clear();
   return {
-    ...(await importOriginal<typeof import("@tanstack/react-query")>()),
+    ...original,
     useQueryClient: () => queryClient,
-    useQuery: (options: { queryKey?: readonly string[] }) => ({
-      data:
-        options.queryKey?.[1] === "allProviderUsage"
-          ? harness.usage
-          : { providers: harness.statuses, cwd: "/tmp" },
-      isPending: false,
-    }),
+    useQuery: (options: Parameters<typeof original.useQuery>[0]) => {
+      if (options.queryKey?.[1] === "providerPermissions") {
+        return original.useQuery(options, permissionsClient);
+      }
+      return {
+        data:
+          options.queryKey?.[1] === "allProviderUsage"
+            ? harness.usage
+            : { providers: harness.statuses, cwd: "/tmp" },
+        isPending: false,
+      };
+    },
   };
 });
 vi.mock("~/lib/serverReactQuery", async (importOriginal) => ({
@@ -56,11 +81,6 @@ vi.mock("~/lib/serverReactQuery", async (importOriginal) => ({
   serverConfigQueryOptions: () => ({}),
   serverSettingsQueryOptions: () => ({}),
   hasReconciledServerProviderStatuses: () => harness.reconciled,
-  serverQueryKeys: {
-    config: () => ["config"],
-    settings: () => ["settings"],
-    allProviderUsage: () => ["server", "allProviderUsage"],
-  },
 }));
 vi.mock("~/hooks/useProviderStatusesForLocalConfig", () => ({
   useProviderStatusesForLocalConfig: () => harness.statuses,
@@ -90,6 +110,8 @@ const props = {
 };
 
 beforeEach(() => {
+  harness.clearPermissionsCache();
+  harness.api.provider.getPermissions.mockClear();
   harness.usage = [];
   harness.reconciled = true;
   harness.refresh.mockReset();
@@ -448,6 +470,36 @@ it("edits the selected account beside the list and offers one-click sign-in", as
   await editor.getByRole("button", { name: "Remove" }).click();
   const removal = updateSettings.mock.lastCall?.[0] as typeof defaults;
   expect(Object.keys(removal.providerInstances)).toEqual(["codex_old"]);
+});
+
+it("loads the selected account's permissions only after its settings save completes", async () => {
+  const { props: panelProps } = accountProps();
+  let finishSave!: () => void;
+  const saving = new Promise<void>((resolve) => {
+    finishSave = resolve;
+  });
+  const updateSettingsAndWait = vi.fn(() => saving);
+  await render(
+    <ProvidersSettingsPanel {...panelProps} updateSettingsAndWait={updateSettingsAndWait} />,
+  );
+  await page.getByRole("button", { name: "Select Work", exact: true }).click();
+  const editor = page.getByRole("group", { name: "Work account", exact: true });
+  await expect
+    .element(editor.getByRole("button", { name: "Load permissions", exact: true }))
+    .toBeVisible();
+  expect(harness.api.provider.getPermissions).not.toHaveBeenCalled();
+  await editor.getByRole("button", { name: "Load permissions", exact: true }).click();
+  await expect.poll(() => updateSettingsAndWait.mock.calls.length).toBe(1);
+  expect(harness.api.provider.getPermissions).not.toHaveBeenCalled();
+  finishSave();
+  await expect
+    .poll(() => harness.api.provider.getPermissions.mock.calls)
+    .toEqual([[{ provider: "codex", instanceId: "codex_work" }]]);
+  await expect.element(editor.getByText("Filesystem mode", { exact: true })).toBeVisible();
+  await expect
+    .element(editor.getByText("Source: Administrator policy · Managed, read-only", { exact: true }))
+    .toBeVisible();
+  await expect.element(editor.getByText("read-only", { exact: true })).toBeVisible();
 });
 
 it("leaves Artifacts to the default Claude account and keeps another account's binary path", async () => {
