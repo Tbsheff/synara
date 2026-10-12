@@ -14,6 +14,8 @@ Terminal output appends deltas to disk. Synara compacts the file when it reaches
 
 Provider event logs are off by default. `--log-provider-events` or `SYNARA_LOG_PROVIDER_EVENTS=true` enables them for debugging. Native and canonical records share one write queue and retain their stream labels. Shutdown flushes the queue. If rotation fails, the sink truncates the current file or stops appending when truncation also fails; it retries rotation after thirty seconds.
 
+Codex lifecycle events keep ordinary item data in the canonical payload. Their raw field keeps protocol metadata without a second data copy. Generated-image records keep the existing sanitized raw fields.
+
 Checkpoint expiry removes old file restore choices. It keeps the turn lifecycle and conversation history. Git can reclaim objects after their last ref is removed during normal maintenance. Synara does not force Git garbage collection.
 
 Settings saves compare stored secret bytes. An unrelated setting change does not rewrite unchanged provider secrets. Secret changes and removal still use the existing rollback and cleanup paths.
