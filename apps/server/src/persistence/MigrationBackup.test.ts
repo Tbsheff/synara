@@ -1132,7 +1132,7 @@ describe("migration backups", () => {
     expect(pendingMigrationsAreAdditiveOnly([])).toBe(false);
     expect(pendingMigrationsAreAdditiveOnly([Number.MAX_SAFE_INTEGER])).toBe(false);
     expect(pendingMigrationsAreAdditiveOnly([123])).toBe(false);
-    expect(pendingMigrationsAreAdditiveOnly([131, 132])).toBe(true);
+    expect(pendingMigrationsAreAdditiveOnly([131, 132, 133, 134])).toBe(true);
     expect(pendingMigrationsAreAdditiveOnly([128, 129, 130, 131, 132])).toBe(false);
   });
 
@@ -1140,7 +1140,7 @@ describe("migration backups", () => {
     const migrationsDirectory = path.join(import.meta.dirname, "Migrations");
     const marked = migrationEntries.filter(([, , migration]) => isAdditiveOnlyMigration(migration));
     expect(marked.map(([id]) => id)).toEqual([
-      110, 111, 112, 114, 115, 116, 117, 124, 125, 126, 127, 129, 130, 131, 132,
+      110, 111, 112, 114, 115, 116, 117, 124, 125, 126, 127, 129, 130, 131, 132, 133, 134,
     ]);
     const rowMutation = /\b(UPDATE|DELETE|INSERT|REPLACE|DROP|RENAME)\b|json_/iu;
     for (const [id, name] of marked) {

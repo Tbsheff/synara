@@ -148,7 +148,7 @@ import Migration0129 from "./Migrations/129_ProjectionThreadsSnooze.ts";
 import Migration0130 from "./Migrations/130_PullRequestAutoFix.ts";
 import Migration0131 from "./Migrations/131_ProjectSourceFolders.ts";
 import Migration0132 from "./Migrations/132_PluginStorage.ts";
-import Migration0133 from "./Migrations/[REDACTED-SECRET-b85fd0b2].ts";
+import Migration0133 from "./Migrations/133_ProposedPlanPartial.ts";
 import Migration0134 from "./Migrations/134_CloudSubmissions.ts";
 
 /**

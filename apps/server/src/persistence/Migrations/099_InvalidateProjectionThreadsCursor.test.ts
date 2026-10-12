@@ -38,7 +38,7 @@ import providerInstanceSessionSchema from "./118_ProjectionThreadSessionProvider
 import sidechatContextSchema from "./126_ProjectionThreadsSidechatContext.ts";
 import threadSnoozeSchema from "./129_ProjectionThreadsSnooze.ts";
 import projectSourceFoldersSchema from "./131_ProjectSourceFolders.ts";
-import proposedPlanPartialSchema from "./[REDACTED-SECRET-b85fd0b2].ts";
+import proposedPlanPartialSchema from "./133_ProposedPlanPartial.ts";
 
 const testLayer = OrchestrationProjectionPipelineLive.pipe(
   Layer.provideMerge(OrchestrationEventStoreLive),
