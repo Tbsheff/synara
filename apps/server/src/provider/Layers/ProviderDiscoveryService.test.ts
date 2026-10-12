@@ -746,3 +746,41 @@ describe("ProviderDiscoveryService.listModels", () => {
     expect(adapterCalls).toBe(1);
   });
 });
+
+describe("account permission discovery", () => {
+  it("resolves saved account options on the server before reading permission defaults", async () => {
+    const getPermissions = vi.fn(() =>
+      Effect.succeed({ supported: true, configPath: null, requirementsRead: true, rows: [] }),
+    );
+    await runDiscovery({
+      adapter: { getPermissions },
+      settings: {
+        providerInstances: {
+          work: { driver: "codex", enabled: true, config: { homePath: "/work-account" } },
+        },
+      },
+      effect: Effect.gen(function* () {
+        const service = yield* ProviderDiscoveryService;
+        return yield* service.getPermissions({ provider: "codex", instanceId: "work" });
+      }),
+    });
+    expect(getPermissions).toHaveBeenCalledWith(
+      expect.objectContaining({ instanceId: "work", homePath: "/work-account" }),
+    );
+  });
+  it("marks unsupported provider permission discovery without starting a provider", async () => {
+    const result = await runDiscovery({
+      adapter: {},
+      effect: Effect.gen(function* () {
+        const service = yield* ProviderDiscoveryService;
+        return yield* service.getPermissions({ provider: "cursor" });
+      }),
+    });
+    expect(result).toEqual({
+      supported: false,
+      configPath: null,
+      requirementsRead: false,
+      rows: [],
+    });
+  });
+});

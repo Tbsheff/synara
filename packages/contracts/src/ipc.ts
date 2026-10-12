@@ -365,6 +365,8 @@ import type {
   ProviderListAgentsResult,
   ProviderListCommandsInput,
   ProviderListCommandsResult,
+  ProviderGetPermissionsInput,
+  ProviderPermissionsResult,
   ProviderListModelsInput,
   ProviderListModelsResult,
   ProviderListPluginsInput,
@@ -1362,6 +1364,7 @@ export interface NativeApi {
     listSkillsCatalog: (input: ProviderSkillsCatalogInput) => Promise<ProviderSkillsCatalogResult>;
     listPlugins: (input: ProviderListPluginsInput) => Promise<ProviderListPluginsResult>;
     readPlugin: (input: ProviderReadPluginInput) => Promise<ProviderReadPluginResult>;
+    getPermissions: (input: ProviderGetPermissionsInput) => Promise<ProviderPermissionsResult>;
     listModels: (input: ProviderListModelsInput) => Promise<ProviderListModelsResult>;
     listAgents: (input: ProviderListAgentsInput) => Promise<ProviderListAgentsResult>;
   };

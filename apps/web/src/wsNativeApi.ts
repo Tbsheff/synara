@@ -838,6 +838,7 @@ export function createWsNativeApi(): NativeApi {
       listSkillsCatalog: (input) => transport.request(WS_METHODS.providerListSkillsCatalog, input),
       listPlugins: (input) => transport.request(WS_METHODS.providerListPlugins, input),
       readPlugin: (input) => transport.request(WS_METHODS.providerReadPlugin, input),
+      getPermissions: (input) => transport.request(WS_METHODS.providerGetPermissions, input),
       listModels: (input) => transport.request(WS_METHODS.providerListModels, input),
       listAgents: (input) => transport.request(WS_METHODS.providerListAgents, input),
     },

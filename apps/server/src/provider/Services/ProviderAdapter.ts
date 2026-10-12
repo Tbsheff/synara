@@ -20,6 +20,7 @@ import type {
   ProviderListAgentsResult,
   ProviderListCommandsInput,
   ProviderListCommandsResult,
+  ProviderPermissionsResult,
   ProviderListModelsInput,
   ProviderListModelsResult,
   ProviderListPluginsInput,
@@ -389,6 +390,10 @@ export interface ProviderAdapterShape<TError> {
   readonly readPlugin?: (
     input: ProviderReadPluginInput,
   ) => Effect.Effect<ProviderReadPluginResult, TError>;
+
+  readonly getPermissions?: (
+    input: ProviderListModelsInput,
+  ) => Effect.Effect<ProviderPermissionsResult, TError>;
 
   /**
    * List models directly from the provider runtime when supported.

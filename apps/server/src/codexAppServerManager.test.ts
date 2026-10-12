@@ -7088,3 +7088,74 @@ describe("scoped persistent approval rules", () => {
     expect(writeMessage).not.toHaveBeenCalled();
   });
 });
+
+describe("account permission discovery", () => {
+  it("reads config and administrator requirements from the selected account without leaking config content", async () => {
+    const manager = new CodexAppServerManager();
+    const context = {};
+    const resolve = vi
+      .spyOn(
+        manager as unknown as {
+          resolveContextForDiscovery: (...args: unknown[]) => Promise<unknown>;
+        },
+        "resolveContextForDiscovery",
+      )
+      .mockResolvedValue(context);
+    vi.spyOn(
+      manager as unknown as { assertDiscoveryAuthMatchesRequest: (...args: unknown[]) => void },
+      "assertDiscoveryAuthMatchesRequest",
+    ).mockImplementation(() => {});
+    const send = vi
+      .spyOn(
+        manager as unknown as { sendRequest: (...args: unknown[]) => Promise<unknown> },
+        "sendRequest",
+      )
+      .mockResolvedValueOnce({
+        config: { approval_policy: "never", sandbox_mode: "read-only", api_key: "private config" },
+        origins: {},
+      })
+      .mockResolvedValueOnce({ requirements: { allowedSandboxModes: ["readOnly"] } });
+    const result = await manager.getPermissions({
+      cwd: "/repo",
+      codexOptions: { accountId: "work" },
+    });
+    expect(resolve).toHaveBeenCalledWith(
+      undefined,
+      "/repo",
+      { accountId: "work" },
+      expect.any(String),
+    );
+    expect(send).toHaveBeenNthCalledWith(
+      1,
+      context,
+      "config/read",
+      { includeLayers: true, cwd: "/repo" },
+      5_000,
+    );
+    expect(send).toHaveBeenNthCalledWith(2, context, "configRequirements/read", undefined, 5_000);
+    expect(result.rows.find((row) => row.key === "allowedSandboxModes")?.managed).toBe(true);
+    expect(JSON.stringify(result)).not.toContain("private config");
+  });
+  it("keeps config visible when the provider cannot report administrator requirements", async () => {
+    const manager = new CodexAppServerManager();
+    vi.spyOn(
+      manager as unknown as {
+        resolveContextForDiscovery: (...args: unknown[]) => Promise<unknown>;
+      },
+      "resolveContextForDiscovery",
+    ).mockResolvedValue({});
+    vi.spyOn(
+      manager as unknown as { assertDiscoveryAuthMatchesRequest: (...args: unknown[]) => void },
+      "assertDiscoveryAuthMatchesRequest",
+    ).mockImplementation(() => {});
+    vi.spyOn(
+      manager as unknown as { sendRequest: (...args: unknown[]) => Promise<unknown> },
+      "sendRequest",
+    )
+      .mockResolvedValueOnce({ config: { sandbox_mode: "read-only" } })
+      .mockRejectedValueOnce(new Error("unsupported"));
+    const result = await manager.getPermissions({});
+    expect(result.requirementsRead).toBe(false);
+    expect(result.rows.find((row) => row.key === "sandbox_mode")?.value).toBe("read-only");
+  });
+});

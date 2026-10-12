@@ -192,6 +192,7 @@ import {
   ProviderListCommandsInput,
   ProviderGetComposerCapabilitiesInput,
   ProviderListPluginsInput,
+  ProviderGetPermissionsInput,
   ProviderListModelsInput,
   ProviderListAgentsInput,
   ProviderReadPluginInput,
@@ -353,6 +354,7 @@ export const WS_METHODS = {
   providerListSkillsCatalog: "provider.listSkillsCatalog",
   providerListPlugins: "provider.listPlugins",
   providerReadPlugin: "provider.readPlugin",
+  providerGetPermissions: "provider.getPermissions",
   providerListModels: "provider.listModels",
   providerListAgents: "provider.listAgents",
 
@@ -626,6 +628,7 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.providerListSkillsCatalog, ProviderSkillsCatalogInput),
   tagRequestBody(WS_METHODS.providerListPlugins, ProviderListPluginsInput),
   tagRequestBody(WS_METHODS.providerReadPlugin, ProviderReadPluginInput),
+  tagRequestBody(WS_METHODS.providerGetPermissions, ProviderGetPermissionsInput),
   tagRequestBody(WS_METHODS.providerListModels, ProviderListModelsInput),
   tagRequestBody(WS_METHODS.providerListAgents, ProviderListAgentsInput),
 

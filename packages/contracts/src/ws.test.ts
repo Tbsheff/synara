@@ -111,3 +111,18 @@ it.effect("rejects push envelopes when channel payload does not match the channe
     assert.strictEqual(result._tag, "Failure");
   }),
 );
+
+it.effect("accepts account permission requests and keeps the selected account", () =>
+  Effect.gen(function* () {
+    const input = {
+      id: "permissions",
+      body: { _tag: "provider.getPermissions", provider: "codex", instanceId: "work" },
+    };
+    const decoded = yield* Effect.exit(decode(WebSocketRequest, input));
+    assert.strictEqual(decoded._tag, "Success");
+    const parsed = yield* decode(WebSocketRequest, input);
+    assert.strictEqual(parsed.body._tag, "provider.getPermissions");
+    if (parsed.body._tag === "provider.getPermissions")
+      assert.strictEqual(parsed.body.instanceId, "work");
+  }),
+);

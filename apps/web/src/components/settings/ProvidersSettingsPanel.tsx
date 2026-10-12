@@ -2,6 +2,7 @@
 // Purpose: Own provider picker, update, and CLI installation settings workflows.
 // Layer: Settings panel
 
+import { ProviderPermissionsPanel } from "./ProviderPermissionsPanel";
 import { PROVIDER_SIGN_OUT_ARGS } from "@synara/shared/providerCliProfiles";
 import {
   DEFAULT_CODEX_ACCOUNT_ID,
@@ -1563,10 +1564,11 @@ function ProviderAccountsControl(props: {
               No saved conversation uses this account.
             </p>
           ) : null}
-          <p className="text-ui-sm text-muted-foreground">
-            Provider file, network, and managed rules remain read-only here. Check the provider
-            configuration to see those limits.
-          </p>
+          <ProviderPermissionsPanel
+            key={account.instanceId}
+            input={{ provider, instanceId: account.instanceId }}
+            beforeLoad={() => props.updateSettingsAndWait({})}
+          />
         </ProviderAccountEditorSection>
 
         <ProviderAccountEditorSection title="Identity">

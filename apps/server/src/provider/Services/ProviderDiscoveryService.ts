@@ -5,6 +5,8 @@ import type {
   ProviderListAgentsResult,
   ProviderListCommandsInput,
   ProviderListCommandsResult,
+  ProviderGetPermissionsInput,
+  ProviderPermissionsResult,
   ProviderListModelsInput,
   ProviderListModelsResult,
   ProviderListPluginsInput,
@@ -44,6 +46,10 @@ export interface ProviderDiscoveryServiceShape {
   readonly readPlugin: (
     input: ProviderReadPluginInput,
   ) => Effect.Effect<ProviderReadPluginResult, ProviderDiscoveryError>;
+  readonly getPermissions: (
+    input: ProviderGetPermissionsInput,
+  ) => Effect.Effect<ProviderPermissionsResult, ProviderDiscoveryError>;
+
   readonly listModels: (
     input: ProviderListModelsInput,
   ) => Effect.Effect<ProviderListModelsResult, ProviderDiscoveryError>;

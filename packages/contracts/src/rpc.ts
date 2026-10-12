@@ -266,6 +266,8 @@ import {
   ProviderListAgentsResult,
   ProviderListCommandsInput,
   ProviderListCommandsResult,
+  ProviderGetPermissionsInput,
+  ProviderPermissionsResult,
   ProviderListModelsInput,
   ProviderListModelsResult,
   ProviderListPluginsInput,
@@ -1597,6 +1599,12 @@ export const WsProviderReadPluginRpc = Rpc.make(WS_METHODS.providerReadPlugin, {
   error: WsRpcError,
 });
 
+export const WsProviderGetPermissionsRpc = Rpc.make(WS_METHODS.providerGetPermissions, {
+  payload: ProviderGetPermissionsInput,
+  success: ProviderPermissionsResult,
+  error: WsRpcError,
+});
+
 export const WsProviderListModelsRpc = Rpc.make(WS_METHODS.providerListModels, {
   payload: ProviderListModelsInput,
   success: ProviderListModelsResult,
@@ -2057,6 +2065,7 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsProviderListSkillsCatalogRpc,
   WsProviderListPluginsRpc,
   WsProviderReadPluginRpc,
+  WsProviderGetPermissionsRpc,
   WsProviderListModelsRpc,
   WsProviderListAgentsRpc,
   WsAutomationListRpc,

@@ -100,3 +100,7 @@ describe("WsRequestAdmission", () => {
     );
   });
 });
+
+it("bounds provider permission reads with other expensive discovery requests", () => {
+  expect(classifyWsRequest(WS_METHODS.providerGetPermissions)).toBe("expensive-read");
+});

@@ -2707,6 +2707,11 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(providerDiscoveryService.listPlugins(input), "Failed to list plugins"),
         [WS_METHODS.providerReadPlugin]: (input) =>
           rpcEffect(providerDiscoveryService.readPlugin(input), "Failed to read plugin"),
+        [WS_METHODS.providerGetPermissions]: (input) =>
+          rpcEffect(
+            providerDiscoveryService.getPermissions(input),
+            "Failed to load provider permissions",
+          ),
         [WS_METHODS.providerListModels]: (input) =>
           rpcEffect(providerDiscoveryService.listModels(input), "Failed to list models"),
         [WS_METHODS.providerListAgents]: (input) =>

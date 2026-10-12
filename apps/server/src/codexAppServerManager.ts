@@ -1,3 +1,4 @@
+import { parseCodexPermissionsSnapshot } from "./provider/codexPermissions";
 import { providerProcessPriorityEnabled } from "./providerProcessPriority";
 import type { ChildProcess, ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -10,6 +11,7 @@ import {
   type ProviderStartOptions,
   type ProviderComposerCapabilities,
   ProviderItemId,
+  type ProviderPermissionsResult,
   type ProviderListModelsResult,
   type ProviderListPluginsResult,
   type ProviderMentionReference,
@@ -3697,6 +3699,35 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     this.assertDiscoveryAuthMatchesRequest(context, codexOptions, authFingerprint);
     setRecentCacheEntry(this.pluginDetailCache, cacheKey, result);
     return result;
+  }
+
+  async getPermissions(input: {
+    readonly cwd?: string;
+    readonly codexOptions?: CodexDiscoveryOptions;
+  }): Promise<ProviderPermissionsResult> {
+    const options = normalizeCodexDiscoveryOptions(input.codexOptions);
+    const authFingerprint = codexAuthFingerprintForOptions(options);
+    const context = await this.resolveContextForDiscovery(
+      undefined,
+      input.cwd,
+      options,
+      authFingerprint,
+    );
+    this.assertDiscoveryAuthMatchesRequest(context, options, authFingerprint);
+    const config = await this.sendRequest(
+      context,
+      "config/read",
+      { includeLayers: true, ...(input.cwd ? { cwd: input.cwd } : {}) },
+      5_000,
+    );
+    let requirements: unknown;
+    try {
+      requirements = await this.sendRequest(context, "configRequirements/read", undefined, 5_000);
+    } catch {
+      requirements = undefined;
+    }
+    this.assertDiscoveryAuthMatchesRequest(context, options, authFingerprint);
+    return parseCodexPermissionsSnapshot(config, requirements);
   }
 
   async listModels(

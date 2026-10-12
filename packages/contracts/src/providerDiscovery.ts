@@ -387,3 +387,26 @@ export const ProviderListAgentsResult = Schema.Struct({
   cached: Schema.optional(Schema.Boolean),
 });
 export type ProviderListAgentsResult = typeof ProviderListAgentsResult.Type;
+
+export const ProviderGetPermissionsInput = Schema.Struct({
+  provider: ProviderDiscoveryKind,
+  instanceId: Schema.optional(ProviderInstanceId),
+  cwd: Schema.optional(TrimmedNonEmptyString),
+});
+export type ProviderGetPermissionsInput = typeof ProviderGetPermissionsInput.Type;
+
+export const ProviderPermissionsResult = Schema.Struct({
+  supported: Schema.Boolean,
+  configPath: Schema.NullOr(TrimmedNonEmptyString),
+  requirementsRead: Schema.Boolean,
+  rows: Schema.Array(
+    Schema.Struct({
+      key: TrimmedNonEmptyString,
+      label: TrimmedNonEmptyString,
+      value: TrimmedNonEmptyString,
+      source: TrimmedNonEmptyString,
+      managed: Schema.Boolean,
+    }),
+  ),
+});
+export type ProviderPermissionsResult = typeof ProviderPermissionsResult.Type;

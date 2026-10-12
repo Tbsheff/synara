@@ -3865,6 +3865,28 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
           }),
       }).pipe(Effect.map((result) => result satisfies ProviderReadPluginResult));
 
+    const getPermissions: NonNullable<CodexAdapterShape["getPermissions"]> = (input) =>
+      Effect.tryPromise({
+        try: () =>
+          manager.getPermissions({
+            ...(input.cwd ? { cwd: input.cwd } : {}),
+            codexOptions: {
+              ...(input.binaryPath ? { binaryPath: input.binaryPath } : {}),
+              ...(input.homePath ? { homePath: input.homePath } : {}),
+              ...(input.shadowHomePath ? { shadowHomePath: input.shadowHomePath } : {}),
+              ...(input.accountId ? { accountId: input.accountId } : {}),
+              ...(input.environment ? { environment: input.environment } : {}),
+            },
+          }),
+        catch: (cause) =>
+          new ProviderAdapterRequestError({
+            provider: PROVIDER,
+            method: "config/read",
+            detail: "Could not load provider permissions.",
+            cause,
+          }),
+      });
+
     const listModels: NonNullable<CodexAdapterShape["listModels"]> = (input) =>
       Effect.tryPromise({
         try: () =>
@@ -4118,6 +4140,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
       listSkills,
       listPlugins,
       readPlugin,
+      getPermissions,
       listModels,
       prewarmVoice,
       transcribeVoice,
