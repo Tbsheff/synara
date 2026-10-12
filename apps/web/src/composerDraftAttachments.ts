@@ -8,6 +8,7 @@ import * as Schema from "effect/Schema";
 import {
   COMPOSER_DRAFT_STORAGE_KEY,
   COMPOSER_DRAFT_STORAGE_VERSION,
+  composerDraftThreadStorageKey,
   PersistedComposerImageAttachment,
   shouldRemoveDraft,
   type ComposerAttachmentPersistenceResult,
@@ -169,6 +170,15 @@ export function isComposerImageBlobReferenced(
     ) {
       return true;
     }
+    for (const queuedTurn of draft.queuedTurns) {
+      if (queuedTurn.kind !== "chat") continue;
+      if (
+        queuedTurn.persistedImages?.some((attachment) => attachment.blobKey === blobKey) ||
+        queuedTurn.persistedFiles?.some((attachment) => attachment.blobKey === blobKey)
+      ) {
+        return true;
+      }
+    }
   }
   return false;
 }
@@ -311,13 +321,22 @@ function asUnknownRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-function readPersistedComposerDraftsRecord(): Record<string, unknown> | null {
+function readPersistedComposerDraftRecord(threadId: ThreadId): Record<string, unknown> | null {
   const persisted = asUnknownRecord(
     getLocalStorageItem(COMPOSER_DRAFT_STORAGE_KEY, Schema.Unknown),
   );
   if (!persisted || persisted.version !== COMPOSER_DRAFT_STORAGE_VERSION) return null;
   const state = asUnknownRecord(persisted.state);
-  return state ? asUnknownRecord(state.draftsByThreadId) : null;
+  if (Array.isArray(state?.draftRecordIds)) {
+    if (!state.draftRecordIds.includes(threadId)) return null;
+    return asUnknownRecord(
+      getLocalStorageItem(
+        composerDraftThreadStorageKey(COMPOSER_DRAFT_STORAGE_KEY, threadId),
+        Schema.Unknown,
+      ),
+    );
+  }
+  return asUnknownRecord(asUnknownRecord(state?.draftsByThreadId)?.[threadId]);
 }
 
 function decodePersistedAttachmentIds(value: unknown): string[] | null {
@@ -402,7 +421,7 @@ function readPersistedAttachmentIdsFromStorage(
     return { available: false };
   }
   try {
-    const draft = asUnknownRecord(readPersistedComposerDraftsRecord()?.[threadId]);
+    const draft = readPersistedComposerDraftRecord(threadId);
     if (!draft) return { available: false };
     const attachmentIds = slot.readStoredAttachmentIds(draft);
     if (!attachmentIds) return { available: false };

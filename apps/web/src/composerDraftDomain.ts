@@ -57,6 +57,8 @@ import {
 
 export const COMPOSER_DRAFT_STORAGE_KEY = "synara:composer-drafts:v1";
 export const COMPOSER_DRAFT_STORAGE_VERSION = 6;
+export const composerDraftThreadStorageKey = (name: string, threadId: string) =>
+  `${name}:thread:${encodeURIComponent(threadId)}`;
 export type DraftThreadEnvMode = "local" | "worktree";
 const TERMINAL_DRAFT_THREAD_MAPPING_SUFFIX = "::terminal";
 
@@ -106,6 +108,14 @@ export interface ComposerFileAttachment extends ChatFileAttachment {
   file: File;
 }
 
+export interface PersistedComposerFileAttachment {
+  id: string;
+  name: string;
+  mimeType: string;
+  sizeBytes: number;
+  blobKey?: string;
+}
+
 export interface ComposerPromptHistorySavedDraft {
   prompt: string;
   images: ComposerImageAttachment[];
@@ -134,6 +144,8 @@ export interface QueuedComposerChatTurn {
   prompt: string;
   images: ComposerImageAttachment[];
   files: ComposerFileAttachment[];
+  persistedImages?: PersistedComposerImageAttachment[] | undefined;
+  persistedFiles?: PersistedComposerFileAttachment[] | undefined;
   assistantSelections: ComposerAssistantSelectionAttachment[];
   browserAnnotations: BrowserAnnotationDraft[];
   terminalContexts: TerminalContextDraft[];

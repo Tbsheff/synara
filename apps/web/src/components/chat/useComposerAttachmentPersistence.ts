@@ -8,11 +8,7 @@ import {
 import { composerImageBlobKey, persistComposerImageBlob } from "../../lib/composerImageBlobStore";
 import { readFileAsDataUrl } from "../../lib/composerSend";
 
-// Shared by the live-composer and prompt-history attachment sync effects:
-// AppSnap images persist their bytes as IndexedDB blobs (reusing an existing
-// blob key when valid), everything else inlines a data URL. Falls back to the
-// already-persisted attachments for images whose serialization fails.
-async function stagePersistedComposerImageAttachments(input: {
+export async function stagePersistedComposerImageAttachments(input: {
   threadId: ThreadId;
   images: ReadonlyArray<ComposerImageAttachment>;
   getPersistedAttachments: () => PersistedComposerImageAttachment[];
@@ -21,48 +17,39 @@ async function stagePersistedComposerImageAttachments(input: {
     const existingPersistedById = new Map(
       input.getPersistedAttachments().map((attachment) => [attachment.id, attachment]),
     );
-    const stagedAttachmentById = new Map<string, PersistedComposerImageAttachment>();
-    await Promise.all(
-      input.images.map(async (image) => {
+    const staged = await Promise.all(
+      input.images.map(async (image): Promise<PersistedComposerImageAttachment | null> => {
+        const existingPersisted = existingPersistedById.get(image.id);
+        const metadata = {
+          id: image.id,
+          name: image.name,
+          mimeType: image.mimeType,
+          sizeBytes: image.sizeBytes,
+          ...(image.source ? { source: image.source } : {}),
+        };
+        const expectedBlobKey = composerImageBlobKey(input.threadId, image.id);
+        if (existingPersisted?.blobKey === expectedBlobKey) {
+          return { ...metadata, blobKey: expectedBlobKey };
+        }
         try {
-          if (image.source?.kind === "appsnap") {
-            const existingPersisted = existingPersistedById.get(image.id);
-            const expectedBlobKey = composerImageBlobKey(input.threadId, image.id);
-            const blobKey =
-              existingPersisted?.blobKey === expectedBlobKey
-                ? expectedBlobKey
-                : await persistComposerImageBlob({
-                    threadId: input.threadId,
-                    imageId: image.id,
-                    file: image.file,
-                  });
-            stagedAttachmentById.set(image.id, {
-              id: image.id,
-              name: image.name,
-              mimeType: image.mimeType,
-              sizeBytes: image.sizeBytes,
-              blobKey,
-              source: image.source,
-            });
-            return;
-          }
-          const dataUrl = await readFileAsDataUrl(image.file);
-          stagedAttachmentById.set(image.id, {
-            id: image.id,
-            name: image.name,
-            mimeType: image.mimeType,
-            sizeBytes: image.sizeBytes,
-            dataUrl,
+          const blobKey = await persistComposerImageBlob({
+            threadId: input.threadId,
+            imageId: image.id,
+            file: image.file,
           });
+          return { ...metadata, blobKey };
         } catch {
-          const existingPersisted = existingPersistedById.get(image.id);
-          if (existingPersisted) {
-            stagedAttachmentById.set(image.id, existingPersisted);
+          try {
+            return { ...metadata, dataUrl: await readFileAsDataUrl(image.file) };
+          } catch {
+            return existingPersisted ?? null;
           }
         }
       }),
     );
-    return Array.from(stagedAttachmentById.values());
+    return staged.filter(
+      (attachment): attachment is PersistedComposerImageAttachment => attachment !== null,
+    );
   } catch {
     const currentImageIds = new Set(input.images.map((image) => image.id));
     return input

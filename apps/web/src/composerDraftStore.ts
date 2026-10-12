@@ -31,16 +31,10 @@ import {
 import {
   migratePersistedComposerDraftStoreState,
   normalizeCurrentPersistedComposerDraftStoreState,
-  partializeComposerDraftStoreState,
   toHydratedThreadDraft,
-  type PersistedComposerDraftStoreState,
 } from "./composerDraftPersistence";
-import {
-  createDeferredPersistStorage,
-  createMemoryStorage,
-  flushStorageBeforePageHide,
-  type StateStorage,
-} from "./lib/storage";
+import { createComposerDraftPersistStorage } from "./composerDraftStorage";
+import { createMemoryStorage, flushStorageBeforePageHide, type StateStorage } from "./lib/storage";
 
 export {
   findSupersededComposerImageBlobAttachments,
@@ -77,17 +71,9 @@ export {
 export type { EffectiveComposerModelState } from "./composerDraftModels";
 export { partializeComposerDraftStoreState } from "./composerDraftPersistence";
 
-const COMPOSER_PERSIST_DEBOUNCE_MS = 300;
 const composerBaseStorage: StateStorage =
   typeof localStorage !== "undefined" ? localStorage : createMemoryStorage();
-const composerPersistStorage = createDeferredPersistStorage<
-  ComposerDraftStoreState,
-  PersistedComposerDraftStoreState
->({
-  getStorage: () => composerBaseStorage,
-  partialize: partializeComposerDraftStoreState,
-  debounceMs: COMPOSER_PERSIST_DEBOUNCE_MS,
-});
+const composerPersistStorage = createComposerDraftPersistStorage(composerBaseStorage);
 
 // Flush pending composer draft writes before the page goes away so at most one
 // debounce window of changes can be lost.
