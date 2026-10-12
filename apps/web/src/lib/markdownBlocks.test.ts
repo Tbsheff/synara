@@ -68,6 +68,76 @@ describe("splitMarkdownBlocks", () => {
     expect(splitMarkdownBlocks("Claim[^1].\n\n[^1]: Source.")).toHaveLength(1);
   });
 
+  it.each([
+    [
+      "python",
+      "def f(x: dict[str, str]):\n    return x\ndef parse_settings(source: str) -> dict[str, str]:",
+    ],
+    [
+      "typescript",
+      "interface Map {\n  [key: string]: string;\n}\nconst values: Record<string, string> = {};",
+    ],
+    ["yaml", "[key, value]: mapping\n[docs]: https://example.com\n[^note]: literal"],
+    ["json", '{"[key]:": "value", "[^note]": "literal"}'],
+  ])("keeps settled blocks stable for streamed %s bracket patterns", (language, code) => {
+    const prefix = "# Answer\n\n```sh\necho settled\n```\n\nMore text.\n\n";
+    const settled = splitMarkdownBlocks(prefix);
+    for (const fence of ["```", "````", "~~~~"]) {
+      for (let indent = 0; indent <= 3; indent += 1) {
+        for (const newline of ["\n", "\r\n"]) {
+          const opener = " ".repeat(indent) + fence + language + "\n";
+          const document = (prefix + opener + code + "\n" + fence + "\n\nDone.").replaceAll(
+            "\n",
+            newline,
+          );
+          const before = splitMarkdownBlocks((prefix + opener).replaceAll("\n", newline));
+          expect(before.slice(0, -1)).toHaveLength(settled.length);
+          for (
+            let end = (prefix + opener).replaceAll("\n", newline).length;
+            end <= document.length;
+            end++
+          ) {
+            expect(splitMarkdownBlocks(document.slice(0, end)).slice(0, settled.length)).toEqual(
+              before.slice(0, -1),
+            );
+          }
+          expect(splitMarkdownBlocks(document)).toHaveLength(5);
+        }
+      }
+    }
+  });
+
+  it.each([
+    "def f(x: dict[str, str]):",
+    "prefix [docs]: /url",
+    "    [docs]: /url",
+    "\t[docs]: /url",
+    "[]: /url",
+    "[ ]: /url",
+    "[docs]:",
+    "[docs]: <broken",
+    "[docs]: /url trailing text",
+    '[docs]: /url "title" trailing',
+    "[outer[inner]]: /url",
+    `[${"x".repeat(1_000)}]: /url`,
+  ])("does not merge blocks for an invalid reference definition: %s", (line) => {
+    expect(splitMarkdownBlocks(`Intro.\n\n${line}\n\nDone.`).length).toBeGreaterThan(1);
+  });
+
+  it.each([
+    "[docs]: /url",
+    "   [docs]: /url",
+    "[docs]: <my url>",
+    "[docs]: /url(a(b)) 'title'",
+    "[docs]:\n  /url",
+    "[multi\nline]: /url",
+    "[escaped\\]]: /url",
+    "> [docs]: /url",
+    "- [docs]: /url",
+  ])("keeps real CommonMark definitions in a single render: %s", (definition) => {
+    expect(splitMarkdownBlocks(`See [docs].\n\n${definition}\n\nDone.`)).toHaveLength(1);
+  });
+
   it("stops splitting after an html block that can span blank lines", () => {
     expect(blockTexts("a\n\n<!--\n\n```\n\n-->\n\nb")).toEqual([
       "a\n",

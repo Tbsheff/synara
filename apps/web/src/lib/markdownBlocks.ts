@@ -1,3 +1,9 @@
+import type { Nodes } from "mdast";
+import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
+import remarkParse from "remark-parse";
+import { unified } from "unified";
+
 export interface MarkdownBlock {
   readonly start: number;
   readonly end: number;
@@ -26,7 +32,19 @@ interface ListMarker {
   readonly hasContent: boolean;
 }
 
-const CROSS_BLOCK_REFERENCE_PATTERN = /\[[^\]\n]*\]:|\[\^/;
+const REFERENCE_CANDIDATE_PATTERN = /^[ \t]*(?:(?:>|[-+*]|\d{1,9}[.)])[ \t]*)*\[/m;
+const referenceParser = unified()
+  .use(remarkParse)
+  .use(remarkGfm)
+  .use(remarkMath, { singleDollarTextMath: true });
+
+function hasReferenceDefinition(node: Nodes): boolean {
+  return (
+    node.type === "definition" ||
+    node.type === "footnoteDefinition" ||
+    ("children" in node && node.children.some(hasReferenceDefinition))
+  );
+}
 const BLANK_LINE_PATTERN = /^[ \t]*$/;
 const THEMATIC_BREAK_PATTERN = /^ {0,3}(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,})$/;
 const SETEXT_UNDERLINE_PATTERN = /^ {0,3}(?:=+|-+)[ \t]*$/;
@@ -140,6 +158,7 @@ class MarkdownBlockScanner {
   private previousBlank = false;
   private previousWasEmptyItemMarker = false;
   poisoned = false;
+  hasReferenceCandidate = false;
 
   canSplitBefore(line: string): boolean {
     if (this.poisoned || this.fence || this.nestedFence || !this.previousBlank) return false;
@@ -158,6 +177,9 @@ class MarkdownBlockScanner {
       if (closesFence(line, this.fence)) this.fence = null;
       this.previousBlank = false;
       return;
+    }
+    if (!this.nestedFence && REFERENCE_CANDIDATE_PATTERN.test(line)) {
+      this.hasReferenceCandidate = true;
     }
     if (BLANK_LINE_PATTERN.test(line)) {
       this.scanBlank();
@@ -332,7 +354,6 @@ class MarkdownBlockScanner {
 
 export function splitMarkdownBlocks(markdown: string): MarkdownBlock[] {
   const whole: MarkdownBlock[] = [{ start: 0, end: markdown.length, line: 0 }];
-  if (CROSS_BLOCK_REFERENCE_PATTERN.test(markdown)) return whole;
   const blocks: MarkdownBlock[] = [];
   const scanner = new MarkdownBlockScanner();
   let blockStart = 0;
@@ -364,6 +385,11 @@ export function splitMarkdownBlocks(markdown: string): MarkdownBlock[] {
     lineNumber += 1;
   }
   blocks.push({ start: blockStart, end: markdown.length, line: blockLine });
+  const hasReferenceCandidate =
+    scanner.hasReferenceCandidate ||
+    (scanner.poisoned && REFERENCE_CANDIDATE_PATTERN.test(markdown.slice(lineStart)));
+  if (hasReferenceCandidate && hasReferenceDefinition(referenceParser.parse(markdown)))
+    return whole;
   return blocks;
 }
 
