@@ -216,6 +216,7 @@ export interface MarkAutomationRunSucceededResult {
 }
 
 export const MarkAutomationRunResultInput = Schema.Struct({
+  onlyActive: Schema.optional(Schema.Boolean),
   id: AutomationRunId,
   result: Schema.NullOr(AutomationRunResult),
   updatedAt: Schema.String,

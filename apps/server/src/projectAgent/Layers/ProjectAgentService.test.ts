@@ -82,6 +82,8 @@ const lineTargetsPath = (line: string, logicalPath: string) =>
 const foreignThreadId = ThreadId.makeUnsafe("thread-foreign-project");
 
 function makeTestLayer(options?: {
+  readonly onInterrupt?: () => Effect.Effect<void>;
+  readonly ignoreInterrupt?: boolean;
   readonly failFirstImport?: boolean;
   readonly shellLookupError?: boolean;
   readonly failCommandTypes?: ReadonlyArray<OrchestrationCommand["type"]>;
@@ -338,6 +340,15 @@ function makeTestLayer(options?: {
         }
         if (options?.failCommandTypes?.includes(command.type)) {
           return yield* Effect.fail(new Error(`refusing ${command.type}`));
+        }
+        if (command.type === "thread.turn.interrupt" && options?.onInterrupt)
+          yield* options.onInterrupt();
+        if (command.type === "thread.turn.interrupt" && options?.ignoreInterrupt !== true) {
+          const shell = threadShells[command.threadId];
+          if (shell) {
+            shell.latestTurn = null;
+            shell.session = null;
+          }
         }
       }),
   } as unknown as OrchestrationEngineService["Service"]);
@@ -6314,5 +6325,229 @@ it.effect("keeps taskless and settled managed workers from delegating further th
         if (result._tag === "Failure") assert.equal(result.failure.code, "forbidden");
       }
     }
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("refuses export through a destination symlink", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const config = yield* ServerConfig;
+    yield* configureTestGroup(service, "export-symlink");
+    const destination = path.join(config.stateDir, "export");
+    const outside = path.join(config.stateDir, "outside");
+    yield* Effect.promise(async () => {
+      await fs.mkdir(destination);
+      await fs.mkdir(outside);
+      await fs.writeFile(path.join(outside, "notes.md"), "keep");
+      await fs.symlink(path.join(outside, "notes.md"), path.join(destination, "notes.md"));
+    });
+    const exit = yield* Effect.exit(
+      service.exportDocuments(
+        {
+          requestId: "export-symlink",
+          projectId: groupId,
+          logicalPaths: ["notes.md"],
+          destinationDirectory: destination,
+        },
+        { kind: "user" },
+      ),
+    );
+    assert.equal(exit._tag, "Failure");
+    assert.equal(
+      yield* Effect.promise(() => fs.readFile(path.join(outside, "notes.md"), "utf8")),
+      "keep",
+    );
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("refuses library copies through nested destination symlinks", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const config = yield* ServerConfig;
+    yield* configureTestGroup(service, "library-symlink");
+    const workspace = path.join(config.stateDir, "copy-source");
+    const root = yield* resolveLibraryRoot({ stateDir: config.stateDir, projectId: groupId });
+    const outside = path.join(config.stateDir, "outside");
+    yield* service.libraryList({ projectId: groupId }, { kind: "user" });
+    yield* Effect.promise(async () => {
+      await fs.mkdir(path.join(workspace, "bundle", "nested"), { recursive: true });
+      await fs.writeFile(path.join(workspace, "bundle", "nested", "note.md"), "overwrite");
+      await fs.mkdir(path.join(root, "destination", "bundle"), { recursive: true });
+      await fs.mkdir(outside);
+      await fs.writeFile(path.join(outside, "note.md"), "keep");
+      await fs.symlink(outside, path.join(root, "destination", "bundle", "nested"));
+    });
+    harness.threadShells[groupMemberThreadId] = {
+      projectId: groupId,
+      title: "Member",
+      session: null,
+      workingDirectory: workspace,
+    };
+    const exit = yield* Effect.exit(
+      service.libraryAdd(
+        {
+          requestId: "copy-symlink",
+          projectId: groupId,
+          sourcePath: "bundle",
+          destinationPath: "destination",
+        },
+        memberPrincipal(),
+      ),
+    );
+    assert.equal(exit._tag, "Failure");
+    assert.equal(
+      yield* Effect.promise(() => fs.readFile(path.join(outside, "note.md"), "utf8")),
+      "keep",
+    );
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("fails a stalled project stream at its source count limit", () => {
+  const harness = makeTestLayer();
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const service = yield* ProjectAgentService;
+      yield* configureTestGroup(service, "stream-count");
+      const pull = yield* Stream.toPull(service.streamEvents({ projectId: groupId }));
+      yield* pull;
+      for (let i = 0; i < 70; i++) {
+        yield* service.writeDocument(
+          {
+            requestId: `buffered-${i}`,
+            projectId: groupId,
+            logicalPath: "notes.md",
+            content: `note ${i}`,
+          },
+          { kind: "user" },
+        );
+      }
+      const exit = yield* Effect.exit(pull);
+      assert.equal(exit._tag, "Failure");
+    }),
+  ).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("fails a stalled project stream at its source byte limit", () => {
+  const harness = makeTestLayer();
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const service = yield* ProjectAgentService;
+      yield* configureTestGroup(service, "stream-bytes");
+      const pull = yield* Stream.toPull(service.streamEvents({ projectId: groupId }));
+      yield* pull;
+      let goal = yield* service.startGoal(
+        {
+          requestId: "large-goal",
+          projectId: groupId,
+          objective: "é".repeat(16_000),
+          acceptanceCriteria: "é".repeat(16_000),
+        },
+        { kind: "user" },
+      );
+      for (let i = 0; i < 18; i++) {
+        goal = yield* service.updateGoal(
+          {
+            requestId: `large-goal-${i}`,
+            projectId: groupId,
+            goalId: goal.id,
+            expectedRevision: goal.revision,
+            objective: "é".repeat(16_000),
+          },
+          { kind: "user" },
+        );
+      }
+      const exit = yield* Effect.exit(pull);
+      assert.equal(exit._tag, "Failure");
+    }),
+  ).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("pause reports failed stops and retries while already paused", () => {
+  const failTypes: OrchestrationCommand["type"][] = ["thread.turn.interrupt"];
+  const harness = makeTestLayer({ failCommandTypes: failTypes });
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const repository = yield* ProjectAgentRepository;
+    yield* configureTestGroup(service, "pause-failure");
+    yield* repository.upsertThreadIndex({
+      projectId: groupId,
+      threadId: groupMemberThreadId,
+      excluded: false,
+      archived: false,
+      summaryStatus: "pending",
+      lastUpdatedAt: now,
+      lastSummarizedAt: null,
+    });
+    harness.threadShells[groupMemberThreadId]!.latestTurn = { state: "running" };
+    const input = { requestId: "pause-retry", projectId: groupId };
+    const exit = yield* Effect.exit(service.pauseGroup(input, { kind: "user" }));
+    assert.equal(exit._tag, "Failure");
+    failTypes.length = 0;
+    yield* service.pauseGroup(input, { kind: "user" });
+    assert.equal(
+      harness.dispatched.filter((command) => command.type === "thread.turn.interrupt").length,
+      2,
+    );
+  }).pipe(Effect.provide(harness.layer));
+});
+
+it.effect("pause refuses success when the reactor ignores the interrupt", () => {
+  return Effect.gen(function* () {
+    const checking = yield* Deferred.make<void>();
+    const harness = makeTestLayer({
+      ignoreInterrupt: true,
+      onInterrupt: () => Deferred.succeed(checking, undefined).pipe(Effect.asVoid),
+    });
+    return yield* Effect.gen(function* () {
+      const service = yield* ProjectAgentService;
+      const repository = yield* ProjectAgentRepository;
+      yield* configureTestGroup(service, "pause-ignored");
+      yield* repository.upsertThreadIndex({
+        projectId: groupId,
+        threadId: groupMemberThreadId,
+        excluded: false,
+        archived: false,
+        summaryStatus: "pending",
+        lastUpdatedAt: now,
+        lastSummarizedAt: null,
+      });
+      harness.threadShells[groupMemberThreadId]!.latestTurn = { state: "running" };
+      const fiber = yield* service
+        .pauseGroup({ requestId: "pause-ignored-stop", projectId: groupId }, { kind: "user" })
+        .pipe(Effect.exit, Effect.forkChild);
+      yield* Deferred.await(checking);
+      yield* TestClock.adjust("6 seconds");
+      assert.equal((yield* Fiber.join(fiber))._tag, "Failure");
+    }).pipe(Effect.provide(harness.layer));
+  });
+});
+
+it.effect("refuses recursive group deletion through a substituted context root", () => {
+  const harness = makeTestLayer();
+  return Effect.gen(function* () {
+    const service = yield* ProjectAgentService;
+    const config = yield* ServerConfig;
+    const repository = yield* ProjectAgentRepository;
+    yield* configureTestGroup(service, "delete-link-setup");
+    const root = path.join(config.stateDir, "project-context", groupId);
+    const outside = path.join(config.stateDir, "keep-context");
+    yield* Effect.promise(async () => {
+      await fs.rename(root, outside);
+      await fs.symlink(outside, root);
+    });
+    const exit = yield* Effect.exit(
+      service.deleteGroup(
+        { requestId: "delete-link", projectId: groupId, confirmName: "Alpha" },
+        { kind: "user" },
+      ),
+    );
+    assert.equal(exit._tag, "Failure");
+    assert.equal(Option.isSome(yield* repository.getConfig(groupId)), true);
+    assert.equal(
+      yield* Effect.promise(() => fs.readFile(path.join(outside, "notes.md"), "utf8")),
+      "# Notes\n\n",
+    );
   }).pipe(Effect.provide(harness.layer));
 });

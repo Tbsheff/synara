@@ -378,3 +378,7 @@ holds shared instructions, memory, and files for related work. Synara adds a coo
 threads for you, server-side monitoring that reports on and recovers those threads, a live panel of
 every thread and PR, and a Git-versioned Library. Threads can use any provider Synara supports, and
 a hub can span several repositories or none.
+
+If a Hub pause cannot stop all running threads, Synara reports the failure and blocks
+new work. Retry **Pause hub** to stop the remaining threads. Synara records pause
+success only after those threads stop.

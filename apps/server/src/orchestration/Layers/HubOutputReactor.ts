@@ -26,7 +26,18 @@ import {
   type ProviderRuntimeEvent,
   type TurnId,
 } from "@synara/contracts";
-import { Cause, Effect, FileSystem, Layer, Option, Path, Stream } from "effect";
+import {
+  Cause,
+  Effect,
+  Exit,
+  FileSystem,
+  Layer,
+  Option,
+  Path,
+  Scope,
+  Semaphore,
+  Stream,
+} from "effect";
 import { makeDrainableWorker, startDrainableWorkerProducers } from "@synara/shared/DrainableWorker";
 import { isGroupContainerKind } from "@synara/shared/projectContainers";
 
@@ -41,6 +52,7 @@ import {
   studioOutputsCapturedActivityPayload,
   type StudioWorkspaceScan,
 } from "../../studioOutputs.ts";
+import { makeHubWorkspaceInventory } from "../hubWorkspaceInventory.ts";
 import { diffStudioWorkspaceScans } from "../../studioOutputs.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
@@ -83,6 +95,38 @@ const make = Effect.gen(function* () {
       Effect.provideService(FileSystem.FileSystem, fileSystem),
       Effect.provideService(Path.Path, path),
     );
+  const inventories = new Map<
+    string,
+    { snapshot: Effect.Effect<StudioWorkspaceScan, unknown>; close: Effect.Effect<void> }
+  >();
+  yield* Effect.addFinalizer(() =>
+    Effect.forEach(inventories.values(), (inventory) => inventory.close, { discard: true }),
+  );
+  const inventoryLock = yield* Semaphore.make(1);
+  const workspaceSnapshot = (root: string) =>
+    inventoryLock
+      .withPermit(
+        Effect.gen(function* () {
+          let inventory = inventories.get(root);
+          if (!inventory) {
+            if (inventories.size >= 32) {
+              const oldest = inventories.entries().next().value;
+              if (oldest) {
+                yield* oldest[1].close;
+                inventories.delete(oldest[0]);
+              }
+            }
+            const scope = yield* Scope.make();
+            const watched = yield* makeHubWorkspaceInventory(root, scanWorkspaceFiles(root)).pipe(
+              Scope.provide(scope),
+            );
+            inventory = { snapshot: watched.snapshot, close: Scope.close(scope, Exit.void) };
+            inventories.set(root, inventory);
+          }
+          return inventory;
+        }),
+      )
+      .pipe(Effect.flatMap((inventory) => inventory.snapshot));
   // ProviderCommandReactor writes this map before invoking sendTurn/startReview.
   // The subsequent runtime turn.started event promotes the prepared entry into
   // baselineByTurn without rescanning after provider execution has begun.
@@ -141,7 +185,7 @@ const make = Effect.gen(function* () {
     if (!workspaceRoot) {
       return { status: "not-applicable" as const };
     }
-    const files = yield* scanWorkspaceFiles(workspaceRoot);
+    const files = yield* workspaceSnapshot(workspaceRoot);
     makeRoomForBaseline();
     pendingBaselineByThread.set(threadId, { threadId, workspaceRoot, files });
     return { status: "completed" as const };
@@ -153,7 +197,7 @@ const make = Effect.gen(function* () {
     captureBaselineBeforeTurnUnsafe(threadId).pipe(
       Effect.catchCause((cause) => {
         if (Cause.hasInterruptsOnly(cause)) {
-          return Effect.failCause(cause);
+          return Effect.interrupt;
         }
         return Effect.logWarning("hub output reactor failed to capture pre-turn baseline", {
           threadId,
@@ -248,7 +292,7 @@ const make = Effect.gen(function* () {
     readonly turnId: TurnId | null;
     readonly createdAt: string;
   }) {
-    const after = yield* scanWorkspaceFiles(input.baseline.workspaceRoot);
+    const after = yield* workspaceSnapshot(input.baseline.workspaceRoot);
     const changedRelativePaths = diffStudioWorkspaceScans(input.baseline.files, after);
     if (changedRelativePaths.length === 0) {
       return;
@@ -342,7 +386,7 @@ const make = Effect.gen(function* () {
     processEvent(event).pipe(
       Effect.catchCause((cause) => {
         if (Cause.hasInterruptsOnly(cause)) {
-          return Effect.failCause(cause);
+          return Effect.interrupt;
         }
         return Effect.logWarning("hub output reactor failed to process event", {
           eventType: event.type,

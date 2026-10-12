@@ -90,6 +90,7 @@ export type AutomationFormState = {
   readonly timeOfDay: string;
   readonly dayOfWeek: string;
   readonly onceRunAt: string;
+  readonly endsAt?: string;
   readonly cronExpression: string;
   readonly timezone: string;
   readonly runtimeMode: RuntimeMode;
@@ -151,6 +152,21 @@ export function scheduleFromKind(
   kind: ScheduleKind,
   current: AutomationSchedule,
   fallbackTimezone: string = localTimezone(),
+): AutomationSchedule {
+  const next = scheduleFromKindWithoutEnd(kind, current, fallbackTimezone);
+  return "endsAt" in current &&
+    current.endsAt &&
+    next.type !== "manual" &&
+    next.type !== "once" &&
+    next.type !== "project-event"
+    ? { ...next, endsAt: current.endsAt }
+    : next;
+}
+
+function scheduleFromKindWithoutEnd(
+  kind: ScheduleKind,
+  current: AutomationSchedule,
+  fallbackTimezone: string,
 ): AutomationSchedule {
   const timeOfDay =
     current.type === "daily" || current.type === "weekly" || current.type === "weekdays"
@@ -476,6 +492,7 @@ export function formFromDefinition(
       schedule.type === "once"
         ? datetimeLocalFromIso(schedule.runAt)
         : datetimeLocalFromIso(new Date(Date.now() + 15 * 60_000).toISOString()),
+    endsAt: "endsAt" in schedule && schedule.endsAt ? datetimeLocalFromIso(schedule.endsAt) : "",
     cronExpression: schedule.type === "cron" ? schedule.expression : "0 9 * * *",
     timezone,
     runtimeMode: definition?.runtimeMode ?? "approval-required",
@@ -523,6 +540,16 @@ export function applyScheduleToForm(
 }
 
 export function scheduleFromForm(form: AutomationFormState): AutomationSchedule {
+  const schedule = scheduleFromFormWithoutEnd(form);
+  return form.endsAt &&
+    schedule.type !== "manual" &&
+    schedule.type !== "once" &&
+    schedule.type !== "project-event"
+    ? { ...schedule, endsAt: isoFromDatetimeLocal(form.endsAt) }
+    : schedule;
+}
+
+function scheduleFromFormWithoutEnd(form: AutomationFormState): AutomationSchedule {
   const timezone = form.timezone.trim();
   switch (form.scheduleKind) {
     case "hourly":

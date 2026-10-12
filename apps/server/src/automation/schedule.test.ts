@@ -385,3 +385,28 @@ describe("deterministic automation schedule jitter", () => {
     ).toBeNull();
   });
 });
+
+it("does not schedule at or after a recurring end date", () => {
+  const schedule = {
+    type: "interval" as const,
+    everySeconds: 60,
+    endsAt: "2026-06-16T10:02:00.000Z",
+  };
+  expect(computeNextAutomationRunAt(schedule, "2026-06-16T10:00:00.000Z")).toBe(
+    "2026-06-16T10:01:00.000Z",
+  );
+  expect(computeNextAutomationRunAt(schedule, "2026-06-16T10:01:00.000Z")).toBeNull();
+  expect(
+    computeNextAutomationRunAtAfter(
+      schedule,
+      "2026-06-16T10:00:00.000Z",
+      "2026-06-16T10:02:00.000Z",
+    ),
+  ).toBeNull();
+  expect(
+    computeNextAutomationRunAt(
+      { type: "daily", timeOfDay: "09:00", timezone: "UTC", endsAt: "2026-06-17T09:00:00.000Z" },
+      "2026-06-16T10:00:00.000Z",
+    ),
+  ).toBeNull();
+});

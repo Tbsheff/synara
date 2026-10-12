@@ -1370,6 +1370,20 @@ export function AutomationDialog({
                     </MenuGroup>
                   </>
                 ) : null}
+                {form.scheduleKind !== "manual" && form.scheduleKind !== "once" ? (
+                  <MenuGroup>
+                    <MenuGroupLabel>End date</MenuGroupLabel>
+                    <div className="px-2 py-1">
+                      <input
+                        type="datetime-local"
+                        aria-label="End date"
+                        value={form.endsAt ?? ""}
+                        onChange={(event) => setField("endsAt", event.target.value)}
+                        className="w-full rounded-md border border-border bg-transparent px-2 py-1.5 text-ui leading-snug outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                      />
+                    </div>
+                  </MenuGroup>
+                ) : null}
               </ComposerPickerMenuPopup>
             </Menu>
 

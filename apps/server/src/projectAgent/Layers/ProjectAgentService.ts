@@ -1,5 +1,10 @@
+import * as Arr from "effect/Array";
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs/promises";
+import { constants } from "node:fs";
+import { waitForThreadTurnStop } from "../../orchestration/waitForThreadTurnStop.ts";
+import { makeLiveUiStreamBudget, type LiveUiStreamLease } from "../../wsStreamBackpressure.ts";
+import { writeFileStringAtomically } from "../../atomicWrite.ts";
 import * as os from "node:os";
 import * as path from "node:path";
 
@@ -72,7 +77,11 @@ import {
   withLibraryQueues,
   withLibraryRootLock,
 } from "../libraryGit.ts";
-import { isContainedPath } from "../../workspace/realPathContainment.ts";
+import {
+  isContainedPath,
+  prepareRealPathForWriteWithinRoot,
+  resolveRealPathForCreateWithinRoot,
+} from "../../workspace/realPathContainment.ts";
 import {
   canWriteMemoryDocument,
   decodeProjectAgentListCursor,
@@ -100,7 +109,6 @@ import {
   Exit,
   Layer,
   Option,
-  PubSub,
   Queue,
   Ref,
   Semaphore,
@@ -130,8 +138,9 @@ import { gateProjectAgentServiceForStable, isServerGroupsEnabled } from "../grou
 import { cleanupGroupWorkspaceRoot } from "../../groupWorkspaceScaffold.ts";
 import {
   hashDocumentContent,
-  materializeDocumentPath,
   projectContextRoot,
+  resolveProjectContextRoot,
+  deleteProjectDocumentMirror,
   readProjectDocumentMirror,
   writeProjectDocumentMirror,
 } from "../materializer.ts";
@@ -253,12 +262,18 @@ const LIBRARY_ADD_MAX_BYTES = 256 * 1024 * 1024;
 
 class LibraryAddTooLargeError extends Error {}
 
-const copyLibrarySourceTree = async (source: string, target: string) => {
+const copyLibrarySourceTree = async (source: string, target: string, root: string) => {
+  root = await fs.realpath(root);
   let fileCount = 0;
   let totalBytes = 0;
   const visit = async (src: string, dst: string, filterName: boolean): Promise<void> => {
     const stat = await fs.lstat(src);
     if (stat.isSymbolicLink()) return;
+    const realSource = await fs.realpath(src);
+    if (!isContainedPath(source, realSource)) throw new Error("Library source escaped its root.");
+    const safeDestination = await resolveRealPathForCreateWithinRoot(root, dst);
+    if (safeDestination === null) throw new Error("Library destination escaped its root.");
+    dst = safeDestination;
     if (stat.isDirectory()) {
       const name = path.basename(src);
       if (filterName && (isGitDirName(name) || name === "node_modules")) return;
@@ -281,8 +296,22 @@ const copyLibrarySourceTree = async (source: string, target: string) => {
         `A library add is limited to ${Math.floor(LIBRARY_ADD_MAX_BYTES / (1024 * 1024))} MB total.`,
       );
     }
-    await fs.mkdir(path.dirname(dst), { recursive: true });
-    await fs.copyFile(src, dst);
+    const safePath = await prepareRealPathForWriteWithinRoot(root, dst);
+    if (safePath === null) throw new Error("Library destination escaped its root.");
+    const handle = await fs.open(
+      realSource,
+      constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) | (constants.O_NONBLOCK ?? 0),
+    );
+    try {
+      const opened = await handle.stat();
+      if (!opened.isFile() || opened.dev !== stat.dev || opened.ino !== stat.ino)
+        throw new Error("Library source changed during copy.");
+      await Effect.runPromise(
+        writeFileStringAtomically({ filePath: safePath, contents: await handle.readFile() }),
+      );
+    } finally {
+      await handle.close();
+    }
   };
   await visit(source, target, false);
 };
@@ -338,7 +367,31 @@ export const makeProjectAgentService = Effect.gen(function* () {
   const projectionThreadSessionRepository = yield* ProjectionThreadSessionRepository;
   const textGeneration = yield* TextGeneration;
   const git = yield* GitCore;
-  const events = yield* PubSub.unbounded<ProjectAgentStreamEvent>();
+  const subscribers = new Map<
+    ProjectId,
+    Set<(event: ProjectAgentStreamEvent, bytes: number) => Effect.Effect<void>>
+  >();
+  const eventProjectId = (event: ProjectAgentStreamEvent): ProjectId => {
+    switch (event.type) {
+      case "snapshot":
+        return event.overview.projectId;
+      case "config-upserted":
+        return event.config.projectId;
+      case "goal-upserted":
+        return event.goal.projectId;
+      case "task-upserted":
+        return event.task.projectId;
+      case "activity-appended":
+        return event.activity.projectId;
+      case "digest-upserted":
+        return event.digest.projectId;
+      case "thread-index-upserted":
+      case "work-item-upserted":
+        return event.projectId;
+      default:
+        return event.head.projectId;
+    }
+  };
   const digestInflight = yield* Ref.make(new Set<string>());
   const digestPending = yield* Ref.make(new Set<string>());
   const digestTimer = yield* Ref.make(new Set<string>());
@@ -349,7 +402,14 @@ export const makeProjectAgentService = Effect.gen(function* () {
   const digestInputSignatures = yield* Ref.make(new Map<string, string>());
 
   const publish = (event: ProjectAgentStreamEvent) =>
-    notifyAfterCommit(PubSub.publish(events, event).pipe(Effect.asVoid));
+    notifyAfterCommit(
+      Effect.suspend(() => {
+        const listeners = subscribers.get(eventProjectId(event));
+        if (!listeners?.size) return Effect.void;
+        const bytes = Buffer.byteLength(JSON.stringify(event));
+        return Effect.forEach([...listeners], (offer) => offer(event, bytes), { discard: true });
+      }),
+    );
   // Index rows are the Overview Threads tab's data — a subscriber must see a
   // coordinator-spawned worker appear the moment it is indexed, not after the
   // next full listing (which may never come while the panel stays open).
@@ -2099,29 +2159,50 @@ export const makeProjectAgentService = Effect.gen(function* () {
           threadId,
           createdAt: isoNow(),
         } as OrchestrationCommand);
+        const update =
+          type === "thread.turn.interrupt"
+            ? dispatch.pipe(
+                Effect.andThen(
+                  waitForThreadTurnStop(() => snapshotQuery.getThreadShellById(threadId)),
+                ),
+                Effect.flatMap((stopped) =>
+                  Option.isSome(stopped)
+                    ? Effect.void
+                    : Effect.fail(
+                        fail(
+                          "Hub thread did not stop. Retry pause to stop the remaining work.",
+                          "conflict",
+                        ),
+                      ),
+                ),
+              )
+            : dispatch;
         return options?.stopOnError === true
-          ? dispatch.pipe(Effect.mapError(toServiceError("Failed to update hub threads.")))
-          : dispatch.pipe(Effect.catch(() => Effect.void));
+          ? update.pipe(Effect.mapError(toServiceError("Failed to update hub threads.")))
+          : update.pipe(Effect.catch(() => Effect.void));
       },
       { discard: true },
     );
 
   // Pause/archive disable the group's automations and record exactly which
   // were on, so resume/unarchive restore only what the lifecycle turned off.
+  const enabledGroupAutomationIds = (projectId: ProjectId) =>
+    automationService.list({ projectId }).pipe(
+      Effect.mapError(toServiceError("Failed to load hub automations.")),
+      Effect.map((listed) =>
+        listed.definitions
+          .filter((definition) => definition.enabled && definition.archivedAt === null)
+          .map((definition) => definition.id),
+      ),
+    );
   const disableGroupAutomations = (projectId: ProjectId) =>
     Effect.gen(function* () {
-      const listed = yield* automationService
-        .list({ projectId })
-        .pipe(Effect.mapError(toServiceError("Failed to load hub automations.")));
-      const enabledIds = listed.definitions
-        .filter((definition) => definition.enabled && definition.archivedAt === null)
-        .map((definition) => definition.id);
-      for (const id of enabledIds) {
+      const ids = yield* enabledGroupAutomationIds(projectId);
+      for (const id of ids)
         yield* automationService
           .update({ id, enabled: false })
-          .pipe(Effect.catch(() => Effect.void));
-      }
-      return enabledIds;
+          .pipe(Effect.mapError(toServiceError("Failed to disable a hub automation.")));
+      return ids;
     });
 
   const restoreGroupAutomations = (automationIds: ReadonlyArray<AutomationId>) =>
@@ -3136,13 +3217,11 @@ export const makeProjectAgentService = Effect.gen(function* () {
         yield* repository
           .deleteDocument({ projectId: input.projectId, logicalPath })
           .pipe(Effect.mapError(toServiceError("Failed to remove hub memory.")));
-        yield* Effect.tryPromise({
-          try: () =>
-            fs.rm(materializeDocumentPath(serverConfig.stateDir, input.projectId, logicalPath), {
-              force: true,
-            }),
-          catch: toServiceError("Failed to remove the memory mirror file."),
-        });
+        yield* deleteProjectDocumentMirror({
+          stateDir: serverConfig.stateDir,
+          projectId: input.projectId,
+          logicalPath,
+        }).pipe(Effect.mapError(toServiceError("Failed to remove the memory mirror file.")));
         yield* updateMemoryIndex({
           projectId: input.projectId,
           logicalPath,
@@ -3235,7 +3314,7 @@ export const makeProjectAgentService = Effect.gen(function* () {
                   Effect.mapError(toServiceError("Failed to resolve the library destination.")),
                 );
                 yield* Effect.tryPromise({
-                  try: () => copyLibrarySourceTree(caller.source, target),
+                  try: () => copyLibrarySourceTree(caller.source, target, root),
                   catch: (cause) =>
                     cause instanceof LibraryAddTooLargeError
                       ? fail(cause.message, "invalid")
@@ -3363,8 +3442,9 @@ export const makeProjectAgentService = Effect.gen(function* () {
           if (existingReceipt) return existingReceipt;
           yield* resolveGroupCoordinatorProject(input.projectId);
           const config = yield* requireConfig(input.projectId);
+          let pauseConfig = config;
           if (config.pausedAt === null) {
-            const disabledIds = yield* disableGroupAutomations(input.projectId);
+            const disabledIds = yield* enabledGroupAutomationIds(input.projectId);
             const now = isoNow();
             const saved = yield* repository
               .saveConfig(
@@ -3380,42 +3460,50 @@ export const makeProjectAgentService = Effect.gen(function* () {
                 config.revision,
               )
               .pipe(Effect.mapError(toServiceError("Failed to pause the hub.")));
+            pauseConfig = saved;
             yield* publish({ type: "config-upserted", config: saved });
-            // Interrupt live turns on the coordinator and member threads so a
-            // paused group stops producing work immediately.
-            const { shells } = yield* listGroupThreadShells({
-              projectId: input.projectId,
-              coordinatorThreadId: config.coordinatorThreadId,
-            });
-            const liveThreadIds = shells
-              .filter(
-                (shell) =>
-                  shell.latestTurn?.state === "running" ||
-                  shell.session?.status === "running" ||
-                  shell.session?.status === "starting",
-              )
-              .map((shell) => shell.id);
-            const coordinator = yield* snapshotQuery
-              .getThreadShellById(config.coordinatorThreadId)
-              .pipe(Effect.catch(() => Effect.succeed(Option.none())));
-            const coordinatorLive =
-              Option.isSome(coordinator) && coordinator.value.latestTurn?.state === "running";
-            yield* dispatchGroupThreadCommand(
-              coordinatorLive ? [config.coordinatorThreadId, ...liveThreadIds] : liveThreadIds,
-              "thread.turn.interrupt",
-            );
-            yield* appendActivity({
-              projectId: input.projectId,
-              kind: "config-updated",
-              actorKind: "user",
-              actorThreadId: null,
-              goalId: null,
-              taskId: null,
-              source: null,
-              summary: "Paused hub.",
-              createdAt: isoNow(),
-            });
           }
+          for (const id of pauseConfig.pausedAutomationIds ?? []) {
+            yield* automationService
+              .update({ id, enabled: false })
+              .pipe(Effect.mapError(toServiceError("Failed to disable a hub automation.")));
+          }
+          const { shells } = yield* listGroupThreadShells({
+            projectId: input.projectId,
+            coordinatorThreadId: config.coordinatorThreadId,
+          });
+          const liveThreadIds = shells
+            .filter(
+              (shell) =>
+                shell.latestTurn?.state === "running" ||
+                shell.session?.status === "running" ||
+                shell.session?.status === "starting",
+            )
+            .map((shell) => shell.id);
+          const coordinator = yield* snapshotQuery
+            .getThreadShellById(config.coordinatorThreadId)
+            .pipe(Effect.mapError(toServiceError("Failed to load coordinator stop state.")));
+          const coordinatorLive =
+            Option.isSome(coordinator) &&
+            (coordinator.value.latestTurn?.state === "running" ||
+              coordinator.value.session?.status === "running" ||
+              coordinator.value.session?.status === "starting");
+          yield* dispatchGroupThreadCommand(
+            coordinatorLive ? [config.coordinatorThreadId, ...liveThreadIds] : liveThreadIds,
+            "thread.turn.interrupt",
+            { stopOnError: true },
+          );
+          yield* appendActivity({
+            projectId: input.projectId,
+            kind: "config-updated",
+            actorKind: "user",
+            actorThreadId: null,
+            goalId: null,
+            taskId: null,
+            source: null,
+            summary: "Paused hub.",
+            createdAt: isoNow(),
+          });
           const overview = yield* buildOverview(input.projectId);
           yield* storeReceipt(input.requestId, input.projectId, "pauseGroup", overview);
           return overview;
@@ -3671,6 +3759,18 @@ export const makeProjectAgentService = Effect.gen(function* () {
           );
           if (existingReceipt) return existingReceipt;
           const project = yield* resolveGroupCoordinatorProject(input.projectId);
+          yield* Effect.tryPromise({
+            try: async () => {
+              projectContextRoot(serverConfig.stateDir, input.projectId);
+              try {
+                await resolveProjectContextRoot(serverConfig.stateDir, input.projectId);
+              } catch (cause) {
+                if ((cause as NodeJS.ErrnoException).code !== "ENOENT") throw cause;
+              }
+            },
+            catch: toServiceError("Failed to validate hub context files."),
+          });
+
           if (input.confirmName.trim() !== project.title.trim()) {
             return yield* Effect.fail(
               fail("Type the hub's name exactly to confirm deletion.", "forbidden"),
@@ -3838,11 +3938,17 @@ export const makeProjectAgentService = Effect.gen(function* () {
               // the managed default library root when it lived under
               // project-context).
               yield* Effect.tryPromise({
-                try: () =>
-                  fs.rm(projectContextRoot(serverConfig.stateDir, input.projectId), {
-                    recursive: true,
-                    force: true,
-                  }),
+                try: async () => {
+                  try {
+                    const root = await resolveProjectContextRoot(
+                      serverConfig.stateDir,
+                      input.projectId,
+                    );
+                    await fs.rm(root, { recursive: true, force: true });
+                  } catch (cause) {
+                    if ((cause as NodeJS.ErrnoException).code !== "ENOENT") throw cause;
+                  }
+                },
                 catch: toServiceError("Failed to remove hub context files."),
               });
               // The managed group workspace folder only gets removed when
@@ -4610,8 +4716,16 @@ export const makeProjectAgentService = Effect.gen(function* () {
           }
           yield* Effect.tryPromise({
             try: async () => {
-              await fs.mkdir(path.dirname(destination), { recursive: true });
-              await fs.writeFile(destination, document.value.content, "utf8");
+              await fs.mkdir(input.destinationDirectory, { recursive: true });
+              const safePath = await prepareRealPathForWriteWithinRoot(
+                input.destinationDirectory,
+                destination,
+              );
+              if (safePath === null)
+                throw new Error("Export destination escaped the chosen directory.");
+              await Effect.runPromise(
+                writeFileStringAtomically({ filePath: safePath, contents: document.value.content }),
+              );
             },
             catch: (cause) => cause,
           }).pipe(Effect.mapError(toServiceError("Failed to export project document.")));
@@ -6396,32 +6510,85 @@ export const makeProjectAgentService = Effect.gen(function* () {
       Stream.unwrap(
         Effect.gen(function* () {
           yield* resolveGroupCoordinatorProject(input.projectId);
-          const matchesProject = (event: ProjectAgentStreamEvent) => {
-            if (event.type === "snapshot") return event.overview.projectId === input.projectId;
-            if (event.type === "config-upserted") return event.config.projectId === input.projectId;
-            if (event.type === "goal-upserted") return event.goal.projectId === input.projectId;
-            if (event.type === "task-upserted") return event.task.projectId === input.projectId;
-            if (event.type === "activity-appended")
-              return event.activity.projectId === input.projectId;
-            if (event.type === "digest-upserted") return event.digest.projectId === input.projectId;
-            if (event.type === "thread-index-upserted") return event.projectId === input.projectId;
-            if (event.type === "work-item-upserted") return event.projectId === input.projectId;
-            return event.head.projectId === input.projectId;
+          const budget = yield* makeLiveUiStreamBudget({
+            capacity: 64,
+            maxSerializedBytes: 1024 * 1024,
+            label: "projectAgent.events",
+          });
+          const liveQueue = yield* Queue.bounded<
+            { event: ProjectAgentStreamEvent; lease: LiveUiStreamLease },
+            ProjectAgentServiceError | Cause.Done
+          >(64);
+          let inFlight: ReadonlyArray<{
+            event: ProjectAgentStreamEvent;
+            lease: LiveUiStreamLease;
+          }> = [];
+          const retained = new Set<LiveUiStreamLease>();
+          const release = () => {
+            for (const { lease } of inFlight) {
+              lease.release();
+              retained.delete(lease);
+            }
+            inFlight = [];
           };
-          const liveQueue = yield* Queue.bounded<ProjectAgentStreamEvent, Cause.Done>(64);
-          // `Stream.fromPubSub` never delivers under this runtime — subscribe
-          // explicitly in the stream's own scope and drain that subscription.
-          const subscription = yield* PubSub.subscribe(events);
-          yield* Stream.fromSubscription(subscription).pipe(
-            Stream.filter(matchesProject),
-            Stream.runIntoQueue(liveQueue),
-            Effect.forkScoped,
+          const listeners = subscribers.get(input.projectId) ?? new Set();
+          subscribers.set(input.projectId, listeners);
+          const offer = (event: ProjectAgentStreamEvent, bytes: number) =>
+            budget.acquire(Symbol(), bytes).pipe(
+              Effect.map((lease) => {
+                retained.add(lease);
+                Queue.offerUnsafe(liveQueue, { event, lease });
+              }),
+              Effect.catch(() =>
+                Effect.sync(() => {
+                  listeners.delete(offer);
+                  for (const lease of retained) lease.release();
+                  retained.clear();
+                  release();
+                  while (Queue.takeUnsafe(liveQueue)?._tag === "Success") {}
+                  Queue.failCauseUnsafe(
+                    liveQueue,
+                    Cause.fail(
+                      fail(
+                        "Project event backlog exceeded its limit. Reconnect for a fresh snapshot.",
+                        "limit",
+                      ),
+                    ),
+                  );
+                }),
+              ),
+            );
+          listeners.add(offer);
+          yield* Effect.addFinalizer(() =>
+            Effect.sync(() => {
+              listeners.delete(offer);
+              if (listeners.size === 0) subscribers.delete(input.projectId);
+              for (const lease of retained) lease.release();
+              retained.clear();
+              release();
+            }).pipe(Effect.andThen(Queue.shutdown(liveQueue))),
+          );
+          const pull = yield* Stream.toPull(Stream.fromQueue(liveQueue));
+          const live = Stream.fromPull(
+            Effect.succeed(
+              Effect.gen(function* () {
+                release();
+                yield* budget.check.pipe(
+                  Effect.mapError(() =>
+                    fail(
+                      "Project event backlog exceeded its limit. Reconnect for a fresh snapshot.",
+                      "limit",
+                    ),
+                  ),
+                );
+                const batch = yield* pull;
+                inFlight = batch;
+                return Arr.map(batch, (item) => item.event);
+              }),
+            ),
           );
           const overview = yield* buildOverview(input.projectId);
-          return Stream.concat(
-            Stream.succeed({ type: "snapshot" as const, overview }),
-            Stream.fromQueue(liveQueue),
-          );
+          return Stream.concat(Stream.succeed({ type: "snapshot" as const, overview }), live);
         }),
       ),
   };

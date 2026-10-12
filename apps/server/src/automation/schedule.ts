@@ -407,7 +407,45 @@ function computeNextCronRunAt(
   return null;
 }
 
+export function automationScheduleHasEnded(schedule: AutomationSchedule, now: string): boolean {
+  return (
+    "endsAt" in schedule &&
+    schedule.endsAt !== undefined &&
+    requireValidDate(now, "timestamp").getTime() >=
+      requireValidDate(schedule.endsAt, "endsAt").getTime()
+  );
+}
+
+function limitRunAt(schedule: AutomationSchedule, next: string | null) {
+  return next !== null && automationScheduleHasEnded(schedule, next) ? null : next;
+}
+
 export function computeNextAutomationRunAt(
+  schedule: AutomationSchedule,
+  fromIso: string,
+  jitterContext?: AutomationScheduleJitterContext,
+): string | null {
+  if (automationScheduleHasEnded(schedule, fromIso)) return null;
+  return limitRunAt(
+    schedule,
+    computeNextAutomationRunAtUnbounded(schedule, fromIso, jitterContext),
+  );
+}
+
+export function computeNextAutomationRunAtAfter(
+  schedule: AutomationSchedule,
+  fromIso: string,
+  notBeforeIso: string,
+  jitterContext?: AutomationScheduleJitterContext,
+): string | null {
+  if (automationScheduleHasEnded(schedule, notBeforeIso)) return null;
+  return limitRunAt(
+    schedule,
+    computeNextAutomationRunAtAfterUnbounded(schedule, fromIso, notBeforeIso, jitterContext),
+  );
+}
+
+function computeNextAutomationRunAtUnbounded(
   schedule: AutomationSchedule,
   fromIso: string,
   jitterContext?: AutomationScheduleJitterContext,
@@ -448,7 +486,7 @@ export function computeNextAutomationRunAt(
  * For interval schedules this fast-forwards past all elapsed intervals; daily/weekly
  * schedules are naturally coalesced because they resolve to the next wall-clock slot.
  */
-export function computeNextAutomationRunAtAfter(
+function computeNextAutomationRunAtAfterUnbounded(
   schedule: AutomationSchedule,
   fromIso: string,
   notBeforeIso: string,
@@ -490,11 +528,11 @@ export function computeAutomationScheduleSpacingSeconds(
   if (schedule.type === "manual" || schedule.type === "once" || schedule.type === "project-event") {
     return null;
   }
-  const first = computeNextAutomationRunAt(schedule, fromIso);
+  const first = computeNextAutomationRunAtUnbounded(schedule, fromIso);
   if (first === null) {
     return null;
   }
-  const second = computeNextAutomationRunAtAfter(schedule, first, first);
+  const second = computeNextAutomationRunAtAfterUnbounded(schedule, first, first);
   if (second === null) {
     return null;
   }
