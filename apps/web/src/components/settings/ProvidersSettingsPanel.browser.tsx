@@ -30,6 +30,10 @@ const harness = vi.hoisted(() => ({
       onEvent: vi.fn(),
     },
     shell: { openExternal: vi.fn(async () => {}) },
+    dialogs: {
+      pickFolder: vi.fn(async (): Promise<string | null> => null),
+      confirm: vi.fn(async () => true),
+    },
   },
 }));
 
@@ -425,6 +429,13 @@ it("edits the selected account beside the list and offers one-click sign-in", as
   await expect
     .element(editor.getByRole("button", { name: "Sign in to Work", exact: true }))
     .toBeVisible();
+  await expect
+    .element(editor.getByRole("button", { name: "Sign out of Work", exact: true }))
+    .toBeVisible();
+  await expect.element(editor.getByText("Permission mode", { exact: true })).toBeVisible();
+  await expect
+    .element(editor.getByText(/Source: conversation settings|No saved conversation/u))
+    .toBeVisible();
   await expect.element(editor.getByText("Environment variables")).toBeVisible();
 
   await page.getByRole("switch", { name: "Enable Work", exact: true }).click();
@@ -469,7 +480,10 @@ it("leaves Artifacts to the default Claude account and keeps another account's b
 
 it("adds an account from a dialog that derives its id from the label", async () => {
   const { props: panelProps, updateSettings } = accountProps();
-  await render(<ProvidersSettingsPanel {...panelProps} />);
+  const updateSettingsAndWait = vi.fn(async (_patch: Partial<typeof defaults>) => {});
+  await render(
+    <ProvidersSettingsPanel {...panelProps} updateSettingsAndWait={updateSettingsAndWait} />,
+  );
 
   await page.getByRole("button", { name: "Add account", exact: true }).first().click();
   const dialog = page.getByRole("dialog", { name: "Add account" });
@@ -494,7 +508,9 @@ it("adds an account from a dialog that derives its id from the label", async () 
   await dialog.getByRole("textbox", { name: "CODEX_HOME path" }).fill("~/.codex-team");
   await dialog.getByRole("button", { name: "Add account", exact: true }).click();
 
-  const added = updateSettings.mock.lastCall?.[0] as typeof defaults;
+  await expect.element(dialog).not.toBeInTheDocument();
+  expect(updateSettings).not.toHaveBeenCalled();
+  const added = updateSettingsAndWait.mock.lastCall?.[0] as typeof defaults;
   expect(added.providerInstances.codex_team_eu).toEqual({
     driver: "codex",
     displayName: "Team EU",
@@ -506,6 +522,56 @@ it("adds an account from a dialog that derives its id from the label", async () 
   expect(added.providerInstances.codex_work).toEqual(
     panelProps.settings.providerInstances.codex_work,
   );
+});
+
+it("keeps the add dialog open when the new account cannot be saved", async () => {
+  const { props: panelProps, updateSettings } = accountProps();
+  const updateSettingsAndWait = vi.fn(async (_patch: Partial<typeof defaults>) => {
+    throw new Error("settings write failed");
+  });
+  await render(
+    <ProvidersSettingsPanel {...panelProps} updateSettingsAndWait={updateSettingsAndWait} />,
+  );
+
+  await page.getByRole("button", { name: "Add account", exact: true }).first().click();
+  const dialog = page.getByRole("dialog", { name: "Add account" });
+  await dialog.getByRole("textbox", { name: "Label" }).fill("Team EU");
+  await dialog.getByRole("button", { name: "Add account", exact: true }).click();
+
+  await expect.poll(() => updateSettingsAndWait.mock.calls.length).toBe(1);
+  await expect.element(dialog).toBeVisible();
+  expect(updateSettings).not.toHaveBeenCalled();
+});
+
+it("imports a directory under a fresh id without replacing a saved account of an unknown driver", async () => {
+  const futureAccount = {
+    driver: "futuredriver",
+    displayName: "Future",
+    enabled: true,
+    config: { root: "/future" },
+  };
+  const { props: panelProps, updateSettings } = accountProps({
+    providerInstances: { codex_2: futureAccount } as typeof defaults.providerInstances,
+  });
+  const updateSettingsAndWait = vi.fn(async (_patch: Partial<typeof defaults>) => {});
+  harness.api.dialogs.pickFolder.mockResolvedValueOnce("/Users/me/.codex-imported");
+  vi.stubGlobal("desktopBridge", {});
+  try {
+    await render(
+      <ProvidersSettingsPanel {...panelProps} updateSettingsAndWait={updateSettingsAndWait} />,
+    );
+    await page.getByRole("button", { name: "Import directory", exact: true }).click();
+    const savedPatch = () =>
+      (updateSettingsAndWait.mock.lastCall?.[0] ?? updateSettings.mock.lastCall?.[0]) as
+        | Partial<typeof defaults>
+        | undefined;
+    await expect.poll(() => savedPatch()).toBeDefined();
+    const instances = savedPatch()!.providerInstances!;
+    expect(instances.codex_2).toEqual(futureAccount);
+    expect(instances.codex_3).toMatchObject({ driver: "codex", displayName: ".codex-imported" });
+  } finally {
+    vi.unstubAllGlobals();
+  }
 });
 
 it("routes a migrated Codex account's rename to its saved account entry", async () => {

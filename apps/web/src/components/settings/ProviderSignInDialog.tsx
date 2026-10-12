@@ -26,6 +26,7 @@ const ignoreMetadata = () => {};
 
 export default function ProviderSignInDialog(props: {
   provider: ProviderKind;
+  action?: "sign-in" | "sign-out";
   instanceId: string;
   accountLabel: string;
   onClose: () => void;
@@ -47,8 +48,11 @@ export default function ProviderSignInDialog(props: {
   const [optionsSent, setOptionsSent] = useState(false);
   const alive = useRef(true);
   const checkInFlight = useRef(false);
+  const signingOut = props.action === "sign-out";
+  const actionLabel = signingOut ? "Sign out" : "Sign in";
   const method = PROVIDER_AUTHENTICATION[props.provider];
-  const interactiveCommand = "interactiveCommand" in method ? method.interactiveCommand : null;
+  const interactiveCommand =
+    !signingOut && "interactiveCommand" in method ? method.interactiveCommand : null;
 
   const checkStatus = useCallback(async () => {
     if (checkInFlight.current) return;
@@ -62,18 +66,22 @@ export default function ProviderSignInDialog(props: {
       (entry) => (entry.instanceId ?? entry.provider) === props.instanceId,
     );
     setResult(
-      status?.authStatus === "authenticated"
-        ? props.provider === "claudeAgent"
-          ? "Signed in locally. You can close this window; usage is checked separately."
-          : "Authenticated. You can close this window."
-        : status?.authStatus === "unauthenticated"
-          ? "This account is not authenticated yet. Complete the sign-in steps and check again."
-          : "Authentication could not be verified. Complete the provider's steps and check again; some providers do not expose a login status.",
+      signingOut
+        ? status?.authStatus === "unauthenticated"
+          ? "Signed out. You can close this window."
+          : "Sign-out is not confirmed. API keys and active sessions can keep access; check the terminal result."
+        : status?.authStatus === "authenticated"
+          ? props.provider === "claudeAgent"
+            ? "Signed in locally. You can close this window; usage is checked separately."
+            : "Authenticated. You can close this window."
+          : status?.authStatus === "unauthenticated"
+            ? "This account is not authenticated yet. Complete the sign-in steps and check again."
+            : "Authentication could not be verified. Complete the provider's steps and check again; some providers do not expose a login status.",
     );
     // Native account preparation can save its isolated roots server-side.
     void queryClient.invalidateQueries({ queryKey: serverQueryKeys.settings() });
     void queryClient.invalidateQueries({ queryKey: serverQueryKeys.allProviderUsage() });
-  }, [props.instanceId, props.provider, queryClient]);
+  }, [props.instanceId, props.provider, queryClient, signingOut]);
 
   useEffect(() => {
     alive.current = true;
@@ -144,9 +152,14 @@ export default function ProviderSignInDialog(props: {
     >
       <DialogPopup className="max-w-3xl" showCloseButton={false}>
         <DialogHeader>
-          <DialogTitle>Sign in to {props.accountLabel}</DialogTitle>
+          <DialogTitle>
+            {actionLabel} {signingOut ? "of" : "to"} {props.accountLabel}
+          </DialogTitle>
           <DialogDescription>
-            {method.instructions} This runs on the Synara server machine for the selected account.
+            {signingOut
+              ? "This ends the saved provider login. Accounts and tools that share its credential folder can also lose access. Active sessions and API keys can keep access."
+              : method.instructions}{" "}
+            This runs on the Synara server machine for the selected account.
           </DialogDescription>
         </DialogHeader>
         <div className="h-[min(55vh,28rem)] min-h-48 overflow-hidden rounded-xl border border-border mx-5">
@@ -155,7 +168,8 @@ export default function ProviderSignInDialog(props: {
               {...session}
               cwd={config.data.cwd}
               providerAuthInstanceId={props.instanceId}
-              terminalLabel={`Sign in · ${props.accountLabel}`}
+              {...(props.action ? { providerAuthAction: props.action } : {})}
+              terminalLabel={`${actionLabel} · ${props.accountLabel}`}
               onSessionExited={() => void checkStatus()}
               onRuntimeStatusChange={setRuntimeStatus}
               onTerminalMetadataChange={ignoreMetadata}
@@ -173,7 +187,7 @@ export default function ProviderSignInDialog(props: {
         <p className="mx-5 mt-3 text-ui-sm text-muted-foreground" role="status">
           {result ??
             (runtimeStatus === "error"
-              ? "Sign-in could not start. Check the terminal error, close this window and retry."
+              ? `${actionLabel} could not start. Check the terminal error, close this window and retry.`
               : "Follow the provider's prompts. Opening the browser does not confirm authentication.")}
         </p>
         <DialogFooter>

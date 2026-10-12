@@ -2,6 +2,7 @@
 // Purpose: Own provider picker, update, and CLI installation settings workflows.
 // Layer: Settings panel
 
+import { PROVIDER_SIGN_OUT_ARGS } from "@synara/shared/providerCliProfiles";
 import {
   DEFAULT_CODEX_ACCOUNT_ID,
   PROVIDER_DISPLAY_NAMES,
@@ -90,6 +91,9 @@ import {
   serverSettingsQueryOptions,
 } from "~/lib/serverReactQuery";
 import { cn } from "~/lib/utils";
+import { RUNTIME_MODE_PRESENTATION } from "~/lib/runtimeMode";
+import { useStore } from "~/store";
+import { EMPTY_THREAD_SHELL_BY_ID } from "~/storeState";
 import { ensureNativeApi } from "~/nativeApi";
 import { isProviderKind, sameProviderOrder } from "~/providerOrdering";
 import {
@@ -906,10 +910,11 @@ function providerInstanceLaunchConfig(
     }
     if (value.trim()) result[key] = value;
   }
-  // A home names an account's identity: inheriting the default's would sign the new
-  // account in as the default one.
   if (config.provider === "codex" || config.provider === "claudeAgent") {
     delete result.homePath;
+  }
+  if (config.provider === "pi" || config.provider === "omp") {
+    delete result.agentDir;
   }
   return result;
 }
@@ -967,6 +972,20 @@ const ACCOUNT_STATUS_DOT_CLASS_NAME: Record<ProviderAccountStatusTone, string> =
 
 const ProviderSignInDialog = lazy(() => import("./ProviderSignInDialog"));
 
+export function nextImportedProviderInstanceId(
+  provider: ProviderKind,
+  settings: AppSettings,
+): string {
+  const prefix = provider === "claudeAgent" ? "claude" : provider;
+  const existingIds = new Set([
+    ...getProviderInstanceOptions(settings).map((option) => String(option.instanceId)),
+    ...Object.keys(settings.providerInstances),
+  ]);
+  let index = 2;
+  while (existingIds.has(`${prefix}_${index}`)) index += 1;
+  return `${prefix}_${index}`;
+}
+
 function ProviderAccountsControl(props: {
   config: ProviderInstallSettings;
   providerStatusByInstance: ReadonlyMap<string, ServerProviderStatus>;
@@ -989,6 +1008,7 @@ function ProviderAccountsControl(props: {
       ),
     [usageQuery.data],
   );
+  const threadShells = useStore((state) => state.threadShellById ?? EMPTY_THREAD_SHELL_BY_ID);
   const allAccounts = getProviderInstanceOptions(props.settings);
   // Default first, then the provider's other accounts by name.
   const accounts = allAccounts.filter((account) => account.provider === provider);
@@ -1001,6 +1021,7 @@ function ProviderAccountsControl(props: {
   const [selectedAccountId, setSelectedAccountId] = useState<string>(provider);
   const [addDialogOpen, setAddDialogOpen] = useState(false);
   const [signInAccount, setSignInAccount] = useState<ProviderInstanceOption | null>(null);
+  const [authAction, setAuthAction] = useState<"sign-in" | "sign-out">("sign-in");
   const [startingSignIn, setStartingSignIn] = useState(false);
   const signInPendingRef = useRef(false);
   const mountedRef = useRef(true);
@@ -1010,7 +1031,10 @@ function ProviderAccountsControl(props: {
       mountedRef.current = false;
     };
   }, []);
-  const startSignIn = async (account: ProviderInstanceOption) => {
+  const startSignIn = async (
+    account: ProviderInstanceOption,
+    action: "sign-in" | "sign-out" = "sign-in",
+  ) => {
     if (signInPendingRef.current) return;
     signInPendingRef.current = true;
     setStartingSignIn(true);
@@ -1018,11 +1042,21 @@ function ProviderAccountsControl(props: {
       // This is queued behind edits already being saved; the server must see
       // the account's latest settings before it resolves the login environment.
       await props.updateSettingsAndWait({});
-      if (mountedRef.current) setSignInAccount(account);
+      if (
+        action === "sign-out" &&
+        !(await ensureNativeApi().dialogs.confirm(
+          `Sign out of ${account.label}? Accounts and tools that share its credential folder can also lose access. Active sessions and API keys can keep access.`,
+        ))
+      )
+        return;
+      if (mountedRef.current) {
+        setAuthAction(action);
+        setSignInAccount(account);
+      }
     } catch (error) {
       toastManager.add({
         type: "error",
-        title: "Unable to start sign-in",
+        title: action === "sign-out" ? "Unable to start sign-out" : "Unable to start sign-in",
         description: error instanceof Error ? error.message : "Unable to save provider settings.",
       });
     } finally {
@@ -1050,25 +1084,40 @@ function ProviderAccountsControl(props: {
   const updateInstances = (next: Record<string, ProviderInstanceConfig>) => {
     props.updateSettings({ providerInstances: next as ProviderInstanceConfigMap });
   };
-  const addAccount = (input: AddProviderAccountInput) => {
+  const saveNewAccount = async (instanceId: string, account: ProviderInstanceConfig) => {
+    try {
+      await props.updateSettingsAndWait({
+        providerInstances: {
+          ...props.settings.providerInstances,
+          [instanceId]: account,
+        } as ProviderInstanceConfigMap,
+      });
+      return true;
+    } catch (error) {
+      toastManager.add({
+        type: "error",
+        title: "Could not save account",
+        description: error instanceof Error ? error.message : "Unable to save provider settings.",
+      });
+      return false;
+    }
+  };
+  const addAccount = async (input: AddProviderAccountInput) => {
     const installConfig = PROVIDER_INSTALL_SETTINGS.find(
       (entry) => entry.provider === input.provider,
     );
-    updateInstances({
-      ...props.settings.providerInstances,
-      [input.instanceId]: {
-        driver: input.provider,
-        ...(input.displayName ? { displayName: input.displayName } : {}),
-        ...(input.accentColor ? { accentColor: input.accentColor } : {}),
-        enabled: true,
-        config: {
-          // A new account starts from the provider's own binary and endpoint settings.
-          ...(installConfig ? providerInstanceLaunchConfig(installConfig, props.settings) : {}),
-          ...input.config,
-        },
+    const saved = await saveNewAccount(input.instanceId, {
+      driver: input.provider,
+      ...(input.displayName ? { displayName: input.displayName } : {}),
+      ...(input.accentColor ? { accentColor: input.accentColor } : {}),
+      enabled: true,
+      config: {
+        ...(installConfig ? providerInstanceLaunchConfig(installConfig, props.settings) : {}),
+        ...input.config,
       },
     });
-    if (input.provider === provider) setSelectedAccountId(input.instanceId);
+    if (!saved) throw new Error("The account was not saved.");
+    if (input.provider === provider && mountedRef.current) setSelectedAccountId(input.instanceId);
     toastManager.add({
       type: "success",
       title: "Account added",
@@ -1077,33 +1126,22 @@ function ProviderAccountsControl(props: {
       }' was added.`,
     });
   };
-  const nextImportedInstanceId = () => {
-    const prefix = provider === "claudeAgent" ? "claude" : provider;
-    const existingIds = new Set(allAccounts.map((option) => String(option.instanceId)));
-    let index = 2;
-    while (existingIds.has(`${prefix}_${index}`)) index += 1;
-    return `${prefix}_${index}`;
-  };
   const importInstance = async () => {
     const selectedDirectory = await ensureNativeApi().dialogs.pickFolder();
     if (!selectedDirectory) return;
-    // Derived accounts share this namespace with explicit entries. Reusing a
-    // derived id would mutate that account instead of creating a new one.
-    const instanceId = nextImportedInstanceId();
+    const instanceId = nextImportedProviderInstanceId(provider, props.settings);
     const directoryName = selectedDirectory.split(/[\\/]/).filter(Boolean).at(-1);
-    updateInstances({
-      ...props.settings.providerInstances,
-      [instanceId]: {
-        driver: provider,
-        displayName: directoryName || `${providerLabel} imported`,
-        enabled: true,
-        config: {
-          ...providerInstanceLaunchConfig(props.config, props.settings),
-          ...providerImportedDirectoryConfig(provider, selectedDirectory),
-        },
+    const saved = await saveNewAccount(instanceId, {
+      driver: provider,
+      displayName: directoryName || `${providerLabel} imported`,
+      enabled: true,
+      config: {
+        ...providerInstanceLaunchConfig(props.config, props.settings),
+        ...providerImportedDirectoryConfig(provider, selectedDirectory),
       },
     });
-    setSelectedAccountId(instanceId);
+    if (!saved) return;
+    if (mountedRef.current) setSelectedAccountId(instanceId);
     toastManager.add({
       type: "success",
       title: `${providerLabel} account imported`,
@@ -1448,6 +1486,18 @@ function ProviderAccountsControl(props: {
             )}
             Sign in
           </Button>
+          {PROVIDER_SIGN_OUT_ARGS[provider] ? (
+            <Button
+              type="button"
+              size="xs"
+              variant="outline"
+              disabled={!account.enabled || liveStatus?.available === false || startingSignIn}
+              onClick={() => void startSignIn(account, "sign-out")}
+              aria-label={`Sign out of ${account.label}`}
+            >
+              Sign out
+            </Button>
+          ) : null}
           {account.isDefault ? (
             defaultIsCustomized ? (
               <SettingResetButton
@@ -1466,7 +1516,7 @@ function ProviderAccountsControl(props: {
               }}
             >
               <XIcon className="size-3.5" />
-              Remove
+              Remove entry
             </Button>
           )}
         </div>
@@ -1478,6 +1528,46 @@ function ProviderAccountsControl(props: {
               : status.detail}
           </div>
         ) : null}
+
+        <ProviderAccountEditorSection title="Permission mode">
+          <p className="text-ui-sm text-muted-foreground">
+            Synara sets permissions per conversation. These values come from saved conversation
+            settings. Provider rules and managed policy can impose more limits.
+          </p>
+          {Object.values(threadShells)
+            .filter(
+              (thread) =>
+                !thread.archivedAt &&
+                thread.modelSelection.provider === provider &&
+                (thread.modelSelection.instanceId ?? provider) === account.instanceId,
+            )
+            .map((thread) => (
+              <SettingsListRow
+                key={thread.id}
+                title={thread.title}
+                description={`Source: conversation settings · ${RUNTIME_MODE_PRESENTATION[thread.runtimeMode].description}`}
+                actions={
+                  <span className="text-ui-sm">
+                    {RUNTIME_MODE_PRESENTATION[thread.runtimeMode].label}
+                  </span>
+                }
+              />
+            ))}
+          {!Object.values(threadShells).some(
+            (thread) =>
+              !thread.archivedAt &&
+              thread.modelSelection.provider === provider &&
+              (thread.modelSelection.instanceId ?? provider) === account.instanceId,
+          ) ? (
+            <p className="text-ui-sm text-muted-foreground">
+              No saved conversation uses this account.
+            </p>
+          ) : null}
+          <p className="text-ui-sm text-muted-foreground">
+            Provider file, network, and managed rules remain read-only here. Check the provider
+            configuration to see those limits.
+          </p>
+        </ProviderAccountEditorSection>
 
         <ProviderAccountEditorSection title="Identity">
           <div className="space-y-3">
@@ -1576,7 +1666,7 @@ function ProviderAccountsControl(props: {
             type="button"
             size="xs"
             variant="outline"
-            onClick={importInstance}
+            onClick={() => void importInstance()}
             disabled={typeof window === "undefined" || !window.desktopBridge}
             title={
               typeof window === "undefined" || !window.desktopBridge
@@ -1664,6 +1754,7 @@ function ProviderAccountsControl(props: {
         <Suspense fallback={<p className="text-ui-sm text-muted-foreground">Opening sign-in…</p>}>
           <ProviderSignInDialog
             provider={provider}
+            action={authAction}
             instanceId={String(signInAccount.instanceId)}
             accountLabel={signInAccount.label}
             onClose={() => setSignInAccount(null)}
@@ -2012,6 +2103,12 @@ export function ProvidersSettingsPanel({
       setProviderEnablementMutationPending(true);
       try {
         await updateSettingsAndWait({ disabledProviders });
+      } catch (error) {
+        toastManager.add({
+          type: "error",
+          title: "Could not change provider activity",
+          description: error instanceof Error ? error.message : "Unable to save provider settings.",
+        });
       } finally {
         providerEnablementMutationInFlightRef.current = false;
         setProviderEnablementMutationPending(false);

@@ -54,7 +54,7 @@ export function AddProviderAccountDialog(props: {
   /** Every account id already in use, across providers. */
   existingIds: ReadonlySet<string>;
   configFieldsFor: (provider: ProviderKind) => ReadonlyArray<AddProviderAccountConfigField>;
-  onAdd: (input: AddProviderAccountInput) => void;
+  onAdd: (input: AddProviderAccountInput) => void | Promise<void>;
 }) {
   const formId = useId();
   const [provider, setProvider] = useState(props.initialProvider);
@@ -64,6 +64,7 @@ export function AddProviderAccountDialog(props: {
   const [accentColor, setAccentColor] = useState<string | undefined>(undefined);
   const [config, setConfig] = useState<Record<string, string>>({});
   const [submitAttempted, setSubmitAttempted] = useState(false);
+  const [saving, setSaving] = useState(false);
 
   // Start from a blank form every time the dialog opens.
   const [wasOpen, setWasOpen] = useState(props.open);
@@ -85,22 +86,29 @@ export function AddProviderAccountDialog(props: {
   const idError = validateProviderAccountId(instanceId, props.existingIds);
   const configFields = props.configFieldsFor(provider);
 
-  const submit = (event: FormEvent) => {
+  const submit = async (event: FormEvent) => {
     event.preventDefault();
     setSubmitAttempted(true);
-    if (idError !== null) return;
+    if (idError !== null || saving) return;
     const filledConfig: Record<string, string> = {};
     for (const field of configFields) {
       const value = config[field.key]?.trim();
       if (value) filledConfig[field.key] = value;
     }
-    props.onAdd({
-      provider,
-      instanceId: instanceId.trim(),
-      displayName: label.trim(),
-      accentColor,
-      config: filledConfig,
-    });
+    setSaving(true);
+    try {
+      await props.onAdd({
+        provider,
+        instanceId: instanceId.trim(),
+        displayName: label.trim(),
+        accentColor,
+        config: filledConfig,
+      });
+    } catch {
+      return;
+    } finally {
+      setSaving(false);
+    }
     props.onOpenChange(false);
   };
 
@@ -114,7 +122,12 @@ export function AddProviderAccountDialog(props: {
           </DialogDescription>
         </DialogHeader>
         <DialogPanel>
-          <form id={formId} className="space-y-3" onSubmit={submit} noValidate>
+          <form
+            id={formId}
+            className="space-y-3"
+            onSubmit={(event) => void submit(event)}
+            noValidate
+          >
             <div className="space-y-1">
               <span className={dialogFieldLabelClassName}>Provider</span>
               <SettingsSelectControl
@@ -212,7 +225,7 @@ export function AddProviderAccountDialog(props: {
           <Button type="button" variant="outline" onClick={() => props.onOpenChange(false)}>
             Cancel
           </Button>
-          <Button type="submit" form={formId}>
+          <Button type="submit" form={formId} disabled={saving}>
             Add account
           </Button>
         </DialogFooter>

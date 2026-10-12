@@ -35,6 +35,7 @@ export interface TerminalRuntimeConfig {
   cwd: string;
   runtimeEnv?: Record<string, string>;
   providerAuthInstanceId?: string;
+  providerAuthAction?: "sign-in" | "sign-out";
   callbacks: TerminalRuntimeCallbacks;
 }
 
@@ -60,6 +61,7 @@ export interface TerminalRuntimeEntry {
   cwd: string;
   runtimeEnv?: Record<string, string>;
   providerAuthInstanceId?: string;
+  providerAuthAction?: "sign-in" | "sign-out";
   callbacks: TerminalRuntimeCallbacks;
   wrapper: HTMLDivElement;
   container: HTMLDivElement | null;

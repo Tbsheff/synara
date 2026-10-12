@@ -339,6 +339,29 @@ describe("TerminalManager", () => {
     }
   });
 
+  it("passes the sign-out action to the selected account and refuses action changes", async () => {
+    const resolver = vi.fn(async () => ({
+      command: process.execPath,
+      args: ["logout"],
+      env: {},
+      cwd: process.cwd(),
+    }));
+    const { manager } = makeManager(5000, { providerAuthResolver: resolver });
+    try {
+      const input = openInput({
+        providerAuthInstanceId: "codex_work",
+        providerAuthAction: "sign-out",
+      });
+      await manager.open(input);
+      expect(resolver).toHaveBeenCalledWith("codex_work", "sign-out");
+      await expect(manager.open({ ...input, providerAuthAction: "sign-in" })).rejects.toThrow(
+        "cannot switch",
+      );
+    } finally {
+      await manager.dispose();
+    }
+  });
+
   it("spawns lazily and reuses running terminal per thread", async () => {
     const { manager, ptyAdapter } = makeManager();
     const [first, second] = await Promise.all([
