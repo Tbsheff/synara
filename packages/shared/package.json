@@ -4,6 +4,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./htmlRender": {
+      "types": "./src/htmlRender.ts",
+      "import": "./src/htmlRender.ts"
+    },
     "./diagnosticIssue": {
       "types": "./src/diagnosticIssue.ts",
       "import": "./src/diagnosticIssue.ts"

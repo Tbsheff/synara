@@ -1,3 +1,6 @@
+import { HTML_RENDER_ACTIVITY_KIND, type HtmlRenderDocument } from "@synara/contracts";
+import { readHtmlRenderDocument } from "@synara/shared/htmlRender";
+import { INLINE_HTML_RENDER_ON } from "./betaFeatures";
 import {
   type CommandExecutionDetails,
   type ComputerPermission,
@@ -138,6 +141,7 @@ export interface WorkLogComputerSetupRequired {
 }
 
 export interface WorkLogEntry {
+  htmlRender?: HtmlRenderDocument;
   id: string;
   createdAt: string;
   /** Server-owned orchestration event sequence for causal ordering. */
@@ -470,6 +474,7 @@ export function deriveWorkLogEntries(
   const visibleTurnIds = options.visibleTurnIds;
   const ordered = orderedActivities(activities);
   const entries = ordered
+    .filter((activity) => activity.kind !== HTML_RENDER_ACTIVITY_KIND || INLINE_HTML_RENDER_ON)
     .filter((activity) => !isTurnFailureActivity(activity))
     .filter((activity) => shouldKeepActivityForWorkLog(activity, latestTurnId, visibleTurnIds))
     .filter(
@@ -491,7 +496,10 @@ export function deriveWorkLogEntries(
     .filter((activity) => !isPlanBoundaryToolActivity(activity))
     .filter((activity) => !isHiddenLegacyActivity(activity))
     .filter((activity) => !isUnrenderableApprovalRequest(activity))
-    .map(toDerivedWorkLogEntry);
+    .map(toDerivedWorkLogEntry)
+    .filter(
+      (entry) => entry.activityKind !== HTML_RENDER_ACTIVITY_KIND || entry.htmlRender !== undefined,
+    );
   const userInputExchangeEntries = withUserInputExchanges(entries, ordered);
   // Strip the derivation-only helpers that exist solely on DerivedWorkLogEntry.
   // `toolName` and `activityKind` are intentionally kept: they are public
@@ -1338,6 +1346,12 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
     ...(toolCallId ? { toolCallId } : {}),
     ...(toolStatus ? { toolStatus } : {}),
   };
+  if (activity.kind === HTML_RENDER_ACTIVITY_KIND) {
+    const document = readHtmlRenderDocument(activity.payload);
+    if (document) entry.htmlRender = document;
+    derivedWorkLogEntryCache.set(activity, entry);
+    return entry;
+  }
   const itemType = extractWorkLogItemType(payload);
   const requestKind = extractWorkLogRequestKind(payload);
   if (payload && typeof payload.detail === "string" && payload.detail.length > 0) {

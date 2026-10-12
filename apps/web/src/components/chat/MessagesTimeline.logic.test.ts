@@ -1056,6 +1056,42 @@ describe("deriveMessagesTimelineRows", () => {
     ).not.toBe(true);
   });
 
+  it("keeps HTML visible above the final reply when it folds earlier work", () => {
+    const html = { title: "Chart", html: "<p>Chart</p>", height: 480 };
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "html-page",
+          kind: "synara.html.rendered",
+          summary: "Chart",
+          payload: html,
+          turnId: "t1",
+          createdAt: "2026-01-01T00:00:02Z",
+        }),
+      ],
+      TurnId.makeUnsafe("t1"),
+    );
+    expect(entries[0]?.htmlRender).toEqual(html);
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      timelineEntries: [
+        userEntry("u1", "2026-01-01T00:00:00Z"),
+        workEntry("w1", "2026-01-01T00:00:01Z", "Making chart"),
+        ...deriveTimelineEntries([], [], entries),
+        assistantEntry("done", "2026-01-01T00:00:03Z", {
+          turnId: "t1",
+          text: "Done",
+          completedAt: "2026-01-01T00:00:04Z",
+        }),
+      ],
+    });
+    expect(rows.map((row) => row.kind)).toEqual(["message", "html-render", "message"]);
+    expect(rows[1]).toMatchObject({ document: html });
+    expect(messageRow(rows, "done")?.collapsedTurnItems?.some((item) => item.id === "w1")).toBe(
+      true,
+    );
+  });
+
   const backgroundCompletionEntry = (
     id: string,
     createdAt: string,

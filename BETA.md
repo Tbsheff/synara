@@ -299,7 +299,10 @@ To put a feature behind the list:
 
 Promote a feature to Stable by deleting its entry; every gate resolves itself.
 
-The list currently contains `groups` (Hubs), gated off in Stable.
+The list currently contains `groups` (Hubs) and `inline-html-render`, gated off in Stable.
+[Inline HTML pages](docs/inline-html-render.md) use a caller-scoped gateway tool and
+a sandboxed transcript frame. Stable hides saved pages and code previews and does
+not list or accept the tool.
 Tasks, Inbox, and Auto-fix CI are available in both apps.
 Oh My Pi, the rail sidebar layout, and message trail
 sound are available in both Stable and Beta.

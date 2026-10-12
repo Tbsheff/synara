@@ -3,6 +3,9 @@
 // Layer: Web chat presentation component
 // Exports: ChatMarkdown
 
+import { HTML_RENDER_DEFAULT_HEIGHT, HTML_RENDER_MAX_BYTES } from "@synara/contracts";
+import { INLINE_HTML_RENDER_ON } from "../betaFeatures";
+import { HtmlRenderFrame } from "./HtmlRenderFrame";
 import {
   CheckIcon,
   CopyIcon,
@@ -122,6 +125,7 @@ import {
   parseComposerChipSegment,
 } from "../lib/remarkComposerChips";
 import { IconButton } from "./ui/icon-button";
+import { Button } from "./ui/button";
 import { applyActiveChatFindMatch, type ThreadFindRange } from "./chat/threadFind.logic";
 import {
   ChatFindRenderProvider,
@@ -931,15 +935,26 @@ function MarkdownCodeBlock({
   code,
   fence,
   isOpen,
+  allowHtmlPreview,
   children,
 }: {
   code: string;
   fence: CodeFenceInfo;
   isOpen: boolean;
+  allowHtmlPreview: boolean;
   children: ReactNode;
 }) {
   const [copied, setCopied] = useState(false);
   const [wrap, setWrap] = useState(false);
+  const [preview, setPreview] = useState(false);
+  const showHtmlToggle =
+    INLINE_HTML_RENDER_ON &&
+    allowHtmlPreview &&
+    !isOpen &&
+    fence.language === "html" &&
+    code.length > 0 &&
+    code.length <= HTML_RENDER_MAX_BYTES &&
+    new TextEncoder().encode(code).byteLength <= HTML_RENDER_MAX_BYTES;
   const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const handleCopy = () => {
     void copyTextToClipboard(code)
@@ -978,6 +993,17 @@ function MarkdownCodeBlock({
       <div className="chat-markdown-codeblock__header">
         <CodeBlockHeaderTitle fence={fence} />
         <div className="chat-markdown-codeblock__actions">
+          {showHtmlToggle && (
+            <Button
+              size="xs"
+              variant="ghost"
+              className="text-ui-xs"
+              aria-pressed={preview}
+              onClick={() => setPreview((current) => !current)}
+            >
+              {preview ? "Code" : "Preview"}
+            </Button>
+          )}
           <IconButton
             className="chat-markdown-codeblock__action"
             onClick={toggleWrap}
@@ -1004,7 +1030,15 @@ function MarkdownCodeBlock({
           )}
         </div>
       </div>
-      <div className="chat-markdown-codeblock__body">{children}</div>
+      <div className="chat-markdown-codeblock__body">
+        {showHtmlToggle && preview ? (
+          <HtmlRenderFrame
+            document={{ title: "HTML preview", html: code, height: HTML_RENDER_DEFAULT_HEIGHT }}
+          />
+        ) : (
+          children
+        )}
+      </div>
     </div>
   );
 }
@@ -1310,7 +1344,12 @@ const MARKDOWN_COMPONENTS: Components = {
       </CodeHighlightErrorBoundary>
     );
     return (
-      <MarkdownCodeBlock code={codeBlock.code} fence={fence} isOpen={blockState !== "settled"}>
+      <MarkdownCodeBlock
+        code={codeBlock.code}
+        fence={fence}
+        isOpen={blockState !== "settled"}
+        allowHtmlPreview={!context.isUserVariant}
+      >
         {fence.language === "mermaid" && blockState === "settled" ? (
           <MarkdownMermaidBlock source={codeBlock.code} theme={context.resolvedTheme}>
             {content}

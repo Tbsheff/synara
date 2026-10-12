@@ -3,6 +3,8 @@
 // Layer: Web chat presentation helpers
 // Exports: row derivation, structural sharing, copy/timer helpers
 
+import type { HtmlRenderDocument } from "@synara/contracts";
+import { INLINE_HTML_RENDER_ON } from "../../betaFeatures";
 import { type MessageId, type TurnId } from "@synara/contracts";
 import { type TimelineEntry, type WorkLogEntry, formatClockDuration } from "../../session-logic";
 import type { WorkLogUserInputExchangeItem } from "../../workLog";
@@ -312,6 +314,7 @@ interface TimelineDiffMessage {
 }
 
 export type MessagesTimelineRow =
+  | { kind: "html-render"; id: string; createdAt: string; document: HtmlRenderDocument }
   | {
       kind: "work";
       id: string;
@@ -828,7 +831,16 @@ export function deriveMessagesTimelineRows(input: {
       // Background task completions do too: they separate two responses.
       for (const runEntry of run) {
         const userInputExchange = runEntry.entry.userInputExchange;
-        if (userInputExchange) {
+        if (runEntry.entry.htmlRender) {
+          flushPendingWorkGroup({ attachToPreviousAssistant: false });
+          if (INLINE_HTML_RENDER_ON)
+            nextRows.push({
+              kind: "html-render",
+              id: runEntry.id,
+              createdAt: runEntry.createdAt,
+              document: runEntry.entry.htmlRender,
+            });
+        } else if (userInputExchange) {
           flushPendingWorkGroup({ attachToPreviousAssistant: false });
           nextRows.push({
             kind: "user-input",
@@ -1100,7 +1112,11 @@ function collapseSettledTurns(
         foldIndices.push(scan);
         continue;
       }
-      if (prev.kind === "proposed-plan" || prev.kind === "user-input") {
+      if (
+        prev.kind === "proposed-plan" ||
+        prev.kind === "user-input" ||
+        prev.kind === "html-render"
+      ) {
         // The plan card and answered questions stay visible, but they should not strand earlier
         // narration/work outside the final "Worked for..." disclosure.
         continue;
@@ -1367,6 +1383,9 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
         })
       );
     }
+
+    case "html-render":
+      return a.document === (b as typeof a).document;
 
     case "proposed-plan":
       return a.proposedPlan === (b as typeof a).proposedPlan;

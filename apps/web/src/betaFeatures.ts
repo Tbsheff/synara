@@ -7,6 +7,7 @@ import {
   desktopFlavorFromProtocol,
   GROUPS_BETA_FEATURE,
   INBOX_BETA_FEATURE,
+  INLINE_HTML_RENDER_BETA_FEATURE,
   isBetaFeatureEnabled,
   PULL_REQUEST_AUTO_FIX_BETA_FEATURE,
 } from "@synara/shared/betaFeatures";
@@ -55,3 +56,5 @@ export function visibleProviderDescriptors(
 }
 
 export const VISIBLE_PROVIDER_DESCRIPTORS = visibleProviderDescriptors();
+
+export const INLINE_HTML_RENDER_ON = isBetaFeatureOn(INLINE_HTML_RENDER_BETA_FEATURE);
