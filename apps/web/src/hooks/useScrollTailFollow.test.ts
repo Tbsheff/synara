@@ -44,6 +44,24 @@ describe("useScrollTailFollow completion", () => {
     expect(box.scrollTop).toBe(400);
   });
 
+  it.each([false, true])(
+    "keeps the reader position when final content arrives after streaming stops (detached: %s)",
+    (detached) => {
+      const { box, controls, render } = mountBox();
+      if (detached) {
+        box.scrollTop = 400;
+        controls.onScroll();
+      }
+      render(false, "live lines");
+      box.scrollHeight = 1_240;
+      render(false, "final lines");
+      expect(box.scrollTop).toBe(detached ? 400 : 1_040);
+      box.scrollHeight = 1_400;
+      render(false, "later settled change");
+      expect(box.scrollTop).toBe(detached ? 400 : 1_040);
+    },
+  );
+
   it("does not tail output that mounted after completion", () => {
     const { box, render } = mountBox(false);
     render(false, "final lines");

@@ -5,7 +5,7 @@
 // Depends on: WorkLogEntry.toolDetails
 
 import type { FileChangeEntry, TranscriptNotice, WebSearchResult } from "@synara/contracts";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { useScrollTailFollow } from "~/hooks/useScrollTailFollow";
 import { useTheme } from "~/hooks/useTheme";
 import { getRenderablePatch, buildFileDiffRenderKey } from "~/lib/diffRendering";
@@ -388,14 +388,18 @@ function PlainTextBlock(props: {
   dataAttr?: string | undefined;
   followTail?: boolean;
 }) {
+  const [lastContent, setLastContent] = useState(props.children);
+  if (props.children && props.children !== lastContent) setLastContent(props.children);
+  const content = props.followTail && !props.children ? lastContent : props.children;
   const tailFollow = useScrollTailFollow<HTMLPreElement>({
     enabled: props.followTail === true,
-    content: props.children,
+    content,
   });
   return (
     <pre
       ref={tailFollow.ref}
       onScroll={tailFollow.onScroll}
+      hidden={!content}
       className={cn(
         PLAIN_TEXT_BLOCK_CLASS_NAME,
         "px-3 py-2.5",
@@ -403,7 +407,7 @@ function PlainTextBlock(props: {
       )}
       {...(props.dataAttr ? { [props.dataAttr]: "true" } : {})}
     >
-      {props.children}
+      {content}
     </pre>
   );
 }
@@ -414,7 +418,13 @@ export function TypedCommandDetails(props: { view: TypedCommandView; running: bo
   const emptyOutput = !view.output && !hasSplitOutput;
   const outputStreaming = running || view.isLiveOutput;
   const primaryOutput = view.output ?? view.stdout ?? view.stderr;
-  const primaryStream = view.output ? "output" : view.stdout ? "stdout" : "stderr";
+  const primaryStream = view.output
+    ? "output"
+    : view.stdout
+      ? "stdout"
+      : view.stderr
+        ? "stderr"
+        : "output";
   return (
     <div className={DETAIL_CARD_CLASS_NAME} data-command-shell-card="true">
       <div className="space-y-1 border-b border-border/45 px-3 py-2">
@@ -434,14 +444,16 @@ export function TypedCommandDetails(props: { view: TypedCommandView; running: bo
           <p className="text-ui-xs text-muted-foreground/68">{view.description}</p>
         ) : null}
       </div>
-      {primaryOutput ? (
+      {primaryOutput || running ? (
         <div
           data-command-stdout={primaryStream === "stdout" ? "true" : undefined}
           data-command-stderr={primaryStream === "stderr" ? "true" : undefined}
         >
-          <div className="px-3 pt-1">
-            <CopyTextButton text={primaryOutput} label={primaryStream} />
-          </div>
+          {primaryOutput ? (
+            <div className="px-3 pt-1">
+              <CopyTextButton text={primaryOutput} label={primaryStream} />
+            </div>
+          ) : null}
           {primaryStream === "stderr" ? (
             <div className={cn(DETAIL_HEADER_CLASS_NAME, "text-destructive/80")}>Stderr</div>
           ) : primaryStream === "stdout" && view.stderr ? (
@@ -458,7 +470,7 @@ export function TypedCommandDetails(props: { view: TypedCommandView; running: bo
             tone={primaryStream === "stderr" ? "error" : "default"}
             followTail={outputStreaming}
           >
-            {primaryOutput}
+            {primaryOutput ?? ""}
           </PlainTextBlock>
         </div>
       ) : null}
