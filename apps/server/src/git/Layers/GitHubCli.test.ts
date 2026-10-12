@@ -1684,6 +1684,7 @@ layer("GitHubCliLive", (it) => {
         repository: "acme/app",
         number: 9,
         action: "merge",
+        expectedHeadSha: "1111111111111111111111111111111111111111",
         mergeMethod: "squash",
       });
 
@@ -1705,7 +1706,11 @@ layer("GitHubCliLive", (it) => {
       expect(mockedRunProcess.mock.calls[1]?.[2]).toEqual(
         expect.objectContaining({
           allowNonZeroExit: true,
-          stdin: JSON.stringify({ merge_method: "squash", merge_action: "default" }),
+          stdin: JSON.stringify({
+            merge_method: "squash",
+            merge_action: "default",
+            sha: "1111111111111111111111111111111111111111",
+          }),
         }),
       );
     }),
@@ -1897,6 +1902,7 @@ layer("GitHubCliLive", (it) => {
         repository: "acme/app",
         number: 9,
         action: "merge",
+        expectedHeadSha: "1111111111111111111111111111111111111111",
         mergeMethod: "rebase",
       });
 
@@ -1908,6 +1914,8 @@ layer("GitHubCliLive", (it) => {
         "--repo",
         "github.com/acme/app",
         "--rebase",
+        "--match-head-commit",
+        "1111111111111111111111111111111111111111",
       ]);
     }),
   );
@@ -1943,6 +1951,7 @@ layer("GitHubCliLive", (it) => {
           repository: "acme/app",
           number: 12,
           action: "merge",
+          expectedHeadSha: "1111111111111111111111111111111111111111",
           mergeMethod: "merge",
         })
         .pipe(Effect.forkChild);
@@ -1957,6 +1966,421 @@ layer("GitHubCliLive", (it) => {
         "github.com",
         "repos/acme/app/pulls/12/merge-async/merge-request-1",
       ]);
+    }),
+  );
+
+  it.effect("fills the pull request detail head SHA from headRefOid", () =>
+    Effect.gen(function* () {
+      mockedRunProcess.mockResolvedValueOnce(
+        processResult(
+          JSON.stringify({
+            number: 9,
+            title: "Reviewed head",
+            url: "https://github.com/acme/app/pull/9",
+            headRefName: "feature",
+            baseRefName: "main",
+            headRefOid: " 1111111111111111111111111111111111111111 ",
+            state: "OPEN",
+            createdAt: "2026-07-01T00:00:00Z",
+            updatedAt: "2026-07-02T00:00:00Z",
+          }),
+        ),
+      );
+
+      const gh = yield* GitHubCli;
+      const detail = yield* gh.getPullRequestDetail({
+        cwd: "/repo",
+        repository: "acme/app",
+        number: 9,
+      });
+
+      assert.equal(detail.headSha, "1111111111111111111111111111111111111111");
+      const jsonFields = String(mockedRunProcess.mock.calls[0]?.[1]?.at(-1)).split(",");
+      expect(jsonFields).toContain("headRefOid");
+    }),
+  );
+
+  it.effect("binds the merge submission itself to the reviewed head commit", () =>
+    Effect.gen(function* () {
+      mockedRunProcess.mockResolvedValue(
+        processResult(
+          JSON.stringify({
+            status: "merged",
+            headRefOid: "1111111111111111111111111111111111111111",
+            details: {},
+          }),
+        ),
+      );
+      const gh = yield* GitHubCli;
+      yield* gh.runPullRequestAction({
+        cwd: "/repo",
+        repository: "acme/app",
+        number: 9,
+        action: "merge",
+        mergeMethod: "squash",
+        expectedHeadSha: "1111111111111111111111111111111111111111",
+      });
+      expect(JSON.parse(mockedRunProcess.mock.calls.at(-1)![2]!.stdin!)).toEqual({
+        merge_method: "squash",
+        merge_action: "default",
+        sha: "1111111111111111111111111111111111111111",
+      });
+      expect(mockedRunProcess).toHaveBeenCalledTimes(1);
+    }),
+  );
+
+  it.effect("refuses a duplicate pending merge for a different reviewed head", () =>
+    Effect.gen(function* () {
+      mockedRunProcess.mockResolvedValueOnce({
+        ...processResult(
+          JSON.stringify({
+            status: "pending",
+            details: {
+              uuid: "existing",
+              expected_head_sha: "2222222222222222222222222222222222222222",
+            },
+          }),
+        ),
+        code: 1,
+        stderr: "HTTP 409 Conflict",
+      });
+      const result = yield* (yield* GitHubCli)
+        .runPullRequestAction({
+          cwd: "/repo",
+          repository: "acme/app",
+          number: 9,
+          action: "merge",
+          expectedHeadSha: "1111111111111111111111111111111111111111",
+        })
+        .pipe(Effect.exit);
+      expect(result._tag).toBe("Failure");
+      expect(mockedRunProcess).toHaveBeenCalledTimes(1);
+    }),
+  );
+
+  it.effect("reports a changed head during merge submission as a review-again failure", () =>
+    Effect.gen(function* () {
+      mockedRunProcess.mockResolvedValueOnce(
+        processResult(
+          JSON.stringify({
+            status: "failed",
+            details: { message: "Head branch was modified. Review and try the merge again." },
+          }),
+        ),
+      );
+      const gh = yield* GitHubCli;
+      const error = yield* gh
+        .runPullRequestAction({
+          cwd: "/repo",
+          repository: "acme/app",
+          number: 9,
+          action: "merge",
+          expectedHeadSha: "1111111111111111111111111111111111111111",
+        })
+        .pipe(Effect.flip);
+      expect(error.detail).toBe(
+        "This pull request changed after you reviewed it. Review the new changes and try again.",
+      );
+    }),
+  );
+
+  it.effect("refuses a merge without the reviewed head commit", () =>
+    Effect.gen(function* () {
+      const gh = yield* GitHubCli;
+      const outcome = yield* gh
+        .runPullRequestAction({ cwd: "/repo", repository: "acme/app", number: 9, action: "merge" })
+        .pipe(Effect.exit);
+      expect(outcome._tag).toBe("Failure");
+      expect(mockedRunProcess).not.toHaveBeenCalled();
+    }),
+  );
+
+  it.effect("submits each formal review against the reviewed commit", () =>
+    Effect.gen(function* () {
+      const gh = yield* GitHubCli;
+      for (const [action, event] of [
+        ["approve", "APPROVE"],
+        ["request_changes", "REQUEST_CHANGES"],
+        ["review_comment", "COMMENT"],
+      ] as const) {
+        mockedRunProcess.mockImplementation(async (_command, args) =>
+          processResult(
+            args[0] === "pr"
+              ? JSON.stringify({
+                  number: 9,
+                  title: "PR",
+                  createdAt: "2026-07-01T00:00:00Z",
+                  updatedAt: "2026-07-01T00:00:00Z",
+                  headRefName: "feature",
+                  baseRefName: "main",
+                  url: "https://github.com/acme/app/pull/9",
+                  state: "OPEN",
+                  isDraft: false,
+                  author: { login: "author" },
+                  headRefOid: "1111111111111111111111111111111111111111",
+                })
+              : args[1] === "user"
+                ? "reviewer"
+                : "{}",
+          ),
+        );
+        const outcome = yield* gh
+          .runPullRequestAction({
+            cwd: "/repo",
+            repository: "acme/app",
+            number: 9,
+            action,
+            expectedHeadSha: "1111111111111111111111111111111111111111",
+            body: "review text",
+          })
+          .pipe(Effect.exit);
+        expect(outcome._tag).toBe("Success");
+        const request = mockedRunProcess.mock.calls.at(-1)!;
+        expect(request[1]).toContain("repos/acme/app/pulls/9/reviews");
+        expect(JSON.parse(request[2]!.stdin!)).toEqual({
+          event,
+          commit_id: "1111111111111111111111111111111111111111",
+          body: "review text",
+        });
+      }
+    }),
+  );
+  it.effect("refuses self approval", () =>
+    Effect.gen(function* () {
+      const gh = yield* GitHubCli;
+      mockedRunProcess.mockImplementation(async (_command, args) =>
+        processResult(
+          args[0] === "pr"
+            ? JSON.stringify({
+                number: 9,
+                title: "PR",
+                createdAt: "2026-07-01T00:00:00Z",
+                updatedAt: "2026-07-01T00:00:00Z",
+                headRefName: "feature",
+                baseRefName: "main",
+                url: "https://github.com/acme/app/pull/9",
+                state: "OPEN",
+                author: { login: "author" },
+                headRefOid: "1111111111111111111111111111111111111111",
+              })
+            : "author",
+        ),
+      );
+      const error = yield* gh
+        .runPullRequestAction({
+          cwd: "/repo",
+          repository: "acme/app",
+          number: 9,
+          action: "approve",
+          expectedHeadSha: "1111111111111111111111111111111111111111",
+        })
+        .pipe(Effect.flip);
+      expect(error.detail).toContain("cannot receive this review");
+      expect(mockedRunProcess.mock.calls.some((call) => call[1].includes("POST"))).toBe(false);
+    }),
+  );
+  it.effect("refuses stale, draft, closed, and empty review submissions", () =>
+    Effect.gen(function* () {
+      const gh = yield* GitHubCli;
+      const base = {
+        number: 9,
+        title: "PR",
+        createdAt: "2026-07-01T00:00:00Z",
+        updatedAt: "2026-07-01T00:00:00Z",
+        headRefName: "feature",
+        baseRefName: "main",
+        url: "https://github.com/acme/app/pull/9",
+        state: "OPEN",
+        isDraft: false,
+        author: { login: "author" },
+        headRefOid: "1111111111111111111111111111111111111111",
+      };
+      for (const [overrides, head, body] of [
+        [{}, "2222222222222222222222222222222222222222", "text"],
+        [{ isDraft: true }, base.headRefOid, "text"],
+        [{ state: "CLOSED" }, base.headRefOid, "text"],
+        [{}, base.headRefOid, ""],
+      ] as const) {
+        mockedRunProcess.mockClear();
+        mockedRunProcess.mockImplementation(async (_command, args) =>
+          processResult(args[0] === "pr" ? JSON.stringify({ ...base, ...overrides }) : "reviewer"),
+        );
+        const outcome = yield* gh
+          .runPullRequestAction({
+            cwd: "/repo",
+            repository: "acme/app",
+            number: 9,
+            action: "request_changes",
+            expectedHeadSha: head,
+            body,
+          })
+          .pipe(Effect.exit);
+        expect(outcome._tag).toBe("Failure");
+        expect(mockedRunProcess.mock.calls.some((call) => call[1].includes("POST"))).toBe(false);
+      }
+    }),
+  );
+
+  it.effect("loads resolved review threads with replies and line positions", () =>
+    Effect.gen(function* () {
+      mockedRunProcess.mockResolvedValue(
+        processResult(
+          JSON.stringify({
+            data: {
+              repository: {
+                pullRequest: {
+                  reviewThreads: {
+                    nodes: [
+                      {
+                        id: "thread-1",
+                        isResolved: true,
+                        line: 12,
+                        diffSide: "RIGHT",
+                        comments: {
+                          nodes: [
+                            { id: "root", databaseId: 21, body: "root", path: "a.ts" },
+                            {
+                              id: "reply",
+                              databaseId: 22,
+                              replyTo: { id: "root" },
+                              body: "reply",
+                              path: "a.ts",
+                            },
+                          ],
+                          pageInfo: { hasNextPage: true },
+                        },
+                      },
+                    ],
+                    pageInfo: { hasNextPage: false },
+                  },
+                },
+              },
+            },
+          }),
+        ),
+      );
+      const gh = yield* GitHubCli;
+      const result = yield* gh.getPullRequestReviewComments({
+        cwd: "/repo",
+        host: "github.com",
+        owner: "acme",
+        repo: "app",
+        number: 9,
+        includeResolved: true,
+      });
+      expect(
+        result.comments.map((comment) => [
+          comment.id,
+          comment.replyToId,
+          comment.threadId,
+          comment.resolved,
+          comment.line,
+        ]),
+      ).toEqual([
+        ["root", null, "thread-1", true, 12],
+        ["reply", "root", "thread-1", true, 12],
+      ]);
+      expect(result.truncated).toBe(true);
+    }),
+  );
+  it.effect("pages through all replies in a review thread", () =>
+    Effect.gen(function* () {
+      mockedRunProcess
+        .mockResolvedValueOnce(
+          processResult(
+            JSON.stringify({
+              data: {
+                repository: {
+                  pullRequest: {
+                    reviewThreads: {
+                      nodes: [
+                        {
+                          id: "thread-1",
+                          isResolved: false,
+                          line: 12,
+                          comments: {
+                            nodes: [{ id: "root" }],
+                            pageInfo: { hasNextPage: true, endCursor: "page-1" },
+                          },
+                        },
+                      ],
+                      pageInfo: { hasNextPage: false },
+                    },
+                  },
+                },
+              },
+            }),
+          ),
+        )
+        .mockResolvedValueOnce(
+          processResult(
+            JSON.stringify({
+              data: {
+                node: {
+                  comments: {
+                    nodes: [{ id: "reply", replyTo: { id: "root" } }],
+                    pageInfo: { hasNextPage: false },
+                  },
+                },
+              },
+            }),
+          ),
+        );
+      const result = yield* (yield* GitHubCli).getPullRequestReviewComments({
+        cwd: "/repo",
+        host: "github.com",
+        owner: "acme",
+        repo: "app",
+        number: 9,
+        includeResolved: true,
+      });
+      expect(result.comments.map((comment) => comment.id)).toEqual(["root", "reply"]);
+      expect(result.truncated).toBe(false);
+      expect(mockedRunProcess.mock.calls[1]?.[1]).toContain("after=page-1");
+    }),
+  );
+  it.effect("posts inline replies and resolves only a thread in this pull request", () =>
+    Effect.gen(function* () {
+      const gh = yield* GitHubCli;
+      mockedRunProcess.mockResolvedValueOnce(processResult("{}"));
+      yield* gh.commentOnPullRequest({
+        cwd: "/repo",
+        repository: "acme/app",
+        number: 9,
+        body: "reply",
+        replyToCommentId: 21,
+      });
+      expect(mockedRunProcess.mock.calls.at(-1)?.[1]).toContain(
+        "repos/acme/app/pulls/9/comments/21/replies",
+      );
+      mockedRunProcess
+        .mockResolvedValueOnce(
+          processResult(
+            JSON.stringify({
+              data: {
+                repository: {
+                  pullRequest: {
+                    reviewThreads: {
+                      nodes: [{ id: "thread-1", comments: { nodes: [{ id: "root" }] } }],
+                      pageInfo: { hasNextPage: false },
+                    },
+                  },
+                },
+              },
+            }),
+          ),
+        )
+        .mockResolvedValueOnce(processResult("{}"));
+      yield* gh.runPullRequestAction({
+        cwd: "/repo",
+        repository: "acme/app",
+        number: 9,
+        action: "resolve_thread",
+        reviewThreadId: "thread-1",
+      });
+      expect(JSON.parse(mockedRunProcess.mock.calls.at(-1)![2]!.stdin!).query).toContain(
+        "resolveReviewThread",
+      );
     }),
   );
 

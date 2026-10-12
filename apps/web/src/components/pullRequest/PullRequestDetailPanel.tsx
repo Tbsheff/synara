@@ -83,6 +83,7 @@ import { PullRequestPageSummary, PullRequestSummaryTab } from "./PullRequestSumm
 import { PullRequestTimelineTab } from "./PullRequestTimelineTab";
 import { PullRequestsUnavailableState } from "./PullRequestsUnavailableState";
 import { PullRequestWarningNote } from "./PullRequestWarningNote";
+import { buildPullRequestActionInput } from "./pullRequestDetail.logic";
 import { assessPullRequestStack, pullRequestMergeBlocker } from "./pullRequestStack.logic";
 
 type DetailTab = "summary" | "timeline" | "code";
@@ -93,6 +94,11 @@ const ACTION_SUCCESS_LABELS: Record<PullRequestAction, string> = {
   draft: "Converted to draft",
   close: "Pull request closed",
   reopen: "Pull request reopened",
+  approve: "Review approved",
+  request_changes: "Changes requested",
+  review_comment: "Review submitted",
+  resolve_thread: "Review thread resolved",
+  unresolve_thread: "Review thread reopened",
 };
 
 // The dock's tab row; the page names the diff "Changes" and puts it before Timeline.
@@ -215,11 +221,7 @@ export function PullRequestDetailPanel({
     if (actionInFlightRef.current) return;
     actionInFlightRef.current = true;
     void actionMutation
-      .mutateAsync({
-        ...input,
-        action,
-        ...(method ? { mergeMethod: method } : {}),
-      })
+      .mutateAsync(buildPullRequestActionInput(input, action, method, detail?.headSha))
       .then((result) => {
         const title =
           action === "merge" && result.mergeOutcome === "enqueued"

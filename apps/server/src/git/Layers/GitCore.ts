@@ -197,6 +197,60 @@ interface ExecuteGitOptions {
 }
 
 type WorkingTreeStatSummary = ReturnType<typeof summarizeGitNumstatOutputs>;
+type WorkingTreeFileStat = WorkingTreeStatSummary["files"][number];
+type StatusFileStat = WorkingTreeFileStat & { readonly staged?: boolean };
+
+function markStagedFiles(
+  files: ReadonlyArray<WorkingTreeFileStat>,
+  stagedNumstatStdout: string,
+): StatusFileStat[] {
+  const stagedPaths = new Set(
+    summarizeGitNumstatOutputs([stagedNumstatStdout]).files.map((file) => file.path),
+  );
+  return files.map((file) => (stagedPaths.has(file.path) ? { ...file, staged: true } : file));
+}
+
+const LITERAL_PATHSPEC_ENV = { GIT_LITERAL_PATHSPECS: "1" } as const;
+
+function invalidWorkspacePathDetail(filePaths: ReadonlyArray<string>): string | null {
+  for (const filePath of filePaths) {
+    if (filePath.includes("\0")) {
+      return "Selected file paths cannot contain NUL characters.";
+    }
+    const normalized = nodePath.posix.normalize(filePath.replaceAll("\\", "/"));
+    if (
+      filePath.length === 0 ||
+      nodePath.posix.isAbsolute(normalized) ||
+      nodePath.win32.isAbsolute(filePath) ||
+      normalized === ".." ||
+      normalized.startsWith("../")
+    ) {
+      return `File paths must be relative to the workspace: '${filePath}'.`;
+    }
+  }
+  return null;
+}
+
+function parseRenamePairs(nameStatusStdout: string): Array<{ from: string; to: string }> {
+  const fields = nameStatusStdout.split("\0");
+  const pairs: Array<{ from: string; to: string }> = [];
+  for (let index = 0; index < fields.length; ) {
+    const status = fields[index] ?? "";
+    if (status.length === 0) {
+      index += 1;
+      continue;
+    }
+    if (status.startsWith("R") || status.startsWith("C")) {
+      const from = fields[index + 1];
+      const to = fields[index + 2];
+      if (status.startsWith("R") && from && to) pairs.push({ from, to });
+      index += 3;
+    } else {
+      index += 2;
+    }
+  }
+  return pairs;
+}
 
 function resolveGitPath(cwd: string, gitPath: string): string {
   return nodePath.isAbsolute(gitPath) ? gitPath : nodePath.join(cwd, gitPath);
@@ -1203,6 +1257,31 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         return true;
       });
 
+    const withMoveAwareIndex = <A, E, R>(
+      operation: string,
+      cwd: string,
+      timeoutMs: number | null,
+      use: (env: NodeJS.ProcessEnv) => Effect.Effect<A, E, R>,
+    ) =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const tempIndexDir = yield* fileSystem.makeTempDirectoryScoped({
+            prefix: `synara-git-status-index-${process.pid}-`,
+          });
+          const tempIndexPath = nodePath.join(tempIndexDir, "index");
+          yield* copyRepositoryIndex(cwd, tempIndexPath);
+
+          const tempIndexEnv = { GIT_INDEX_FILE: tempIndexPath };
+          yield* executeGit(`${operation}.addAll`, cwd, ["add", "-A", "--", ":/"], {
+            env: tempIndexEnv,
+            timeoutMs,
+            fallbackErrorMessage: "git add -A failed while summarizing working tree status",
+          });
+
+          return yield* use(tempIndexEnv);
+        }),
+      );
+
     const readMoveAwareWorkingTreeSummary = (
       cwd: string,
       untrackedPaths: ReadonlySet<string>,
@@ -1260,7 +1339,14 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
             },
           );
 
-          return summarizeGitNumstatOutputs([numstatStdout]);
+          const stagedNumstatStdout = yield* runGitNulMetadata(
+            "GitCore.statusDetails.moveAwareStagedNumstat",
+            cwd,
+            ["diff", "--cached", "--numstat", "-z", "--find-renames"],
+            { timeoutMs: MOVE_AWARE_WORKING_TREE_STATUS_TIMEOUT_MS },
+          );
+          const summary = summarizeGitNumstatOutputs([numstatStdout]);
+          return { ...summary, files: markStagedFiles(summary.files, stagedNumstatStdout) };
         }),
       ).pipe(
         Effect.catch((cause) =>
@@ -1901,7 +1987,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           configuredPrBaseBranch,
           hasWorkingTreeChanges,
           workingTree: {
-            files,
+            files: markStagedFiles(files, stagedNumstatStdout),
             insertions,
             deletions,
           },
@@ -2957,17 +3043,87 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         };
       });
 
-    const prepareCommitContext: GitCoreShape["prepareCommitContext"] = (cwd, filePaths) =>
+    const readWorkingTreeRenames = (cwd: string, nameStatusArgs: ReadonlyArray<string>) =>
+      Effect.gen(function* () {
+        const deletedFromWorkingTree = yield* runGitNulMetadata(
+          "GitCore.prepareCommitContext.deletedFiles",
+          cwd,
+          ["ls-files", "--deleted", "-z"],
+          GIT_MUTATION_OPTIONS,
+        );
+        if (deletedFromWorkingTree.length === 0) return null;
+        return yield* withMoveAwareIndex(
+          "GitCore.prepareCommitContext.moveAware",
+          cwd,
+          null,
+          (env) =>
+            runGitNulMetadata(
+              "GitCore.prepareCommitContext.workingTreeRenames",
+              cwd,
+              nameStatusArgs,
+              {
+                ...GIT_MUTATION_OPTIONS,
+                env,
+              },
+            ),
+        );
+      });
+
+    const readRenameSourcesOfSelectedDestinations = (
+      cwd: string,
+      filePaths: ReadonlyArray<string>,
+    ) =>
+      Effect.gen(function* () {
+        const nameStatusArgs = ["diff", "--cached", "-M", "--name-status", "-z", "--no-ext-diff"];
+        const [stagedRenames, workingTreeRenames] = yield* Effect.all(
+          [
+            runGitNulMetadata(
+              "GitCore.prepareCommitContext.stagedRenames",
+              cwd,
+              nameStatusArgs,
+              GIT_MUTATION_OPTIONS,
+            ),
+            readWorkingTreeRenames(cwd, nameStatusArgs),
+          ],
+          { concurrency: "unbounded" },
+        );
+        const selected = new Set(filePaths);
+        const sources = new Set<string>();
+        for (const pair of [
+          ...parseRenamePairs(stagedRenames),
+          ...parseRenamePairs(workingTreeRenames ?? ""),
+        ]) {
+          if (selected.has(pair.to) && !selected.has(pair.from)) sources.add(pair.from);
+        }
+        return [...sources];
+      }).pipe(
+        Effect.mapError(
+          toGitCommandError(
+            {
+              operation: "GitCore.prepareCommitContext.renames",
+              cwd,
+              args: ["diff", "--cached", "-M", "--name-status"],
+            },
+            "could not read renamed files for the selection.",
+          ),
+        ),
+      );
+
+    const prepareCommitContext: GitCoreShape["prepareCommitContext"] = (
+      cwd,
+      filePaths,
+      commitScope,
+    ) =>
       Effect.gen(function* () {
         if (filePaths && filePaths.length > 0) {
-          if (filePaths.some((filePath) => filePath.includes("\0"))) {
-            return yield* createGitCommandError(
-              "GitCore.prepareCommitContext.addSelected",
-              cwd,
-              ["add", "-A"],
-              "Selected file paths cannot contain NUL characters.",
-            );
-          }
+          yield* requireWorkspaceRelativePaths(
+            "GitCore.prepareCommitContext.addSelected",
+            cwd,
+            ["add", "-A"],
+            filePaths,
+          );
+          const renameSources = yield* readRenameSourcesOfSelectedDestinations(cwd, filePaths);
+          const pathsToStage = [...filePaths, ...renameSources];
           yield* executeGit(
             "GitCore.prepareCommitContext.reset",
             cwd,
@@ -2981,12 +3137,12 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
                 prefix: "synara-git-pathspec-",
               });
               const pathspec = nodePath.join(directory, "paths");
-              yield* fileSystem.writeFileString(pathspec, `${filePaths.join("\0")}\0`);
+              yield* fileSystem.writeFileString(pathspec, `${pathsToStage.join("\0")}\0`);
               yield* executeGit(
                 "GitCore.prepareCommitContext.addSelected",
                 cwd,
                 ["add", "-A", `--pathspec-from-file=${pathspec}`, "--pathspec-file-nul"],
-                GIT_MUTATION_OPTIONS,
+                { ...GIT_MUTATION_OPTIONS, env: LITERAL_PATHSPEC_ENV },
               );
             }),
           ).pipe(
@@ -3002,12 +3158,15 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
             ),
           );
         } else {
-          yield* executeGit(
-            "GitCore.prepareCommitContext.addAll",
-            cwd,
-            ["add", "-A"],
-            GIT_MUTATION_OPTIONS,
-          );
+          const scope = commitScope ?? "staged";
+          if (scope === "all") {
+            yield* executeGit(
+              "GitCore.prepareCommitContext.addAll",
+              cwd,
+              ["add", "-A"],
+              GIT_MUTATION_OPTIONS,
+            );
+          }
         }
 
         const stagedSummary = yield* executeGit(
@@ -3699,6 +3858,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
                   force: false,
                   errorOnExist: true,
                   preserveTimestamps: true,
+                  verbatimSymlinks: true,
                 });
               },
               catch: (cause) =>
@@ -3757,6 +3917,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
                   force: false,
                   errorOnExist: true,
                   preserveTimestamps: true,
+                  verbatimSymlinks: true,
                 });
               }
               await nodeFs.writeFile(
@@ -4608,11 +4769,164 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         ),
       );
 
+    const requireWorkspaceRelativePaths = (
+      operation: string,
+      cwd: string,
+      args: readonly string[],
+      paths: ReadonlyArray<string>,
+    ): Effect.Effect<void, GitCommandError> => {
+      const detail = invalidWorkspacePathDetail(paths);
+      return detail === null
+        ? Effect.void
+        : Effect.fail(createGitCommandError(operation, cwd, args, detail));
+    };
+
+    const discardFile: GitCoreShape["discardFile"] = (cwd, filePath, expectedPatch) =>
+      Effect.gen(function* () {
+        const operation = "GitCore.discardFile";
+        yield* requireWorkspaceRelativePaths(operation, cwd, ["restore"], [filePath]);
+        const verifyPatch = readWorkingTreePatch(cwd, filePath).pipe(
+          Effect.flatMap((result) =>
+            result.truncated || result.patch !== expectedPatch
+              ? Effect.fail(
+                  createGitCommandError(
+                    operation,
+                    cwd,
+                    ["diff"],
+                    "The file changed after you reviewed it. Refresh the diff before discarding.",
+                  ),
+                )
+              : Effect.void,
+          ),
+        );
+        yield* verifyPatch;
+        const sources = yield* readRenameSourcesOfSelectedDestinations(cwd, [filePath]);
+        const paths = [filePath, ...sources];
+        const realCwd = yield* fileSystem
+          .realPath(cwd)
+          .pipe(
+            Effect.mapError((cause) => createGitCommandError(operation, cwd, [], String(cause))),
+          );
+        for (const relative of paths) {
+          const parent = nodePath.dirname(nodePath.join(realCwd, relative));
+          const resolved = yield* fileSystem.realPath(parent).pipe(Effect.option);
+          if (Option.isSome(resolved) && resolved.value !== parent)
+            return yield* createGitCommandError(
+              operation,
+              cwd,
+              [],
+              "Discard cannot follow a symbolic link outside the workspace.",
+            );
+          const directory = yield* Effect.tryPromise({
+            try: () =>
+              nodeFs.lstat(nodePath.join(realCwd, relative)).then(
+                (entry) => entry.isDirectory(),
+                (error: NodeJS.ErrnoException) => {
+                  if (error.code === "ENOENT" || error.code === "ENOTDIR") return false;
+                  throw error;
+                },
+              ),
+            catch: (cause) => createGitCommandError(operation, cwd, [], String(cause)),
+          });
+          if (directory)
+            return yield* createGitCommandError(
+              operation,
+              cwd,
+              [],
+              "Discard can only target a file.",
+            );
+        }
+        const recoveryRef = `refs/synara/discard/${crypto.randomUUID()}`;
+        const saved = yield* withMoveAwareIndex(operation, cwd, 30_000, (env) =>
+          Effect.gen(function* () {
+            const tree = (yield* executeGit(operation, cwd, ["write-tree"], { env })).stdout;
+            const commit = (yield* executeGit(
+              operation,
+              cwd,
+              ["commit-tree", tree.trim(), "-m", "Synara pre-discard recovery"],
+              {
+                env: {
+                  ...env,
+                  GIT_AUTHOR_NAME: "Synara",
+                  GIT_AUTHOR_EMAIL: "synara@localhost",
+                  GIT_COMMITTER_NAME: "Synara",
+                  GIT_COMMITTER_EMAIL: "synara@localhost",
+                },
+              },
+            )).stdout;
+            yield* executeGit(operation, cwd, ["update-ref", recoveryRef, commit.trim()]);
+            return true;
+          }),
+        );
+        if (!saved)
+          return yield* createGitCommandError(
+            operation,
+            cwd,
+            [],
+            "Could not save a recovery copy. Discard was refused.",
+          );
+        yield* verifyPatch;
+        const head = yield* executeGit(operation, cwd, ["rev-parse", "--verify", "HEAD"], {
+          allowNonZeroExit: true,
+        });
+        const tracked =
+          head.code === 0
+            ? (yield* runGitNulMetadata(
+                operation,
+                cwd,
+                ["ls-tree", "-r", "--name-only", "-z", "HEAD", "--", ...paths],
+                { env: LITERAL_PATHSPEC_ENV },
+              ))
+                .split("\0")
+                .filter(Boolean)
+            : [];
+        yield* Effect.gen(function* () {
+          if (tracked.length)
+            yield* executeGit(
+              operation,
+              cwd,
+              ["restore", "--source=HEAD", "--staged", "--worktree", "--", ...tracked],
+              { env: LITERAL_PATHSPEC_ENV },
+            );
+          for (const relative of paths.filter((entry) => !tracked.includes(entry))) {
+            yield* executeGit(
+              operation,
+              cwd,
+              ["rm", "--cached", "-f", "--ignore-unmatch", "--", relative],
+              { env: LITERAL_PATHSPEC_ENV },
+            );
+            yield* fileSystem.remove(nodePath.join(realCwd, relative), { force: true });
+          }
+        }).pipe(
+          Effect.mapError((cause) =>
+            createGitCommandError(
+              operation,
+              cwd,
+              [],
+              `Discard failed. The recovery copy is kept at ${recoveryRef}. ${String(cause)}`,
+            ),
+          ),
+        );
+        return { recoveryRef };
+      }).pipe(
+        Effect.mapError((cause) =>
+          cause instanceof GitCommandError
+            ? cause
+            : createGitCommandError("GitCore.discardFile", cwd, [], String(cause)),
+        ),
+      );
+
     const stageFiles: GitCoreShape["stageFiles"] = (cwd, paths) =>
-      runGit("GitCore.stageFiles", cwd, ["add", "--", ...paths]);
+      Effect.gen(function* () {
+        yield* requireWorkspaceRelativePaths("GitCore.stageFiles", cwd, ["add"], paths);
+        yield* executeGit("GitCore.stageFiles", cwd, ["add", "--", ...paths], {
+          env: LITERAL_PATHSPEC_ENV,
+        });
+      });
 
     const unstageFiles: GitCoreShape["unstageFiles"] = (cwd, paths) =>
       Effect.gen(function* () {
+        yield* requireWorkspaceRelativePaths("GitCore.unstageFiles", cwd, ["reset"], paths);
         // `git reset` resolves against HEAD, which does not exist before the first
         // commit. Fall back to `git rm --cached` so newly staged files can still be
         // unstaged in a freshly initialized repository.
@@ -4623,12 +4937,13 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           { allowNonZeroExit: true },
         ).pipe(Effect.map((result) => result.code === 0));
 
-        yield* runGit(
+        yield* executeGit(
           "GitCore.unstageFiles",
           cwd,
           headExists
             ? ["reset", "-q", "HEAD", "--", ...paths]
             : ["rm", "--cached", "-q", "--", ...paths],
+          { env: LITERAL_PATHSPEC_ENV },
         );
       });
 
@@ -4679,6 +4994,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
       initRepo,
       listLocalBranchNames,
       stageFiles,
+      discardFile,
       unstageFiles,
     } satisfies GitCoreShape;
   });

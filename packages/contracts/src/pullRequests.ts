@@ -15,7 +15,18 @@ export type PullRequestState = typeof PullRequestState.Type;
 export const PullRequestMergeMethod = Schema.Literals(["merge", "squash", "rebase"]);
 export type PullRequestMergeMethod = typeof PullRequestMergeMethod.Type;
 
-export const PullRequestAction = Schema.Literals(["merge", "ready", "draft", "close", "reopen"]);
+export const PullRequestAction = Schema.Literals([
+  "merge",
+  "ready",
+  "draft",
+  "close",
+  "reopen",
+  "approve",
+  "request_changes",
+  "review_comment",
+  "resolve_thread",
+  "unresolve_thread",
+]);
 export type PullRequestAction = typeof PullRequestAction.Type;
 
 export const PullRequestActor = Schema.Struct({
@@ -77,6 +88,12 @@ export const PullRequestComment = Schema.Struct({
   url: Schema.NullOr(Schema.String),
   path: Schema.NullOr(Schema.String),
   reviewState: Schema.NullOr(Schema.String),
+  threadId: Schema.optional(Schema.String),
+  resolved: Schema.optional(Schema.Boolean),
+  line: Schema.optional(Schema.NullOr(PositiveInt)),
+  side: Schema.optional(Schema.NullOr(Schema.Literals(["LEFT", "RIGHT"]))),
+  replyToId: Schema.optional(Schema.NullOr(Schema.String)),
+  databaseId: Schema.optional(PositiveInt),
 });
 export type PullRequestComment = typeof PullRequestComment.Type;
 
@@ -254,6 +271,9 @@ export const PullRequestDetail = Schema.Struct({
   stackMetadataIncomplete: Schema.optional(Schema.Boolean).pipe(
     Schema.withDecodingDefault(() => false),
   ),
+  headSha: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
 });
 export type PullRequestDetail = typeof PullRequestDetail.Type;
 
@@ -269,10 +289,14 @@ export const PullRequestActionInput = Schema.Struct({
   number: PositiveInt,
   action: PullRequestAction,
   mergeMethod: Schema.optional(PullRequestMergeMethod),
+  expectedHeadSha: Schema.optional(TrimmedNonEmptyString),
+  body: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(65536))),
+  reviewThreadId: Schema.optional(TrimmedNonEmptyString),
 });
 export type PullRequestActionInput = typeof PullRequestActionInput.Type;
 
 export const PullRequestCommentInput = Schema.Struct({
+  replyToCommentId: Schema.optional(PositiveInt),
   projectId: ProjectId,
   repository: TrimmedNonEmptyString,
   number: PositiveInt,

@@ -11,6 +11,8 @@ import { GLASS_RAISED_SURFACE_CLASS_NAME } from "~/surfaceStyles";
 import type { PullRequestDetailInput } from "@synara/contracts";
 import { useRef, useState } from "react";
 
+import { Menu, MenuTrigger, MenuPopupBase, MenuItem } from "~/components/ui/menu";
+import { Button } from "~/components/ui/button";
 import { toastManager } from "~/components/ui/toast";
 import { ArrowUpIcon, GitHubIcon } from "~/lib/icons";
 import { PR_BODY_TEXT_CLASS_NAME } from "./pullRequestText";
@@ -24,16 +26,22 @@ export type GitHubCommentTarget = Pick<
 
 /** The slice of a React Query comment mutation the composer drives. */
 export interface GitHubCommentMutation {
-  mutateAsync: (input: GitHubCommentTarget & { body: string }) => Promise<unknown>;
+  mutateAsync: (
+    input: GitHubCommentTarget & { body: string; replyToCommentId?: number },
+  ) => Promise<unknown>;
   isPending: boolean;
 }
 
 export function PullRequestCommentComposer({
   target,
   mutation,
+  onReview,
 }: {
   target: GitHubCommentTarget;
   mutation: GitHubCommentMutation;
+  onReview?:
+    | ((action: "approve" | "request_changes" | "review_comment", body: string) => Promise<unknown>)
+    | undefined;
 }) {
   const [body, setBody] = useState("");
   // Synchronous re-entrancy lock: mutation.isPending updates on React's schedule, which is
@@ -63,6 +71,23 @@ export function PullRequestCommentComposer({
           type: "error",
           title: "Could not post comment",
           description: error instanceof Error ? error.message : "GitHub CLI comment failed.",
+        });
+      })
+      .finally(() => {
+        submittingRef.current = false;
+      });
+  };
+
+  const submitReview = (action: "approve" | "request_changes" | "review_comment") => {
+    if (!onReview || submittingRef.current || mutation.isPending) return;
+    submittingRef.current = true;
+    void onReview(action, trimmed)
+      .then(() => setBody(""))
+      .catch((error: unknown) => {
+        toastManager.add({
+          type: "error",
+          title: "Could not submit review",
+          description: error instanceof Error ? error.message : "Review failed.",
         });
       })
       .finally(() => {
@@ -101,6 +126,22 @@ export function PullRequestCommentComposer({
           "font-system-ui min-w-0 flex-1 resize-none bg-transparent py-1.5 outline-none placeholder:text-muted-foreground disabled:opacity-60",
         )}
       />
+      {onReview ? (
+        <Menu>
+          <MenuTrigger render={<Button variant="ghost" size="xs" disabled={mutation.isPending} />}>
+            Review
+          </MenuTrigger>
+          <MenuPopupBase>
+            <MenuItem onClick={() => submitReview("approve")}>Approve</MenuItem>
+            <MenuItem disabled={!trimmed} onClick={() => submitReview("request_changes")}>
+              Request changes
+            </MenuItem>
+            <MenuItem disabled={!trimmed} onClick={() => submitReview("review_comment")}>
+              Submit review comment
+            </MenuItem>
+          </MenuPopupBase>
+        </Menu>
+      ) : null}
       <button
         type="button"
         disabled={!canSubmit}

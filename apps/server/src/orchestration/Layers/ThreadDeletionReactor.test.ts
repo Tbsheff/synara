@@ -10,6 +10,7 @@ import {
   isThreadCurrentlyArchived,
 } from "./ThreadDeletionReactor";
 import { classifyManagedWorktreeRemovalCandidates } from "../../managedWorktrees";
+import * as threadDeletion from "./ThreadDeletionReactor";
 import { TerminalError } from "../../terminal/Services/Manager";
 
 describe("terminal scope cleanup", () => {
@@ -132,5 +133,33 @@ describe("holdWorktreesWithUnresolvedCleanup", () => {
   it("leaves the thread list untouched when every cleanup resolved", () => {
     const threads = [{ id: "a", archivedAt: null, deletedAt: "2026-10-01T00:00:00.000Z" }];
     expect(holdWorktreesWithUnresolvedCleanup(threads, new Set())).toBe(threads);
+  });
+});
+
+describe("checkpoint retention", () => {
+  it("purges orphan start refs for only the deleted thread in all managed families", async () => {
+    const execute = vi
+      .fn()
+      .mockReturnValueOnce(
+        Effect.succeed({
+          code: 0,
+          stderr: "",
+          stdout:
+            "refs/synara/checkpoints/ZGVsZXRlZA/turn-start/b3JwaGFu\nrefs/legacy/checkpoints/ZGVsZXRlZA/message-start/b3JwaGFu\nrefs/synara/checkpoints/cGVlcg/turn/1\nrefs/heads/main\n",
+        }),
+      )
+      .mockReturnValue(Effect.succeed({ code: 0, stdout: "", stderr: "" }));
+    expect(typeof threadDeletion.purgeThreadCheckpointRefs).toBe("function");
+    await Effect.runPromise(
+      threadDeletion.purgeThreadCheckpointRefs(
+        { execute },
+        "/repo",
+        ThreadId.makeUnsafe("deleted"),
+      ),
+    );
+    expect(execute.mock.calls.slice(1).map(([input]) => input.args)).toEqual([
+      ["update-ref", "-d", "refs/synara/checkpoints/ZGVsZXRlZA/turn-start/b3JwaGFu"],
+      ["update-ref", "-d", "refs/legacy/checkpoints/ZGVsZXRlZA/message-start/b3JwaGFu"],
+    ]);
   });
 });

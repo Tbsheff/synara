@@ -218,6 +218,12 @@ const make = Effect.gen(function* () {
             ELSE 0 END
         )`
       : sql``;
+    const threadFilter =
+      input.threadIds === undefined
+        ? sql``
+        : input.threadIds.length === 0
+          ? sql`AND 0`
+          : sql`AND thread_id IN ${sql.in(input.threadIds)}`;
     return Effect.gen(function* () {
       const rows = yield* sql<Record<string, unknown>>`
         SELECT sequence, event_json AS "eventJson"
@@ -225,6 +231,7 @@ const make = Effect.gen(function* () {
         WHERE sequence > ${input.sequenceExclusive}
           AND sequence <= ${input.throughSequenceInclusive}
           ${checkpointFilter}
+          ${threadFilter}
         ORDER BY sequence ASC
         LIMIT ${limit}
       `.pipe(Effect.mapError(toPersistenceSqlError("ProviderRuntimeEvent.readAfter")));

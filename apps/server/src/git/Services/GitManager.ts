@@ -48,6 +48,10 @@ export interface GitRunStackedActionOptions {
 /**
  * GitManagerShape - Service API for high-level Git workflow actions.
  */
+export interface GitHandoffThreadOptions {
+  readonly onApplied?: (result: GitHandoffThreadResult) => Effect.Effect<void, unknown>;
+}
+
 export interface GitManagerShape {
   /**
    * Read current repository Git status plus open PR metadata when available.
@@ -125,6 +129,7 @@ export interface GitManagerShape {
    */
   readonly handoffThread: (
     input: Omit<GitHandoffThreadInput, "commandId" | "threadId">,
+    options?: GitHandoffThreadOptions,
   ) => Effect.Effect<GitHandoffThreadResult, GitManagerServiceError>;
 
   /**

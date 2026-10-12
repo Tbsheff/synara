@@ -61,6 +61,7 @@ export function makePullRequestOperations(dependencies: {
                 host: "github.com",
                 owner,
                 repo,
+                includeResolved: true,
                 number,
               }),
             )
@@ -104,6 +105,16 @@ export function makePullRequestOperations(dependencies: {
           url: comment.url,
           path: comment.path,
           reviewState: null,
+          ...(comment.threadId !== undefined
+            ? {
+                threadId: comment.threadId,
+                resolved: comment.resolved,
+                line: comment.line,
+                side: comment.side,
+                replyToId: comment.replyToId,
+                databaseId: comment.databaseId,
+              }
+            : {}),
         })),
       ].toSorted((left, right) => left.createdAt.localeCompare(right.createdAt));
       return {
@@ -118,6 +129,7 @@ export function makePullRequestOperations(dependencies: {
         mergeCapabilities,
         stack: stackResult.stack,
         stackMetadataIncomplete: stackResult.incomplete,
+        headSha: detail.headSha ?? null,
       } satisfies PullRequestDetail;
     });
 
@@ -178,7 +190,10 @@ export function makePullRequestOperations(dependencies: {
           repository,
           number: input.number,
           action: input.action,
+          ...(input.body ? { body: input.body } : {}),
+          ...(input.reviewThreadId ? { reviewThreadId: input.reviewThreadId } : {}),
           ...(input.mergeMethod ? { mergeMethod: input.mergeMethod } : {}),
+          ...(input.expectedHeadSha ? { expectedHeadSha: input.expectedHeadSha } : {}),
         })
         .pipe(
           Effect.ensuring(
@@ -206,6 +221,7 @@ export function makePullRequestOperations(dependencies: {
           repository,
           number: input.number,
           body: input.body,
+          ...(input.replyToCommentId ? { replyToCommentId: input.replyToCommentId } : {}),
         })
         .pipe(
           Effect.ensuring(

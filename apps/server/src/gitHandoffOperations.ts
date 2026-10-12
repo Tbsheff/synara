@@ -99,6 +99,15 @@ export const recordGitHandoffResult = (commandId: string, result: GitHandoffThre
     `.pipe(Effect.mapError(operationError("Failed to persist applied Git handoff result.")));
   });
 
+export const makeGitHandoffResultRecorder = (commandId: string) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    return (result: GitHandoffThreadResult) =>
+      recordGitHandoffResult(commandId, result).pipe(
+        Effect.provideService(SqlClient.SqlClient, sql),
+      );
+  });
+
 export const completeGitHandoff = (commandId: string) =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
@@ -158,14 +167,54 @@ export const recoverGitHandoffOperations = (
     `.pipe(Effect.mapError(operationError("Failed to list recoverable Git handoffs.")));
 
     for (const row of rows) {
-      const input = yield* Effect.try({
-        try: () => Schema.decodeUnknownSync(GitHandoffThreadInput)(JSON.parse(row.inputJson)),
-        catch: operationError(`Invalid persisted Git handoff input for ${row.commandId}.`),
-      });
-      const result = yield* parseResult(row);
-      yield* dispatch(gitHandoffMetadataCommand(input, result)).pipe(
-        Effect.mapError(operationError(`Failed to recover Git handoff ${row.commandId}.`)),
-      );
-      yield* completeGitHandoff(row.commandId);
+      yield* recoverGitHandoff(row, dispatch);
     }
+  });
+
+const parseInput = (row: HandoffRow) =>
+  Effect.try({
+    try: () => Schema.decodeUnknownSync(GitHandoffThreadInput)(JSON.parse(row.inputJson)),
+    catch: operationError(`Invalid persisted Git handoff input for ${row.commandId}.`),
+  });
+
+const recoverGitHandoff = (
+  row: HandoffRow,
+  dispatch: (command: OrchestrationCommand) => Effect.Effect<unknown, unknown>,
+) =>
+  Effect.gen(function* () {
+    const decoded = yield* Effect.result(Effect.all([parseInput(row), parseResult(row)] as const));
+    if (decoded._tag === "Failure") {
+      yield* markUndecodableGitHandoffUncertain(row.commandId);
+      yield* Effect.logError(
+        "Undecodable Git handoff was marked uncertain; its stored row is kept for inspection",
+        {
+          commandId: row.commandId,
+          error: decoded.failure,
+        },
+      );
+      return;
+    }
+    const [input, result] = decoded.success;
+    const dispatched = yield* Effect.result(dispatch(gitHandoffMetadataCommand(input, result)));
+    if (dispatched._tag === "Failure") {
+      yield* Effect.logWarning(
+        "Git handoff recovery dispatch failed; the row stays git_applied to retry next launch",
+        {
+          commandId: row.commandId,
+          error: dispatched.failure,
+        },
+      );
+      return;
+    }
+    yield* completeGitHandoff(row.commandId);
+  });
+
+const markUndecodableGitHandoffUncertain = (commandId: string) =>
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+    yield* sql`
+      UPDATE git_handoff_operations
+      SET phase = 'uncertain', updated_at = ${new Date().toISOString()}
+      WHERE command_id = ${commandId} AND phase = 'git_applied'
+    `.pipe(Effect.mapError(operationError("Failed to fence invalid Git handoff operation.")));
   });

@@ -2311,6 +2311,58 @@ it.layer(TestLayer)("git integration", (it) => {
 
   // ── Full flow: checkout conflict ──
 
+  describe("discardFile", () => {
+    it.effect("discards only the reviewed literal file and keeps a recovery copy", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* writeTextFile(`${tmp}/a*.txt`, "committed\n");
+        yield* writeTextFile(`${tmp}/ab.txt`, "other\n");
+        yield* git(tmp, ["add", "."]);
+        yield* git(tmp, ["commit", "-m", "literal files"]);
+        yield* writeTextFile(`${tmp}/a*.txt`, "discard me\n");
+        yield* writeTextFile(`${tmp}/ab.txt`, "keep me\n");
+        yield* git(tmp, ["add", "--", "ab.txt"]);
+        const core = yield* GitCore;
+        expect(typeof core.discardFile).toBe("function");
+        const patch = yield* core.readWorkingTreePatch(tmp, "a*.txt");
+        const result = yield* core.discardFile(tmp, "a*.txt", patch.patch);
+        expect(yield* readTextFile(`${tmp}/a*.txt`)).toBe("committed\n");
+        expect(yield* readTextFile(`${tmp}/ab.txt`)).toBe("keep me\n");
+        expect(yield* git(tmp, ["diff", "--cached", "--name-only"])).toBe("ab.txt");
+        expect(yield* git(tmp, ["show", `${result.recoveryRef}:a*.txt`])).toBe("discard me");
+      }),
+    );
+    it.effect("refuses a discard when the reviewed file changed", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* writeTextFile(`${tmp}/new.txt`, "reviewed\n");
+        const core = yield* GitCore;
+        expect(typeof core.discardFile).toBe("function");
+        const patch = yield* core.readWorkingTreePatch(tmp, "new.txt");
+        yield* writeTextFile(`${tmp}/new.txt`, "newer\n");
+        const error = yield* core.discardFile(tmp, "new.txt", patch.patch).pipe(Effect.flip);
+        expect(error.message).toContain("changed after you reviewed");
+        expect(yield* readTextFile(`${tmp}/new.txt`)).toBe("newer\n");
+      }),
+    );
+    it.effect("removes an untracked file only after saving its contents", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* writeTextFile(`${tmp}/new.txt`, "recover me\n");
+        const core = yield* GitCore;
+        expect(typeof core.discardFile).toBe("function");
+        const patch = yield* core.readWorkingTreePatch(tmp, "new.txt");
+        const result = yield* core.discardFile(tmp, "new.txt", patch.patch);
+        const fs = yield* FileSystem.FileSystem;
+        expect(yield* fs.exists(`${tmp}/new.txt`)).toBe(false);
+        expect(yield* git(tmp, ["show", `${result.recoveryRef}:new.txt`])).toBe("recover me");
+      }),
+    );
+  });
+
   describe("GitCore", () => {
     it.effect(
       "reuses an existing remote when the target URL only differs by a trailing slash after .git",
@@ -3392,7 +3444,7 @@ it.layer(TestLayer)("git integration", (it) => {
         const core = yield* GitCore;
 
         yield* writeTextFile(path.join(tmp, "README.md"), "new content\n");
-        const context = yield* core.prepareCommitContext(tmp);
+        const context = yield* core.prepareCommitContext(tmp, undefined, "all");
         expect(context).not.toBeNull();
         expect(context!.stagedSummary.length).toBeGreaterThan(0);
         expect(context!.stagedPatch.length).toBeGreaterThan(0);
@@ -3441,6 +3493,236 @@ it.layer(TestLayer)("git integration", (it) => {
       }),
     );
 
+    it.effect("commit selection treats selected names as literal paths", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* writeTextFile(path.join(tmp, "*.txt"), "star\n");
+        yield* writeTextFile(path.join(tmp, "b.txt"), "b\n");
+
+        const context = yield* (yield* GitCore).prepareCommitContext(tmp, ["*.txt"]);
+
+        expect(context).not.toBeNull();
+        expect(yield* git(tmp, ["diff", "--cached", "--name-only"])).toBe("*.txt");
+      }),
+    );
+
+    it.effect("commit selection keeps the source deletion of a selected staged rename", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* writeTextFile(path.join(tmp, "old.txt"), "moved contents\n".repeat(20));
+        yield* git(tmp, ["add", "old.txt"]);
+        yield* git(tmp, ["commit", "-m", "add old"]);
+        yield* git(tmp, ["mv", "old.txt", "new.txt"]);
+        yield* writeTextFile(path.join(tmp, "README.md"), "# unrelated\n");
+        const core = yield* GitCore;
+
+        yield* core.prepareCommitContext(tmp, ["new.txt"]);
+        yield* core.commit(tmp, "Move old to new", "");
+
+        expect(yield* git(tmp, ["ls-files", "old.txt"])).toBe("");
+        expect(yield* git(tmp, ["show", "--name-status", "--format=", "-M", "HEAD"])).toBe(
+          "R100\told.txt\tnew.txt",
+        );
+        expect(yield* git(tmp, ["status", "--porcelain"])).toBe("M README.md");
+      }),
+    );
+
+    it.effect("commit selection keeps the source deletion of a selected working-tree move", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* writeTextFile(path.join(tmp, "old.txt"), "moved contents\n".repeat(20));
+        yield* git(tmp, ["add", "old.txt"]);
+        yield* git(tmp, ["commit", "-m", "add old"]);
+        yield* Effect.promise(() =>
+          fs.rename(path.join(tmp, "old.txt"), path.join(tmp, "new.txt")),
+        );
+        yield* writeTextFile(path.join(tmp, "other.txt"), "other\n");
+        const core = yield* GitCore;
+        const status = yield* core.statusDetails(tmp);
+        expect(status.workingTree.files.map((file) => file.path)).toEqual(["new.txt", "other.txt"]);
+
+        yield* core.prepareCommitContext(tmp, ["new.txt"]);
+        yield* core.commit(tmp, "Move old to new", "");
+
+        expect(yield* git(tmp, ["ls-files", "old.txt"])).toBe("");
+        expect(yield* git(tmp, ["status", "--porcelain"])).toBe("?? other.txt");
+      }),
+    );
+
+    it.effect("commit scope without a selection commits only the staged index", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* writeTextFile(path.join(tmp, "a.txt"), "a\n");
+        yield* writeTextFile(path.join(tmp, "b.txt"), "b\n");
+        yield* git(tmp, ["add", "a.txt"]);
+
+        const context = yield* (yield* GitCore).prepareCommitContext(tmp);
+
+        expect(context?.stagedSummary).toBe("A\ta.txt");
+        expect(yield* git(tmp, ["status", "--porcelain"])).toBe("A  a.txt\n?? b.txt");
+      }),
+    );
+
+    it.effect("commit scope without a selection leaves an empty index alone", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* writeTextFile(path.join(tmp, "unselected.txt"), "keep me uncommitted\n");
+        const context = yield* (yield* GitCore).prepareCommitContext(tmp);
+        expect(context).toBeNull();
+        expect(yield* git(tmp, ["diff", "--cached", "--name-only"])).toBe("");
+      }),
+    );
+
+    it.effect("commit scope without a selection uses the staged index on an unborn branch", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithoutCommit(tmp);
+        yield* writeTextFile(path.join(tmp, "a.txt"), "a\n");
+        yield* writeTextFile(path.join(tmp, "b.txt"), "b\n");
+        yield* git(tmp, ["add", "a.txt"]);
+
+        const context = yield* (yield* GitCore).prepareCommitContext(tmp);
+
+        expect(context?.stagedSummary).toBe("A\ta.txt");
+      }),
+    );
+
+    it.effect("commit scope all stages every change and staged leaves an empty index alone", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* writeTextFile(path.join(tmp, "a.txt"), "a\n");
+        yield* writeTextFile(path.join(tmp, "b.txt"), "b\n");
+        const core = yield* GitCore;
+
+        expect(yield* core.prepareCommitContext(tmp, undefined, "staged")).toBeNull();
+        expect(yield* git(tmp, ["diff", "--cached", "--name-only"])).toBe("");
+
+        yield* git(tmp, ["add", "a.txt"]);
+        const context = yield* core.prepareCommitContext(tmp, undefined, "all");
+        expect(context?.stagedSummary).toBe("A\ta.txt\nA\tb.txt");
+      }),
+    );
+
+    it.effect("status marks files whose changes are staged", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* writeTextFile(path.join(tmp, "a.txt"), "a\n");
+        yield* writeTextFile(path.join(tmp, "b.txt"), "b\n");
+        yield* git(tmp, ["add", "a.txt"]);
+        const core = yield* GitCore;
+
+        const status = yield* core.statusDetails(tmp);
+        expect(
+          status.workingTree.files.map((file) => [file.path, file.staged === true] as const),
+        ).toEqual([
+          ["a.txt", true],
+          ["b.txt", false],
+        ]);
+      }),
+    );
+
+    it.effect("status marks staged files when it summarizes working-tree moves", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* writeTextFile(path.join(tmp, "old.txt"), "moved contents\n".repeat(20));
+        yield* git(tmp, ["add", "old.txt"]);
+        yield* git(tmp, ["commit", "-m", "add old"]);
+        yield* Effect.promise(() =>
+          fs.rename(path.join(tmp, "old.txt"), path.join(tmp, "new.txt")),
+        );
+        yield* writeTextFile(path.join(tmp, "README.md"), "# staged\n");
+        yield* git(tmp, ["add", "README.md"]);
+        const core = yield* GitCore;
+
+        const status = yield* core.statusDetails(tmp);
+        expect(
+          status.workingTree.files.map((file) => [file.path, file.staged === true] as const),
+        ).toEqual([
+          ["new.txt", false],
+          ["README.md", true],
+        ]);
+      }),
+    );
+
+    it.effect("stage and unstage treat file names as literal paths", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* writeTextFile(path.join(tmp, "*.txt"), "star\n");
+        yield* writeTextFile(path.join(tmp, "a.txt"), "a\n");
+        const core = yield* GitCore;
+
+        yield* core.stageFiles(tmp, ["*.txt"]);
+        expect(yield* git(tmp, ["diff", "--cached", "--name-only"])).toBe("*.txt");
+
+        yield* git(tmp, ["add", "a.txt"]);
+        yield* core.unstageFiles(tmp, ["*.txt"]);
+        expect(yield* git(tmp, ["diff", "--cached", "--name-only"])).toBe("a.txt");
+      }),
+    );
+
+    it.effect("stage and unstage reject paths that are not workspace-relative", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* writeTextFile(path.join(tmp, "a.txt"), "a\n");
+        const core = yield* GitCore;
+
+        for (const invalid of [path.join(tmp, "a.txt"), "../a.txt", "dir/../../a.txt", ""]) {
+          const staged = yield* Effect.result(core.stageFiles(tmp, [invalid]));
+          expect(staged._tag).toBe("Failure");
+          const unstaged = yield* Effect.result(core.unstageFiles(tmp, [invalid]));
+          expect(unstaged._tag).toBe("Failure");
+        }
+        expect(yield* git(tmp, ["diff", "--cached", "--name-only"])).toBe("");
+      }),
+    );
+
+    it.effect("worktree copies and snapshots keep relative and dangling symlinks verbatim", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        yield* Effect.promise(async () => {
+          await fs.symlink("README.md", path.join(tmp, "relative-link"));
+          await fs.symlink("missing.txt", path.join(tmp, "dangling-link"));
+          await fs.mkdir(path.join(tmp, "nested"));
+          await fs.symlink("../README.md", path.join(tmp, "nested", "inner-link"));
+        });
+        const core = yield* GitCore;
+        const expectedLinks = [
+          ["relative-link", "README.md"],
+          ["dangling-link", "missing.txt"],
+          ["nested/inner-link", "../README.md"],
+        ] as const;
+
+        const snapshotPath = path.join(yield* makeTmpDir("git-snapshot-"), "snapshot");
+        yield* core.snapshotWorktree({ cwd: tmp, outputPath: snapshotPath });
+        const wtPath = path.join(yield* makeTmpDir("git-symlink-wt-"), "wt");
+        yield* core.createDetachedWorktree({
+          cwd: tmp,
+          ref: "HEAD",
+          path: wtPath,
+          copyChangesFrom: tmp,
+        });
+
+        for (const [link, target] of expectedLinks) {
+          expect(yield* Effect.promise(() => fs.readlink(path.join(wtPath, link)))).toBe(target);
+          expect(
+            yield* Effect.promise(() => fs.readlink(path.join(snapshotPath, "files", link))),
+          ).toBe(target);
+        }
+        yield* core.removeWorktree({ cwd: tmp, path: wtPath, force: true });
+      }),
+    );
+
     it.effect("commits and pushes a large diff, then skips when up to date", () =>
       Effect.gen(function* () {
         const tmp = yield* makeTmpDir();
@@ -3456,7 +3738,7 @@ it.layer(TestLayer)("git integration", (it) => {
         yield* writeTextFile(path.join(tmp, "feature.txt"), contents);
         const expectedBlob = yield* git(tmp, ["hash-object", "feature.txt"]);
         const core = yield* GitCore;
-        const context = yield* core.prepareCommitContext(tmp);
+        const context = yield* core.prepareCommitContext(tmp, undefined, "all");
         expect(context).not.toBeNull();
         expect(context!.stagedSummary).toContain("feature.txt");
         expect(context!.stagedPatch).toContain("+large change");

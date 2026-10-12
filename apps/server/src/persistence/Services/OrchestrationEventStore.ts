@@ -19,6 +19,7 @@ export interface OrchestrationEventReplayFilter {
   readonly eventTypes: ReadonlyArray<OrchestrationEvent["type"]>;
   readonly activityKinds?: ReadonlyArray<string>;
   readonly includeBoundaryEvent?: boolean;
+  readonly threadIds?: ReadonlyArray<string>;
 }
 
 /**

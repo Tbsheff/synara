@@ -4,6 +4,7 @@
 // Layer: Header action control
 // Depends on: GitActionsControl.logic resolvers and the shared git dialog chrome.
 
+import type { GitStackedAction } from "@synara/contracts";
 import { useEffect, useMemo, useState } from "react";
 import { Checkbox } from "~/components/ui/checkbox";
 import { DiffStat } from "~/components/ui/diff-stat";
@@ -34,15 +35,58 @@ export interface GitCreatePrDialogSubmission {
   body: string | null;
 }
 
+export interface CreatePrCommitSelection {
+  commitMessage: string | null;
+  filePaths: string[] | null;
+  commitScope?: "staged" | "all";
+}
+
+export function resolveCreatePrCommitFields(
+  action: GitStackedAction,
+  commit: CreatePrCommitSelection | null,
+): { commitMessage?: string; filePaths?: string[]; commitScope?: "staged" | "all" } {
+  if (!commit || (action !== "commit_push_pr" && action !== "commit_push")) return {};
+  return {
+    ...(commit.commitMessage ? { commitMessage: commit.commitMessage } : {}),
+    ...(commit.filePaths ? { filePaths: commit.filePaths } : {}),
+    ...(commit.commitScope ? { commitScope: commit.commitScope } : {}),
+  };
+}
+
+function encodeBranchForCompareUrl(branch: string): string {
+  return branch.split("/").map(encodeURIComponent).join("/");
+}
+
+export function buildPullRequestCompareUrl(input: {
+  repoUrl: string;
+  baseBranch: string;
+  headBranch: string;
+  title?: string | null;
+  body?: string | null;
+}): string {
+  const params = new URLSearchParams({ expand: "1" });
+  if (input.title) params.set("title", input.title);
+  if (input.body) params.set("body", input.body);
+  return `${input.repoUrl}/compare/${encodeBranchForCompareUrl(input.baseBranch)}...${encodeBranchForCompareUrl(input.headBranch)}?${params.toString()}`;
+}
+
 export interface GitCreatePrDialogBrowserRequest {
   preparation: CreatePrBrowserPreparation;
   includeLocalChanges: boolean;
+  title: string | null;
+  body: string | null;
 }
 
 interface GitCreatePrDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   context: GitDialogContext;
+  initialDraft?: {
+    title: string | null;
+    body: string | null;
+    includeLocalChanges?: boolean;
+    draft?: boolean;
+  } | null;
   onSubmit: (submission: GitCreatePrDialogSubmission) => void;
   onOpenInBrowser: (request: GitCreatePrDialogBrowserRequest) => void;
 }
@@ -51,19 +95,23 @@ export function GitCreatePrDialog({
   open,
   onOpenChange,
   context,
+  initialDraft,
   onSubmit,
   onOpenInBrowser,
 }: GitCreatePrDialogProps) {
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
   const [includeLocalChanges, setIncludeLocalChanges] = useState(true);
+  const initialIncludeLocalChanges = initialDraft?.includeLocalChanges ?? true;
+  const initialTitle = initialDraft?.title ?? "";
+  const initialBody = initialDraft?.body ?? "";
 
   useEffect(() => {
     if (!open) return;
-    setTitle("");
-    setBody("");
-    setIncludeLocalChanges(true);
-  }, [open]);
+    setTitle(initialTitle);
+    setBody(initialBody);
+    setIncludeLocalChanges(initialIncludeLocalChanges);
+  }, [initialBody, initialTitle, initialIncludeLocalChanges, open]);
 
   const view = useMemo(() => resolveCreatePrDialogView(context), [context]);
   const execution = useMemo(
@@ -90,7 +138,11 @@ export function GitCreatePrDialog({
   };
 
   return (
-    <GitDialogShell open={open} onOpenChange={onOpenChange} onSubmitShortcut={() => submit(false)}>
+    <GitDialogShell
+      open={open}
+      onOpenChange={onOpenChange}
+      onSubmitShortcut={() => submit(initialDraft?.draft ?? false)}
+    >
       <GitDialogHeading
         eyebrow={`${view.isNewBranch ? "New branch" : "Branch"} → ${view.baseBranchName}`}
         subject={
@@ -157,7 +209,14 @@ export function GitCreatePrDialog({
           disabled={!canOpenInBrowser}
           icon={<ExternalLinkIcon />}
           label="Open PR in browser"
-          onClick={() => onOpenInBrowser({ preparation: browserPreparation, includeLocalChanges })}
+          onClick={() =>
+            onOpenInBrowser({
+              preparation: browserPreparation,
+              includeLocalChanges,
+              title: title.trim() || null,
+              body: body.trim() || null,
+            })
+          }
         />
       </GitDialogActionList>
     </GitDialogShell>

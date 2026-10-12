@@ -186,4 +186,29 @@ describe("makePullRequestOperations", () => {
     expect(exit._tag).toBe("Failure");
     expect(runPullRequestAction).not.toHaveBeenCalled();
   });
+
+  it("passes the reviewed head SHA to the merge", async () => {
+    const base = createGitHubCliWithFakeGh().service;
+    const runPullRequestAction = vi.fn(base.runPullRequestAction);
+    const operations = makeTestOperations({
+      ...base,
+      getPullRequestStack: () => Effect.succeed(null),
+      runPullRequestAction,
+    });
+
+    await Effect.runPromise(
+      operations.action({
+        projectId: project.id,
+        repository: "acme/widgets",
+        number: 42,
+        action: "merge",
+        mergeMethod: "squash",
+        expectedHeadSha: "1111111111111111111111111111111111111111",
+      }),
+    );
+
+    expect(runPullRequestAction).toHaveBeenCalledWith(
+      expect.objectContaining({ expectedHeadSha: "1111111111111111111111111111111111111111" }),
+    );
+  });
 });

@@ -688,6 +688,7 @@ export function createWsNativeApi(): NativeApi {
       stashInfo: (input) => transport.request(WS_METHODS.gitStashInfo, input),
       removeIndexLock: (input) => transport.request(WS_METHODS.gitRemoveIndexLock, input),
       init: (input) => transport.request(WS_METHODS.gitInit, input),
+      discardFile: (input) => transport.request(WS_METHODS.gitDiscardFile, input),
       stageFiles: (input) => transport.request(WS_METHODS.gitStageFiles, input),
       unstageFiles: (input) => transport.request(WS_METHODS.gitUnstageFiles, input),
       handoffThread: (input) => transport.request(WS_METHODS.gitHandoffThread, input),

@@ -387,3 +387,23 @@ export function resolveDiffSelectAllWithinViewport(
 ): boolean {
   return eventWithinDiffViewport || (lastPointerInDiffViewport && !isTextEditingTarget);
 }
+
+export function shouldFallBackToBranchScope(input: {
+  diffOpen: boolean;
+  diffViewKind: DiffViewKind;
+  repoDiffScope: RepoDiffScope;
+  hasResolvedRepoPatch: boolean;
+  hasNoRepoChanges: boolean;
+  branchHasCommittedChanges: boolean;
+  initialScopeSettled: boolean;
+}): boolean {
+  return (
+    !input.initialScopeSettled &&
+    input.diffOpen &&
+    input.diffViewKind === "repo" &&
+    input.repoDiffScope === "workingTree" &&
+    input.hasResolvedRepoPatch &&
+    input.hasNoRepoChanges &&
+    input.branchHasCommittedChanges
+  );
+}

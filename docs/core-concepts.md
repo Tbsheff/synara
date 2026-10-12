@@ -324,6 +324,19 @@ The intended loop is:
 5. Commit only the intended changes.
 6. Push and open a pull request when appropriate.
 
+Commit uses the staged index by default. The commit dialog starts with staged files selected;
+if no files are staged, it sends the shown file selection. Commit, stage, unstage, and discard
+first save pending editor changes and use the current workspace. A rename includes both paths.
+Discard asks for confirmation against a fresh file diff and saves a Git recovery ref first.
+
+Pull request review supports Approve, Request changes, and a comment review. Reviews and merges
+use the head commit that the user reviewed. Review comments keep their replies, line positions,
+and resolved state, with Reply and Resolve controls. A failed PR create keeps its entered fields.
+
+File Undo restores the files, index, and checkpoint refs if the operation fails. Interrupted thread
+reverts restore the workspace when possible and name the saved recovery ref when they cannot.
+Thread purge removes managed checkpoint refs, including old start and rescue refs.
+
 Create PR can include uncommitted changes and create a feature branch from the default branch.
 When you supply a PR title, Synara also uses it as the commit message unless a separate commit
 message was supplied. Providing both the title and description skips text generation for this flow.

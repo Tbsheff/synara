@@ -88,7 +88,7 @@ function optimisticPullRequestActionPatch(
       return { state: "closed", closedAt: new Date().toISOString() };
     case "reopen":
       return { state: "open", closedAt: null };
-    case "merge":
+    default:
       return null;
   }
 }
@@ -116,8 +116,7 @@ function pullRequestActionTargetState(
       return "closed";
     case "reopen":
       return "open";
-    case "ready":
-    case "draft":
+    default:
       return undefined;
   }
 }

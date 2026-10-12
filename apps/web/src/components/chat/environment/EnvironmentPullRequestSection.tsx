@@ -48,6 +48,7 @@ import {
 } from "../../pullRequest/PullRequestConfirmActionDialog";
 import { PullRequestCheckStatusIcon } from "../../pullRequest/PullRequestCheckStatusIcon";
 import { PullRequestDiffStat } from "../../pullRequest/PullRequestDiffStat";
+import { buildPullRequestActionInput } from "../../pullRequest/pullRequestDetail.logic";
 import {
   PR_STATE_PRESENTATION_ICONS,
   resolvePrStatePresentation,
@@ -192,6 +193,11 @@ const MERGE_METHOD_LABELS: Record<PullRequestMergeMethod, string> = {
 
 const ACTION_SUCCESS_TITLES: Record<PullRequestAction, string> = {
   merge: "Pull request merged",
+  approve: "Review approved",
+  request_changes: "Changes requested",
+  review_comment: "Review submitted",
+  resolve_thread: "Review thread resolved",
+  unresolve_thread: "Review thread reopened",
   ready: "Marked ready for review",
   draft: "Converted to draft",
   close: "Pull request closed",
@@ -199,6 +205,11 @@ const ACTION_SUCCESS_TITLES: Record<PullRequestAction, string> = {
 };
 
 const ACTION_PENDING_TITLES: Record<Exclude<PullRequestAction, "merge">, string> = {
+  approve: "Submitting approval...",
+  request_changes: "Requesting changes...",
+  review_comment: "Submitting review...",
+  resolve_thread: "Resolving review thread...",
+  unresolve_thread: "Reopening review thread...",
   ready: "Marking ready for review...",
   draft: "Converting to draft...",
   close: "Closing pull request...",
@@ -518,7 +529,9 @@ export function EnvironmentPullRequestSection({
       timeout: 0,
     });
     void actionMutation
-      .mutateAsync({ ...actionInput, action, ...(method ? { mergeMethod: method } : {}) })
+      .mutateAsync(
+        buildPullRequestActionInput(actionInput, action, method, detailQuery.data?.headSha),
+      )
       .then((result) => {
         toastManager.update(toastId, {
           type: "success",

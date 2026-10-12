@@ -210,7 +210,9 @@ import {
   GitResolvePullRequestResult,
   GitRunStackedActionInput,
   GitStageFilesInput,
+  GitDiscardFileInput,
   GitStageFilesResult,
+  GitDiscardFileResult,
   GitStashAndCheckoutInput,
   GitStashDropInput,
   GitStashInfoInput,
@@ -1270,6 +1272,12 @@ export const WsGitStageFilesRpc = Rpc.make(WS_METHODS.gitStageFiles, {
   error: WsRpcError,
 });
 
+export const WsGitDiscardFileRpc = Rpc.make(WS_METHODS.gitDiscardFile, {
+  payload: GitDiscardFileInput,
+  success: GitDiscardFileResult,
+  error: WsRpcError,
+});
+
 export const WsGitUnstageFilesRpc = Rpc.make(WS_METHODS.gitUnstageFiles, {
   payload: GitUnstageFilesInput,
   success: GitUnstageFilesResult,
@@ -2014,6 +2022,7 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsGitRemoveIndexLockRpc,
   WsGitInitRpc,
   WsGitStageFilesRpc,
+  WsGitDiscardFileRpc,
   WsGitUnstageFilesRpc,
   WsGitHandoffThreadRpc,
   WsTerminalOpenRpc,

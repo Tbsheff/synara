@@ -13,6 +13,7 @@ import { ensureNativeApi } from "../nativeApi";
 import { EXPENSIVE_READ_RETRY_OPTIONS, isRpcCapacityExceededError } from "./expensiveReadRetry";
 import { preserveActivePullRequestActionGitFields } from "./pullRequestGitCache";
 import { capturePullRequestActionReadFence } from "./pullRequestMutationCoordinator";
+import { flushWorkspaceEditors } from "./workspaceEditorSession";
 
 const GIT_STATUS_STALE_TIME_MS = 30_000;
 // Freshness is driven primarily by event-based invalidation (turn lifecycle +
@@ -717,6 +718,15 @@ type GitMutationInvalidateOn = "success" | "settled";
 // missing cwd with a clear message, run the single call, then invalidate git
 // caches — globally or scoped to this cwd — on success or settle. Keeps each
 // mutation definition down to its key + the one API call it performs.
+async function saveWorkspaceEditorsBeforeGit(queryClient: QueryClient, cwd: string) {
+  const saved = await flushWorkspaceEditors(queryClient, cwd).catch(() => false);
+  if (!saved) {
+    throw new Error(
+      "Could not save editor changes. Resolve the save error before running this Git action.",
+    );
+  }
+}
+
 function makeGitMutationOptions<TArgs, TResult>(config: {
   cwd: string | null;
   queryClient: QueryClient;
@@ -818,6 +828,7 @@ export function gitRunStackedActionMutationOptions(input: {
       commitMessage?: string;
       featureBranch?: boolean;
       filePaths?: string[];
+      commitScope?: "staged" | "all";
       prTitle?: string;
       prBody?: string;
       prDraft?: boolean;
@@ -831,7 +842,7 @@ export function gitRunStackedActionMutationOptions(input: {
     unavailableMessage: "Git action is unavailable.",
     invalidate: "cwd",
     awaitInvalidation: false,
-    run: (
+    run: async (
       api,
       cwd,
       {
@@ -840,19 +851,24 @@ export function gitRunStackedActionMutationOptions(input: {
         commitMessage,
         featureBranch,
         filePaths,
+        commitScope,
         prTitle,
         prBody,
         prDraft,
         allowDirtyWorkingTree,
       },
-    ) =>
-      api.git.runStackedAction({
+    ) => {
+      if ((action !== "push" && action !== "create_pr") || featureBranch) {
+        await saveWorkspaceEditorsBeforeGit(input.queryClient, cwd);
+      }
+      return api.git.runStackedAction({
         actionId,
         cwd,
         action,
         ...(commitMessage ? { commitMessage } : {}),
         ...(featureBranch ? { featureBranch } : {}),
         ...(filePaths ? { filePaths } : {}),
+        ...(commitScope ? { commitScope } : {}),
         ...(prTitle ? { prTitle } : {}),
         ...(prBody ? { prBody } : {}),
         ...(prDraft !== undefined ? { prDraft } : {}),
@@ -861,7 +877,28 @@ export function gitRunStackedActionMutationOptions(input: {
         ...(input.model ? { textGenerationModel: input.model } : {}),
         ...(input.modelSelection ? { textGenerationModelSelection: input.modelSelection } : {}),
         ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
-      }),
+      });
+    },
+  });
+}
+
+export function gitDiscardFileMutationOptions(input: {
+  cwd: string | null;
+  queryClient: QueryClient;
+}) {
+  return makeGitMutationOptions<
+    { filePath: string; expectedPatch: string },
+    Awaited<ReturnType<NativeApi["git"]["discardFile"]>>
+  >({
+    cwd: input.cwd,
+    queryClient: input.queryClient,
+    mutationKey: ["git", "discard-file", input.cwd],
+    unavailableMessage: "File discard is unavailable.",
+    invalidate: "cwd",
+    run: async (api, cwd, request) => {
+      await saveWorkspaceEditorsBeforeGit(input.queryClient, cwd);
+      return api.git.discardFile({ cwd, ...request });
+    },
   });
 }
 
@@ -951,8 +988,11 @@ export function gitPreparePullRequestThreadMutationOptions(input: {
     // The result already identifies the prepared checkout. Opening its draft must not
     // wait for status/diff refreshes in every cached project and worktree.
     awaitInvalidation: false,
-    run: (api, cwd, { reference, mode, cwd: targetCwd }) =>
-      api.git.preparePullRequestThread({ cwd: targetCwd ?? cwd, reference, mode }),
+    run: async (api, cwd, { reference, mode, cwd: targetCwd }) => {
+      if (mode === "local")
+        await saveWorkspaceEditorsBeforeGit(input.queryClient, targetCwd ?? cwd);
+      return api.git.preparePullRequestThread({ cwd: targetCwd ?? cwd, reference, mode });
+    },
   });
 }
 
@@ -968,6 +1008,9 @@ export function gitHandoffThreadMutationOptions(input: {
     queryClient: input.queryClient,
     mutationKey: gitMutationKeys.handoffThread(input.cwd),
     unavailableMessage: "Git handoff is unavailable.",
-    run: (api, cwd, request) => api.git.handoffThread({ cwd, ...request }),
+    run: async (api, cwd, request) => {
+      await saveWorkspaceEditorsBeforeGit(input.queryClient, cwd);
+      return api.git.handoffThread({ cwd, ...request });
+    },
   });
 }

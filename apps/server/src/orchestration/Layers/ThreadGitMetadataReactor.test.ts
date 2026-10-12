@@ -7,7 +7,18 @@ import {
   type OrchestrationThreadPullRequest,
   type ProviderRuntimeEvent,
 } from "@synara/contracts";
-import { Effect, Exit, Layer, ManagedRuntime, Option, PubSub, Scope, Stream } from "effect";
+import {
+  Deferred,
+  Effect,
+  Exit,
+  Layer,
+  ManagedRuntime,
+  Option,
+  PubSub,
+  Scope,
+  Stream,
+} from "effect";
+import { TestClock } from "effect/testing";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { GitManagerError } from "../../git/Errors.ts";
@@ -88,12 +99,15 @@ describe("ThreadGitMetadataReactor", () => {
     readonly threads: MutableThreadShell[];
     readonly branchByCwd: Readonly<Record<string, string>>;
     readonly pullRequestLookupFails?: boolean;
+    readonly blockPullRequestLookupFor?: ReadonlySet<string>;
+    readonly testClock?: boolean;
   }) => {
     const runtimeEvents = Effect.runSync(PubSub.unbounded<ProviderRuntimeEvent>());
     const commands: OrchestrationCommand[] = [];
     const pullRequestLookups: string[] = [];
     const statusCwds: string[] = [];
     const threads = new Map(input.threads.map((thread) => [thread.id, thread]));
+    const releaseBlockedLookups = Effect.runSync(Deferred.make<void>());
     const projectId = input.threads[0]!.projectId;
 
     const providerService = {
@@ -122,6 +136,9 @@ describe("ThreadGitMetadataReactor", () => {
       pullRequestForBranch: ({ branch }: { branch: string }) =>
         Effect.gen(function* () {
           pullRequestLookups.push(branch);
+          if (input.blockPullRequestLookupFor?.has(branch)) {
+            yield* Deferred.await(releaseBlockedLookups);
+          }
           if (input.pullRequestLookupFails) {
             return yield* new GitManagerError({
               operation: "pullRequestForBranch",
@@ -155,13 +172,16 @@ describe("ThreadGitMetadataReactor", () => {
         }),
     } as unknown as OrchestrationEngineShape;
 
-    const layer = ThreadGitMetadataReactorLive.pipe(
+    const baseLayer = ThreadGitMetadataReactorLive.pipe(
       Layer.provideMerge(Layer.succeed(ProviderService, providerService)),
       Layer.provideMerge(Layer.succeed(ProjectionSnapshotQuery, projectionSnapshotQuery)),
       Layer.provideMerge(Layer.succeed(GitCore, gitCore)),
       Layer.provideMerge(Layer.succeed(GitManager, gitManager)),
       Layer.provideMerge(Layer.succeed(OrchestrationEngineService, orchestrationEngine)),
     );
+    const layer = input.testClock
+      ? baseLayer.pipe(Layer.provideMerge(TestClock.layer()))
+      : baseLayer;
     const managedRuntime = ManagedRuntime.make(layer);
     runtime = managedRuntime;
     const reactor = await managedRuntime.runPromise(Effect.service(ThreadGitMetadataReactor));
@@ -178,6 +198,10 @@ describe("ThreadGitMetadataReactor", () => {
       statusCwds,
       publish,
       drain: () => managedRuntime.runPromise(reactor.drain),
+      releaseBlockedLookups: () =>
+        Effect.runPromise(Deferred.succeed(releaseBlockedLookups, undefined).pipe(Effect.asVoid)),
+      adjustClock: (duration: `${number} seconds`) =>
+        managedRuntime.runPromise(Effect.scoped(TestClock.adjust(duration))),
     };
   };
 
@@ -619,5 +643,92 @@ describe("ThreadGitMetadataReactor", () => {
       threadId: nextThreadId,
       branch: pullRequest.headBranch,
     });
+  });
+
+  it("does not let a slow pull request lookup in one repository block another repository", async () => {
+    const slowThreadId = ThreadId.makeUnsafe("slow-repo-thread");
+    const fastThreadId = ThreadId.makeUnsafe("fast-repo-thread");
+    const slowCwd = "/repo/.worktrees/slow";
+    const fastCwd = "/repo/.worktrees/fast";
+    const projectId = ProjectId.makeUnsafe("project-1");
+    const harness = await createHarness({
+      threads: [
+        {
+          id: slowThreadId,
+          projectId,
+          envMode: "worktree",
+          worktreePath: slowCwd,
+          branch: "synara/stale-slow",
+          lastKnownPr: null,
+        },
+        {
+          id: fastThreadId,
+          projectId,
+          envMode: "worktree",
+          worktreePath: fastCwd,
+          branch: "synara/stale-fast",
+          lastKnownPr: null,
+        },
+      ],
+      branchByCwd: { [slowCwd]: "synara/slow-branch", [fastCwd]: pullRequest.headBranch },
+      blockPullRequestLookupFor: new Set(["synara/slow-branch"]),
+    });
+
+    try {
+      await harness.publish(completedEvent(slowThreadId, TurnId.makeUnsafe("slow-turn")));
+      await waitFor(() => harness.pullRequestLookups.length === 1);
+      await harness.publish(completedEvent(fastThreadId, TurnId.makeUnsafe("fast-turn")));
+      await waitFor(() => harness.commands.length === 1).catch(() => undefined);
+      expect(harness.commands).toHaveLength(1);
+
+      expect(harness.commands[0]).toMatchObject({
+        type: "thread.meta.update",
+        threadId: fastThreadId,
+        branch: pullRequest.headBranch,
+        lastKnownPr: pullRequest,
+      });
+    } finally {
+      await harness.releaseBlockedLookups();
+    }
+    await waitFor(() => harness.commands.length === 2);
+    expect(harness.commands[1]).toMatchObject({ threadId: slowThreadId });
+  });
+
+  it("treats a hung pull request lookup as unavailable after the lookup timeout", async () => {
+    const threadId = ThreadId.makeUnsafe("hung-lookup-thread");
+    const cwd = "/repo/.worktrees/hung";
+    const harness = await createHarness({
+      threads: [
+        {
+          id: threadId,
+          projectId: ProjectId.makeUnsafe("project-1"),
+          envMode: "worktree",
+          worktreePath: cwd,
+          branch: pullRequest.headBranch,
+          lastKnownPr: pullRequest,
+        },
+      ],
+      branchByCwd: { [cwd]: pullRequest.headBranch },
+      blockPullRequestLookupFor: new Set([pullRequest.headBranch]),
+      testClock: true,
+    });
+
+    try {
+      await harness.publish(completedEvent(threadId, TurnId.makeUnsafe("hung-turn")));
+      await waitFor(() => harness.pullRequestLookups.length === 1);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      await harness.adjustClock("15 seconds");
+      await waitFor(() => harness.commands.length === 1).catch(() => undefined);
+      expect(harness.commands).toHaveLength(1);
+
+      expect(harness.commands[0]).toMatchObject({
+        type: "thread.meta.update",
+        threadId,
+        associatedWorktreePath: cwd,
+      });
+      expect(harness.commands[0]).not.toHaveProperty("lastKnownPr");
+    } finally {
+      await harness.releaseBlockedLookups();
+    }
   });
 });

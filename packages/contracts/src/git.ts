@@ -127,6 +127,12 @@ export const GitPullRequestComment = Schema.Struct({
   path: Schema.NullOr(TrimmedNonEmptyStringSchema),
   url: Schema.NullOr(Schema.String),
   createdAt: Schema.NullOr(TrimmedNonEmptyStringSchema),
+  threadId: Schema.optional(Schema.String),
+  resolved: Schema.optional(Schema.Boolean),
+  line: Schema.optional(Schema.NullOr(PositiveInt)),
+  side: Schema.optional(Schema.NullOr(Schema.Literals(["LEFT", "RIGHT"]))),
+  replyToId: Schema.optional(Schema.NullOr(Schema.String)),
+  databaseId: Schema.optional(PositiveInt),
 });
 export type GitPullRequestComment = typeof GitPullRequestComment.Type;
 
@@ -238,8 +244,9 @@ export const GitRunStackedActionInput = Schema.Struct({
   // so the dirty-tree safety guard must not reject the action.
   allowDirtyWorkingTree: Schema.optional(Schema.Boolean),
   filePaths: Schema.optional(
-    Schema.Array(TrimmedNonEmptyStringSchema).check(Schema.isMinLength(1)),
+    Schema.Array(Schema.String.check(Schema.isMinLength(1))).check(Schema.isMinLength(1)),
   ),
+  commitScope: Schema.optional(Schema.Literals(["staged", "all"])),
   codexHomePath: Schema.optional(TrimmedNonEmptyStringSchema),
   providerOptions: Schema.optional(ProviderStartOptions),
   textGenerationModel: Schema.optional(TrimmedNonEmptyStringSchema).pipe(
@@ -386,13 +393,22 @@ export type GitInitInput = typeof GitInitInput.Type;
 
 export const GitStageFilesInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
-  paths: Schema.Array(TrimmedNonEmptyStringSchema).check(Schema.isMinLength(1)),
+  paths: Schema.Array(Schema.String.check(Schema.isMinLength(1))).check(Schema.isMinLength(1)),
 });
 export type GitStageFilesInput = typeof GitStageFilesInput.Type;
 
+export const GitDiscardFileInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  filePath: Schema.String.check(Schema.isMinLength(1)),
+  expectedPatch: Schema.String.check(Schema.isMaxLength(10000000)),
+});
+export type GitDiscardFileInput = typeof GitDiscardFileInput.Type;
+export const GitDiscardFileResult = Schema.Struct({ recoveryRef: Schema.String });
+export type GitDiscardFileResult = typeof GitDiscardFileResult.Type;
+
 export const GitUnstageFilesInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
-  paths: Schema.Array(TrimmedNonEmptyStringSchema).check(Schema.isMinLength(1)),
+  paths: Schema.Array(Schema.String.check(Schema.isMinLength(1))).check(Schema.isMinLength(1)),
 });
 export type GitUnstageFilesInput = typeof GitUnstageFilesInput.Type;
 
@@ -421,6 +437,7 @@ export const GitStatusResult = Schema.Struct({
         path: TrimmedNonEmptyStringSchema,
         insertions: NonNegativeInt,
         deletions: NonNegativeInt,
+        staged: Schema.optional(Schema.Boolean),
       }),
     ),
     insertions: NonNegativeInt,

@@ -148,7 +148,9 @@ import type {
   GitRunStackedActionInput,
   GitRunStackedActionResult,
   GitStageFilesInput,
+  GitDiscardFileInput,
   GitStageFilesResult,
+  GitDiscardFileResult,
   GitStashAndCheckoutInput,
   GitStashDropInput,
   GitStashInfoInput,
@@ -1242,6 +1244,7 @@ export interface NativeApi {
     stashInfo: (input: GitStashInfoInput) => Promise<GitStashInfoResult>;
     removeIndexLock: (input: GitRemoveIndexLockInput) => Promise<void>;
     init: (input: GitInitInput) => Promise<void>;
+    discardFile: (input: GitDiscardFileInput) => Promise<GitDiscardFileResult>;
     stageFiles: (input: GitStageFilesInput) => Promise<GitStageFilesResult>;
     unstageFiles: (input: GitUnstageFilesInput) => Promise<GitUnstageFilesResult>;
     handoffThread: (input: GitHandoffThreadInput) => Promise<GitHandoffThreadResult>;

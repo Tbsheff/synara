@@ -31,14 +31,49 @@ export interface GitCommitDialogSubmission {
   action: GitCommitDialogAction["action"];
   featureBranch: boolean;
   message: string | null;
-  /** null commits every changed file; otherwise only the listed paths. */
   filePaths: string[] | null;
+  commitScope?: "staged" | "all";
 }
 
 interface ChangedFile {
   path: string;
   insertions: number;
   deletions: number;
+  staged?: boolean | undefined;
+}
+
+function hasStagedFiles(files: readonly ChangedFile[]): boolean {
+  return files.some((file) => file.staged === true);
+}
+
+export function resolveCommitDialogDefaultSelection(files: readonly ChangedFile[]): string[] {
+  const staged = hasStagedFiles(files);
+  return files.filter((file) => !staged || file.staged === true).map((file) => file.path);
+}
+
+function isDefaultSelection(files: readonly ChangedFile[], selectedPaths: ReadonlySet<string>) {
+  const defaults = resolveCommitDialogDefaultSelection(files);
+  const shownSelected = files.filter((file) => selectedPaths.has(file.path));
+  return (
+    shownSelected.length === defaults.length && defaults.every((path) => selectedPaths.has(path))
+  );
+}
+
+export function resolveCommitDialogFileSubmission(input: {
+  files: readonly ChangedFile[];
+  selectedPaths: ReadonlySet<string> | null;
+}): Pick<GitCommitDialogSubmission, "filePaths" | "commitScope"> {
+  const { files, selectedPaths } = input;
+  if (
+    hasStagedFiles(files) &&
+    (selectedPaths === null || isDefaultSelection(files, selectedPaths))
+  ) {
+    return { filePaths: null, commitScope: "staged" };
+  }
+  const filePaths = files
+    .filter((file) => selectedPaths === null || selectedPaths.has(file.path))
+    .map((file) => file.path);
+  return { filePaths: filePaths.length > 0 ? filePaths : null };
 }
 
 interface GitCommitDialogProps {
@@ -57,24 +92,32 @@ export function GitCommitDialog({
   onOpenFile,
 }: GitCommitDialogProps) {
   const [message, setMessage] = useState("");
-  const [excludedFiles, setExcludedFiles] = useState<ReadonlySet<string>>(new Set());
+  const [editedSelection, setEditedSelection] = useState<ReadonlySet<string> | null>(null);
   const [isEditingFiles, setIsEditingFiles] = useState(false);
 
   useEffect(() => {
     if (!open) return;
     setMessage("");
-    setExcludedFiles(new Set());
+    setEditedSelection(null);
     setIsEditingFiles(false);
   }, [open]);
 
   const gitStatus = context.gitStatus;
   const allFiles = useMemo(() => gitStatus?.workingTree.files ?? [], [gitStatus]);
-  const selectedFiles = useMemo(
-    () => allFiles.filter((file) => !excludedFiles.has(file.path)),
-    [allFiles, excludedFiles],
+  const selectedPaths = useMemo<ReadonlySet<string>>(
+    () => editedSelection ?? new Set(resolveCommitDialogDefaultSelection(allFiles)),
+    [allFiles, editedSelection],
   );
-  const allSelected = excludedFiles.size === 0;
+  const selectedFiles = useMemo(
+    () => allFiles.filter((file) => selectedPaths.has(file.path)),
+    [allFiles, selectedPaths],
+  );
+  const allSelected = selectedFiles.length === allFiles.length;
   const noneSelected = selectedFiles.length === 0;
+  const fileSubmission = resolveCommitDialogFileSubmission({
+    files: allFiles,
+    selectedPaths: editedSelection,
+  });
   // With nothing to select the file gate is vacuous — a pure push must stay runnable.
   const hasFileSelection = allFiles.length === 0 || !noneSelected;
 
@@ -89,7 +132,7 @@ export function GitCommitDialog({
       action: action.action,
       featureBranch: action.featureBranch,
       message: message.trim() || null,
-      filePaths: allSelected ? null : selectedFiles.map((file) => file.path),
+      ...fileSubmission,
     });
   };
 
@@ -99,15 +142,13 @@ export function GitCommitDialog({
   };
 
   const toggleFile = (path: string) => {
-    setExcludedFiles((prev) => {
-      const next = new Set(prev);
-      if (next.has(path)) {
-        next.delete(path);
-      } else {
-        next.add(path);
-      }
-      return next;
-    });
+    const next = new Set(selectedPaths);
+    if (next.has(path)) {
+      next.delete(path);
+    } else {
+      next.add(path);
+    }
+    setEditedSelection(next);
   };
 
   return (
@@ -137,8 +178,8 @@ export function GitCommitDialog({
                 checked={allSelected}
                 indeterminate={!allSelected && !noneSelected}
                 onCheckedChange={() => {
-                  setExcludedFiles(
-                    allSelected ? new Set(allFiles.map((file) => file.path)) : new Set(),
+                  setEditedSelection(
+                    allSelected ? new Set() : new Set(allFiles.map((file) => file.path)),
                   );
                 }}
               />
@@ -162,6 +203,11 @@ export function GitCommitDialog({
               </Button>
             ) : null}
           </div>
+          {fileSubmission.commitScope === "staged" ? (
+            <p className="text-ui-sm text-muted-foreground">
+              Only staged changes are committed. Edit the selection to commit whole files.
+            </p>
+          ) : null}
           {allFiles.length > 0 ? (
             <ScrollArea className="h-32 rounded-md border border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary-opaque)]">
               <div className="space-y-1 p-1">
@@ -169,7 +215,7 @@ export function GitCommitDialog({
                   <ChangedFileRow
                     key={file.path}
                     file={file}
-                    excluded={excludedFiles.has(file.path)}
+                    excluded={!selectedPaths.has(file.path)}
                     selectable={isEditingFiles}
                     onToggle={() => toggleFile(file.path)}
                     onOpen={() => onOpenFile(file.path)}

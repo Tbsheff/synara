@@ -45,9 +45,12 @@ import {
 import { GIT_ACTION_ICON_CLASS, GitActionGlyph } from "./gitActionGlyphs";
 import { GitCommitDialog, type GitCommitDialogSubmission } from "./GitCommitDialog";
 import {
+  buildPullRequestCompareUrl,
+  type CreatePrCommitSelection,
   GitCreatePrDialog,
   type GitCreatePrDialogBrowserRequest,
   type GitCreatePrDialogSubmission,
+  resolveCreatePrCommitFields,
 } from "./GitCreatePrDialog";
 import { getProviderStartOptions, useAppSettings } from "~/appSettings";
 import { formatClockDuration } from "~/session-logic";
@@ -135,6 +138,7 @@ interface PendingDefaultBranchAction {
   forcePushOnlyProgress: boolean;
   onConfirmed?: () => void;
   filePaths?: string[];
+  commitScope?: "staged" | "all";
 }
 
 type GitActionToastId = ReturnType<typeof toastManager.add>;
@@ -163,11 +167,13 @@ interface RunGitActionWithToastInput {
   isDefaultBranchOverride?: boolean;
   progressToastId?: GitActionToastId;
   filePaths?: string[];
+  commitScope?: "staged" | "all";
   prTitle?: string;
   prBody?: string;
   prDraft?: boolean;
   allowDirtyWorkingTree?: boolean;
   afterSuccess?: (result: GitRunStackedActionResult) => void;
+  afterFailure?: () => void;
 }
 
 // Overrides captured when the Create PR dialog opens from a surface with a
@@ -177,6 +183,13 @@ interface CreatePrDialogState {
   statusOverride: GitStatusResult | null;
   statusOverrideSource: GitStatusResult | null;
   isDefaultBranchOverride: boolean | null;
+  commit: CreatePrCommitSelection | null;
+  draft: {
+    title: string | null;
+    body: string | null;
+    includeLocalChanges?: boolean;
+    draft?: boolean;
+  } | null;
 }
 
 interface GitPickerMenuItem {
@@ -186,11 +199,6 @@ interface GitPickerMenuItem {
   disabledReason: string | null;
   icon: GitGlyphName;
   onSelect: () => void;
-}
-
-// Keep "/" literal in branch names; GitHub compare URLs expect it unescaped.
-function encodeBranchForCompareUrl(branch: string): string {
-  return branch.split("/").map(encodeURIComponent).join("/");
 }
 
 function formatElapsedDescription(startedAtMs: number | null): string | undefined {
@@ -599,6 +607,8 @@ export default function GitActionsControl({
       statusOverride?: GitStatusResult | null;
       statusOverrideSource?: GitStatusResult | null;
       isDefaultBranchOverride?: boolean;
+      commit?: CreatePrCommitSelection;
+      draft?: { title: string | null; body: string | null };
     }) => {
       const execution = resolveCreatePrExecution({
         gitStatus: input?.statusOverride ?? gitStatusForActions,
@@ -624,6 +634,8 @@ export default function GitActionsControl({
         statusOverride: input?.statusOverride ?? null,
         statusOverrideSource: input?.statusOverrideSource ?? null,
         isDefaultBranchOverride: input?.isDefaultBranchOverride ?? null,
+        commit: input?.commit ?? null,
+        draft: input?.draft ?? null,
       });
     },
     [
@@ -638,7 +650,11 @@ export default function GitActionsControl({
   );
 
   const openComparePage = useCallback(
-    async (headBranch: string | null, baseBranch: string) => {
+    async (
+      headBranch: string | null,
+      baseBranch: string,
+      draft?: { title: string | null; body: string | null },
+    ) => {
       const api = readNativeApi();
       if (!api || !gitCwd || !headBranch) {
         toastManager.add({
@@ -661,7 +677,13 @@ export default function GitActionsControl({
           return;
         }
         await api.shell.openExternal(
-          `${repoUrl}/compare/${encodeBranchForCompareUrl(baseBranch)}...${encodeBranchForCompareUrl(headBranch)}?expand=1`,
+          buildPullRequestCompareUrl({
+            repoUrl,
+            baseBranch,
+            headBranch,
+            title: draft?.title ?? null,
+            body: draft?.body ?? null,
+          }),
         );
       } catch (error) {
         toastManager.add({
@@ -708,11 +730,13 @@ export default function GitActionsControl({
       isDefaultBranchOverride,
       progressToastId,
       filePaths,
+      commitScope,
       prTitle,
       prBody,
       prDraft,
       allowDirtyWorkingTree,
       afterSuccess,
+      afterFailure,
     }: RunGitActionWithToastInput) {
       const forcePushOnlyProgress = forcePushOnlyProgressProp ?? false;
       const skipDefaultBranchPrompt = skipDefaultBranchPromptProp ?? false;
@@ -742,6 +766,7 @@ export default function GitActionsControl({
           forcePushOnlyProgress,
           ...(onConfirmed ? { onConfirmed } : {}),
           ...(filePaths ? { filePaths } : {}),
+          ...(commitScope ? { commitScope } : {}),
         });
         return;
       }
@@ -759,6 +784,7 @@ export default function GitActionsControl({
             description: createPrAvailability.hint ?? "No branch changes to include in a PR.",
             data: threadToastData,
           });
+          afterFailure?.();
           return;
         }
       }
@@ -813,6 +839,7 @@ export default function GitActionsControl({
         ...(commitMessage ? { commitMessage } : {}),
         ...(featureBranch ? { featureBranch } : {}),
         ...(filePaths ? { filePaths } : {}),
+        ...(commitScope ? { commitScope } : {}),
         ...(prTitle ? { prTitle } : {}),
         ...(prBody ? { prBody } : {}),
         ...(prDraft ? { prDraft } : {}),
@@ -960,6 +987,7 @@ export default function GitActionsControl({
           },
           failureToast.data,
         );
+        afterFailure?.();
       }
     },
     [
@@ -989,6 +1017,7 @@ export default function GitActionsControl({
 
   const handleCreatePrDialogSubmit = useCallback(
     (submission: GitCreatePrDialogSubmission) => {
+      const dialogState = createPrDialog;
       setCreatePrDialog(null);
       const actionStatus = createPrDialogRuntimeStatus.gitStatus;
       const actionIsDefaultBranch = createPrDialogRuntimeStatus.isDefaultBranch;
@@ -1002,18 +1031,35 @@ export default function GitActionsControl({
         isDefaultBranchOverride: actionIsDefaultBranch,
         ...(actionIsDefaultBranch ? { featureBranch: true } : {}),
         skipDefaultBranchPrompt: true,
+        ...resolveCreatePrCommitFields(submission.action, dialogState?.commit ?? null),
         ...(submission.title ? { prTitle: submission.title } : {}),
         ...(submission.body ? { prBody: submission.body } : {}),
         ...(submission.draft ? { prDraft: true } : {}),
         ...(excludesDirtyChanges ? { allowDirtyWorkingTree: true } : {}),
+        ...(dialogState
+          ? {
+              afterFailure: () =>
+                setCreatePrDialog({
+                  ...dialogState,
+                  draft: {
+                    title: submission.title,
+                    body: submission.body,
+                    includeLocalChanges: submission.includeLocalChanges,
+                    draft: submission.draft,
+                  },
+                }),
+            }
+          : {}),
       });
     },
-    [createPrDialogRuntimeStatus, runGitActionWithToast],
+    [createPrDialog, createPrDialogRuntimeStatus, runGitActionWithToast],
   );
 
   const handleCreatePrDialogBrowser = useCallback(
     (request: GitCreatePrDialogBrowserRequest) => {
+      const dialogState = createPrDialog;
       setCreatePrDialog(null);
+      const draft = { title: request.title, body: request.body };
       const actionStatus = createPrDialogRuntimeStatus.gitStatus;
       const actionIsDefaultBranch = createPrDialogRuntimeStatus.isDefaultBranch;
       const preparation = request.preparation;
@@ -1034,6 +1080,7 @@ export default function GitActionsControl({
         void openComparePage(
           actionStatus?.branch ?? null,
           resolveCreatePrBaseBranch(actionStatus, defaultBranchName),
+          draft,
         );
         return;
       }
@@ -1047,16 +1094,28 @@ export default function GitActionsControl({
         isDefaultBranchOverride: actionIsDefaultBranch,
         ...(actionIsDefaultBranch ? { featureBranch: true } : {}),
         skipDefaultBranchPrompt: true,
+        ...resolveCreatePrCommitFields(preparation.action, dialogState?.commit ?? null),
         ...(excludesDirtyChanges ? { allowDirtyWorkingTree: true } : {}),
+        ...(dialogState
+          ? {
+              afterFailure: () =>
+                setCreatePrDialog({
+                  ...dialogState,
+                  draft: { ...draft, includeLocalChanges: request.includeLocalChanges },
+                }),
+            }
+          : {}),
         afterSuccess: (result) => {
           void openComparePage(
             result.push.branch ?? result.branch.name ?? actionStatus?.branch ?? null,
             resolveCreatePrBaseBranch(actionStatus, defaultBranchName),
+            draft,
           );
         },
       });
     },
     [
+      createPrDialog,
       createPrDialogRuntimeStatus,
       defaultBranchName,
       openComparePage,
@@ -1092,7 +1151,7 @@ export default function GitActionsControl({
 
   const continuePendingDefaultBranchAction = useCallback(() => {
     if (!pendingDefaultBranchAction) return;
-    const { action, commitMessage, forcePushOnlyProgress, onConfirmed, filePaths } =
+    const { action, commitMessage, forcePushOnlyProgress, onConfirmed, filePaths, commitScope } =
       pendingDefaultBranchAction;
     setPendingDefaultBranchAction(null);
     void runGitActionWithToast({
@@ -1101,6 +1160,7 @@ export default function GitActionsControl({
       forcePushOnlyProgress,
       ...(onConfirmed ? { onConfirmed } : {}),
       ...(filePaths ? { filePaths } : {}),
+      ...(commitScope ? { commitScope } : {}),
       ...(requiresFeatureBranchForDefaultBranchAction(action) ? { featureBranch: true } : {}),
       skipDefaultBranchPrompt: true,
     });
@@ -1108,7 +1168,7 @@ export default function GitActionsControl({
 
   const checkoutFeatureBranchAndContinuePendingAction = useCallback(() => {
     if (!pendingDefaultBranchAction) return;
-    const { action, commitMessage, forcePushOnlyProgress, onConfirmed, filePaths } =
+    const { action, commitMessage, forcePushOnlyProgress, onConfirmed, filePaths, commitScope } =
       pendingDefaultBranchAction;
     setPendingDefaultBranchAction(null);
     void runGitActionWithToast({
@@ -1117,6 +1177,7 @@ export default function GitActionsControl({
       forcePushOnlyProgress,
       ...(onConfirmed ? { onConfirmed } : {}),
       ...(filePaths ? { filePaths } : {}),
+      ...(commitScope ? { commitScope } : {}),
       featureBranch: true,
       skipDefaultBranchPrompt: true,
     });
@@ -1128,13 +1189,20 @@ export default function GitActionsControl({
       // Create PR owns its own authoring dialog (title/description/draft), so the
       // commit dialog hands off instead of dispatching a PR chain itself.
       if (submission.action === "create_pr") {
-        openCreatePrDialog();
+        openCreatePrDialog({
+          commit: {
+            commitMessage: submission.message,
+            filePaths: submission.filePaths,
+            ...(submission.commitScope ? { commitScope: submission.commitScope } : {}),
+          },
+        });
         return;
       }
       void runGitActionWithToast({
         action: submission.action,
         ...(submission.message ? { commitMessage: submission.message } : {}),
         ...(submission.filePaths ? { filePaths: submission.filePaths } : {}),
+        ...(submission.commitScope ? { commitScope: submission.commitScope } : {}),
         ...(submission.featureBranch ? { featureBranch: true, skipDefaultBranchPrompt: true } : {}),
       });
     },
@@ -1601,6 +1669,7 @@ export default function GitActionsControl({
           if (!open) setCreatePrDialog(null);
         }}
         context={createPrDialogContext}
+        initialDraft={createPrDialog?.draft ?? null}
         onSubmit={handleCreatePrDialogSubmit}
         onOpenInBrowser={handleCreatePrDialogBrowser}
       />
