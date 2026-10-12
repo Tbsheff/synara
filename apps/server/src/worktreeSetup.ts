@@ -29,6 +29,7 @@ export async function runWorktreeSetupScript(
     cwd,
     timeoutMs: WORKTREE_SETUP_TIMEOUT_MS,
     maxBufferBytes: 8 * 1024 * 1024,
+    ownProcessGroup: true,
     ...(signal ? { signal } : {}),
   });
 }

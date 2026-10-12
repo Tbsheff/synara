@@ -3,7 +3,11 @@ import { StringDecoder } from "node:string_decoder";
 import { isCommandNotFoundExit } from "@synara/shared/platformProcess";
 import { spawnProcess } from "@synara/shared/processRuntime";
 
-import { signalOwnedChildProcess } from "./platform/processTreeController.ts";
+import {
+  signalOwnedChildProcess,
+  signalOwnedProcessGroup,
+  stopProcessGroupWithin,
+} from "./platform/processTreeController.ts";
 
 export interface ProcessRunOptions {
   cwd?: string | undefined;
@@ -13,6 +17,7 @@ export interface ProcessRunOptions {
   signal?: AbortSignal | undefined;
   allowNonZeroExit?: boolean | undefined;
   maxBufferBytes?: number | undefined;
+  ownProcessGroup?: boolean | undefined;
   outputMode?: "error" | "truncate" | undefined;
   onStdoutChunk?: ((chunk: string) => void) | undefined;
   onStderrChunk?: ((chunk: string) => void) | undefined;
@@ -81,6 +86,9 @@ function normalizeBufferError(
 }
 
 const DEFAULT_MAX_BUFFER_BYTES = 8 * 1024 * 1024;
+const FORCE_KILL_DELAY_MS = 1_000;
+const STOPPED_PIPE_CLOSE_DEADLINE_MS = 2_000;
+const STOPPED_PROCESS_GROUP_EXIT_DEADLINE_MS = 2_000;
 
 function processAbortError(): Error {
   const error = new Error("Process execution was aborted.");
@@ -91,8 +99,26 @@ function processAbortError(): Error {
 // The platform boundary decides whether a kill needs tree traversal (Windows
 // batch shims) or Node's direct signal (POSIX); application code never invokes
 // OS tree commands itself.
-function killChild(child: ChildProcessHandle, signal: "SIGTERM" | "SIGKILL" = "SIGTERM"): void {
+function killChild(
+  child: ChildProcessHandle,
+  signal: "SIGTERM" | "SIGKILL",
+  ownsProcessGroup: boolean,
+): void {
+  if (ownsProcessGroup) {
+    signalOwnedProcessGroup(child, signal);
+    return;
+  }
   signalOwnedChildProcess(child, signal);
+}
+
+function processGroupExitUnprovenError(
+  command: string,
+  args: readonly string[],
+  processGroupId: number,
+): Error {
+  return new Error(
+    `${commandLabel(command, args)} was stopped, but process group ${processGroupId} did not exit.`,
+  );
 }
 
 function appendChunkWithinLimit(
@@ -130,6 +156,7 @@ export async function runProcess(
   const timeoutMs = options.timeoutMs ?? 60_000;
   const maxBufferBytes = options.maxBufferBytes ?? DEFAULT_MAX_BUFFER_BYTES;
   const outputMode = options.outputMode ?? "error";
+  const ownsProcessGroup = options.ownProcessGroup === true && process.platform !== "win32";
 
   return new Promise<ProcessRunResult>((resolve, reject) => {
     const child = spawnProcess(command, args, {
@@ -137,6 +164,7 @@ export async function runProcess(
       env: options.env,
       stdio: "pipe",
       requireExecutable: true,
+      ...(options.ownProcessGroup ? { ownProcessGroup: true } : {}),
     });
 
     let stdout = "";
@@ -150,16 +178,37 @@ export async function runProcess(
     let settled = false;
     let timeoutTimer: ReturnType<typeof setTimeout> | null = null;
     let forceKillTimer: ReturnType<typeof setTimeout> | null = null;
+    let pipeCloseTimer: ReturnType<typeof setTimeout> | null = null;
+    let stopRequested = false;
     const stdoutDecoder = new StringDecoder("utf8");
     const stderrDecoder = new StringDecoder("utf8");
     const stdoutObserverDecoder = options.onStdoutChunk ? new StringDecoder("utf8") : null;
     const stderrObserverDecoder = options.onStderrChunk ? new StringDecoder("utf8") : null;
 
-    const scheduleForceKill = (): void => {
+    const kill = (signal: "SIGTERM" | "SIGKILL"): void => {
+      killChild(child, signal, ownsProcessGroup);
+    };
+
+    const rootExited = (): boolean => child.exitCode !== null || child.signalCode !== null;
+
+    const armStoppedPipeCloseDeadline = (): void => {
+      if (process.platform === "win32" || !stopRequested || !rootExited() || pipeCloseTimer) {
+        return;
+      }
+      pipeCloseTimer = setTimeout(() => {
+        child.stdout.destroy();
+        child.stderr.destroy();
+      }, STOPPED_PIPE_CLOSE_DEADLINE_MS);
+    };
+
+    const stop = (): void => {
+      stopRequested = true;
+      kill("SIGTERM");
       if (forceKillTimer) clearTimeout(forceKillTimer);
       forceKillTimer = setTimeout(() => {
-        killChild(child, "SIGKILL");
-      }, 1_000);
+        kill("SIGKILL");
+      }, FORCE_KILL_DELAY_MS);
+      armStoppedPipeCloseDeadline();
     };
 
     const onAbort = (): void => {
@@ -171,14 +220,12 @@ export async function runProcess(
         clearTimeout(timeoutTimer);
         timeoutTimer = null;
       }
-      killChild(child, "SIGTERM");
-      scheduleForceKill();
+      stop();
     };
 
     timeoutTimer = setTimeout(() => {
       timedOut = true;
-      killChild(child, "SIGTERM");
-      scheduleForceKill();
+      stop();
     }, timeoutMs);
 
     const finalize = (callback: () => void): void => {
@@ -190,12 +237,15 @@ export async function runProcess(
       if (forceKillTimer) {
         clearTimeout(forceKillTimer);
       }
+      if (pipeCloseTimer) {
+        clearTimeout(pipeCloseTimer);
+      }
       options.signal?.removeEventListener("abort", onAbort);
       callback();
     };
 
     const fail = (error: Error): void => {
-      killChild(child, "SIGTERM");
+      kill("SIGTERM");
       finalize(() => {
         reject(error);
       });
@@ -296,7 +346,9 @@ export async function runProcess(
       });
     });
 
-    child.once("close", (code, signal) => {
+    child.once("exit", armStoppedPipeCloseDeadline);
+
+    const settleClose = (code: number | null, signal: NodeJS.Signals | null): void => {
       if (!stdoutTruncated) stdout += stdoutDecoder.end();
       if (!stderrTruncated) stderr += stderrDecoder.end();
       flushOutputObserver(options.onStdoutChunk, stdoutObserverDecoder);
@@ -322,6 +374,25 @@ export async function runProcess(
           return;
         }
         resolve(result);
+      });
+    };
+
+    child.once("close", (code, signal) => {
+      if (!stopRequested || !ownsProcessGroup || child.pid === undefined) {
+        settleClose(code, signal);
+        return;
+      }
+      const processGroupId = child.pid;
+      void stopProcessGroupWithin(processGroupId, {
+        deadlineMs: STOPPED_PROCESS_GROUP_EXIT_DEADLINE_MS,
+      }).then((stopped) => {
+        if (stopped) {
+          settleClose(code, signal);
+          return;
+        }
+        finalize(() => {
+          reject(processGroupExitUnprovenError(command, args, processGroupId));
+        });
       });
     });
 
