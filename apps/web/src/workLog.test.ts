@@ -5450,6 +5450,67 @@ describe("transcript parity ordering and typed entries", () => {
     expect(entries.map((entry) => entry.notice?.noticeKind)).toEqual(["mcp-server-status"]);
   });
 
+  it("omits stored MCP authentication notices but keeps server failures and ready rows", () => {
+    const activities = [
+      makeActivity({
+        id: "claude-auth",
+        kind: "transcript.notice",
+        summary: "MCP server claude.ai Linear needs authentication",
+        payload: {
+          noticeKind: "mcp-server-status",
+          severity: "warning",
+          title: "MCP server claude.ai Linear needs authentication",
+          status: "failed",
+        },
+      }),
+      makeActivity({
+        id: "codex-auth",
+        kind: "transcript.notice",
+        summary: "MCP server Linear failed to start",
+        payload: {
+          noticeKind: "mcp-server-status",
+          severity: "warning",
+          title: "MCP server Linear failed to start",
+          detail: "Authentication required",
+          status: "failed",
+        },
+      }),
+      makeActivity({
+        id: "crashed",
+        kind: "transcript.notice",
+        summary: "MCP server github failed to start",
+        payload: {
+          noticeKind: "mcp-server-status",
+          severity: "warning",
+          title: "MCP server github failed to start",
+          detail: "Server process exited unexpectedly",
+          status: "failed",
+        },
+      }),
+      makeActivity({
+        id: "ready",
+        kind: "transcript.notice",
+        summary: "MCP servers ready: neon",
+        payload: {
+          noticeKind: "mcp-server-status",
+          severity: "info",
+          title: "MCP servers ready: neon",
+          status: "completed",
+        },
+      }),
+    ];
+    const stored = structuredClone(activities);
+    const entries = deriveWorkLogEntries(activities, undefined, {
+      visibleTurnIds: new Set([TurnId.makeUnsafe("turn-1")]),
+    });
+    expect(entries.map((entry) => entry.id)).toEqual(["crashed", "ready"]);
+    expect(activities).toEqual(stored);
+    expect(deriveTimelineEntries([], [], entries).map((entry) => entry.id)).toEqual([
+      "crashed",
+      "ready",
+    ]);
+  });
+
   it("renders nothing for legacy output-delta rows and dropped unmapped methods", () => {
     const entries = deriveWorkLogEntries(
       [

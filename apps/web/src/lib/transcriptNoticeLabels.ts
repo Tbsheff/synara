@@ -110,6 +110,28 @@ export function transcriptNoticeIsRunning(notice: Pick<TranscriptNotice, "status
   return notice.status === "started" || notice.status === "running";
 }
 
+export function isMcpAuthenticationNotice(notice: TranscriptNotice): boolean {
+  if (
+    notice.noticeKind !== "mcp-server-status" ||
+    notice.status === "completed" ||
+    /^MCP servers ready\b/i.test(notice.title)
+  ) {
+    return false;
+  }
+  if (
+    /\b(?:needs authentication|auth(?:entication)?[-_ ]required|needs[-_]auth)[.!]?\s*$/i.test(
+      notice.title,
+    )
+  ) {
+    return true;
+  }
+  return [notice.detail, notice.body].some(
+    (text) =>
+      text !== undefined &&
+      /\b(?:needs authentication|auth(?:entication)?[-_ ]required|needs[-_]auth)\b/i.test(text),
+  );
+}
+
 interface GroupedHookData {
   readonly count: number;
   readonly hookEvents: ReadonlyArray<string>;

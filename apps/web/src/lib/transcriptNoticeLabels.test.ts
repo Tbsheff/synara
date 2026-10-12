@@ -9,6 +9,7 @@ import {
 } from "./legacyUnmappedEventLabels";
 import {
   contextCompactionTitle,
+  isMcpAuthenticationNotice,
   readGroupedHookNoticeData,
   transcriptNoticePresentation,
   transcriptNoticeStatusLabel,
@@ -148,6 +149,50 @@ describe("contextCompactionTitle", () => {
 });
 
 describe("hook and MCP notice titles", () => {
+  it.each([
+    { title: "MCP server claude.ai Linear needs authentication" },
+    { detail: "Authentication required" },
+    { body: "MCP error: auth_required" },
+    { detail: "MCP status: needs-auth" },
+  ])("recognizes MCP authentication notices in %j", (fields) => {
+    expect(
+      isMcpAuthenticationNotice(
+        notice({
+          noticeKind: "mcp-server-status",
+          title: "MCP server Linear failed to start",
+          status: "failed",
+          ...fields,
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps other MCP failures, ready rows, and non-MCP authentication notices", () => {
+    for (const entry of [
+      notice({
+        noticeKind: "mcp-server-status",
+        title: "MCP server github failed to start",
+        detail: "Connection closed",
+        status: "failed",
+      }),
+      notice({
+        noticeKind: "mcp-server-status",
+        title: "MCP server auth_required failed to start",
+        status: "failed",
+      }),
+      notice({
+        noticeKind: "mcp-server-status",
+        title: "MCP servers ready: auth_required",
+        status: "completed",
+      }),
+      notice({ noticeKind: "mcp-server-status", title: "MCP servers ready: needs-auth" }),
+      notice({ noticeKind: "provider-warning", title: "Provider needs authentication" }),
+      notice({ noticeKind: "mcp-oauth", title: "MCP sign-in completed" }),
+    ]) {
+      expect(isMcpAuthenticationNotice(entry)).toBe(false);
+    }
+  });
+
   it("names a hook by its event or name and never as a lifecycle hook", () => {
     expect(
       transcriptNoticeTitle(

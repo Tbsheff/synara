@@ -71,6 +71,7 @@ import {
   legacyUnmappedMethodTitle,
 } from "./lib/legacyUnmappedEventLabels";
 import { stripProposedPlanBlocksFromText } from "./proposedPlan";
+import { isMcpAuthenticationNotice } from "./lib/transcriptNoticeLabels";
 
 import type { ChatMessage, ProposedPlan } from "./types";
 
@@ -497,6 +498,7 @@ export function deriveWorkLogEntries(
     .filter((activity) => !isHiddenLegacyActivity(activity))
     .filter((activity) => !isUnrenderableApprovalRequest(activity))
     .map(toDerivedWorkLogEntry)
+    .filter((entry) => !entry.notice || !isMcpAuthenticationNotice(entry.notice))
     .filter(
       (entry) => entry.activityKind !== HTML_RENDER_ACTIVITY_KIND || entry.htmlRender !== undefined,
     );
