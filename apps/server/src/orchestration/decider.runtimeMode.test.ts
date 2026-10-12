@@ -176,7 +176,8 @@ describe("decider Auto model compatibility", () => {
     // Provider-native threads mirror subagents the provider already runs;
     // rejecting them would durably poison the runtime journal replaying the
     // provider event (see ProviderRuntimeIngestion), not stop any session.
-    const readModel = await makeProjectOnlyReadModel();
+    const projectOnly = await makeProjectOnlyReadModel();
+    const readModel = { ...projectOnly, threads: makeReadModel(true).threads };
 
     const result = await Effect.runPromise(
       decideOrchestrationCommand({

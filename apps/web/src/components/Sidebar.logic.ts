@@ -929,7 +929,11 @@ function collectActiveThreadAncestorIds<
 
   while (currentThreadId) {
     const parentThreadId = threadById.get(currentThreadId)?.parentThreadId ?? undefined;
-    if (!parentThreadId) {
+    if (
+      !parentThreadId ||
+      parentThreadId === forceVisibleThreadId ||
+      ancestorIds.has(parentThreadId)
+    ) {
       break;
     }
     ancestorIds.add(parentThreadId);

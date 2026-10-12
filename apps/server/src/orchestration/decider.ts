@@ -130,6 +130,54 @@ function validateStandaloneSidechatCreate(
       );
 }
 
+function parentThreadLinkProblem(input: {
+  readonly readModel: OrchestrationReadModel;
+  readonly threadId: OrchestrationThread["id"];
+  readonly projectId: OrchestrationThread["projectId"];
+  readonly parentThreadId: OrchestrationThread["id"];
+}): string | null {
+  const { readModel, threadId, parentThreadId } = input;
+  if (parentThreadId === threadId) {
+    return `Thread '${threadId}' cannot be its own parent.`;
+  }
+  const threadById = new Map(readModel.threads.map((thread) => [thread.id, thread]));
+  const parent = threadById.get(parentThreadId);
+  if (parent === undefined || parent.deletedAt !== null) {
+    return `Parent thread '${parentThreadId}' does not exist.`;
+  }
+  if (parent.projectId !== input.projectId) {
+    return `Parent thread '${parentThreadId}' belongs to a different project.`;
+  }
+  const visited = new Set<string>([parentThreadId]);
+  let ancestorId = parent.parentThreadId ?? null;
+  while (ancestorId !== null) {
+    if (ancestorId === threadId) {
+      return `Parent thread '${parentThreadId}' is a descendant of thread '${threadId}'.`;
+    }
+    if (visited.has(ancestorId)) {
+      return `Parent thread '${parentThreadId}' has a cyclic ancestor chain.`;
+    }
+    visited.add(ancestorId);
+    ancestorId = threadById.get(ancestorId)?.parentThreadId ?? null;
+  }
+  return null;
+}
+
+function validateParentThreadLink(
+  command: OrchestrationCommand,
+  input: Parameters<typeof parentThreadLinkProblem>[0],
+) {
+  const problem = parentThreadLinkProblem(input);
+  return problem === null
+    ? Effect.void
+    : Effect.fail(
+        new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: problem,
+        }),
+      );
+}
+
 function validateAutoRuntimeMode(
   command: OrchestrationCommand,
   modelSelection: OrchestrationThread["modelSelection"],
@@ -1145,6 +1193,14 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       if (sidechatContext !== null) {
         yield* validateStandaloneSidechatCreate(command);
       }
+      if (command.parentThreadId != null) {
+        yield* validateParentThreadLink(command, {
+          readModel,
+          threadId: command.threadId,
+          projectId: command.projectId,
+          parentThreadId: command.parentThreadId,
+        });
+      }
       return {
         ...withEventBase({
           aggregateKind: "thread",
@@ -1642,6 +1698,17 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       }
       if (command.providerHandoff === true) {
         yield* validateProviderHandoff(command, thread);
+      }
+      if (
+        command.parentThreadId != null &&
+        command.parentThreadId !== (thread.parentThreadId ?? null)
+      ) {
+        yield* validateParentThreadLink(command, {
+          readModel,
+          threadId: thread.id,
+          projectId: thread.projectId,
+          parentThreadId: command.parentThreadId,
+        });
       }
       const occurredAt = nowIso();
       return {
