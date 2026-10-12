@@ -14,6 +14,7 @@ import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import { defineConfig, type Plugin } from "vite";
 import pkg from "./package.json" with { type: "json" };
 import { listFiles, pruneProductionIcons } from "./scripts/production-assets";
+import { shikiBundleGuard } from "./scripts/shiki-bundle-guard";
 
 const port = Number(process.env.PORT ?? 5733);
 const sourcemapEnv = process.env.SYNARA_WEB_SOURCEMAP?.trim().toLowerCase();
@@ -167,7 +168,11 @@ export default defineConfig({
     tailwindcss(),
     centralIconPrunePlugin(),
     precompressPlugin(),
+    shikiBundleGuard(),
   ],
+  worker: {
+    plugins: () => [shikiBundleGuard()],
+  },
   optimizeDeps: {
     include: [
       "@pierre/diffs",

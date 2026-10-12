@@ -12,3 +12,90 @@ index fa9a91568ab6464890d4570465c7bb1b93828555..69558b5f6cdaebd0e2568d54d9e4936b
  	}
  	updateRenderCache(dirtyLines, themeType, options) {
  		this.fileRenderer.updateRenderCache(dirtyLines, themeType, options?.lineCountChangeInFlight);
+diff --git a/dist/constants.js b/dist/constants.js
+index 88b44306b2b358bfd8052126f54ecbff014129f3..db9ebb98b1246d74b066a6ac1e875594d3b6ff6c 100644
+--- a/dist/constants.js
++++ b/dist/constants.js
+@@ -26,8 +26,8 @@ const HEADER_FILENAME_SUFFIX_SLOT_ID = "header-filename-suffix";
+ const HEADER_METADATA_SLOT_ID = "header-metadata";
+ const CUSTOM_HEADER_SLOT_ID = "header-custom";
+ const DEFAULT_THEMES = {
+-	dark: "pierre-dark",
+-	light: "pierre-light"
++	dark: "github-dark",
++	light: "github-light"
+ };
+ const THEME_CSS_ATTRIBUTE = "data-theme-css";
+ const UNSAFE_CSS_ATTRIBUTE = "data-unsafe-css";
+diff --git a/dist/highlighter/languages/resolveLanguage.js b/dist/highlighter/languages/resolveLanguage.js
+index 5c564857e99dc8090fceb824b83cf6f75fbf00b5..7462bc0a3e06a6db1c9c1c323c537970f4354c18 100644
+--- a/dist/highlighter/languages/resolveLanguage.js
++++ b/dist/highlighter/languages/resolveLanguage.js
+@@ -1,6 +1,6 @@
+ import { RegisteredCustomLanguages, ResolvedLanguages, ResolvingLanguages } from "./constants.js";
+ import { isWorkerContext } from "../../utils/isWorkerContext.js";
+-import { bundledLanguages } from "shiki";
++import { bundledLanguages } from "shiki/langs";
+ //#region src/highlighter/languages/resolveLanguage.ts
+ async function resolveLanguage(lang) {
+ 	if (isWorkerContext()) throw new Error(`resolveLanguage("${lang}") cannot be called from a worker context. Languages must be pre-resolved on the main thread and passed to the worker via the resolvedLanguages parameter.`);
+diff --git a/dist/highlighter/shared_highlighter.js b/dist/highlighter/shared_highlighter.js
+index 24484bd9d94e338ba4af08ba8de0daa7ba23d08f..0d68584cb843dc9747efd663cc417bcb7a726fb6 100644
+--- a/dist/highlighter/shared_highlighter.js
++++ b/dist/highlighter/shared_highlighter.js
+@@ -5,15 +5,17 @@ import { themeResolver } from "./themes/themeResolver.js";
+ import { attachResolvedThemes } from "./themes/attachResolvedThemes.js";
+ import { cleanUpResolvedThemes } from "./themes/cleanUpResolvedThemes.js";
+ import { getResolvedOrResolveTheme } from "./themes/getResolvedOrResolveTheme.js";
+-import { createHighlighter, createJavaScriptRegexEngine, createOnigurumaEngine } from "shiki";
++import { createHighlighterCore } from "shiki/core";
++import { createJavaScriptRegexEngine } from "shiki/engine/javascript";
+ import { pierreThemes } from "@pierre/theming/themes";
+ //#region src/highlighter/shared_highlighter.ts
+ let highlighter;
+ async function getSharedHighlighter({ themes, langs, preferredHighlighter = "shiki-js" }) {
+-	highlighter ??= createHighlighter({
++	if (preferredHighlighter !== "shiki-js") throw new Error("Synara only supports the Shiki JavaScript engine");
++	highlighter ??= createHighlighterCore({
+ 		themes: [],
+ 		langs: ["text"],
+-		engine: preferredHighlighter === "shiki-wasm" ? createOnigurumaEngine(import("shiki/wasm")) : createJavaScriptRegexEngine()
++		engine: createJavaScriptRegexEngine()
+ 	});
+ 	const instance = isHighlighterLoading(highlighter) ? await highlighter : highlighter;
+ 	highlighter = instance;
+diff --git a/dist/worker/worker.js b/dist/worker/worker.js
+index 09c283a5e76f77acf2d0826bd4acd9fd7572155e..db0056bc210bb1b13c5646cd4d6ff0321f3ffddb 100644
+--- a/dist/worker/worker.js
++++ b/dist/worker/worker.js
+@@ -1,6 +1,5 @@
+ import { createHighlighterCore } from "shiki/core";
+ import { createJavaScriptRegexEngine } from "shiki/engine/javascript";
+-import { createOnigurumaEngine } from "shiki/engine/oniguruma";
+ import { createThemeResolver } from "@pierre/theming";
+ import { diffChars, diffWordsWithSpace } from "diff";
+ import { transformerStyleToClass } from "@shikijs/transformers";
+@@ -13,8 +12,8 @@ import { normalizeThemeColors } from "@pierre/theming/color";
+ 	}
+ })();
+ const DEFAULT_THEMES = {
+-	dark: "pierre-dark",
+-	light: "pierre-light"
++	dark: "github-dark",
++	light: "github-light"
+ };
+ Object.freeze({
+ 	fromStart: 0,
+@@ -1758,10 +1757,11 @@ async function handleRenderDiff({ id, diff, resolvedLanguages, customExtensionsV
+ 	sendDiffSuccess(id, renderDiffWithHighlighter(diff, highlighter, renderOptions), renderOptions);
+ }
+ function getHighlighter(preferredHighlighter = "shiki-js") {
++	if (preferredHighlighter !== "shiki-js") throw new Error("Synara only supports the Shiki JavaScript engine");
+ 	highlighter ??= createHighlighterCore({
+ 		themes: [],
+ 		langs: [],
+-		engine: preferredHighlighter === "shiki-wasm" ? createOnigurumaEngine(import("shiki/wasm")) : createJavaScriptRegexEngine()
++		engine: createJavaScriptRegexEngine()
+ 	});
+ 	return highlighter;
+ }

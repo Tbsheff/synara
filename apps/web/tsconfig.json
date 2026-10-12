@@ -21,5 +21,11 @@
       }
     ]
   },
-  "include": ["src", "perf", "scripts/production-assets*.ts", "vite.config.ts"]
+  "include": [
+    "src",
+    "perf",
+    "scripts/production-assets*.ts",
+    "scripts/shiki-bundle*.ts",
+    "vite.config.ts"
+  ]
 }
