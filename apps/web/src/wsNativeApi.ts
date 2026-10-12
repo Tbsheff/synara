@@ -43,6 +43,7 @@ import {
   ServerConfigUpdatedPayload,
   WS_CHANNELS,
   WS_METHODS,
+  CLOUD_AGENTS_WS_METHODS,
   type WsWelcomePayload,
   type WsBootstrapNegotiateResult,
   type AutomationStreamEvent,
@@ -829,6 +830,22 @@ export function createWsNativeApi(): NativeApi {
       getProfileTokenStats: (input) =>
         transport.request(WS_METHODS.statsGetProfileTokenStats, input),
       getRecap: (input) => transport.request(WS_METHODS.statsGetRecap, input),
+    },
+    cloud: {
+      getCapabilities: (input) => transport.request(CLOUD_AGENTS_WS_METHODS.getCapabilities, input),
+      listEnvironments: (input) =>
+        transport.request(CLOUD_AGENTS_WS_METHODS.listEnvironments, input),
+      listTasks: (input) => transport.request(CLOUD_AGENTS_WS_METHODS.listTasks, input),
+      getTask: (input) => transport.request(CLOUD_AGENTS_WS_METHODS.getTask, input),
+      submit: (input) =>
+        transport.request(CLOUD_AGENTS_WS_METHODS.submit, input, { timeoutMs: null }),
+      listSubmissions: (input) => transport.request(CLOUD_AGENTS_WS_METHODS.listSubmissions, input),
+      getDiff: (input) => transport.request(CLOUD_AGENTS_WS_METHODS.getDiff, input),
+      applyToWorktree: (input) =>
+        transport.request(CLOUD_AGENTS_WS_METHODS.applyToWorktree, input, { timeoutMs: null }),
+      sendFollowUp: (input) =>
+        transport.request(CLOUD_AGENTS_WS_METHODS.sendFollowUp, input, { timeoutMs: null }),
+      watchTask: (input, listener) => transport.watchCloudTask(input, listener),
     },
     provider: {
       getComposerCapabilities: (input) =>

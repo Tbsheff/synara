@@ -109,6 +109,7 @@ const RAIL_HUGEICON_GLYPHS: Record<HugeiconRailItemId, AppRailGlyphs> = {
 const RAIL_ITEM_GLYPH_NAMES: Record<Exclude<RailItemId, HugeiconRailItemId>, string> = {
   kanban: "columns-3-wide",
   plugins: "puzzle",
+  cloud: "cloud",
   settings: "settings-gear-4",
 };
 

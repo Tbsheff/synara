@@ -637,6 +637,7 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         [131, "ProjectSourceFolders"],
         [132, "PluginStorage"],
         [133, "ProposedPlanPartial"],
+        [134, "CloudSubmissions"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -722,6 +723,7 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
           { migration_id: 131, name: "ProjectSourceFolders" },
           { migration_id: 132, name: "PluginStorage" },
           { migration_id: 133, name: "ProposedPlanPartial" },
+          { migration_id: 134, name: "CloudSubmissions" },
         ],
       );
       const groupConfigColumns = yield* sql<{ readonly name: string }>`
@@ -887,6 +889,7 @@ agentGatewayRetentionLegacyLayer(
           [131, "ProjectSourceFolders"],
           [132, "PluginStorage"],
           [133, "ProposedPlanPartial"],
+          [134, "CloudSubmissions"],
         ]);
 
         const columns = yield* sql<{ readonly name: string }>`
@@ -1015,6 +1018,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [131, "ProjectSourceFolders"],
         [132, "PluginStorage"],
         [133, "ProposedPlanPartial"],
+        [134, "CloudSubmissions"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -1084,6 +1088,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [131, "ProjectSourceFolders"],
           [132, "PluginStorage"],
           [133, "ProposedPlanPartial"],
+          [134, "CloudSubmissions"],
         ],
       );
 
@@ -1207,6 +1212,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [131, "ProjectSourceFolders"],
         [132, "PluginStorage"],
         [133, "ProposedPlanPartial"],
+        [134, "CloudSubmissions"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -1272,6 +1278,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [131, "ProjectSourceFolders"],
           [132, "PluginStorage"],
           [133, "ProposedPlanPartial"],
+          [134, "CloudSubmissions"],
         ],
       );
       const preservedSpaces = yield* sql<{ readonly spaceId: string }>`

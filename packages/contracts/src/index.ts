@@ -56,3 +56,4 @@ export * from "./claudeCache";
 export * from "./todo";
 
 export * from "./htmlRender";
+export * from "./cloudAgents";

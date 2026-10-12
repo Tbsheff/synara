@@ -7,16 +7,14 @@
 // Layer: Pull request presentation
 // Exports: PullRequestCommentComposer, GitHubCommentTarget, GitHubCommentMutation
 
-import { GLASS_RAISED_SURFACE_CLASS_NAME } from "~/surfaceStyles";
 import type { PullRequestDetailInput } from "@synara/contracts";
 import { useRef, useState } from "react";
 
 import { Menu, MenuTrigger, MenuPopupBase, MenuItem } from "~/components/ui/menu";
 import { Button } from "~/components/ui/button";
 import { toastManager } from "~/components/ui/toast";
-import { ArrowUpIcon, GitHubIcon } from "~/lib/icons";
-import { PR_BODY_TEXT_CLASS_NAME } from "./pullRequestText";
-import { cn } from "~/lib/utils";
+import { GitHubIcon } from "~/lib/icons";
+import { PillComposerField } from "../PillComposerField";
 
 /** The item a comment goes to. Pull requests and issues share one number space per repository. */
 export type GitHubCommentTarget = Pick<
@@ -96,62 +94,43 @@ export function PullRequestCommentComposer({
   };
 
   return (
-    <div
-      className={`${GLASS_RAISED_SURFACE_CLASS_NAME} flex items-center gap-2 rounded-3xl border border-border/60 bg-background py-1 pl-3 pr-1.5 shadow-sm`}
-    >
-      <span
-        className="flex size-5 shrink-0 items-center justify-center rounded-full bg-[var(--color-background-elevated-secondary)] text-muted-foreground"
-        title="Commenting as your GitHub account"
-      >
-        <GitHubIcon className="size-3" />
-      </span>
-      <textarea
-        rows={Math.min(6, body.split("\n").length)}
-        value={body}
-        disabled={mutation.isPending}
-        placeholder="Leave a comment"
-        aria-label="Leave a comment"
-        onChange={(event) => setBody(event.target.value)}
-        onKeyDown={(event) => {
-          // Enter during IME composition confirms the composition, not the comment.
-          if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
-            event.preventDefault();
-            void submit();
-          }
-        }}
-        // font-system-ui overrides the global `textarea { font-family: mono }` reset — this is
-        // UI chrome, not code, exactly like the chat composer's editor.
-        className={cn(
-          PR_BODY_TEXT_CLASS_NAME,
-          "font-system-ui min-w-0 flex-1 resize-none bg-transparent py-1.5 outline-none placeholder:text-muted-foreground disabled:opacity-60",
-        )}
-      />
-      {onReview ? (
-        <Menu>
-          <MenuTrigger render={<Button variant="ghost" size="xs" disabled={mutation.isPending} />}>
-            Review
-          </MenuTrigger>
-          <MenuPopupBase>
-            <MenuItem onClick={() => submitReview("approve")}>Approve</MenuItem>
-            <MenuItem disabled={!trimmed} onClick={() => submitReview("request_changes")}>
-              Request changes
-            </MenuItem>
-            <MenuItem disabled={!trimmed} onClick={() => submitReview("review_comment")}>
-              Submit review comment
-            </MenuItem>
-          </MenuPopupBase>
-        </Menu>
-      ) : null}
-      <button
-        type="button"
-        disabled={!canSubmit}
-        aria-label="Post comment"
-        title="Post comment"
-        onClick={() => void submit()}
-        className="flex size-7 shrink-0 items-center justify-center self-end rounded-full bg-primary text-primary-foreground transition-opacity disabled:opacity-35"
-      >
-        <ArrowUpIcon className="size-4" />
-      </button>
-    </div>
+    <PillComposerField
+      value={body}
+      onValueChange={setBody}
+      onSubmit={submit}
+      canSubmit={canSubmit}
+      disabled={mutation.isPending}
+      placeholder="Leave a comment"
+      ariaLabel="Leave a comment"
+      submitLabel="Post comment"
+      actions={
+        onReview ? (
+          <Menu>
+            <MenuTrigger
+              render={<Button variant="ghost" size="xs" disabled={mutation.isPending} />}
+            >
+              Review
+            </MenuTrigger>
+            <MenuPopupBase>
+              <MenuItem onClick={() => submitReview("approve")}>Approve</MenuItem>
+              <MenuItem disabled={!trimmed} onClick={() => submitReview("request_changes")}>
+                Request changes
+              </MenuItem>
+              <MenuItem disabled={!trimmed} onClick={() => submitReview("review_comment")}>
+                Submit review comment
+              </MenuItem>
+            </MenuPopupBase>
+          </Menu>
+        ) : null
+      }
+      leading={
+        <span
+          className="flex size-5 shrink-0 items-center justify-center rounded-full bg-[var(--color-background-elevated-secondary)] text-muted-foreground"
+          title="Commenting as your GitHub account"
+        >
+          <GitHubIcon className="size-3" />
+        </span>
+      }
+    />
   );
 }

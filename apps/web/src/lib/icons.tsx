@@ -145,6 +145,7 @@ export const CircleCheckIcon = adaptIcon(IconCircleCheck);
 // set so they sit visually beside the other timeline glyphs (robot, search, …).
 export const CircleQuestionIcon: LucideIcon = centralIconWrapper("circle-questionmark");
 export const ArrowUpCircleIcon: LucideIcon = centralIconWrapper("arrow-up-circle");
+export const CloudIcon: LucideIcon = centralIconWrapper("cloud");
 export const CloudSyncIcon = centralIconWrapper("cloud-sync");
 export const Columns2Icon = adaptIcon(IconColumns2);
 export const CoffeeIcon = adaptIcon(IconCoffee);

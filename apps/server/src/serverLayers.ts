@@ -76,6 +76,7 @@ import { GitHubInboxServiceLive } from "./githubInbox/Layers/GitHubInboxService"
 import { ProviderHealthLive } from "./provider/Layers/ProviderHealth";
 import { makeServerProviderLayer } from "./provider/runtimeLayer";
 import { PluginHostLive } from "./plugins/PluginHost";
+import { makeCloudAgentsServerLayer } from "./cloudAgents/cloudAgentsServerLayer";
 
 export { makeServerProviderLayer } from "./provider/runtimeLayer";
 
@@ -293,6 +294,8 @@ export function makeServerRuntimeServicesLayer(
     Layer.provideMerge(runtimeServicesLayer),
     Layer.provideMerge(ServerSettingsLive),
   );
+  const cloudAgentsLayer = makeCloudAgentsServerLayer().pipe(Layer.provide(ServerSettingsLive));
+
   return Layer.mergeAll(
     agentGatewayCredentialsLayer,
     agentGatewayLayer,
@@ -328,6 +331,7 @@ export function makeServerRuntimeServicesLayer(
     TerminalLayerLive,
     KeybindingsLive,
     keepAwakeLayer,
+    cloudAgentsLayer,
     ServerEnvironmentLive,
     ProfileStatsQueryLive,
     RecapStatsQueryLive,

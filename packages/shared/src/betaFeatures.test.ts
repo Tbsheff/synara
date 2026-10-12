@@ -6,6 +6,7 @@ import {
   desktopFlavorFromProtocol,
   GROUPS_BETA_FEATURE,
   isBetaFeatureEnabled,
+  PROVIDER_CLOUD_BETA_FEATURE,
 } from "./betaFeatures";
 import {
   SYNARA_BETA_BUNDLE_ID,
@@ -43,6 +44,14 @@ describe("isBetaFeatureEnabled", () => {
       expect(isBetaFeatureEnabled(GROUPS_BETA_FEATURE, flavor)).toBe(true);
     }
     expect(isBetaFeatureEnabled(GROUPS_BETA_FEATURE, "production")).toBe(false);
+  });
+
+  it("keeps cloud agents out of Stable only", () => {
+    expect(BETA_ONLY_FEATURES).toContain(PROVIDER_CLOUD_BETA_FEATURE);
+    for (const flavor of ["development", "canary", "cua", "beta", "unknown"] as const) {
+      expect(isBetaFeatureEnabled(PROVIDER_CLOUD_BETA_FEATURE, flavor)).toBe(true);
+    }
+    expect(isBetaFeatureEnabled(PROVIDER_CLOUD_BETA_FEATURE, "production")).toBe(false);
   });
 
   it("enables the rail sidebar layout in both Beta and Stable", () => {

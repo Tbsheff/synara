@@ -44,6 +44,7 @@ export const RAIL_ORDERABLE_ITEM_IDS = [
   "kanban",
   "tasks",
   "pullRequests",
+  "cloud",
   "automations",
   "plugins",
   "studio",
@@ -64,13 +65,9 @@ export function railItemCanHide(id: RailOrderableItemId): boolean {
 
 export function normalizeRailItemOrder(order: readonly string[]): RailOrderableItemId[] {
   const normalized = normalizeIdOrder(order, RAIL_ORDERABLE_ITEM_IDS, isRailOrderableItemId);
-  // Inbox and Plugins shipped after users saved an order: each joins where it sits by default.
-  return placeNewIdAfter(
-    placeNewIdAfter(normalized, order, "inbox", "home"),
-    order,
-    "plugins",
-    "automations",
-  );
+  const withInbox = placeNewIdAfter(normalized, order, "inbox", "home");
+  const withCloud = placeNewIdAfter(withInbox, order, "cloud", "pullRequests");
+  return placeNewIdAfter(withCloud, order, "plugins", "automations");
 }
 
 export function normalizeHiddenRailItems(hidden: readonly string[]): RailOrderableItemId[] {
@@ -82,12 +79,14 @@ export interface RailAvailability {
   readonly studioAvailable: boolean;
   /** Whether this host offers Inbox. */
   readonly inboxAvailable: boolean;
+  readonly cloudAvailable: boolean;
 }
 
 /** Whether an item exists on this host at all: the rail and its Customize list agree. */
 export function isRailItemAvailable(id: RailOrderableItemId, availability: RailAvailability) {
   if (id === "studio") return availability.studioAvailable;
   if (id === "inbox") return availability.inboxAvailable;
+  if (id === "cloud") return availability.cloudAvailable;
   return true;
 }
 
@@ -194,7 +193,12 @@ export function resolveActiveRailShortcutKey(input: {
  */
 export function railItemShowsPanel(id: RailItemId): boolean {
   return (
-    id !== "kanban" && id !== "tasks" && id !== "pullRequests" && id !== "inbox" && id !== "plugins"
+    id !== "kanban" &&
+    id !== "tasks" &&
+    id !== "pullRequests" &&
+    id !== "inbox" &&
+    id !== "plugins" &&
+    id !== "cloud"
   );
 }
 
@@ -208,6 +212,7 @@ export function railItemForPathname(pathname: string): RailRouteItemId | null {
   if (matchesRoute(pathname, "/kanban")) return "kanban";
   if (matchesRoute(pathname, "/tasks")) return "tasks";
   if (matchesRoute(pathname, "/pull-requests")) return "pullRequests";
+  if (matchesRoute(pathname, "/cloud")) return "cloud";
   if (matchesRoute(pathname, "/automations")) return "automations";
   if (matchesRoute(pathname, "/plugins") || matchesRoute(pathname, "/extensions")) {
     return "plugins";
