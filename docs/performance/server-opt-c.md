@@ -40,3 +40,53 @@ The write harness uses the actual receipt insert SQL, plus one synthetic 100-cha
 | Receipt insert `IdxInsert` instructions |           3 |           2 | One per accepted receipt |
 
 These results measure isolated SQLite writes, not full server throughput. Space becomes reusable; the migration does not shrink the database file. The two migration tests fail before registration and pass afterward. They cover upgrade, row preservation, retained indexes, repeated execution, and fresh databases. A future query that filters on receipt sequence could need a new index.
+
+## Thread title-version index
+
+Migration 136 creates a partial `(aggregate_kind, stream_id, sequence)` index. Its predicate matches the repository title-version query: thread creation, archive, deletion, or a metadata update with a text title. Non-title events do not enter this index. It uses `CREATE INDEX IF NOT EXISTS` and the existing additive-only marker. The marker test now permits pure JSON functions while still rejecting row-change statements.
+
+The new tests capture the SQL prepared by the real event-store repository and check its query plan. They fail before migration 136 and pass after it. They cover fresh databases, upgrade, repeated execution, unchanged rows, null and numeric titles, unrelated metadata, another thread, an absent thread, explicit title regeneration, archive, and deletion.
+
+The measurement harness copies the schema through migration 134 into memory. It loads short and long histories with one initial title and 100-character assistant deltas. The regeneration cases replace the middle event with a text-title update. A SQLite progress handler counts every VM step for one query. Timing then runs without the handler: ten warmups and the mean of 200 queries. Every before and after result matches.
+
+| Events | Explicit regeneration | VM steps before → after | Mean µs before → after |
+| ------ | --------------------- | ----------------------: | ---------------------: |
+| 32     | No                    |                433 → 77 |            7.82 → 0.72 |
+| 32     | Yes                   |                261 → 77 |            3.95 → 4.65 |
+| 2,140  | No                    |             23,621 → 77 |          447.71 → 0.75 |
+| 2,140  | Yes                   |             11,855 → 77 |          259.37 → 0.76 |
+| 50,000 | No                    |            550,081 → 77 |       37,769.77 → 1.14 |
+| 50,000 | Yes                   |            275,085 → 77 |       11,061.83 → 3.44 |
+
+The query plan changes from `idx_orch_events_stream_sequence` to `idx_orch_events_thread_title_sequence`. The 2,140-event initial-title case removes 99.7% of VM steps. Timing has host noise; the short regeneration case shows no time gain in this run. The new index uses one 4,096-byte page in each case. It adds writes for title-changing events and must scan existing history once when it is built. A future query predicate change must update the index predicate too.
+
+## Files and local evidence
+
+| Item          | Source and tests                                                                                                                                                                                                                               |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Fingerprints  | `apps/server/src/orchestration/providerRuntimeActivityProjection.ts`, `providerRuntimeActivityProjection.test.ts`; existing `Layers/ProviderRuntimeIngestion.test.ts` covers recovery                                                          |
+| Receipt index | `apps/server/src/persistence/Migrations/135_DropUnusedReceiptSequenceIndex.ts`, `receiptSequenceIndex.test.ts`; registration and tracker expectations in `Migrations.ts` and `Migrations.test.ts`; backup fixture in `MigrationBackup.test.ts` |
+| Title index   | `apps/server/src/persistence/Migrations/136_ThreadTitleVersionIndex.ts`, `threadTitleIndex.test.ts`; registration and tracker expectations in `Migrations.ts` and `Migrations.test.ts`; marker checks in `MigrationBackup.test.ts`             |
+
+Both migrations apply to Stable and Beta. Neither migration changes user data or app identity. The production change reuses the existing serializer, fingerprint helper, crypto import, SQL layer, and migration marker.
+
+The ignored `.opt-c/` folder in this worktree keeps the measurement scripts, raw query plans, before and after values, and test logs. Use `bun .opt-c/fingerprint-measure.ts`, `python3 .opt-c/receipt-measure.py`, and `python3 .opt-c/title-measure.py` to repeat the current measurements. The receipt and title scripts use the isolated `.opt-c/baseline.sqlite` schema. The fingerprint script runs the current helper; the recorded before run used the original helper.
+
+## Verification
+
+| Check                                                                         | Result                                                                                                        |
+| ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `bun run fmt:check`                                                           | Pass                                                                                                          |
+| `bun run lint`                                                                | Pass; 1,032 warnings, no errors; synchronous filesystem budget passes                                         |
+| `bun run typecheck`                                                           | Pass; all eight workspace tasks pass                                                                          |
+| `bun run migrations:check`                                                    | Fails only on the existing released-name conflicts for IDs 38–65; none for 135 or 136                         |
+| Activity projection and ingestion                                             | 243 tests pass; projection rerun after the test type fix: 71 pass                                             |
+| Migration, backup, replay, receipt, event-store, and engine durability suites | Eight files, 78 tests pass                                                                                    |
+| Import history and recovery                                                   | Two files, 10 tests pass                                                                                      |
+| Broad checkpoint suite                                                        | 92 pass, eight fail; group retry repeats the eight failures                                                   |
+| Starting-source checkpoint comparison                                         | Four of those eight fail with the original production source and migration registry at `50bdb4681`; four pass |
+| Focused checkpoint checks with the changes                                    | Three of the other four pass together; the workspace-alias case passes alone                                  |
+
+The four failures reproduced on the starting source cover the three blocked-workspace publication cases and the peer-claim ACK case. The remaining four cases have short waits for state or Git refs and pass in focused runs. The broad checkpoint suite remains red; these runs do not prove why its result varies.
+
+All Git test runs use `GIT_CONFIG_GLOBAL=/dev/null`. The checks use test fixtures and isolated databases. No installed Synara app, user data home, or live provider was tested. All new item tests have a recorded failure before the change and a pass afterward.
