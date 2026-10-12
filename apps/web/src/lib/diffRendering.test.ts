@@ -4,6 +4,7 @@
 // Depends on: Vitest and diffRendering helpers
 
 import { describe, expect, it } from "vitest";
+import type { FileDiffMetadata } from "@pierre/diffs";
 import {
   buildFileDiffRenderKey,
   buildPatchCacheKey,
@@ -118,6 +119,18 @@ describe("resolveDiffCopyText", () => {
 });
 
 describe("resolveFileDiffPrevPath", () => {
+  it("resolves paired raw diff prefixes without stripping parsed directory names", () => {
+    const raw = {
+      type: "change",
+      name: "b/apps/web/src/example.ts",
+      prevName: "a/apps/web/src/example.ts",
+    } as FileDiffMetadata;
+    expect(resolveFileDiffPath(raw)).toBe("apps/web/src/example.ts");
+    expect(resolveFileDiffPath({ ...raw, name: "b/example.ts", prevName: "b/example.ts" })).toBe(
+      "b/example.ts",
+    );
+  });
+
   const parseSingleFile = (patch: string) => {
     const renderable = getRenderablePatch(patch, "prev-path:test");
     if (renderable?.kind !== "files" || renderable.files.length !== 1) {

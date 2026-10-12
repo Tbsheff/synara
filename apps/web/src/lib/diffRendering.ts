@@ -328,6 +328,13 @@ export function getRenderablePatch(
 }
 
 export function resolveFileDiffPath(fileDiff: FileDiffMetadata): string {
+  if (
+    fileDiff.type === "change" &&
+    fileDiff.name?.startsWith("b/") &&
+    fileDiff.prevName === `a/${fileDiff.name.slice(2)}`
+  ) {
+    return fileDiff.name.slice(2);
+  }
   return fileDiff.name ?? fileDiff.prevName ?? "";
 }
 
