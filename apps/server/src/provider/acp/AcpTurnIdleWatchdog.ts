@@ -61,6 +61,19 @@ export interface AcpTurnIdleWatchdogParams {
   readonly onIdleTimeout: (idleMs: number) => Effect.Effect<void>;
 }
 
+const SUSPEND_TICK_GAP_INTERVALS = 3;
+const SUSPEND_MIN_TICK_GAP_MS = 30_000;
+
+export function isAcpWatchdogTickAfterSuspend(input: {
+  readonly tickGapMs: number;
+  readonly checkIntervalMs: number;
+}): boolean {
+  return (
+    input.tickGapMs >
+    Math.max(input.checkIntervalMs * SUSPEND_TICK_GAP_INTERVALS, SUSPEND_MIN_TICK_GAP_MS)
+  );
+}
+
 /** The action the watchdog takes after evaluating a single idle-progress tick. */
 export type AcpTurnIdleTickDecision = "stop" | "touch" | "timeout" | "continue";
 
@@ -77,11 +90,12 @@ export function evaluateAcpTurnIdleTick(input: {
   readonly isAwaitingHuman: boolean;
   readonly idleMs: number;
   readonly idleTimeoutMs: number;
+  readonly resumedFromSuspend?: boolean;
 }): AcpTurnIdleTickDecision {
   if (!input.isTurnActive) {
     return "stop";
   }
-  if (input.isAwaitingHuman) {
+  if (input.isAwaitingHuman || input.resumedFromSuspend === true) {
     return "touch";
   }
   return input.idleMs >= input.idleTimeoutMs ? "timeout" : "continue";
@@ -123,16 +137,24 @@ export const forkAcpTurnIdleWatchdog = (
   params: AcpTurnIdleWatchdogParams,
 ): Effect.Effect<Fiber.Fiber<void>> =>
   Effect.gen(function* () {
+    let previousTickAt = Date.now();
     const loop = Effect.gen(function* () {
       while (true) {
         yield* Effect.sleep(params.checkIntervalMs);
-        const idleMs = Date.now() - params.lastActivityAt();
+        const tickAt = Date.now();
+        const resumedFromSuspend = isAcpWatchdogTickAfterSuspend({
+          tickGapMs: tickAt - previousTickAt,
+          checkIntervalMs: params.checkIntervalMs,
+        });
+        previousTickAt = tickAt;
+        const idleMs = tickAt - params.lastActivityAt();
         const currentIdleTimeoutMs = params.currentIdleTimeoutMs?.() ?? params.idleTimeoutMs;
         const decision = evaluateAcpTurnIdleTick({
           isTurnActive: params.isTurnActive(),
           isAwaitingHuman: params.isAwaitingHuman(),
           idleMs,
           idleTimeoutMs: currentIdleTimeoutMs,
+          resumedFromSuspend,
         });
         if (decision === "stop") {
           return;

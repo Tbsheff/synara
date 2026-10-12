@@ -61,6 +61,7 @@ import { ServerConfig, type ServerConfigShape } from "../../config.ts";
 import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
 import { loadProviderPromptImageBlocks } from "../promptAttachments.ts";
 import { settleConcurrentTeardowns } from "../settleConcurrentTeardowns.ts";
+import { teardownProviderProcessTree } from "../supervisedProcessTeardown.ts";
 import { readOmpSessionHistory } from "../OmpSessionHistory.ts";
 import { snapshotProviderTurns } from "../snapshotProviderTurns.ts";
 import { appendProviderReferencesPromptBlock } from "../promptReferenceProjection.ts";
@@ -124,7 +125,11 @@ import {
   type OmpAccountBoundary,
   type OmpAcpRuntimeSettings,
 } from "../acp/OmpAcpSupport.ts";
-import { makeSessionTeardownGate } from "../acp/SessionTeardownGate.ts";
+import {
+  makeRetriableProcessTreeTeardown,
+  makeSessionTeardownGate,
+  type RetriableProcessTreeTeardown,
+} from "../acp/SessionTeardownGate.ts";
 import { cancelTurnAndWait } from "../acp/TurnCancellation.ts";
 import {
   elicitationQuestionsFromRequest,
@@ -194,6 +199,7 @@ function isOmpAcpDebugEnabled(): boolean {
 export interface OmpAdapterLiveOptions {
   readonly nativeEventLogPath?: string;
   readonly nativeEventLogger?: EventNdjsonLogger;
+  readonly teardownProcessTree?: typeof teardownProviderProcessTree;
 }
 
 interface PendingApproval {
@@ -259,7 +265,8 @@ interface OmpSessionContext {
   sessionConfigReady: Deferred.Deferred<void> | undefined;
   // Resolves only after the ACP scope and its child process have fully closed.
   // Recovery awaits this gate before starting a replacement session.
-  readonly teardownComplete: Deferred.Deferred<void>;
+  readonly teardownComplete: Deferred.Deferred<void, ProviderAdapterProcessError>;
+  readonly processTeardown: RetriableProcessTreeTeardown;
   latestSessionCostUsd: number | undefined;
   // Count of ACP session/update events fully handled by the notification
   // consumer. Compared against acp.sessionUpdatesEnqueuedCount to detect when
@@ -383,7 +390,7 @@ export function makeOmpAdapter(
       options?.nativeEventLogger === undefined ? nativeEventLogger : undefined;
 
     const sessions = new Map<ThreadId, OmpSessionContext>();
-    const sessionTeardownGate = makeSessionTeardownGate();
+    const sessionTeardownGate = makeSessionTeardownGate<ProviderAdapterProcessError>();
     const modelDiscoveryCache = new Map<
       string,
       { readonly expiresAt: number; readonly result: ProviderListModelsResult }
@@ -630,68 +637,96 @@ export function makeOmpAdapter(
       return Effect.succeed(ctx);
     };
 
+    const toTeardownError = (threadId: ThreadId, cause: unknown) =>
+      new ProviderAdapterProcessError({
+        provider: PROVIDER,
+        threadId,
+        detail: `OMP runtime teardown did not prove the process exited: ${
+          Cause.isCause(cause) ? Cause.pretty(cause) : String(cause)
+        }`,
+        cause: Cause.isCause(cause) ? Cause.squash(cause) : cause,
+      });
+
+    const beginSessionTeardown = (
+      ctx: OmpSessionContext,
+      options?: {
+        readonly exitKind?: "graceful" | "error";
+        readonly reason?: string;
+      },
+    ) =>
+      Effect.uninterruptible(
+        Effect.gen(function* () {
+          if (ctx.stopped) {
+            return;
+          }
+          ctx.stopped = true;
+          yield* cancelAgentGatewayTurn(ctx.gatewaySessionLease, ctx.activeTurnId);
+          ctx.gatewaySessionLease?.release();
+          sessionTeardownGate.track(ctx.threadId, ctx.teardownComplete);
+          if (sessions.get(ctx.threadId) === ctx) {
+            sessions.delete(ctx.threadId);
+          }
+          yield* settleAcpPendingApprovalsAsCancelled(ctx.pendingApprovals);
+          yield* settleAcpPendingUserInputsAsEmptyAnswers(ctx.pendingUserInputs);
+          if (ctx.sessionConfigReady !== undefined) {
+            yield* Deferred.succeed(ctx.sessionConfigReady, undefined);
+            ctx.sessionConfigReady = undefined;
+          }
+          if (ctx.resumeReplayReady !== undefined) {
+            yield* Deferred.succeed(ctx.resumeReplayReady, undefined);
+            ctx.resumeReplayReady = undefined;
+            ctx.resumeReplayLastSuppressedAt = undefined;
+          }
+          if (ctx.notificationFiber) {
+            yield* Fiber.interrupt(ctx.notificationFiber);
+          }
+
+          const retryTeardown = Effect.tryPromise({
+            try: ctx.processTeardown.retry,
+            catch: (cause) => toTeardownError(ctx.threadId, cause),
+          });
+          const teardown = Effect.gen(function* () {
+            const closeExit = yield* Effect.exit(Scope.close(ctx.scope, Exit.void));
+            if (Exit.isFailure(closeExit)) {
+              return yield* toTeardownError(ctx.threadId, closeExit.cause);
+            }
+            yield* offerRuntimeEvent(ctx.lifecycleGeneration, {
+              type: "session.exited",
+              ...(yield* makeEventStamp()),
+              provider: PROVIDER,
+              threadId: ctx.threadId,
+              payload: {
+                exitKind: options?.exitKind ?? "graceful",
+                ...(options?.reason ? { reason: options.reason } : {}),
+              },
+            });
+          }).pipe(
+            Effect.exit,
+            Effect.flatMap((exit) =>
+              sessionTeardownGate.complete(
+                ctx.threadId,
+                ctx.teardownComplete,
+                Exit.isSuccess(exit) || Cause.hasFails(exit.cause)
+                  ? exit
+                  : Exit.fail(toTeardownError(ctx.threadId, exit.cause)),
+                retryTeardown,
+              ),
+            ),
+          );
+
+          const teardownOutsideScopeOwnedFibers = teardown.pipe(Effect.forkDetach, Effect.asVoid);
+          yield* teardownOutsideScopeOwnedFibers;
+        }),
+      );
+
     const stopSessionInternal = (
       ctx: OmpSessionContext,
       options?: {
         readonly exitKind?: "graceful" | "error";
         readonly reason?: string;
-        readonly awaitTermination?: boolean;
       },
     ) =>
-      Effect.uninterruptibleMask((restore) =>
-        Effect.gen(function* () {
-          if (!ctx.stopped) {
-            ctx.stopped = true;
-            yield* cancelAgentGatewayTurn(ctx.gatewaySessionLease, ctx.activeTurnId);
-            ctx.gatewaySessionLease?.release();
-            sessionTeardownGate.track(ctx.threadId, ctx.teardownComplete);
-            if (sessions.get(ctx.threadId) === ctx) {
-              sessions.delete(ctx.threadId);
-            }
-            yield* settleAcpPendingApprovalsAsCancelled(ctx.pendingApprovals);
-            yield* settleAcpPendingUserInputsAsEmptyAnswers(ctx.pendingUserInputs);
-            if (ctx.sessionConfigReady !== undefined) {
-              yield* Deferred.succeed(ctx.sessionConfigReady, undefined);
-              ctx.sessionConfigReady = undefined;
-            }
-            if (ctx.resumeReplayReady !== undefined) {
-              yield* Deferred.succeed(ctx.resumeReplayReady, undefined);
-              ctx.resumeReplayReady = undefined;
-              ctx.resumeReplayLastSuppressedAt = undefined;
-            }
-            if (ctx.notificationFiber) {
-              yield* Fiber.interrupt(ctx.notificationFiber);
-            }
-
-            const completeTeardown = sessionTeardownGate.complete(
-              ctx.threadId,
-              ctx.teardownComplete,
-            );
-            const teardown = Effect.gen(function* () {
-              yield* Effect.ignore(Scope.close(ctx.scope, Exit.void));
-              yield* offerRuntimeEvent(ctx.lifecycleGeneration, {
-                type: "session.exited",
-                ...(yield* makeEventStamp()),
-                provider: PROVIDER,
-                threadId: ctx.threadId,
-                payload: {
-                  exitKind: options?.exitKind ?? "graceful",
-                  ...(options?.reason ? { reason: options.reason } : {}),
-                },
-              });
-            }).pipe(Effect.ensuring(completeTeardown));
-
-            // Scope.close interrupts prompt/watchdog fibers owned by this scope.
-            // A daemon performs the close so those fibers can initiate teardown
-            // without waiting on their own termination.
-            yield* teardown.pipe(Effect.forkDetach, Effect.asVoid);
-          }
-
-          if (options?.awaitTermination !== false) {
-            yield* restore(Deferred.await(ctx.teardownComplete));
-          }
-        }),
-      );
+      beginSessionTeardown(ctx, options).pipe(Effect.andThen(Deferred.await(ctx.teardownComplete)));
 
     const noteSuppressedOmpRuntimeEvent = (
       ctx: OmpSessionContext,
@@ -851,6 +886,9 @@ export function makeOmpAdapter(
           const pendingUserInputs = new Map<ApprovalRequestId, PendingUserInput>();
           const sessionScope = yield* Scope.make("sequential");
           let sessionScopeTransferred = false;
+          const processTeardown = makeRetriableProcessTreeTeardown(
+            options?.teardownProcessTree ?? teardownProviderProcessTree,
+          );
           const gatewaySessionLease = acquireAgentGatewaySessionLease(
             agentGatewayCredentials,
             input.threadId,
@@ -914,6 +952,7 @@ export function makeOmpAdapter(
             ...(resumeSessionId ? { resumeSessionId } : {}),
             clientCapabilities: { elicitation: { form: {} } },
             clientInfo: { name: "Synara", version: "0.0.0" },
+            teardownProcessTree: processTeardown.teardownProcessTree,
             ...(agentGatewayCredentials
               ? {
                   buildMcpServers: (initializeResult: Acp.InitializeResponse) =>
@@ -1092,7 +1131,7 @@ export function makeOmpAdapter(
           const resumeReplayReady =
             started.sessionSetupMethod === "load" ? yield* Deferred.make<void>() : undefined;
           const sessionConfigReady = yield* Deferred.make<void>();
-          const teardownComplete = yield* Deferred.make<void>();
+          const teardownComplete = yield* Deferred.make<void, ProviderAdapterProcessError>();
           const now = yield* nowIso;
           const session: ProviderSession = {
             provider: PROVIDER,
@@ -1140,6 +1179,7 @@ export function makeOmpAdapter(
             resumeReplayLastSuppressedAt: resumeReplayReady !== undefined ? Date.now() : undefined,
             sessionConfigReady,
             teardownComplete,
+            processTeardown,
             latestSessionCostUsd: undefined,
             sessionUpdatesProcessed: 0,
             turnStarting: false,
@@ -1476,7 +1516,9 @@ export function makeOmpAdapter(
               }),
             ),
             Effect.onExit((exit) =>
-              Exit.isSuccess(exit) ? Effect.void : Effect.ignore(stopSessionInternal(ctx)),
+              Exit.isSuccess(exit)
+                ? Effect.void
+                : stopSessionInternal(ctx).pipe(Effect.ignore({ log: true })),
             ),
           );
 
@@ -1525,10 +1567,9 @@ export function makeOmpAdapter(
         // Let Omp flush final ACP updates and settle session/prompt before
         // escalating to process teardown for a silent nested worker.
         yield* cancelOmpPromptWithGrace(ctx, promptFiber);
-        yield* stopSessionInternal(ctx, {
+        yield* beginSessionTeardown(ctx, {
           exitKind: "error",
           reason: detail,
-          awaitTermination: false,
         });
       });
 
@@ -1623,7 +1664,7 @@ export function makeOmpAdapter(
             stopSessionInternal(ctx, {
               exitKind: "error",
               reason: Cause.pretty(cause),
-            }),
+            }).pipe(Effect.ignore({ log: true })),
           ),
         );
         const promptParts: Array<Acp.ContentBlock> = [];
@@ -1766,10 +1807,9 @@ export function makeOmpAdapter(
                 // Transport/prompt failures make the ACP child unusable. Remove
                 // it from routing immediately so ProviderService can recover on
                 // the next send instead of reusing a dead session forever.
-                yield* stopSessionInternal(ctx, {
+                yield* beginSessionTeardown(ctx, {
                   exitKind: "error",
                   reason: detail,
-                  awaitTermination: false,
                 });
               }),
             onSuccess: (result) =>
@@ -2394,10 +2434,18 @@ export function makeOmpAdapter(
       );
 
     const stopAll: OmpAdapterShape["stopAll"] = () =>
-      settleConcurrentTeardowns(sessions.values(), stopSessionInternal);
+      settleConcurrentTeardowns(sessions.values(), stopSessionInternal).pipe(
+        Effect.andThen(
+          settleConcurrentTeardowns(
+            sessionTeardownGate.pendingThreadIds(),
+            sessionTeardownGate.awaitPending,
+          ),
+        ),
+      );
 
     yield* Effect.addFinalizer(() =>
-      settleConcurrentTeardowns(sessions.values(), stopSessionInternal).pipe(
+      stopAll().pipe(
+        Effect.ignore({ log: true }),
         Effect.tap(() => PubSub.shutdown(runtimeEventPubSub)),
         Effect.tap(() => managedNativeEventLogger?.close() ?? Effect.void),
       ),

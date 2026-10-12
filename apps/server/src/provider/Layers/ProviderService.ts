@@ -56,6 +56,7 @@ import {
   Duration,
   Effect,
   Exit,
+  Fiber,
   Layer,
   Option,
   PubSub,
@@ -237,6 +238,7 @@ type ProviderInterruptionFence = {
   readonly settled: Promise<void>;
   readonly resolve: () => void;
   failure: string | null;
+  exitProven: boolean;
 };
 type TargetedChildInterruptTombstone = {
   readonly lifecycleGeneration: string | undefined;
@@ -254,6 +256,7 @@ type InteractionResponse =
  */
 const PROVIDER_START_SESSION_TIMEOUT = Duration.seconds(60);
 const PROVIDER_STOP_SESSION_TIMEOUT = Duration.seconds(10);
+const PROVIDER_INTERRUPT_ROTATION_TIMEOUT = Duration.seconds(10);
 const PRIOR_TRANSCRIPT_BOOTSTRAP_PENDING = "priorTranscriptBootstrapPending";
 
 function toValidationError(
@@ -1000,6 +1003,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       runtimeEventBufferCapacity,
     );
     const runtimeEventProducerScope = yield* Scope.make("sequential");
+    const interruptRotationScope = yield* Effect.scope;
     const runtimeIdleTimers = new Map<ThreadId, ReturnType<typeof setTimeout>>();
     const liveRuntimeTaskIds = new Map<ThreadId, Set<string>>();
     const runtimeTaskSettlementWaiters = new Map<ThreadId, Set<() => void>>();
@@ -1160,6 +1164,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
 
     const acquireProviderInterruptionFence = (
       threadId: ThreadId,
+      restore: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>,
     ): Effect.Effect<ProviderInterruptionFence, ProviderValidationError> =>
       Effect.suspend(() => {
         const existing = providerInterruptionFences.get(threadId);
@@ -1171,14 +1176,15 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             }),
             resolve: () => resolveFence(),
             failure: null,
+            exitProven: false,
           };
           providerInterruptionFences.set(threadId, fence);
           return Effect.succeed(fence);
         }
-        return Effect.promise(() => existing.settled).pipe(
+        return restore(Effect.promise(() => existing.settled)).pipe(
           Effect.flatMap(() => {
             if (providerInterruptionFences.get(threadId) !== existing) {
-              return acquireProviderInterruptionFence(threadId);
+              return acquireProviderInterruptionFence(threadId, restore);
             }
             return Effect.fail(
               toValidationError(
@@ -4191,36 +4197,57 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             }
           }),
         );
-        return yield* Effect.uninterruptible(
-          Effect.gen(function* () {
-            // Publish and settle the fence inside the same masked region. If
-            // this interrupt fiber is itself cancelled while runtime teardown
-            // is blocked, deferred interruption must not skip resolve/delete.
-            const fence = yield* acquireProviderInterruptionFence(input.threadId);
-            const rotationExit = yield* Effect.exit(
-              input.providerThreadId === undefined
-                ? interruptActiveTurn.pipe(
-                    Effect.andThen(
-                      stopRuntimeSessionInternal({ threadId: input.threadId }, undefined, {
-                        requireAgentGatewayCredentialRotation: true,
-                      }),
-                    ),
-                  )
-                : interruptActiveTurn,
-            );
-            if (Exit.isFailure(rotationExit)) {
-              if (rotationStarted) {
-                fence.failure = Cause.pretty(rotationExit.cause);
-              } else if (providerInterruptionFences.get(input.threadId) === fence) {
-                providerInterruptionFences.delete(input.threadId);
-              }
-              fence.resolve();
-              return yield* Effect.failCause(rotationExit.cause);
-            }
-            if (providerInterruptionFences.get(input.threadId) === fence) {
+        const rotation =
+          input.providerThreadId === undefined
+            ? interruptActiveTurn.pipe(
+                Effect.andThen(
+                  stopRuntimeSessionInternal({ threadId: input.threadId }, undefined, {
+                    requireAgentGatewayCredentialRotation: true,
+                  }),
+                ),
+              )
+            : interruptActiveTurn;
+        const boundedRotation = Effect.interruptible(rotation).pipe(
+          Effect.timeoutOption(PROVIDER_INTERRUPT_ROTATION_TIMEOUT),
+          Effect.flatMap(
+            Option.match({
+              onNone: () =>
+                Effect.fail(
+                  toValidationError(
+                    "ProviderService.interruptTurn",
+                    `The provider runtime for thread '${input.threadId}' was not proven stopped within ${Duration.toMillis(
+                      PROVIDER_INTERRUPT_ROTATION_TIMEOUT,
+                    )}ms of the interrupt.`,
+                  ),
+                ),
+              onSome: () => Effect.void,
+            }),
+          ),
+        );
+        const settleFence = (
+          fence: ProviderInterruptionFence,
+          rotationExit: Exit.Exit<void, unknown>,
+        ) =>
+          Effect.sync(() => {
+            if (Exit.isFailure(rotationExit) && rotationStarted && !fence.exitProven) {
+              fence.failure = Cause.hasInterruptsOnly(rotationExit.cause)
+                ? "the interrupt was cancelled before the provider runtime was proven stopped"
+                : Cause.pretty(rotationExit.cause);
+            } else if (providerInterruptionFences.get(input.threadId) === fence) {
               providerInterruptionFences.delete(input.threadId);
             }
             fence.resolve();
+          });
+        return yield* Effect.uninterruptibleMask((restore) =>
+          Effect.gen(function* () {
+            const fence = yield* acquireProviderInterruptionFence(input.threadId, restore);
+            const rotationOwner = yield* boundedRotation.pipe(
+              Effect.exit,
+              Effect.tap((rotationExit) => settleFence(fence, rotationExit)),
+              Effect.forkIn(interruptRotationScope, { uninterruptible: true }),
+            );
+            const rotationExit = yield* restore(Fiber.join(rotationOwner));
+            return yield* rotationExit;
           }),
         );
       });
@@ -4536,6 +4563,17 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               }),
             );
             lease.commit();
+            const interruptionFence = providerInterruptionFences.get(input.threadId);
+            if (
+              interruptionFence !== undefined &&
+              options?.requireAgentGatewayCredentialRotation !== true
+            ) {
+              if (interruptionFence.failure === null) {
+                interruptionFence.exitProven = true;
+              } else {
+                providerInterruptionFences.delete(input.threadId);
+              }
+            }
             retireRuntimeIdleGeneration(input.threadId, expectedIdleGeneration);
           }),
         );

@@ -465,4 +465,51 @@ export function signalOwnedChildProcess(
   child.kill(signal);
 }
 
+export function signalOwnedProcessGroup(
+  child: { readonly pid?: number | undefined; kill(signal?: NodeJS.Signals): unknown },
+  signal: TerminalKillSignal,
+  platform: NodeJS.Platform = process.platform,
+): void {
+  if (child.pid === undefined || !isSignalablePid(child.pid)) return;
+  if (platform === "win32") {
+    signalProcessTree({ rootPid: child.pid, signal });
+    return;
+  }
+  if (!signalProcessGroup(child.pid, signal)) child.kill(signal);
+}
+
+function signalProcessGroup(processGroupId: number, signal: TerminalKillSignal): boolean {
+  if (!isSignalablePid(processGroupId)) return false;
+  try {
+    globalThis.process.kill(-processGroupId, signal);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function isProcessGroupRunning(processGroupId: number): boolean {
+  if (!isSignalablePid(processGroupId)) return false;
+  try {
+    globalThis.process.kill(-processGroupId, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException)?.code !== "ESRCH";
+  }
+}
+
+export async function stopProcessGroupWithin(
+  processGroupId: number,
+  input: { readonly deadlineMs: number; readonly pollMs?: number },
+): Promise<boolean> {
+  if (!isProcessGroupRunning(processGroupId)) return true;
+  signalProcessGroup(processGroupId, "SIGKILL");
+  const deadline = Date.now() + input.deadlineMs;
+  while (Date.now() < deadline) {
+    await new Promise<void>((resolve) => setTimeout(resolve, input.pollMs ?? 25));
+    if (!isProcessGroupRunning(processGroupId)) return true;
+  }
+  return !isProcessGroupRunning(processGroupId);
+}
+
 export const defaultProcessTreeKiller: ProcessTreeKiller = createProcessTreeKiller();

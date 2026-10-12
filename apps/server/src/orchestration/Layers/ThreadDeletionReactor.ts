@@ -12,7 +12,10 @@ import { ProviderService } from "../../provider/Services/ProviderService";
 import { TerminalManager, type TerminalManagerShape } from "../../terminal/Services/Manager";
 import { THREAD_RETENTION_COMMAND_ID_PREFIX } from "../../threadRetention";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine";
-import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery";
+import {
+  ProjectionSnapshotQuery,
+  type ProjectionSnapshotQueryShape,
+} from "../Services/ProjectionSnapshotQuery";
 import {
   ThreadDeletionReactor,
   type ThreadDeletionReactorShape,
@@ -103,6 +106,43 @@ export const closeThreadTerminalScopes = (
     }),
   ).pipe(Effect.map((results) => results.every(Boolean)));
 
+export const cleanupDeletedThreadResources = <E, R>(input: {
+  readonly threadId: ThreadId;
+  readonly stopThreadProcesses: Effect.Effect<boolean, E, R>;
+  readonly pruneManagedWorktrees: Effect.Effect<void, E, R>;
+  readonly purgeThreadData: Effect.Effect<void, E, R>;
+}): Effect.Effect<void, E, R> =>
+  Effect.gen(function* () {
+    const cleanupSucceeded = yield* input.stopThreadProcesses;
+    if (!cleanupSucceeded) {
+      yield* Effect.logWarning(
+        "thread deletion cleanup kept the worktree and deferred stats archive purge",
+        { threadId: input.threadId },
+      );
+      return;
+    }
+    yield* input.pruneManagedWorktrees;
+    yield* input.purgeThreadData;
+  });
+
+export const holdWorktreesWithUnresolvedCleanup = <
+  Thread extends {
+    readonly id: string;
+    readonly archivedAt?: string | null | undefined;
+    readonly deletedAt?: string | null | undefined;
+  },
+>(
+  threads: ReadonlyArray<Thread>,
+  unresolvedCleanupThreadIds: ReadonlySet<string>,
+): ReadonlyArray<Thread> =>
+  unresolvedCleanupThreadIds.size === 0
+    ? threads
+    : threads.map((thread) =>
+        unresolvedCleanupThreadIds.has(thread.id)
+          ? { ...thread, archivedAt: null, deletedAt: null }
+          : thread,
+      );
+
 const make = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
   const profileStatsArchive = yield* ProfileStatsArchive;
@@ -111,6 +151,18 @@ const make = Effect.gen(function* () {
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const serverConfig = yield* ServerConfig;
   const git = yield* GitCore;
+  const unresolvedCleanupThreadIds = new Set<string>();
+  const snapshotQueryHoldingUnresolvedCleanup: ProjectionSnapshotQueryShape = {
+    ...projectionSnapshotQuery,
+    listManagedWorktreeThreads: () =>
+      projectionSnapshotQuery
+        .listManagedWorktreeThreads()
+        .pipe(
+          Effect.map((threads) =>
+            holdWorktreesWithUnresolvedCleanup(threads, unresolvedCleanupThreadIds),
+          ),
+        ),
+  };
 
   const pruneManagedWorktreesAfterLifecycle = (context: {
     readonly eventType: ThreadDeletedEvent["type"];
@@ -119,7 +171,7 @@ const make = Effect.gen(function* () {
     pruneProjectedArchivedManagedWorktrees({
       homeDir: serverConfig.homeDir,
       worktreesDir: serverConfig.worktreesDir,
-      snapshotQuery: projectionSnapshotQuery,
+      snapshotQuery: snapshotQueryHoldingUnresolvedCleanup,
       git,
     }).pipe(
       Effect.asVoid,
@@ -228,7 +280,13 @@ const make = Effect.gen(function* () {
   ) {
     const providerCleanupSucceeded = yield* stopProviderSession(threadId);
     const terminalCleanupSucceeded = yield* closeThreadTerminals(threadId, true);
-    return providerCleanupSucceeded && terminalCleanupSucceeded;
+    const cleanupSucceeded = providerCleanupSucceeded && terminalCleanupSucceeded;
+    if (cleanupSucceeded) {
+      unresolvedCleanupThreadIds.delete(threadId);
+    } else {
+      unresolvedCleanupThreadIds.add(threadId);
+    }
+    return cleanupSucceeded;
   });
 
   const cleanupArchivedThread = Effect.fn(function* (event: ThreadArchivedEvent) {
@@ -254,11 +312,15 @@ const make = Effect.gen(function* () {
         false,
         event.payload.archivedAt,
       );
-      if (terminalCleanupSucceeded) return;
+      if (terminalCleanupSucceeded) {
+        unresolvedCleanupThreadIds.delete(threadId);
+        return;
+      }
       if (attempt < ARCHIVE_CLEANUP_RETRY_ATTEMPTS) {
         yield* Effect.sleep(ARCHIVE_CLEANUP_RETRY_DELAY_MS);
       }
     }
+    unresolvedCleanupThreadIds.add(threadId);
     yield* Effect.logWarning("thread archive cleanup exhausted retries", {
       threadId,
       attempts: ARCHIVE_CLEANUP_RETRY_ATTEMPTS,
@@ -268,20 +330,17 @@ const make = Effect.gen(function* () {
   const processThreadDeleted = Effect.fn(function* (event: ThreadDeletedEvent) {
     const { threadId } = event.payload;
     yield* detachThreadDevice(threadId);
-    const cleanupSucceeded = yield* cleanupThreadBeforePurge(threadId);
     // Reclaim while the soft-deleted projection row still names the worktree.
     // Dirty managed worktrees are snapped and left with a warning (no force).
-    yield* pruneManagedWorktreesAfterLifecycle({
-      eventType: event.type,
+    yield* cleanupDeletedThreadResources({
       threadId,
-    });
-    if (!cleanupSucceeded) {
-      yield* Effect.logWarning("thread deletion cleanup deferred stats archive purge", {
+      stopThreadProcesses: cleanupThreadBeforePurge(threadId),
+      pruneManagedWorktrees: pruneManagedWorktreesAfterLifecycle({
+        eventType: event.type,
         threadId,
-      });
-      return;
-    }
-    yield* purgeThreadData(event);
+      }),
+      purgeThreadData: purgeThreadData(event),
+    });
   });
 
   const processLifecycleEvent = (event: ThreadLifecycleCleanupEvent) =>

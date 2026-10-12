@@ -273,6 +273,7 @@ describe("thread retention", () => {
       }),
     ]) as unknown as OrchestrationShellSnapshot;
     const engine = {
+      getReadModel: () => Effect.succeed(shellSnapshot),
       dispatch: (command: OrchestrationCommand) =>
         Effect.sync(() => {
           dispatchedCommands.push(command);
@@ -281,6 +282,8 @@ describe("thread retention", () => {
     } as unknown as OrchestrationEngineShape;
     const snapshotQuery = {
       getShellSnapshot: () => Effect.succeed(shellSnapshot),
+      getThreadShellsByIds: (threadIds: ReadonlyArray<ThreadId>) =>
+        Effect.succeed(shellSnapshot.threads.filter((thread) => threadIds.includes(thread.id))),
     } as unknown as ProjectionSnapshotQueryShape;
     const automationRepository = {
       list: () => Effect.succeed({ definitions: [], runs: [], memories: [] }),
@@ -318,6 +321,127 @@ describe("thread retention", () => {
         deletedCount: 1,
         totalCount: 1,
       },
+    });
+  });
+
+  describe("when the thread changes after the sweep selects it", () => {
+    const rootId = ThreadId.makeUnsafe("thread-selected");
+    const staleActivityAt = () =>
+      new Date(Date.now() - THREAD_RETENTION_UNUSED_MS - 60_000).toISOString();
+
+    const sweepWithFreshState = async (
+      freshThreads: OrchestrationReadModel["threads"],
+      protectedThreadIds: ReadonlyArray<ThreadId> = [],
+    ) => {
+      const dispatchedCommands: OrchestrationCommand[] = [];
+      const selectedSnapshot = makeReadModel([
+        makeReadModelThread({ id: rootId, latestUserMessageAt: staleActivityAt() }),
+      ]) as unknown as OrchestrationShellSnapshot;
+      let automationReads = 0;
+      const engine = {
+        getReadModel: () => Effect.succeed(makeReadModel(freshThreads)),
+        dispatch: (command: OrchestrationCommand) =>
+          Effect.sync(() => {
+            dispatchedCommands.push(command);
+            return { sequence: 1 };
+          }),
+      } as unknown as OrchestrationEngineShape;
+      const snapshotQuery = {
+        getShellSnapshot: () => Effect.succeed(selectedSnapshot),
+        getThreadShellsByIds: (threadIds: ReadonlyArray<ThreadId>) =>
+          Effect.succeed(freshThreads.filter((thread) => threadIds.includes(thread.id))),
+      } as unknown as ProjectionSnapshotQueryShape;
+      const automationRepository = {
+        list: () =>
+          Effect.sync(() => {
+            automationReads += 1;
+            return {
+              definitions:
+                automationReads === 1
+                  ? []
+                  : protectedThreadIds.map((threadId) => ({
+                      enabled: true,
+                      mode: "heartbeat",
+                      targetThreadId: threadId,
+                    })),
+              runs: [],
+              memories: [],
+            };
+          }),
+      } as unknown as AutomationRepositoryShape;
+
+      await Effect.runPromise(
+        runThreadRetentionSweep(engine, snapshotQuery, automationRepository, Effect.void).pipe(
+          Effect.provide(ServerLifecycleEventsLive),
+        ),
+      );
+      return dispatchedCommands;
+    };
+
+    it("archives a selected thread that is still inactive", async () => {
+      const commands = await sweepWithFreshState([
+        makeReadModelThread({ id: rootId, latestUserMessageAt: staleActivityAt() }),
+      ]);
+      expect(commands).toMatchObject([{ type: "thread.archive", threadId: rootId }]);
+    });
+
+    it("does not archive a thread that received a message", async () => {
+      const commands = await sweepWithFreshState([
+        makeReadModelThread({ id: rootId, latestUserMessageAt: new Date().toISOString() }),
+      ]);
+      expect(commands).toEqual([]);
+    });
+
+    it("does not archive a thread that started a turn", async () => {
+      const commands = await sweepWithFreshState([
+        makeReadModelThread({
+          id: rootId,
+          latestUserMessageAt: staleActivityAt(),
+          latestTurn: {
+            state: "running",
+          } as OrchestrationReadModel["threads"][number]["latestTurn"],
+        }),
+      ]);
+      expect(commands).toEqual([]);
+    });
+
+    it("does not archive a thread that was pinned", async () => {
+      const commands = await sweepWithFreshState([
+        makeReadModelThread({ id: rootId, latestUserMessageAt: staleActivityAt(), isPinned: true }),
+      ]);
+      expect(commands).toEqual([]);
+    });
+
+    it("does not archive a thread that was snoozed", async () => {
+      const commands = await sweepWithFreshState([
+        makeReadModelThread({
+          id: rootId,
+          latestUserMessageAt: staleActivityAt(),
+          snoozedUntil: new Date(Date.now() + 60_000).toISOString(),
+        }),
+      ]);
+      expect(commands).toEqual([]);
+    });
+
+    it("does not archive a thread that an automation started to continue", async () => {
+      const commands = await sweepWithFreshState(
+        [makeReadModelThread({ id: rootId, latestUserMessageAt: staleActivityAt() })],
+        [rootId],
+      );
+      expect(commands).toEqual([]);
+    });
+
+    it("does not archive a thread whose new child is working", async () => {
+      const commands = await sweepWithFreshState([
+        makeReadModelThread({ id: rootId, latestUserMessageAt: staleActivityAt() }),
+        makeReadModelThread({
+          id: ThreadId.makeUnsafe("thread-selected-child"),
+          parentThreadId: rootId,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        }),
+      ]);
+      expect(commands).toEqual([]);
     });
   });
 });

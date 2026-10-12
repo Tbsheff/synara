@@ -153,6 +153,7 @@ import { ManagedAttachmentRepository } from "../../persistence/Services/ManagedA
 import { ServerConfig } from "../../config.ts";
 import { diagnosticIssueReason } from "@synara/shared/diagnosticIssue";
 import { reportBetaOperationalIssue } from "../../betaOperationalIssue.ts";
+import { predatesBetaImport, readBetaImportCompletedAtMs } from "../../betaImportBoundary.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import {
   mergeProviderStartOptions,
@@ -967,6 +968,11 @@ const make = Effect.gen(function* () {
     gatewayCompletionWaits.get(operationId, readGatewayOperationCompletion(operationId));
   const managedAttachments = yield* ManagedAttachmentRepository;
   const serverConfig = yield* ServerConfig;
+  const betaImportCompletedAtMs = yield* Effect.promise(() =>
+    readBetaImportCompletedAtMs(serverConfig.baseDir),
+  );
+  const predatesThisBetaImport = (timestamp: string | null | undefined) =>
+    predatesBetaImport(betaImportCompletedAtMs, timestamp);
   const handledTurnStartKeys = yield* Cache.make<string, true>({
     capacity: HANDLED_TURN_START_KEY_MAX,
     timeToLive: HANDLED_TURN_START_KEY_TTL,
@@ -1630,6 +1636,27 @@ const make = Effect.gen(function* () {
       },
       ...(input.expectedSession !== undefined ? { expectedSession: input.expectedSession } : {}),
       createdAt: input.createdAt,
+    });
+  });
+
+  const settleSendCopiedFromStable = Effect.fnUntraced(function* (threadId: ThreadId) {
+    const createdAt = new Date().toISOString();
+    yield* appendProviderFailureActivity({
+      threadId,
+      kind: "provider.turn.start.failed",
+      summary: "Message not sent after copying to Synara Beta",
+      detail:
+        "This message was still waiting in Synara when your data was copied to Synara Beta, so Beta did not send it. Resend it to continue here.",
+      turnId: null,
+      createdAt,
+    });
+    const session = (yield* resolveThread(threadId))?.session;
+    if (session?.status !== "starting") return;
+    yield* setThreadSession({
+      threadId,
+      expectedSession: session,
+      session: { ...session, status: "stopped", activeTurnId: null, updatedAt: createdAt },
+      createdAt,
     });
   });
 
@@ -4462,6 +4489,10 @@ const make = Effect.gen(function* () {
       if (!thread || isExpiredSidechat(thread)) {
         return;
       }
+      if (predatesThisBetaImport(event.payload.createdAt)) {
+        yield* settleSendCopiedFromStable(event.payload.threadId);
+        return;
+      }
       if (
         thread.claudeCacheReview &&
         thread.claudeCacheReview.reviewId !== acceptedCacheReview?.reviewId
@@ -5599,6 +5630,14 @@ const make = Effect.gen(function* () {
     withProviderSessionLease(
       event.payload.threadId,
       Effect.gen(function* () {
+        if (predatesThisBetaImport(event.payload.createdAt)) {
+          blockedGoalContinuations.delete(event.payload.threadId);
+          yield* pauseActiveThreadGoal({
+            threadId: event.payload.threadId,
+            expectedGoalStartedAt: event.payload.goalStartedAt,
+          });
+          return;
+        }
         const thread = yield* resolveThread(event.payload.threadId);
         if (
           !thread ||
@@ -5955,14 +5994,59 @@ const make = Effect.gen(function* () {
     return yield* Effect.failCause(result.cause);
   });
 
+  const isInterruptTargetSuperseded = Effect.fnUntraced(function* (
+    threadId: ThreadId,
+    targetTurnId: TurnId,
+  ) {
+    const thread = yield* resolveThread(threadId);
+    if (!thread) {
+      return false;
+    }
+    const providerThread = yield* resolveProviderSessionThread(threadId);
+    const liveTurnId =
+      providerThread?.id === thread.id ? yield* resolveLiveProviderTurnId(threadId) : undefined;
+    if (liveTurnId !== undefined) {
+      return liveTurnId !== targetTurnId;
+    }
+    const session = thread.session;
+    const latestTurn = thread.latestTurn;
+    const projectedActiveTurnId = session?.activeTurnId ?? null;
+    if (
+      projectedActiveTurnId === targetTurnId ||
+      (latestTurn?.turnId === targetTurnId && latestTurn.state === "running")
+    ) {
+      return false;
+    }
+    const targetEnded = latestTurn?.turnId === targetTurnId;
+    const otherWorkIsRunning =
+      projectedActiveTurnId !== null ||
+      latestTurn?.state === "running" ||
+      session?.status === "starting" ||
+      session?.status === "running";
+    return targetEnded || otherWorkIsRunning;
+  });
+
   const processTurnInterruptRequested = Effect.fnUntraced(function* (
     event: Extract<ProviderIntentEvent, { type: "thread.turn-interrupt-requested" }>,
   ) {
+    const intentionalQuit = event.commandId?.startsWith("quit-resume-interrupt:") === true;
+    const targetTurnId = event.payload.turnId;
+    if (
+      targetTurnId !== undefined &&
+      !intentionalQuit &&
+      (yield* isInterruptTargetSuperseded(event.payload.threadId, targetTurnId))
+    ) {
+      yield* Effect.logInfo("provider command reactor ignored an interrupt for a superseded turn", {
+        threadId: event.payload.threadId,
+        targetTurnId,
+      });
+      return;
+    }
     yield* interruptProviderTurn({
       threadId: event.payload.threadId,
-      turnId: event.payload.turnId,
+      turnId: targetTurnId,
       createdAt: event.payload.createdAt,
-      intentionalQuit: event.commandId?.startsWith("quit-resume-interrupt:") === true,
+      intentionalQuit,
     });
   });
 
@@ -5982,23 +6066,31 @@ const make = Effect.gen(function* () {
       });
     }
 
-    yield* providerService
-      .stopTask({
+    const result = yield* runBoundedProviderCall({
+      label: "The provider task stop",
+      timeout: Duration.min(
+        PROVIDER_COMMAND_INTERRUPT_TIMEOUT,
+        Duration.millis(Duration.toMillis(commandEventTimeout) / 2),
+      ),
+      call: providerService.stopTask({
         threadId: providerThread.id,
         taskId: event.payload.taskId,
-      })
-      .pipe(
-        Effect.catchCause((cause) =>
-          appendProviderFailureActivity({
-            threadId: event.payload.threadId,
-            kind: "provider.task.stop.failed",
-            summary: "Provider task stop failed",
-            detail: Cause.pretty(cause),
-            turnId: null,
-            createdAt: event.payload.createdAt,
-          }),
-        ),
-      );
+      }),
+    });
+    if (result._tag === "ok") {
+      return;
+    }
+    yield* appendProviderFailureActivity({
+      threadId: event.payload.threadId,
+      kind: "provider.task.stop.failed",
+      summary: "Provider task stop failed",
+      detail: result._tag === "timeout" ? result.detail : Cause.pretty(result.cause),
+      turnId: null,
+      createdAt: event.payload.createdAt,
+      ...(result._tag === "timeout" || result.outcome._tag === "uncertain"
+        ? { settlementStatus: "uncertain" as const }
+        : {}),
+    });
   });
 
   const processTaskBackgroundRequested = Effect.fnUntraced(function* (
@@ -7165,6 +7257,10 @@ const make = Effect.gen(function* () {
           yield* processConversationRollbackRequested(event);
           return;
         case "thread.message-edit-resend-requested":
+          if (predatesThisBetaImport(event.payload.createdAt)) {
+            yield* settleSendCopiedFromStable(event.payload.threadId);
+            return;
+          }
           yield* processMessageEditResendRequested(event).pipe(
             Effect.catchCause((cause) =>
               setThreadSessionError({
@@ -8948,14 +9044,20 @@ const make = Effect.gen(function* () {
           thread.goalPausedAt == null,
       ),
       (thread) =>
-        orchestrationEngine.dispatch({
-          type: "thread.goal.continue",
-          commandId: serverCommandId("goal-startup-recovery"),
-          threadId: thread.id,
-          goalStartedAt: thread.goalStartedAt ?? null,
-          trigger: "startup-recovery",
-          createdAt: new Date().toISOString(),
-        }),
+        predatesThisBetaImport(thread.goalStartedAt ?? thread.createdAt) &&
+        predatesThisBetaImport(thread.latestTurn?.requestedAt ?? thread.createdAt)
+          ? pauseActiveThreadGoal({
+              threadId: thread.id,
+              expectedGoalStartedAt: thread.goalStartedAt ?? null,
+            })
+          : orchestrationEngine.dispatch({
+              type: "thread.goal.continue",
+              commandId: serverCommandId("goal-startup-recovery"),
+              threadId: thread.id,
+              goalStartedAt: thread.goalStartedAt ?? null,
+              trigger: "startup-recovery",
+              createdAt: new Date().toISOString(),
+            }),
       { discard: true },
     );
   });

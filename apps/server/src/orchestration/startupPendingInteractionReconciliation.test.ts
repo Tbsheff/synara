@@ -26,7 +26,7 @@ import { OrchestrationProjectionPipelineLive } from "./Layers/ProjectionPipeline
 import { OrchestrationProjectionSnapshotQueryLive } from "./Layers/ProjectionSnapshotQuery.ts";
 import { OrchestrationEngineService } from "./Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
-import { reconcileRestartStuckTurns } from "./startupTurnReconciliation.ts";
+import { makeRestartStuckTurnReconciliation } from "./startupTurnReconciliation.ts";
 import { ServerSettingsService } from "../serverSettings.ts";
 
 const PROJECT_ID = ProjectId.makeUnsafe("project-1");
@@ -204,7 +204,10 @@ describe("boot-time pending interaction reconciliation", () => {
       await managed.runPromise(pendingInteractions.upsert({ ...row, status: "retryable" }));
     };
 
-    const runBootReconciliation = () => managed.runPromise(reconcileRestartStuckTurns);
+    const runBootReconciliation = () =>
+      managed.runPromise(
+        makeRestartStuckTurnReconciliation({ liveSince: new Date(Date.now() + 1).toISOString() }),
+      );
 
     return {
       engine,
