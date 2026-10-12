@@ -1023,6 +1023,7 @@ function collapseSettledTurns(
     return bMs < aMs ? b : a;
   };
 
+  const foldedIndices = new Set<number>();
   for (let pass = rows.length - 1; pass >= 0; pass -= 1) {
     const row = rows[pass]!;
     if (row.kind !== "message" || row.message.role !== "assistant") continue;
@@ -1136,12 +1137,21 @@ function collapseSettledTurns(
       delete row.inlineWorkEntries;
       delete row.inlineWorkGroupId;
 
-      for (const index of foldIndices.toSorted((a, b) => b - a)) {
-        rows.splice(index, 1);
+      for (const index of foldIndices) {
+        foldedIndices.add(index);
       }
-      pass -= foldIndices.length;
+      pass = foldIndices[0] ?? pass;
     }
   }
+  if (foldedIndices.size === 0) return;
+  let write = 0;
+  for (let read = 0; read < rows.length; read += 1) {
+    if (!foldedIndices.has(read)) {
+      rows[write] = rows[read]!;
+      write += 1;
+    }
+  }
+  rows.length = write;
 }
 
 const MAX_FRESH_TAIL_ROWS = 4;

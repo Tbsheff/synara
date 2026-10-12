@@ -77,14 +77,64 @@ describe("desktop bundle file selection", () => {
   it("only removes the musl SDK executable for a confirmed glibc Linux build", () => {
     const musl = "node_modules/@anthropic-ai/claude-agent-sdk-linux-x64-musl/claude";
     expect(excluded(musl, createDesktopBundleFilePatterns("linux"))).toBe(false);
-    expect(excluded(musl, createDesktopBundleFilePatterns("mac", { linuxGlibc: true }))).toBe(
-      false,
-    );
     const patterns = createDesktopBundleFilePatterns("linux", { linuxGlibc: true });
     expect(excluded(musl, patterns)).toBe(true);
     expect(excluded("node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/claude", patterns)).toBe(
       false,
     );
+  });
+
+  it("drops the Claude SDK native executable on mac and Windows but keeps the SDK", () => {
+    for (const platform of ["mac", "win"] as const) {
+      const patterns = createDesktopBundleFilePatterns(platform, { diagnostics: true });
+      for (const path of [
+        "node_modules/@anthropic-ai/claude-agent-sdk-darwin-arm64/claude",
+        "node_modules/@anthropic-ai/claude-agent-sdk-darwin-x64/package.json",
+        "node_modules/@anthropic-ai/claude-agent-sdk-win32-x64/claude.exe",
+        "node_modules/@anthropic-ai/claude-agent-sdk-linux-x64-musl/claude",
+      ]) {
+        expect(excluded(path, patterns), `${platform}/${path}`).toBe(true);
+      }
+      for (const path of [
+        "node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs",
+        "node_modules/@anthropic-ai/claude-agent-sdk/package.json",
+        "node_modules/@anthropic-ai/sdk/index.mjs",
+      ]) {
+        expect(excluded(path, patterns), `${platform}/${path}`).toBe(false);
+      }
+    }
+    const linux = createDesktopBundleFilePatterns("linux");
+    expect(excluded("node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/claude", linux)).toBe(
+      false,
+    );
+  });
+
+  it("drops the stealth browser driver on every platform, not the stock driver", () => {
+    for (const platform of ["mac", "linux", "win"] as const) {
+      const patterns = createDesktopBundleFilePatterns(platform, { diagnostics: true });
+      expect(excluded("node_modules/patchright-core/lib/server/chromium/crPage.js", patterns)).toBe(
+        true,
+      );
+      expect(excluded("node_modules/playwright-core/lib/server/chromium/crPage.js", patterns)).toBe(
+        false,
+      );
+      expect(excluded("node_modules/betterwright/dist/src/client.js", patterns)).toBe(false);
+    }
+  });
+
+  it("drops TypeScript sources from nested effect copies, not their compiled exports", () => {
+    const patterns = createDesktopBundleFilePatterns("mac");
+    const nested = "node_modules/@opencode/schema/node_modules/effect";
+    expect(excluded(`${nested}/src/Effect.ts`, patterns)).toBe(true);
+    expect(excluded(`${nested}/src/unstable/ai/Tool.ts`, patterns)).toBe(true);
+    expect(excluded(`${nested}/dist/Effect.js`, patterns)).toBe(false);
+    expect(excluded(`${nested}/package.json`, patterns)).toBe(false);
+    expect(
+      excluded(
+        `${nested}/src/Effect.ts`,
+        createDesktopBundleFilePatterns("mac", { diagnostics: true }),
+      ),
+    ).toBe(false);
   });
 
   it("preserves every supported icon preference and menu fallback", () => {

@@ -27,7 +27,7 @@ export const WorkspaceEntriesLive = Layer.succeed(WorkspaceEntries, {
     }),
   searchContent: (input) =>
     Effect.tryPromise({
-      try: () => searchWorkspaceContent(input),
+      try: (signal) => searchWorkspaceContent(input, { signal }),
       catch: (cause) => toWorkspaceEntriesError("search workspace content", cause),
     }),
   prewarmSearchIndex: (input) => Effect.sync(() => prewarmWorkspaceSearchIndex(input)),

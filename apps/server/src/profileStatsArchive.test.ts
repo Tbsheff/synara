@@ -57,6 +57,7 @@ const checkpointStoreTestLayer = Layer.succeed(CheckpointStore, {
   restoreCheckpoint: () => Effect.die("unused checkpoint store test method"),
   reverseCheckpointDiff: () => Effect.die("unused checkpoint store test method"),
   diffCheckpoints: () => Effect.die("unused checkpoint store test method"),
+  diffCheckpointFiles: () => Effect.die("unused checkpoint store test method"),
   deleteCheckpointRefs: (input) => deleteCheckpointRefsImpl(input),
 } satisfies CheckpointStoreShape);
 
@@ -814,6 +815,42 @@ describe("ProfileStatsArchive", () => {
         expect(purgedAgain).toBe(false);
         const statsAfterRepurge = yield* statsQuery.getProfileStats({ utcOffsetMinutes: 0 });
         expect(statsAfterRepurge.activity).toEqual(statsBefore.activity);
+      }),
+    );
+  });
+
+  it("deletes only the purged thread's event stream", async () => {
+    await runArchiveTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const archive = yield* ProfileStatsArchive;
+        yield* seedTwoThreadsWithActivity;
+        yield* sql`
+          INSERT INTO orchestration_events (
+            event_id, aggregate_kind, stream_id, stream_version, event_type,
+            occurred_at, command_id, actor_kind, payload_json, metadata_json
+          )
+          VALUES (
+            'event-keep-handoff', 'thread', 'thread-keep', 2, 'thread.created',
+            '2026-06-14T11:00:00.000Z', 'cmd-keep-handoff', 'client',
+            '{"threadId":"thread-keep","handoff":{"sourceThreadId":"thread-purge"}}',
+            '{}'
+          )
+        `;
+        yield* acknowledgeProviderCommandJournal(sql);
+
+        expect(yield* archive.purgeThreadWithStatsSnapshot({ threadId: "thread-purge" })).toBe(
+          true,
+        );
+
+        const remaining = yield* sql<{ readonly streamId: string; readonly count: number }>`
+          SELECT stream_id AS "streamId", COUNT(*) AS count
+          FROM orchestration_events
+          WHERE aggregate_kind = 'thread'
+          GROUP BY stream_id
+          ORDER BY stream_id ASC
+        `;
+        expect(remaining).toEqual([{ streamId: "thread-keep", count: 2 }]);
       }),
     );
   });

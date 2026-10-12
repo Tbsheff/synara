@@ -492,6 +492,7 @@ const projectionSnapshotQuery = {
       updatedAt: now,
     }),
   getCounts: () => Effect.succeed({ projectCount: 1, threadCount: 0 }),
+  listThreadSessions: () => Effect.succeed([]),
   getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 0 }),
   getShellSnapshot: () => {
     const snapshot = {

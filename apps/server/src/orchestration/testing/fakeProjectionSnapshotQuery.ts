@@ -22,6 +22,7 @@ export function fakeProjectionSnapshotQuery(
     getCommandReadModel: unused,
     getSnapshot: unused,
     getCounts: unused,
+    listThreadSessions: unused,
     getSnapshotSequence: unused,
     listStaleInFlightThreadIds: unused,
     listThreadProgressIncludingNativeChildren: unused,

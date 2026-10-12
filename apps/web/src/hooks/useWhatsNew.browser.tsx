@@ -2,7 +2,7 @@ import "../index.css";
 
 import { page } from "vitest/browser";
 import { afterEach, beforeEach, expect, it } from "vitest";
-import { render } from "vitest-browser-react";
+import { render, renderHook } from "vitest-browser-react";
 
 import { AnnouncementSheet } from "../components/AnnouncementSheet";
 import { useAnnouncementSheetSlotStore } from "../components/announcementSheetSlot";
@@ -87,5 +87,18 @@ it("keeps update notes unseen while queued and retains the slot from card throug
     expect(JSON.parse(localStorage.getItem(storageKey)!)).toEqual({ lastSeenVersion: "1.0.0" });
   } finally {
     await screen.unmount();
+  }
+});
+
+it("loads the curated release notes on demand after an upgrade", async () => {
+  const { result, unmount } = await renderHook(() => useWhatsNew({ currentVersion: "1.0.1" }));
+  try {
+    expect(JSON.parse(localStorage.getItem(storageKey)!)).toEqual({ lastSeenVersion: "0.9.9" });
+    await expect.poll(() => result.current.isPopoutVisible).toBe(true);
+    expect(result.current.currentEntry?.version).toBe("1.0.1");
+    expect(result.current.allEntries.length).toBeGreaterThan(1);
+    expect(JSON.parse(localStorage.getItem(storageKey)!)).toEqual({ lastSeenVersion: "0.9.9" });
+  } finally {
+    await unmount();
   }
 });

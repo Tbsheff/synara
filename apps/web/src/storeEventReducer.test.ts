@@ -16,7 +16,11 @@ import {
 } from "@synara/contracts";
 import { describe, expect, it, vi } from "vitest";
 
-import { applyOrchestrationEvents, applyOrchestrationEventsHotPath } from "./storeEventReducer";
+import {
+  applyOrchestrationEvents,
+  applyOrchestrationEventsHotPath,
+  applyThreadMessageSentEvent,
+} from "./storeEventReducer";
 import {
   applyShellEvent,
   syncServerShellSnapshot,
@@ -273,6 +277,38 @@ describe("store event reducer", () => {
       { name: "linear", path: "plugin://linear@openai-curated" },
     ]);
     expect(threadsOf(next)[0]?.messages[0]?.startsNewTurn).toBe(true);
+  });
+
+  it("keeps thread state identity when an assistant message event changes nothing", () => {
+    const turnId = TurnId.makeUnsafe("turn-1");
+    const event = makeDomainEvent("thread.message-sent", {
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      messageId: MessageId.makeUnsafe("assistant-1"),
+      role: "assistant",
+      text: "Done",
+      turnId,
+      streaming: false,
+      source: "native",
+      createdAt: "2026-02-27T00:00:00.000Z",
+      updatedAt: "2026-02-27T00:00:01.000Z",
+    });
+    const thread = makeThread({
+      turnDiffSummaries: [
+        {
+          turnId,
+          completedAt: "2026-02-27T00:00:01.000Z",
+          assistantMessageId: MessageId.makeUnsafe("assistant-1"),
+          files: [],
+        },
+      ],
+    });
+    const once = applyOrchestrationEvents(makeState(thread), [event]);
+    const twice = applyOrchestrationEvents(once, [event]);
+
+    const settledThread = threadsOf(once)[0]!;
+
+    expect(applyThreadMessageSentEvent(settledThread, event)).toBe(settledThread);
+    expect(twice).toBe(once);
   });
 
   it("updates thread error and marks the running latest turn failed from session-set events", () => {

@@ -309,6 +309,19 @@ function buildLatestTurn(params: {
     params.previous?.turnId === params.turnId
       ? (params.previous.sourceProposedPlan ?? params.sourceProposedPlan)
       : params.sourceProposedPlan;
+  const previous = params.previous;
+  if (
+    previous &&
+    previous.turnId === params.turnId &&
+    previous.state === params.state &&
+    previous.requestedAt === params.requestedAt &&
+    previous.startedAt === params.startedAt &&
+    previous.completedAt === params.completedAt &&
+    previous.assistantMessageId === params.assistantMessageId &&
+    previous.sourceProposedPlan === sourceProposedPlan
+  ) {
+    return previous;
+  }
   return {
     turnId: params.turnId,
     state: params.state,
@@ -390,7 +403,7 @@ function reconcileLatestTurnFromSession(
 }
 
 function rebindTurnDiffSummariesForAssistantMessage(
-  turnDiffSummaries: ReadonlyArray<Thread["turnDiffSummaries"][number]>,
+  turnDiffSummaries: Thread["turnDiffSummaries"],
   turnId: Thread["turnDiffSummaries"][number]["turnId"],
   assistantMessageId: NonNullable<Thread["latestTurn"]>["assistantMessageId"],
 ): Thread["turnDiffSummaries"] {
@@ -405,7 +418,7 @@ function rebindTurnDiffSummariesForAssistantMessage(
       assistantMessageId: assistantMessageId ?? undefined,
     };
   });
-  return changed ? nextSummaries : [...turnDiffSummaries];
+  return changed ? nextSummaries : turnDiffSummaries;
 }
 
 function retainThreadMessagesAfterRevert(
@@ -708,7 +721,7 @@ function mergeStreamingMessage(
   };
 }
 
-function applyThreadMessageSentEvent(thread: Thread, event: ThreadMessageSentEvent): Thread {
+export function applyThreadMessageSentEvent(thread: Thread, event: ThreadMessageSentEvent): Thread {
   const payload = event.payload;
   // Single backward scan: streaming deltas target the newest message, so walking from the tail
   // finds it in O(1) instead of scanning the (up to MAX_THREAD_MESSAGES) list front-to-back on

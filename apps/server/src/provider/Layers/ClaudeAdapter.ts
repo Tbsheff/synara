@@ -751,6 +751,10 @@ function neverResolvingUserMessageStream(): AsyncIterable<SDKUserMessage> {
   };
 }
 
+function resolveClaudeExecutable(binaryPath: string | null | undefined): string {
+  return nonEmptyTrimmed(binaryPath) ?? "claude";
+}
+
 function claudeDiscoveryKey(input: {
   readonly instanceId?: string | null | undefined;
   readonly binaryPath?: string | null | undefined;
@@ -761,7 +765,7 @@ function claudeDiscoveryKey(input: {
 }): string {
   return JSON.stringify({
     instanceId: input.instanceId?.trim() || null,
-    binaryPath: input.binaryPath?.trim() || "claude",
+    binaryPath: resolveClaudeExecutable(input.binaryPath),
     homePath: input.homePath?.trim() || null,
     environment: environmentFingerprint(input.environment),
     cwd: input.includeCwd === false ? null : input.cwd?.trim() || null,
@@ -6670,7 +6674,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           input.providerOptions?.claudeAgent?.environment,
           input.providerInstanceId,
         );
-        const binaryPath = input.providerOptions?.claudeAgent?.binaryPath ?? "claude";
+        const binaryPath = resolveClaudeExecutable(input.providerOptions?.claudeAgent?.binaryPath);
         if (input.runtimeMode !== "auto") {
           const cachedVersion = yield* readCachedClaudeCliVersion({
             binaryPath,
@@ -7310,7 +7314,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           ...(input.cwd ? { cwd: input.cwd } : {}),
           // Model identity and the spawn-fixed compaction override are separate settings.
           ...(apiModelId ? { model: apiModelId } : {}),
-          pathToClaudeCodeExecutable: providerOptions?.binaryPath ?? "claude",
+          pathToClaudeCodeExecutable: resolveClaudeExecutable(providerOptions?.binaryPath),
           settingSources: [...CLAUDE_SETTING_SOURCES],
           systemPrompt: {
             type: "preset",
@@ -8825,7 +8829,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           input.environment,
           input.instanceId,
         );
-        const binaryPath = input.binaryPath ?? "claude";
+        const binaryPath = resolveClaudeExecutable(input.binaryPath);
         const pendingKey = JSON.stringify([discoveryKey, enableArtifacts]);
         let discoveryPromise = pendingCommandDiscoveries.get(pendingKey);
         if (!discoveryPromise) {
@@ -8938,7 +8942,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             discoverModelsViaTemporaryProcess(
               input.cwd ?? serverConfig.cwd,
               claudeSdkEnv,
-              input.binaryPath ?? "claude",
+              resolveClaudeExecutable(input.binaryPath),
             ),
           catch: (cause) =>
             new ProviderAdapterProcessError({

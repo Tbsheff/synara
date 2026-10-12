@@ -349,6 +349,7 @@ import type {
   OrchestrationGetTurnDiffInput,
   OrchestrationGetTurnDiffResult,
   OrchestrationEvent,
+  OrchestrationGetCountsResult,
   OrchestrationReadModel,
   OrchestrationShellSnapshot,
   OrchestrationShellStreamItem,
@@ -1174,7 +1175,10 @@ export interface NativeApi {
     searchLocalEntries: (
       input: ProjectSearchLocalEntriesInput,
     ) => Promise<ProjectSearchLocalEntriesResult>;
-    searchContent: (input: ProjectSearchContentInput) => Promise<ProjectSearchContentResult>;
+    searchContent: (
+      input: ProjectSearchContentInput,
+      options?: { readonly signal?: AbortSignal },
+    ) => Promise<ProjectSearchContentResult>;
     prewarmSearchIndex: (
       input: ProjectPrewarmSearchIndexInput,
     ) => Promise<ProjectPrewarmSearchIndexResult>;
@@ -1367,6 +1371,7 @@ export interface NativeApi {
   };
   orchestration: {
     getSnapshot: () => Promise<OrchestrationReadModel>;
+    getCounts: () => Promise<OrchestrationGetCountsResult>;
     getShellSnapshot: () => Promise<OrchestrationShellSnapshot>;
     getThreadDetailSnapshot: (
       input: OrchestrationGetThreadDetailSnapshotInput,

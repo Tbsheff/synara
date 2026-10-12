@@ -2695,24 +2695,38 @@ describe("startSession", () => {
     }
   });
 
-  it("requires a Codex CLI version with AI approval-review support for auto mode", async () => {
-    const manager = new CodexAppServerManager();
-    const versionCheck = vi
+  function mockSyntheticVersionGate(
+    manager: CodexAppServerManager,
+    implementation: (input: {
+      binaryPath: string;
+      cwd: string;
+      minimumVersion?: string;
+      minimumVersionRequirement?: string;
+    }) => Promise<void>,
+  ) {
+    return vi
       .spyOn(
         manager as unknown as {
           assertSupportedCodexCliVersion: (input: {
             binaryPath: string;
             cwd: string;
-            homePath?: string;
             minimumVersion?: string;
-          }) => void;
+            minimumVersionRequirement?: string;
+          }) => Promise<void>;
         },
         "assertSupportedCodexCliVersion",
       )
-      .mockImplementation((input) => {
-        expect(input.minimumVersion).toBe(MINIMUM_CODEX_AUTO_REVIEW_CLI_VERSION);
-        throw new Error("Codex Auto version gate");
-      });
+      .mockImplementation(implementation);
+  }
+
+  it("requires a Codex CLI version with AI approval-review support for auto mode", async () => {
+    const fake = createSyntheticCodexAppServer();
+    const { manager, teardownProcessTree } = createSyntheticCodexManager(fake);
+    const versionCheck = mockSyntheticVersionGate(manager, async (input) => {
+      expect(input.minimumVersion).toBe(MINIMUM_CODEX_AUTO_REVIEW_CLI_VERSION);
+      throw new Error("Codex Auto version gate");
+    });
+    const cwd = mkdtempSync(path.join(os.tmpdir(), "synara-codex-auto-version-"));
 
     try {
       await expect(
@@ -2720,84 +2734,62 @@ describe("startSession", () => {
           threadId: asThreadId("thread-auto-version"),
           provider: "codex",
           runtimeMode: "auto",
-          cwd: process.cwd(),
+          cwd,
           agentGatewayCapabilityInput: AGENT_GATEWAY_NO_CAPABILITIES,
         }),
       ).rejects.toThrow("Codex Auto version gate");
       expect(versionCheck).toHaveBeenCalledTimes(1);
+      expect(fake.requests.some((request) => request.method === "thread/start")).toBe(false);
+      expect(fake.children).toHaveLength(1);
+      expect(teardownProcessTree).toHaveBeenCalledTimes(1);
     } finally {
-      versionCheck.mockRestore();
       await manager.stopAll();
+      rmSync(cwd, { recursive: true, force: true });
     }
   });
 
-  it("requires excludeTurns support before spawning a resumed Codex session", async () => {
-    const spawnAppServer = vi.fn(() => {
-      throw new Error("Version gate must run before spawning Codex");
+  it("requires excludeTurns support before resuming a Codex thread", async () => {
+    const fake = createSyntheticCodexAppServer();
+    const { manager, teardownProcessTree } = createSyntheticCodexManager(fake);
+    const versionCheck = mockSyntheticVersionGate(manager, async (input) => {
+      expect(input.minimumVersion).toBe(MINIMUM_CODEX_EXCLUDE_TURNS_CLI_VERSION);
+      expect(input.minimumVersionRequirement).toMatch(/resume|fork/i);
+      throw new Error("Codex excludeTurns version gate");
     });
-    const manager = new CodexAppServerManager(undefined, { spawnAppServer });
-    const versionCheck = vi
-      .spyOn(
-        manager as unknown as {
-          assertSupportedCodexCliVersion: (input: {
-            binaryPath: string;
-            cwd: string;
-            homePath?: string;
-            minimumVersion?: string;
-            minimumVersionRequirement?: string;
-          }) => void;
-        },
-        "assertSupportedCodexCliVersion",
-      )
-      .mockImplementation((input) => {
-        expect(input.minimumVersion).toBe(MINIMUM_CODEX_EXCLUDE_TURNS_CLI_VERSION);
-        expect(input.minimumVersionRequirement).toMatch(/resume|fork/i);
-        throw new Error("Codex excludeTurns version gate");
-      });
+    const cwd = mkdtempSync(path.join(os.tmpdir(), "synara-codex-resume-version-"));
 
     try {
       await expect(
         manager.startSession({
           threadId: asThreadId("thread-resume-version"),
           provider: "codex",
+          cwd,
           runtimeMode: "full-access",
           resumeCursor: { threadId: "provider-thread" },
-          // The version gate runs before the pinned generation is verified.
-          expectedCodexContinuationGeneration: "00000000-0000-4000-8000-000000000000",
+          expectedCodexContinuationGeneration: SYNTHETIC_CONTINUATION_GENERATION,
           agentGatewayCapabilityInput: AGENT_GATEWAY_NO_CAPABILITIES,
         }),
       ).rejects.toThrow("Codex excludeTurns version gate");
       expect(versionCheck).toHaveBeenCalledTimes(1);
-      expect(spawnAppServer).not.toHaveBeenCalled();
+      expect(fake.requests.some((request) => request.method === "thread/resume")).toBe(false);
+      expect(fake.requests.some((request) => request.method === "thread/start")).toBe(false);
+      expect(fake.children).toHaveLength(1);
+      expect(teardownProcessTree).toHaveBeenCalledTimes(1);
     } finally {
-      versionCheck.mockRestore();
       await manager.stopAll();
+      rmSync(cwd, { recursive: true, force: true });
     }
   });
 
-  it("requires excludeTurns support before spawning a forked Codex session", async () => {
-    const spawnAppServer = vi.fn(() => {
-      throw new Error("Version gate must run before spawning Codex");
+  it("requires excludeTurns support before forking a Codex thread", async () => {
+    const fake = createSyntheticCodexAppServer();
+    const { manager, teardownProcessTree } = createSyntheticCodexManager(fake);
+    const versionCheck = mockSyntheticVersionGate(manager, async (input) => {
+      expect(input.minimumVersion).toBe(MINIMUM_CODEX_EXCLUDE_TURNS_CLI_VERSION);
+      expect(input.minimumVersionRequirement).toMatch(/resume|fork/i);
+      throw new Error("Codex fork excludeTurns version gate");
     });
-    const manager = new CodexAppServerManager(undefined, { spawnAppServer });
-    const versionCheck = vi
-      .spyOn(
-        manager as unknown as {
-          assertSupportedCodexCliVersion: (input: {
-            binaryPath: string;
-            cwd: string;
-            homePath?: string;
-            minimumVersion?: string;
-            minimumVersionRequirement?: string;
-          }) => void;
-        },
-        "assertSupportedCodexCliVersion",
-      )
-      .mockImplementation((input) => {
-        expect(input.minimumVersion).toBe(MINIMUM_CODEX_EXCLUDE_TURNS_CLI_VERSION);
-        expect(input.minimumVersionRequirement).toMatch(/resume|fork/i);
-        throw new Error("Codex fork excludeTurns version gate");
-      });
+    const cwd = mkdtempSync(path.join(os.tmpdir(), "synara-codex-fork-version-"));
 
     try {
       await expect(
@@ -2805,16 +2797,104 @@ describe("startSession", () => {
           sourceThreadId: asThreadId("source-thread"),
           sourceResumeCursor: { threadId: "provider-source-thread" },
           threadId: asThreadId("thread-fork-version"),
+          cwd,
           runtimeMode: "full-access",
-          // The version gate runs before the pinned generation is verified.
-          expectedCodexContinuationGeneration: "00000000-0000-4000-8000-000000000000",
+          expectedCodexContinuationGeneration: SYNTHETIC_CONTINUATION_GENERATION,
         }),
       ).rejects.toThrow("Codex fork excludeTurns version gate");
       expect(versionCheck).toHaveBeenCalledTimes(1);
-      expect(spawnAppServer).not.toHaveBeenCalled();
+      expect(fake.requests.some((request) => request.method === "thread/fork")).toBe(false);
+      expect(fake.children).toHaveLength(1);
+      expect(teardownProcessTree).toHaveBeenCalledTimes(1);
     } finally {
-      versionCheck.mockRestore();
       await manager.stopAll();
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("initializes the app-server while the version probe runs and opens the thread after it passes", async () => {
+    const fake = createSyntheticCodexAppServer();
+    const { manager } = createSyntheticCodexManager(fake);
+    let passVersionGate!: () => void;
+    const versionCheck = mockSyntheticVersionGate(
+      manager,
+      () =>
+        new Promise<void>((resolve) => {
+          passVersionGate = resolve;
+        }),
+    );
+    const cwd = mkdtempSync(path.join(os.tmpdir(), "synara-codex-version-overlap-"));
+
+    try {
+      const started = manager.startSession({
+        threadId: asThreadId("thread-version-overlap"),
+        provider: "codex",
+        cwd,
+        runtimeMode: "full-access",
+        agentGatewayCapabilityInput: AGENT_GATEWAY_NO_CAPABILITIES,
+      });
+      await vi.waitFor(() =>
+        expect(fake.requests.some((request) => request.method === "account/read")).toBe(true),
+      );
+      expect(versionCheck).toHaveBeenCalledTimes(1);
+      expect(fake.requests.some((request) => request.method === "initialize")).toBe(true);
+      expect(fake.requests.some((request) => request.method === "thread/start")).toBe(false);
+
+      passVersionGate();
+      const session = await started;
+      expect(session.status).toBe("ready");
+      expect(fake.requests.filter((request) => request.method === "thread/start")).toHaveLength(1);
+    } finally {
+      await manager.stopAll();
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("reports the version probe failure over a launch failure it overlapped", async () => {
+    const fake = createSyntheticCodexAppServer();
+    const { manager } = createSyntheticCodexManager(fake);
+    let failVersionGate!: (error: Error) => void;
+    mockSyntheticVersionGate(
+      manager,
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          failVersionGate = reject;
+        }),
+    );
+    vi.spyOn(
+      manager as unknown as { buildSessionProcessEnv: () => Promise<unknown> },
+      "buildSessionProcessEnv",
+    ).mockRejectedValue(new Error("launch env failed"));
+    const events: Array<{ method: string; message?: string }> = [];
+    manager.on("event", (event) => {
+      events.push({ method: event.method, ...(event.message ? { message: event.message } : {}) });
+    });
+    const cwd = mkdtempSync(path.join(os.tmpdir(), "synara-codex-version-failure-"));
+
+    try {
+      const started = manager.startSession({
+        threadId: asThreadId("thread-version-failure"),
+        provider: "codex",
+        cwd,
+        runtimeMode: "full-access",
+        agentGatewayCapabilityInput: AGENT_GATEWAY_NO_CAPABILITIES,
+      });
+      const outcome = started.then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      await vi.waitFor(() => expect(failVersionGate).toBeTypeOf("function"));
+      failVersionGate(new Error("Codex CLI v0.1.0 is too old"));
+      const error = await outcome;
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toBe("Codex CLI v0.1.0 is too old");
+      expect(fake.children).toHaveLength(0);
+      expect(events).toEqual([
+        { method: "session/startFailed", message: "Codex CLI v0.1.0 is too old" },
+      ]);
+    } finally {
+      await manager.stopAll();
+      rmSync(cwd, { recursive: true, force: true });
     }
   });
 });

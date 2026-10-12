@@ -1,12 +1,12 @@
 import type { GitStatusResult, GitStatusStreamEvent } from "@synara/contracts";
-import { Deferred, Effect, Layer, Scope, Stream } from "effect";
+import { Deferred, Effect, Fiber, Layer, Scope, Stream } from "effect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { GitManagerServiceError } from "../Errors";
 import { GitCore, type GitCoreShape, type GitStatusDetails } from "../Services/GitCore";
 import { GitManager, type GitManagerShape } from "../Services/GitManager";
 import { GitStatusBroadcaster } from "../Services/GitStatusBroadcaster";
-import { GIT_STATUS_CACHE_MAX_ENTRIES } from "../gitStatusCache";
+import { GIT_STATUS_CACHE_MAX_ENTRIES, LOCAL_STATUS_SINGLE_FLIGHT_TTL_MS } from "../gitStatusCache";
 import { GitStatusBroadcasterLive } from "./GitStatusBroadcaster";
 
 const baseStatus: GitStatusResult = {
@@ -34,23 +34,31 @@ const baseDetails: GitStatusDetails = {
   behindCount: baseStatus.behindCount,
 };
 
-function makeTestLayer(state: {
+interface BroadcasterTestState {
   currentDetails: GitStatusDetails;
   currentStatus: GitStatusResult;
   detailsCalls: number;
   statusCalls: number;
-}) {
+  statusCallsWithDetails?: number;
+  detailsGate?: Effect.Effect<void>;
+}
+
+function makeTestLayer(state: BroadcasterTestState) {
   const gitCore = {
     statusDetails: () =>
-      Effect.sync(() => {
+      Effect.gen(function* () {
         state.detailsCalls += 1;
+        if (state.detailsGate) yield* state.detailsGate;
         return state.currentDetails;
       }),
   } as unknown as GitCoreShape;
   const gitManager: GitManagerShape = {
-    status: () =>
+    status: (_input, options) =>
       Effect.sync(() => {
         state.statusCalls += 1;
+        if (options?.details) {
+          state.statusCallsWithDetails = (state.statusCallsWithDetails ?? 0) + 1;
+        }
         return state.currentStatus;
       }),
     pullRequestForBranch: () =>
@@ -77,14 +85,14 @@ function makeTestLayer(state: {
 }
 
 const runBroadcasterTest = (
-  state: {
-    currentDetails: GitStatusDetails;
-    currentStatus: GitStatusResult;
-    detailsCalls: number;
-    statusCalls: number;
-  },
+  state: BroadcasterTestState,
   effect: Effect.Effect<void, GitManagerServiceError, GitStatusBroadcaster | Scope.Scope>,
 ) => effect.pipe(Effect.provide(makeTestLayer(state)), Effect.scoped, Effect.runPromise);
+
+function useFakeClock() {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(0);
+}
 
 afterEach(() => {
   vi.useRealTimers();
@@ -92,7 +100,8 @@ afterEach(() => {
 
 describe("GitStatusBroadcasterLive", () => {
   it("refreshes local git status on repeated reads without repeating PR lookup", async () => {
-    const state = {
+    useFakeClock();
+    const state: BroadcasterTestState = {
       currentDetails: baseDetails,
       currentStatus: baseStatus,
       detailsCalls: 0,
@@ -105,6 +114,7 @@ describe("GitStatusBroadcasterLive", () => {
         const broadcaster = yield* GitStatusBroadcaster;
 
         const first = yield* broadcaster.getStatus({ cwd: "/repo" });
+        vi.setSystemTime(LOCAL_STATUS_SINGLE_FLIGHT_TTL_MS + 1);
         state.currentDetails = {
           ...baseDetails,
           hasWorkingTreeChanges: true,
@@ -123,17 +133,18 @@ describe("GitStatusBroadcasterLive", () => {
           workingTree: state.currentDetails.workingTree,
         });
         expect(state.statusCalls).toBe(1);
-        expect(state.detailsCalls).toBe(1);
+        expect(state.detailsCalls).toBe(2);
       }),
     );
   });
 
   it("refreshes the configured PR base while reusing cached remote metadata", async () => {
+    useFakeClock();
     const initialStatus = {
       ...baseStatus,
       configuredPrBaseBranch: "main",
     };
-    const state = {
+    const state: BroadcasterTestState = {
       currentDetails: {
         ...baseDetails,
         configuredPrBaseBranch: "main",
@@ -149,6 +160,7 @@ describe("GitStatusBroadcasterLive", () => {
         const broadcaster = yield* GitStatusBroadcaster;
 
         const first = yield* broadcaster.getStatus({ cwd: "/repo" });
+        vi.setSystemTime(LOCAL_STATUS_SINGLE_FLIGHT_TTL_MS + 1);
         state.currentDetails = {
           ...baseDetails,
           configuredPrBaseBranch: "release",
@@ -158,15 +170,14 @@ describe("GitStatusBroadcasterLive", () => {
         expect(first.configuredPrBaseBranch).toBe("main");
         expect(second.configuredPrBaseBranch).toBe("release");
         expect(state.statusCalls).toBe(1);
-        expect(state.detailsCalls).toBe(1);
+        expect(state.detailsCalls).toBe(2);
       }),
     );
   });
 
   it("refreshes full status when cached remote metadata expires", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
-    const state = {
+    useFakeClock();
+    const state: BroadcasterTestState = {
       currentDetails: baseDetails,
       currentStatus: baseStatus,
       detailsCalls: 0,
@@ -201,17 +212,15 @@ describe("GitStatusBroadcasterLive", () => {
         expect(first.pr).toBeNull();
         expect(second.pr?.number).toBe(42);
         expect(state.statusCalls).toBe(2);
-        // Expired remote metadata can never be reused, so the details probe is
-        // skipped instead of being fetched and thrown away by the full reload.
-        expect(state.detailsCalls).toBe(0);
+        expect(state.detailsCalls).toBe(2);
+        expect(state.statusCallsWithDetails).toBe(2);
       }),
     );
   });
 
   it("does not extend the remote metadata TTL when reusing cached remote status", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
-    const state = {
+    useFakeClock();
+    const state: BroadcasterTestState = {
       currentDetails: baseDetails,
       currentStatus: baseStatus,
       detailsCalls: 0,
@@ -248,13 +257,13 @@ describe("GitStatusBroadcasterLive", () => {
 
         expect(third.pr?.number).toBe(43);
         expect(state.statusCalls).toBe(2);
-        expect(state.detailsCalls).toBe(1);
+        expect(state.detailsCalls).toBe(3);
       }),
     );
   });
 
   it("refreshes the cached snapshot after explicit invalidation", async () => {
-    const state = {
+    const state: BroadcasterTestState = {
       currentDetails: baseDetails,
       currentStatus: baseStatus,
       detailsCalls: 0,
@@ -290,9 +299,8 @@ describe("GitStatusBroadcasterLive", () => {
   });
 
   it("reads git status once per poll when the cache has expired", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
-    const state = {
+    useFakeClock();
+    const state: BroadcasterTestState = {
       currentDetails: baseDetails,
       currentStatus: baseStatus,
       detailsCalls: 0,
@@ -304,9 +312,6 @@ describe("GitStatusBroadcasterLive", () => {
       Effect.gen(function* () {
         const broadcaster = yield* GitStatusBroadcaster;
 
-        // The sidebar polls on a 60s timer against a 30s remote TTL, so every poll
-        // after the first misses the cache. Each miss must cost exactly one status
-        // read, not a discarded details probe plus a full reload.
         yield* broadcaster.getStatus({ cwd: "/repo" });
         vi.setSystemTime(60_000);
         yield* broadcaster.getStatus({ cwd: "/repo" });
@@ -314,13 +319,15 @@ describe("GitStatusBroadcasterLive", () => {
         yield* broadcaster.getStatus({ cwd: "/repo" });
 
         expect(state.statusCalls).toBe(3);
-        expect(state.detailsCalls).toBe(0);
+        expect(state.detailsCalls).toBe(3);
+        expect(state.statusCallsWithDetails).toBe(3);
       }),
     );
   });
 
   it("evicts the coldest working directory once the cache is full", async () => {
-    const state = {
+    useFakeClock();
+    const state: BroadcasterTestState = {
       currentDetails: baseDetails,
       currentStatus: baseStatus,
       detailsCalls: 0,
@@ -332,21 +339,19 @@ describe("GitStatusBroadcasterLive", () => {
       Effect.gen(function* () {
         const broadcaster = yield* GitStatusBroadcaster;
 
-        // Every thread worktree is a distinct cwd, so an unbounded cache would pin
-        // status details for every directory the server ever saw.
         for (let index = 0; index <= GIT_STATUS_CACHE_MAX_ENTRIES; index += 1) {
           yield* broadcaster.getStatus({ cwd: `/worktrees/repo-${index}` });
         }
         expect(state.statusCalls).toBe(GIT_STATUS_CACHE_MAX_ENTRIES + 1);
+        expect(state.detailsCalls).toBe(GIT_STATUS_CACHE_MAX_ENTRIES + 1);
 
-        // The most recent directories are still cached (details reuse, no reload).
+        vi.setSystemTime(LOCAL_STATUS_SINGLE_FLIGHT_TTL_MS + 1);
         yield* broadcaster.getStatus({
           cwd: `/worktrees/repo-${GIT_STATUS_CACHE_MAX_ENTRIES}`,
         });
         expect(state.statusCalls).toBe(GIT_STATUS_CACHE_MAX_ENTRIES + 1);
-        expect(state.detailsCalls).toBe(1);
+        expect(state.detailsCalls).toBe(GIT_STATUS_CACHE_MAX_ENTRIES + 2);
 
-        // The coldest one was evicted, so it reloads from git.
         yield* broadcaster.getStatus({ cwd: "/worktrees/repo-0" });
         expect(state.statusCalls).toBe(GIT_STATUS_CACHE_MAX_ENTRIES + 2);
       }),
@@ -354,7 +359,7 @@ describe("GitStatusBroadcasterLive", () => {
   });
 
   it("streams a status snapshot first and later refresh updates", async () => {
-    const state = {
+    const state: BroadcasterTestState = {
       currentDetails: baseDetails,
       currentStatus: baseStatus,
       detailsCalls: 0,
@@ -409,6 +414,89 @@ describe("GitStatusBroadcasterLive", () => {
             workingTree: baseStatus.workingTree,
           },
         });
+      }),
+    );
+  });
+  it("shares one git read between concurrent status reads for a directory", async () => {
+    const release = Effect.runSync(Deferred.make<void>());
+    const state: BroadcasterTestState = {
+      currentDetails: baseDetails,
+      currentStatus: baseStatus,
+      detailsCalls: 0,
+      statusCalls: 0,
+      detailsGate: Deferred.await(release),
+    };
+
+    await runBroadcasterTest(
+      state,
+      Effect.gen(function* () {
+        const broadcaster = yield* GitStatusBroadcaster;
+        const reads = yield* Effect.all(
+          Array.from({ length: 5 }, () => broadcaster.getStatus({ cwd: "/repo" })),
+          { concurrency: "unbounded" },
+        ).pipe(Effect.forkScoped);
+        yield* Effect.sleep("20 millis");
+        expect(state.detailsCalls).toBe(1);
+        yield* Deferred.succeed(release, undefined);
+        const results = yield* Fiber.join(reads);
+
+        expect(results).toEqual(Array.from({ length: 5 }, () => baseStatus));
+        expect(state.detailsCalls).toBe(1);
+        expect(state.statusCalls).toBe(1);
+      }),
+    );
+  });
+
+  it("reuses a status read until the local TTL expires", async () => {
+    useFakeClock();
+    const state: BroadcasterTestState = {
+      currentDetails: baseDetails,
+      currentStatus: baseStatus,
+      detailsCalls: 0,
+      statusCalls: 0,
+    };
+
+    await runBroadcasterTest(
+      state,
+      Effect.gen(function* () {
+        const broadcaster = yield* GitStatusBroadcaster;
+        yield* broadcaster.getStatus({ cwd: "/repo" });
+        vi.setSystemTime(LOCAL_STATUS_SINGLE_FLIGHT_TTL_MS - 1);
+        yield* broadcaster.getStatus({ cwd: "/repo" });
+        expect(state.detailsCalls).toBe(1);
+
+        vi.setSystemTime(LOCAL_STATUS_SINGLE_FLIGHT_TTL_MS + 1);
+        yield* broadcaster.getStatus({ cwd: "/repo" });
+        expect(state.detailsCalls).toBe(2);
+        expect(state.statusCalls).toBe(1);
+      }),
+    );
+  });
+
+  it("bypasses the local TTL on refresh and serves the refreshed value", async () => {
+    useFakeClock();
+    const state: BroadcasterTestState = {
+      currentDetails: baseDetails,
+      currentStatus: baseStatus,
+      detailsCalls: 0,
+      statusCalls: 0,
+    };
+
+    await runBroadcasterTest(
+      state,
+      Effect.gen(function* () {
+        const broadcaster = yield* GitStatusBroadcaster;
+        yield* broadcaster.getStatus({ cwd: "/repo" });
+        const updated = { ...baseStatus, hasWorkingTreeChanges: true };
+        state.currentStatus = updated;
+
+        const refreshed = yield* broadcaster.refreshStatus("/repo");
+        const afterRefresh = yield* broadcaster.getStatus({ cwd: "/repo" });
+
+        expect(refreshed).toEqual(updated);
+        expect(afterRefresh).toEqual(updated);
+        expect(state.statusCalls).toBe(2);
+        expect(state.detailsCalls).toBe(1);
       }),
     );
   });

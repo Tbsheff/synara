@@ -10,6 +10,7 @@ import {
   projectLocalPreviewGrantQueryOptions,
   projectQueryKeys,
   projectReadFileQueryOptions,
+  projectSearchContentQueryOptions,
   refetchFreshProjectFileQuery,
 } from "./projectReactQuery";
 
@@ -222,10 +223,34 @@ describe("project read file capacity retry", () => {
   });
 });
 
-describe("project search capacity retry", () => {
-  const capacityError = {
-    code: "RPC_EXPENSIVE_READ_CAPACITY_EXCEEDED",
-    retryable: true,
-    retryAfterMs: 375,
-  };
+describe("project content search cancellation", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("aborts the superseded scan when the observed query changes", async () => {
+    const signals = new Map<string, AbortSignal | undefined>();
+    const searchContent = vi.fn((input: { query: string }, options?: { signal?: AbortSignal }) => {
+      signals.set(input.query, options?.signal);
+      return new Promise(() => undefined);
+    });
+    vi.spyOn(nativeApi, "ensureNativeApi").mockReturnValue({
+      projects: { searchContent },
+    } as unknown as NativeApi);
+
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const observer = new QueryObserver(
+      queryClient,
+      projectSearchContentQueryOptions({ cwd: "/repo", query: "use" }),
+    );
+    const unsubscribe = observer.subscribe(() => undefined);
+    await vi.waitFor(() => expect(signals.get("use")?.aborted).toBe(false));
+
+    observer.setOptions(projectSearchContentQueryOptions({ cwd: "/repo", query: "useEffect" }));
+    await vi.waitFor(() => expect(signals.get("useEffect")?.aborted).toBe(false));
+
+    expect(signals.get("use")?.aborted).toBe(true);
+    unsubscribe();
+    queryClient.clear();
+  });
 });

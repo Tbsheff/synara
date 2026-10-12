@@ -232,6 +232,31 @@ it("renders snippet rows and gates short queries behind the prompt", async () =>
   }
 });
 
+it("waits for a pause in typing before scanning file contents", async () => {
+  const searchContent = vi.fn().mockResolvedValue({ matches: [], truncated: false });
+  const restoreNativeApi = installNativeApi({
+    projects: {
+      prewarmSearchIndex: vi.fn().mockResolvedValue({ started: true }),
+      searchContent,
+    },
+  } as unknown as NativeApi);
+
+  try {
+    await renderPalette("snippets");
+    const input = page.getByPlaceholder("Search code");
+    for (const prefix of ["use", "useEf", "useEffe"]) {
+      await input.fill(prefix);
+      await new Promise((resolve) => setTimeout(resolve, 120));
+    }
+    await input.fill("useEffect");
+
+    await vi.waitFor(() => expect(searchContent).toHaveBeenCalledTimes(1));
+    expect(searchContent.mock.calls[0]?.[0]).toMatchObject({ query: "useEffect" });
+  } finally {
+    restoreNativeApi();
+  }
+});
+
 it("offers an Open path row for an in-workspace absolute path without fuzzy search", async () => {
   const searchEntries = vi.fn().mockResolvedValue({ entries: [], truncated: false });
   const restoreNativeApi = installNativeApi({

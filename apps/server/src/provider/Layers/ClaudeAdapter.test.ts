@@ -943,6 +943,66 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  it.effect.each([
+    { binaryPath: "", expected: "claude" },
+    { binaryPath: "   ", expected: "claude" },
+    { binaryPath: undefined, expected: "claude" },
+    { binaryPath: " /custom/bin/claude ", expected: "/custom/bin/claude" },
+  ])(
+    "never hands the SDK an empty executable path (binaryPath $binaryPath)",
+    ({ binaryPath, expected }) => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        yield* adapter.startSession({
+          threadId: THREAD_ID,
+          provider: "claudeAgent",
+          runtimeMode: "full-access",
+          ...(binaryPath === undefined ? {} : { providerOptions: { claudeAgent: { binaryPath } } }),
+        });
+
+        assert.equal(
+          harness.getLastCreateQueryInput()?.options.pathToClaudeCodeExecutable,
+          expected,
+        );
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    },
+  );
+
+  it.effect("probes the PATH Claude CLI for Auto mode when binaryPath is blank", () => {
+    const probed: string[] = [];
+    const layer = makeClaudeAdapterLiveBase({
+      readClaudeCliVersion: async ({ binaryPath }) => {
+        probed.push(binaryPath);
+        return "2.1.110";
+      },
+      createQuery: () => new FakeClaudeQuery(),
+    }).pipe(
+      Layer.provideMerge(ServerConfig.layerTest("/tmp/claude-adapter-test", "/tmp")),
+      Layer.provideMerge(NodeServices.layer),
+    );
+
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* Effect.exit(
+        adapter.startSession({
+          threadId: THREAD_ID,
+          provider: "claudeAgent",
+          runtimeMode: "auto",
+          providerOptions: { claudeAgent: { binaryPath: "" } },
+        }),
+      );
+
+      assert.deepEqual(probed, ["claude"]);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(layer),
+    );
+  });
+
   it.effect.each([true, false])(
     "leases computer control with the session when enableComputerControl is %s",
     (enableComputerControl) => {

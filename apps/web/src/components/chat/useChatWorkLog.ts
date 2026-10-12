@@ -15,6 +15,27 @@ import { createRelevantWorkLogThreadsSelector } from "../ChatView.selectors";
 import { deriveComposerSubagentStripItems } from "./ComposerSubagentStrip.logic";
 import { deriveWorkflowRunState, type WorkflowSubagentThreadRef } from "./WorkflowRunCard.logic";
 const EMPTY_ACTIVITIES: OrchestrationThreadActivity[] = [];
+const TURN_ID_KEY_SEPARATOR = "\n";
+
+function visibleTurnIdsKey(
+  messages: ReadonlyArray<Pick<Thread["messages"][number], "turnId">>,
+  latestTurnId: TurnId | null,
+): string {
+  const turnIds = new Set<TurnId>();
+  for (const message of messages) {
+    if (message.turnId) {
+      turnIds.add(message.turnId);
+    }
+  }
+  if (latestTurnId) {
+    turnIds.add(latestTurnId);
+  }
+  return [...turnIds].join(TURN_ID_KEY_SEPARATOR);
+}
+
+function visibleTurnIdsFromKey(key: string): ReadonlySet<TurnId> {
+  return new Set(key.length === 0 ? [] : (key.split(TURN_ID_KEY_SEPARATOR) as TurnId[]));
+}
 interface ChatWorkLogInput {
   activeThread: Thread | undefined;
   latestTurnSettled: boolean;
@@ -38,18 +59,14 @@ export function useChatWorkLog({
   // Memoized on purpose: an inline Set would change identity every render and cascade
   // through the memoized work-log/timeline chain into the virtualized list, which resets
   // in a loop on unstable data.
-  const workLogVisibleTurnIds = useMemo(() => {
-    const turnIds = new Set<TurnId>();
-    for (const message of activeThread?.messages ?? []) {
-      if (message.turnId) {
-        turnIds.add(message.turnId);
-      }
-    }
-    if (activeLatestTurnId) {
-      turnIds.add(activeLatestTurnId);
-    }
-    return turnIds;
-  }, [activeLatestTurnId, activeThread?.messages]);
+  const workLogVisibleTurnIdsKey = useMemo(
+    () => visibleTurnIdsKey(activeThread?.messages ?? [], activeLatestTurnId),
+    [activeLatestTurnId, activeThread?.messages],
+  );
+  const workLogVisibleTurnIds = useMemo(
+    () => visibleTurnIdsFromKey(workLogVisibleTurnIdsKey),
+    [workLogVisibleTurnIdsKey],
+  );
   const rawWorkLogEntries = useMemo(
     () =>
       deriveWorkLogEntries(threadActivities, activeLatestTurnId ?? undefined, {
@@ -161,21 +178,23 @@ export function useChatWorkLog({
   const stripSourceLatestTurnCompletedAt = stripParentThread
     ? (stripParentThread.latestTurn?.completedAt ?? null)
     : activeLatestTurnCompletedAt;
-  const stripVisibleTurnIds = useMemo(() => {
-    if (!stripParentThread) {
-      return workLogVisibleTurnIds;
-    }
-    const turnIds = new Set<TurnId>();
-    for (const message of stripParentThread.messages) {
-      if (message.turnId) {
-        turnIds.add(message.turnId);
-      }
-    }
-    if (stripParentThread.latestTurn?.turnId) {
-      turnIds.add(stripParentThread.latestTurn.turnId);
-    }
-    return turnIds;
-  }, [stripParentThread, workLogVisibleTurnIds]);
+  const stripParentVisibleTurnIdsKey = useMemo(
+    () =>
+      stripParentThread
+        ? visibleTurnIdsKey(
+            stripParentThread.messages,
+            stripParentThread.latestTurn?.turnId ?? null,
+          )
+        : null,
+    [stripParentThread],
+  );
+  const stripVisibleTurnIds = useMemo(
+    () =>
+      stripParentVisibleTurnIdsKey === null
+        ? workLogVisibleTurnIds
+        : visibleTurnIdsFromKey(stripParentVisibleTurnIdsKey),
+    [stripParentVisibleTurnIdsKey, workLogVisibleTurnIds],
+  );
   const stripLiveTurnId = stripParentThread
     ? isLatestTurnSettled(stripParentThread.latestTurn, stripParentThread.session ?? null)
       ? null

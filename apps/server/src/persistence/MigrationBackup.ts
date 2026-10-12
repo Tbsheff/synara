@@ -39,9 +39,10 @@ import {
   planLegacyMigration32Rename,
   planMigrationLineageAliasRepairs,
 } from "./Migrations.ts";
+import { isAdditiveOnlyMigration } from "./Migrations/additiveOnly.ts";
 
 /** Keep at most this many finished pre-migration SQLite backups (issue #618). */
-export const MIGRATION_BACKUP_RETENTION = 5;
+export const MIGRATION_BACKUP_RETENTION = 2;
 export const FAILED_MIGRATION_BUNDLE_RETENTION = 3;
 
 const STALE_RECOVERY_ARTIFACT_AGE_MS = 24 * 60 * 60 * 1_000;
@@ -187,7 +188,9 @@ async function assertBackupSpaceAvailable(
   }
 }
 
-type MigrationBackupPlan = MigrationDivergencePlan;
+type MigrationBackupPlan = MigrationDivergencePlan & {
+  readonly pendingMigrationIds?: ReadonlyArray<number> | undefined;
+};
 
 export type MigrationBackupResult = MigrationBackupPlan & {
   readonly backupPath: string;
@@ -249,7 +252,8 @@ export const inspectMigrationBackupPlan = Effect.gen(function* () {
   if (migration32Rename !== null) {
     inspectedNames.set(32, migration32Rename);
   }
-  for (const repair of planMigrationLineageAliasRepairs(inspectedNames)) {
+  const aliasRepairs = planMigrationLineageAliasRepairs(inspectedNames);
+  for (const repair of aliasRepairs) {
     if (repair.kind === "rename") {
       inspectedNames.set(repair.migrationId, repair.name);
     } else {
@@ -287,10 +291,41 @@ export const inspectMigrationBackupPlan = Effect.gen(function* () {
   }
 
   if (highWaterMark < latestMigrationId) {
-    return { sourceVersion: `v${highWaterMark}`, targetVersion: latestMigrationId };
+    return {
+      sourceVersion: `v${highWaterMark}`,
+      targetVersion: latestMigrationId,
+      ...(aliasRepairs.length === 0
+        ? {
+            pendingMigrationIds: migrationEntries
+              .filter(([id]) => id > highWaterMark)
+              .map(([id]) => id),
+          }
+        : {}),
+    };
   }
   return null;
-});
+}).pipe(Effect.map((plan): MigrationBackupPlan | null => plan));
+
+export function pendingMigrationsAreAdditiveOnly(
+  pendingMigrationIds: ReadonlyArray<number>,
+): boolean {
+  return (
+    pendingMigrationIds.length > 0 &&
+    pendingMigrationIds.every((pendingId) =>
+      migrationEntries.some(
+        ([id, , migration]) => id === pendingId && isAdditiveOnlyMigration(migration),
+      ),
+    )
+  );
+}
+
+function canSkipPreMigrationBackup(plan: MigrationBackupPlan): boolean {
+  return (
+    plan.lineageDivergence === undefined &&
+    plan.pendingMigrationIds !== undefined &&
+    pendingMigrationsAreAdditiveOnly(plan.pendingMigrationIds)
+  );
+}
 
 function compactTimestamp(date: Date): string {
   return date.toISOString().replaceAll(/[-:.]/gu, "");
@@ -798,6 +833,25 @@ export const runWithPreMigrationBackup = <A, E, R>(
       if (challenge && options.divergenceConsent !== challenge.consentToken) {
         return yield* Effect.fail(new MigrationDivergenceConsentRequiredError(challenge));
       }
+    }
+    if (plan && canSkipPreMigrationBackup(plan)) {
+      yield* Effect.logInfo(
+        "Skipping pre-migration backup: every pending migration is additive-only",
+      ).pipe(
+        Effect.annotateLogs({
+          sourceVersion: plan.sourceVersion,
+          targetVersion: plan.targetVersion,
+          pendingMigrationIds: plan.pendingMigrationIds?.join(","),
+        }),
+      );
+      yield* pruneMigrationBackups(dbPath).pipe(
+        Effect.catch((cause) =>
+          Effect.logWarning("Could not prune old pre-migration backups", {
+            detail: String(cause),
+          }),
+        ),
+      );
+      return yield* migration;
     }
     const backup = plan ? yield* createMigrationBackup(dbPath, plan) : null;
     const recoveryPayload = backup ? migrationRecoveryPayload(dbPath, backup) : null;

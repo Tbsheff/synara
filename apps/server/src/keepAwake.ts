@@ -13,7 +13,7 @@ import { spawnProcess } from "@synara/shared/processRuntime";
 import {
   type KeepAwakeMode,
   type OrchestrationEvent,
-  type OrchestrationReadModel,
+  type OrchestrationSession,
   type ServerKeepAwakeState,
   ThreadSessionSetPayload,
 } from "@synara/contracts";
@@ -76,12 +76,12 @@ export function isActiveSession(
 }
 
 export function seedActiveThreads(
-  readModel: Pick<OrchestrationReadModel, "threads">,
+  sessions: ReadonlyArray<Pick<OrchestrationSession, "threadId" | "status" | "activeTurnId">>,
 ): ReadonlySet<string> {
   const active = new Set<string>();
-  for (const thread of readModel.threads) {
-    if (isActiveSession(thread.session)) {
-      active.add(thread.id);
+  for (const session of sessions) {
+    if (isActiveSession(session)) {
+      active.add(session.threadId);
     }
   }
   return active;
@@ -267,7 +267,7 @@ export const makeKeepAwake = Effect.fn(function* (runtime: KeepAwakeRuntime) {
     // Register the domain-event subscriber before seeding so no session
     // transition can slip between the snapshot and the live stream.
     const domainEvents = yield* orchestrationEngine.subscribeDomainEvents;
-    const seeded = yield* projectionSnapshotQuery.getSnapshot().pipe(
+    const seeded = yield* projectionSnapshotQuery.listThreadSessions().pipe(
       Effect.map(seedActiveThreads),
       Effect.catch((error) =>
         Effect.logWarning("keep-awake could not seed active turns; starting empty", {

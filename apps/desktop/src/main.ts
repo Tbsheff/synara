@@ -183,7 +183,8 @@ import {
 import { persistMacAppIcon } from "./macAppIcon";
 import {
   MAC_WINDOW_VIBRANCY,
-  createWindowMaterialApplier,
+  bindWindowMaterialActivity,
+  createWindowMaterialController,
   parseDesktopWindowMaterial,
   type WindowMaterialAddon,
 } from "./windowMaterial";
@@ -2065,7 +2066,7 @@ function loadWindowMaterialAddon(): WindowMaterialAddon | null {
   }
 }
 
-const applyWindowMaterial = createWindowMaterialApplier(loadWindowMaterialAddon);
+const windowMaterialController = createWindowMaterialController(loadWindowMaterialAddon);
 
 function resolveAppSnapHelperPath(): string {
   if (app.isPackaged) {
@@ -5099,7 +5100,7 @@ function registerIpcHandlers(): void {
     const input = parseDesktopWindowMaterial(rawInput);
     const window = BrowserWindow.fromWebContents(event.sender);
     if (process.platform !== "darwin" || !input || !window) return false;
-    return applyWindowMaterial(window, input);
+    return windowMaterialController.apply(window, input);
   });
 
   ipcMain.removeHandler(IPC.getAppIcon);
@@ -5746,6 +5747,7 @@ function createWindow(): BrowserWindow {
   window.on("enter-full-screen", () => emitDesktopWindowState(window));
   window.on("leave-full-screen", () => emitDesktopWindowState(window));
   if (process.platform === "darwin") {
+    bindWindowMaterialActivity(window, windowMaterialController);
     guardDesktopWindowClose(
       window,
       `Close the ${APP_DISPLAY_NAME} window?`,

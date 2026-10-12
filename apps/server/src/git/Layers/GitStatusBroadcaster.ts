@@ -8,8 +8,10 @@ import type {
   GitStatusStreamEvent,
 } from "@synara/contracts";
 import { mergeGitStatusParts } from "@synara/shared/git";
+import { makeKeyedSingleFlightCache } from "@synara/shared/KeyedSingleFlightCache";
 
-import { GitCore } from "../Services/GitCore";
+import type { GitManagerServiceError } from "../Errors";
+import { GitCore, type GitStatusDetails } from "../Services/GitCore";
 import { GitManager } from "../Services/GitManager";
 import {
   GitStatusBroadcaster,
@@ -18,7 +20,8 @@ import {
 import {
   canReuseCachedRemoteStatus,
   type CachedGitStatus,
-  isCachedRemoteStatusFresh,
+  GIT_STATUS_CACHE_MAX_ENTRIES,
+  LOCAL_STATUS_SINGLE_FLIGHT_TTL_MS,
   makeCachedStatusValue,
   setCachedGitStatus,
   splitLocalStatus,
@@ -50,6 +53,10 @@ export const GitStatusBroadcasterLive = Layer.effect(
       (pubsub) => PubSub.shutdown(pubsub),
     );
     const cacheRef = yield* Ref.make(new Map<string, CachedGitStatus>());
+    const statusReads = yield* makeKeyedSingleFlightCache<GitStatusResult, GitManagerServiceError>({
+      maxEntries: GIT_STATUS_CACHE_MAX_ENTRIES,
+      ttlMs: LOCAL_STATUS_SINGLE_FLIGHT_TTL_MS,
+    });
 
     const getCachedStatus = (cwd: string) =>
       Ref.get(cacheRef).pipe(Effect.map((cache) => cache.get(cwd) ?? null));
@@ -100,39 +107,47 @@ export const GitStatusBroadcasterLive = Layer.effect(
         return remote;
       });
 
-    const loadStatus = (cwd: string, options?: { readonly publish?: boolean }) =>
+    const loadStatus = (
+      cwd: string,
+      options?: { readonly publish?: boolean; readonly details?: GitStatusDetails },
+    ) =>
       Effect.gen(function* () {
-        const status = yield* gitManager.status({ cwd });
+        const status = yield* gitManager.status(
+          { cwd },
+          options?.details ? { details: options.details } : undefined,
+        );
         const local = yield* updateCachedLocalStatus(cwd, splitLocalStatus(status), options);
         const remote = yield* updateCachedRemoteStatus(cwd, splitRemoteStatus(status), options);
         return mergeGitStatusParts(local, remote) as GitStatusResult;
       });
 
-    const getStatus: GitStatusBroadcasterShape["getStatus"] = (input) =>
+    const readStatus = (cwd: string) =>
       Effect.gen(function* () {
-        const normalizedCwd = normalizeCwd(input.cwd);
-        const cached = yield* getCachedStatus(normalizedCwd);
-        // Only probe git for details when the cached remote metadata could still be
-        // reused. `statusDetails` spawns several git subprocesses, and a full status
-        // load runs it again, so probing against expired cache state would double the
-        // git work on every poll (the sidebar polls at 60 s against a 30 s TTL, so the
-        // reuse check could never pass on that path).
-        if (cached?.remote && isCachedRemoteStatusFresh({ cached })) {
-          const details = yield* gitCore.statusDetails(normalizedCwd);
-          if (canReuseCachedRemoteStatus({ cached, details })) {
-            const local = yield* updateCachedLocalStatus(
-              normalizedCwd,
-              splitLocalStatusDetails(details),
-            );
-            const remote = splitRemoteStatusDetails(details, cached.remote.value);
-            return mergeGitStatusParts(local, remote) as GitStatusResult;
-          }
+        const details = yield* gitCore.statusDetails(cwd);
+        const cached = yield* getCachedStatus(cwd);
+        if (cached?.remote && canReuseCachedRemoteStatus({ cached, details })) {
+          const local = yield* updateCachedLocalStatus(cwd, splitLocalStatusDetails(details));
+          const remote = splitRemoteStatusDetails(details, cached.remote.value);
+          return mergeGitStatusParts(local, remote) as GitStatusResult;
         }
-        return yield* loadStatus(normalizedCwd);
+        return yield* loadStatus(cwd, { details });
       });
 
-    const refreshStatus: GitStatusBroadcasterShape["refreshStatus"] = (cwd) =>
-      loadStatus(normalizeCwd(cwd), { publish: true });
+    const getStatus: GitStatusBroadcasterShape["getStatus"] = (input) => {
+      const normalizedCwd = normalizeCwd(input.cwd);
+      return statusReads.get(normalizedCwd, readStatus(normalizedCwd));
+    };
+
+    const refreshStatus: GitStatusBroadcasterShape["refreshStatus"] = (cwd) => {
+      const normalizedCwd = normalizeCwd(cwd);
+      return statusReads
+        .invalidate(normalizedCwd)
+        .pipe(
+          Effect.andThen(
+            statusReads.get(normalizedCwd, loadStatus(normalizedCwd, { publish: true })),
+          ),
+        );
+    };
 
     const refreshLocalStatus: GitStatusBroadcasterShape["refreshLocalStatus"] = (cwd) =>
       refreshStatus(cwd).pipe(Effect.map(splitLocalStatus));

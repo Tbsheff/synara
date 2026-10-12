@@ -5,6 +5,7 @@ import { desktopIconAssetPaths } from "./lib/brand-assets.ts";
 
 import {
   createDesktopPlatformBuildConfig,
+  ELECTRON_LANGUAGES,
   MAC_APPSNAP_HELPER_ASAR_EXCLUSION,
   MAC_APPSNAP_HELPER_BUNDLE_PATH,
   MAC_APPSNAP_HELPER_STAGE_PATH,
@@ -72,6 +73,7 @@ describe("createDesktopPlatformBuildConfig", () => {
     assert.ok(config.files?.includes(MAC_APPSNAP_HELPER_ASAR_EXCLUSION));
     assert.ok(config.files?.includes(MAC_WINDOW_MATERIAL_ADDON_ASAR_EXCLUSION));
     assert.ok(config.files?.includes("!apps/desktop/resources/cua-driver/**"));
+    assert.ok(config.files?.includes("!apps/desktop/prod-resources/cua-driver/**"));
     assert.deepStrictEqual(config.extraFiles, [
       {
         from: "apps/desktop/resources/cua-driver",
@@ -209,6 +211,19 @@ describe("createDesktopPlatformBuildConfig", () => {
       publisherName: "Synara",
       azureSignOptions: { publisherName: "Synara" },
     });
+  });
+
+  it("keeps only English Electron locales on every platform", () => {
+    const configs = [
+      createDesktopPlatformBuildConfig({ platform: "mac", target: "dmg" }),
+      createDesktopPlatformBuildConfig({ platform: "win", target: "nsis" }),
+      createDesktopPlatformBuildConfig({ platform: "linux", target: "AppImage" }),
+    ];
+
+    assert.deepStrictEqual(ELECTRON_LANGUAGES, ["en", "en-US"]);
+    for (const config of configs) {
+      assert.deepStrictEqual(config.electronLanguages, ["en", "en-US"]);
+    }
   });
 
   it("omits Azure signing options for unsigned build-only artifacts", () => {

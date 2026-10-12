@@ -36,7 +36,6 @@
     "@effect/sql-sqlite-bun": "catalog:",
     "@opencode-ai/sdk": "1.18.31",
     "@opencode/client": "2.0.25",
-    "@pierre/diffs": "^1.2.12",
     "@xterm/headless": "^6.0.0",
     "effect": "catalog:",
     "esbuild": "^0.28.1",

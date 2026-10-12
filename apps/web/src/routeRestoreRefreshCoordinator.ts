@@ -50,11 +50,11 @@ function delay(ms: number): Promise<void> {
  *
  * Full projection rebuilds thrash multi-GB state DBs and hold the server
  * maintenance lock for minutes. Poll the lightweight shell first so catch-up
- * can win, then use one full snapshot probe before calling repair.
+ * can win, then use one projection count probe before calling repair.
  */
 export async function runEmptyRouteRestoreRefresh(input: {
   readonly getShellSnapshot: () => Promise<OrchestrationShellSnapshot>;
-  readonly getSnapshot: () => Promise<OrchestrationReadModel>;
+  readonly countThreads: () => Promise<number>;
   readonly repairState: () => Promise<OrchestrationReadModel>;
   readonly applyShellSnapshot: (snapshot: OrchestrationShellSnapshot) => void;
   readonly hasThreads: () => boolean;
@@ -75,12 +75,7 @@ export async function runEmptyRouteRestoreRefresh(input: {
     }
   }
 
-  // The full projection is only a recovery probe. Applying it here would bypass
-  // EventRouter's shell sequence fence, which is the race this coordinator exists
-  // to remove. If it already contains threads, re-read the shell projection and
-  // let EventRouter apply that snapshot through its normal fenced path.
-  const readModel = await input.getSnapshot();
-  if (readModel.threads.length > 0) {
+  if ((await input.countThreads()) > 0) {
     return await applyFreshShellSnapshot();
   }
 

@@ -45,7 +45,10 @@ import {
 
 export type WorkspaceSearchPaletteMode = "files" | "snippets";
 
-const SEARCH_DEBOUNCE_MS = 100;
+const SEARCH_DEBOUNCE_MS = {
+  files: 100,
+  snippets: 250,
+} satisfies Record<WorkspaceSearchPaletteMode, number>;
 // ~17 rows are visible at the list's max height; 30 keeps keyboard depth
 // without paying mount/layout for rows nobody scrolls to.
 const SEARCH_LIMIT = 30;
@@ -290,7 +293,9 @@ function WorkspaceSearchPaletteContent(props: WorkspaceSearchPaletteProps) {
 
   const [query, setQuery] = useState("");
   const trimmedQuery = query.trim();
-  const [debouncedQuery] = useDebouncedValue(trimmedQuery, { wait: SEARCH_DEBOUNCE_MS });
+  const [debouncedQuery] = useDebouncedValue(trimmedQuery, {
+    wait: SEARCH_DEBOUNCE_MS[props.mode],
+  });
 
   // The content component mounts once per open, so this fires before the
   // first keystroke — the server index build overlaps with the user typing.

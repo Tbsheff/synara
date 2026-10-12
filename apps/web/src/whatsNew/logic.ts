@@ -72,6 +72,10 @@ function compareVersions(a: string, b: string): number {
   return patchA - patchB;
 }
 
+export function whatsNewNeedsEntries(currentVersion: string, lastSeenVersion: string | null) {
+  return lastSeenVersion !== null && compareVersions(currentVersion, lastSeenVersion) > 0;
+}
+
 /**
  * Return the given entries sorted by version in descending order (newest
  * first). This is the canonical "display order" used everywhere we present a

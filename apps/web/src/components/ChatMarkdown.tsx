@@ -51,6 +51,10 @@ import remarkMath from "remark-math";
 import { copyTextToClipboard } from "../hooks/useCopyToClipboard";
 import { resolveDiffThemeName, type DiffThemeName } from "../lib/diffRendering";
 import {
+  loadSyntaxHighlighting,
+  type SyntaxHighlightingModule,
+} from "../lib/syntaxHighlightingLoader";
+import {
   classifyStreamingCodeBlock,
   dedentCode,
   parseCodeFenceInfo,
@@ -1009,14 +1013,6 @@ interface SuspenseShikiCodeBlockProps {
   sourceOffset: number;
 }
 
-type SyntaxHighlightingModule = typeof import("../lib/syntaxHighlighting");
-let syntaxHighlightingModulePromise: Promise<SyntaxHighlightingModule> | null = null;
-
-function getSyntaxHighlightingModulePromise(): Promise<SyntaxHighlightingModule> {
-  syntaxHighlightingModulePromise ??= import("../lib/syntaxHighlighting");
-  return syntaxHighlightingModulePromise;
-}
-
 // Each highlight costs roughly linearly in block length, so the cadence also stretches
 // with size: small blocks stay at the base interval, a block at
 // `STREAMING_CODE_HIGHLIGHT_SLOW_CHARS` is highlighted at most once per
@@ -1054,7 +1050,7 @@ function SuspenseShikiCodeBlock({
     streamingCodeHighlightIntervalMs(liveCode.length),
   );
   const throttledCodeIsPrefix = liveCode.startsWith(throttledCode);
-  const syntaxHighlighting = use(getSyntaxHighlightingModulePromise());
+  const syntaxHighlighting = use(loadSyntaxHighlighting());
   return (
     <LoadedShikiCodeBlock
       syntaxHighlighting={syntaxHighlighting}

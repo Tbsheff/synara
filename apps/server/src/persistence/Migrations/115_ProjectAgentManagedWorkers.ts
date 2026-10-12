@@ -1,13 +1,13 @@
 import { Effect } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
-export default Effect.gen(function* () {
-  const sql = yield* SqlClient.SqlClient;
+import { additiveOnlyMigration } from "./additiveOnly.ts";
 
-  // Every thread the coordinator creates is a tracked worker — with or without
-  // an active goal — so settle, roll-up, and stuck detection have a durable
-  // record to drive. Tasks still link back via task_id when a goal exists.
-  yield* sql.unsafe(`
+export default additiveOnlyMigration(
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+
+    yield* sql.unsafe(`
     CREATE TABLE IF NOT EXISTS project_agent_managed_workers (
       project_id TEXT NOT NULL,
       thread_id TEXT NOT NULL,
@@ -26,13 +26,14 @@ export default Effect.gen(function* () {
     )
   `);
 
-  yield* sql.unsafe(`
+    yield* sql.unsafe(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_project_agent_workers_thread
     ON project_agent_managed_workers (thread_id)
   `);
 
-  yield* sql.unsafe(`
+    yield* sql.unsafe(`
     CREATE INDEX IF NOT EXISTS idx_project_agent_workers_batch
     ON project_agent_managed_workers (project_id, batch_id)
   `);
-});
+  }),
+);

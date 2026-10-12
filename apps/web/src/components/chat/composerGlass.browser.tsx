@@ -87,22 +87,36 @@ describe("chat composer on sidebar-only macOS glass", () => {
     },
   );
 
-  it.each([
-    { name: "browser", transparent: false, material: "opaque", scope: "none" },
-    { name: "Solid macOS", transparent: true, material: "opaque", scope: "none" },
-    { name: "nontransparent host", transparent: false, material: "translucent", scope: "sidebar" },
-  ])("preserves page frosting on a $name surface", async ({ transparent, material, scope }) => {
-    if (transparent) root.dataset.windowTransparent = "true";
-    else delete root.dataset.windowTransparent;
-    root.dataset.windowMaterial = material;
-    root.dataset.windowTranslucency = scope;
+  it("preserves page frosting on a nontransparent translucent host", async () => {
+    delete root.dataset.windowTransparent;
+    root.dataset.windowMaterial = "translucent";
+    root.dataset.windowTranslucency = "sidebar";
     await render(<ComposerFixture />, { container: appRoot });
 
     for (const name of ["composer", "stacked"] as const) {
-      expect(getComputedStyle(surface(name), "::before").backdropFilter).not.toBe("none");
+      expect(getComputedStyle(surface(name), "::before").backdropFilter).toContain("blur(40px)");
       expect(fillAlpha(surface(name))).toBeLessThan(0.75);
     }
   });
+
+  it.each([
+    { name: "browser", transparent: false },
+    { name: "Solid macOS", transparent: true },
+  ])(
+    "uses dense fills without a backdrop blur on an opaque $name surface",
+    async ({ transparent }) => {
+      if (transparent) root.dataset.windowTransparent = "true";
+      else delete root.dataset.windowTransparent;
+      root.dataset.windowMaterial = "opaque";
+      root.dataset.windowTranslucency = "none";
+      await render(<ComposerFixture />, { container: appRoot });
+
+      for (const name of ["composer", "stacked"] as const) {
+        expect(getComputedStyle(surface(name), "::before").backdropFilter).toBe("none");
+        expect(fillAlpha(surface(name))).toBeGreaterThanOrEqual(name === "composer" ? 0.9 : 0.75);
+      }
+    },
+  );
 
   it("preserves the shared raised tint on whole-window glass", async () => {
     sidebarGlass();
@@ -115,16 +129,19 @@ describe("chat composer on sidebar-only macOS glass", () => {
     }
   });
 
-  it("restores page frosting when switching the mounted composer to Solid", async () => {
+  it("keeps dense unblurred fills when switching the mounted composer to Solid", async () => {
     sidebarGlass();
+    root.dataset.windowTranslucency = "window";
     await render(<ComposerFixture />, { container: appRoot });
-    expect(getComputedStyle(surface("composer"), "::before").backdropFilter).toBe("none");
+    expect(fillAlpha(surface("composer"))).toBeCloseTo(0.4, 2);
 
     root.dataset.windowMaterial = "opaque";
     root.dataset.windowTranslucency = "none";
     for (const name of ["composer", "stacked"] as const) {
-      expect(getComputedStyle(surface(name), "::before").backdropFilter).not.toBe("none");
-      await expect.poll(() => fillAlpha(surface(name))).toBeLessThan(0.75);
+      expect(getComputedStyle(surface(name), "::before").backdropFilter).toBe("none");
+      await expect
+        .poll(() => fillAlpha(surface(name)))
+        .toBeGreaterThanOrEqual(name === "composer" ? 0.9 : 0.75);
     }
   });
 

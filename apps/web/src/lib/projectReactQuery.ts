@@ -444,16 +444,19 @@ export function projectSearchContentQueryOptions(input: {
   const trimmedQuery = input.query.trim();
   return queryOptions({
     queryKey: projectQueryKeys.searchContent(input.cwd, trimmedQuery, limit),
-    queryFn: async () => {
+    queryFn: async ({ signal }) => {
       const api = ensureNativeApi();
       if (!input.cwd) {
         throw new Error("Workspace content search is unavailable.");
       }
-      return api.projects.searchContent({
-        cwd: input.cwd,
-        query: trimmedQuery,
-        limit,
-      });
+      return api.projects.searchContent(
+        {
+          cwd: input.cwd,
+          query: trimmedQuery,
+          limit,
+        },
+        { signal },
+      );
     },
     enabled:
       (input.enabled ?? true) &&

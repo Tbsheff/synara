@@ -12,6 +12,7 @@ import type {
   OrchestrationProjectShell,
   OrchestrationSpaceShell,
   OrchestrationReadModel,
+  OrchestrationSession,
   OrchestrationShellSnapshot,
   OrchestrationThreadDetailSnapshot,
   OrchestrationThread,
@@ -134,6 +135,11 @@ export interface ProjectionSnapshotQueryShape {
    * Read aggregate projection counts without hydrating the full read model.
    */
   readonly getCounts: () => Effect.Effect<ProjectionSnapshotCounts, ProjectionRepositoryError>;
+
+  readonly listThreadSessions: () => Effect.Effect<
+    ReadonlyArray<OrchestrationSession>,
+    ProjectionRepositoryError
+  >;
 
   /**
    * Read the latest projection snapshot sequence without hydrating read-model entities.

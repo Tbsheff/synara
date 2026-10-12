@@ -9,14 +9,20 @@
  *
  * @module CheckpointStoreLive
  */
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import { Cause, Deferred, Effect, Exit, Layer, FileSystem, Option, Path, Semaphore } from "effect";
 
 import { CheckpointInvariantError, type CheckpointStoreError } from "../Errors.ts";
 import { GitCommandError } from "../../git/Errors.ts";
 import { GitCore } from "../../git/Services/GitCore.ts";
-import { CheckpointStore, type CheckpointStoreShape } from "../Services/CheckpointStore.ts";
+import {
+  CheckpointStore,
+  type CheckpointStoreShape,
+  type DiffCheckpointFilesInput,
+} from "../Services/CheckpointStore.ts";
+import { parseCheckpointFilesFromRawNumstat } from "../Diffs.ts";
+import { gitIndexHasAssumeUnchangedEntries } from "../GitIndexFile.ts";
 import { CheckpointRef } from "@synara/contracts";
 
 const CHECKPOINT_DIFF_MAX_OUTPUT_BYTES = 10_000_000;
@@ -28,12 +34,38 @@ const CHECKPOINT_DIFF_MAX_OUTPUT_BYTES = 10_000_000;
 // per-command timeouts would allow.
 const CHECKPOINT_CAPTURE_TIMEOUT_MS = 180_000;
 
+const PERSISTENT_INDEX_NAME_PREFIX = "synara-checkpoint-index-";
+const STALE_INDEX_LOCK_MS = CHECKPOINT_CAPTURE_TIMEOUT_MS;
+
+const CHECKPOINT_COMMIT_IDENTITY_ENV: NodeJS.ProcessEnv = {
+  GIT_AUTHOR_NAME: "Synara",
+  GIT_AUTHOR_EMAIL: "synara@users.noreply.github.com",
+  GIT_COMMITTER_NAME: "Synara",
+  GIT_COMMITTER_EMAIL: "synara@users.noreply.github.com",
+};
+
+interface CheckpointIndexLocation {
+  readonly workingIndexPath: string;
+  readonly persistentIndexPath: string;
+}
+
+interface PersistentIndexState {
+  readonly workingIndexFingerprint: string;
+  readonly persistentIndexFingerprint: string;
+}
+
+const fingerprintOf = (info: FileSystem.File.Info): string =>
+  `${info.dev}:${info.ino ?? ""}:${info.size}:${info.mtime?.getTime() ?? ""}`;
+
 const makeCheckpointStore = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const git = yield* GitCore;
   const captureLock = yield* Semaphore.make(1);
   const inFlightCaptures = new Map<string, Deferred.Deferred<void, CheckpointStoreError>>();
+  const worktreeLocks = new Map<string, Semaphore.Semaphore>();
+  const indexLocations = new Map<string, CheckpointIndexLocation>();
+  const persistentIndexStates = new Map<string, PersistentIndexState>();
 
   // Normalize the cwd so captures for the same repo reached via differently
   // written paths (trailing slash, relative segments) share one in-flight slot.
@@ -68,34 +100,311 @@ const makeCheckpointStore = Effect.gen(function* () {
       })
       .pipe(Effect.map((result) => result.code === 0));
 
-  const seedCheckpointIndex = (cwd: string, tempIndexPath: string) =>
+  const worktreeLock = (key: string): Semaphore.Semaphore => {
+    const existing = worktreeLocks.get(key);
+    if (existing) {
+      return existing;
+    }
+    const lock = Semaphore.makeUnsafe(1);
+    worktreeLocks.set(key, lock);
+    return lock;
+  };
+
+  const fingerprint = (filePath: string): Effect.Effect<string | null> =>
+    fs.stat(filePath).pipe(
+      Effect.map(fingerprintOf),
+      Effect.orElseSucceed(() => null),
+    );
+
+  const resolveIndexLocation = (
+    cwd: string,
+    key: string,
+  ): Effect.Effect<CheckpointIndexLocation | null, GitCommandError> =>
     Effect.gen(function* () {
-      const indexPathResult = yield* git.execute({
+      const cached = indexLocations.get(key);
+      if (cached) {
+        const gitDirExists = yield* fs
+          .exists(path.dirname(cached.workingIndexPath))
+          .pipe(Effect.orElseSucceed(() => false));
+        if (gitDirExists) {
+          return cached;
+        }
+        indexLocations.delete(key);
+        persistentIndexStates.delete(key);
+      }
+
+      const persistentIndexName = `${PERSISTENT_INDEX_NAME_PREFIX}${createHash("sha256")
+        .update(key)
+        .digest("hex")
+        .slice(0, 16)}`;
+      const result = yield* git.execute({
         operation: "CheckpointStore.resolveWorkingIndex",
         cwd,
-        args: ["rev-parse", "--git-path", "index"],
+        args: ["rev-parse", "--git-path", "index", "--git-path", persistentIndexName],
         allowNonZeroExit: true,
       });
-      const indexPathRaw = indexPathResult.stdout.trim();
-      if (indexPathResult.code !== 0 || indexPathRaw.length === 0) {
+      const [workingIndexRaw = "", persistentIndexRaw = ""] = result.stdout
+        .split(/\r?\n/)
+        .map((line) => line.trim());
+      if (result.code !== 0 || workingIndexRaw.length === 0 || persistentIndexRaw.length === 0) {
         return null;
       }
 
-      const indexPath = path.isAbsolute(indexPathRaw)
-        ? indexPathRaw
-        : path.resolve(cwd, indexPathRaw);
-      const indexExists = yield* fs.exists(indexPath).pipe(Effect.orElseSucceed(() => false));
+      const location: CheckpointIndexLocation = {
+        workingIndexPath: path.resolve(cwd, workingIndexRaw),
+        persistentIndexPath: path.resolve(cwd, persistentIndexRaw),
+      };
+      indexLocations.set(key, location);
+      return location;
+    });
+
+  const seedCheckpointIndex = (location: CheckpointIndexLocation | null, tempIndexPath: string) =>
+    Effect.gen(function* () {
+      if (location === null) {
+        return null;
+      }
+      const indexExists = yield* fs
+        .exists(location.workingIndexPath)
+        .pipe(Effect.orElseSucceed(() => false));
       if (!indexExists) {
         return null;
       }
-
-      // Preserve Git's stat cache in the throwaway index. Starting every
-      // checkpoint from `read-tree HEAD` discards it, forcing `git add -A` to
-      // rescan and re-hash the whole worktree before every user turn.
-      const indexInfo = yield* fs.stat(indexPath);
-      yield* fs.copyFile(indexPath, tempIndexPath);
-      return indexInfo;
+      const indexInfo = yield* fs.stat(location.workingIndexPath);
+      const indexBytes = yield* fs.readFile(location.workingIndexPath);
+      yield* fs.writeFile(tempIndexPath, indexBytes);
+      return {
+        indexInfo,
+        supportsPersistentIndex: gitIndexHasAssumeUnchangedEntries(indexBytes) === false,
+      };
     });
+
+  const listIgnoredIndexEntries = (cwd: string, indexPath: string) =>
+    git
+      .execute({
+        operation: "CheckpointStore.listIgnoredIndexEntries",
+        cwd,
+        args: ["ls-files", "-z", "--cached", "--ignored", "--exclude-standard"],
+        env: { GIT_INDEX_FILE: indexPath },
+      })
+      .pipe(
+        Effect.map(
+          (result) => new Set(result.stdout.split("\0").filter((entry) => entry.length > 0)),
+        ),
+      );
+
+  const worktreePathExists = (absolutePath: string) =>
+    fs.exists(absolutePath).pipe(
+      Effect.flatMap((exists) =>
+        exists
+          ? Effect.succeed(true)
+          : fs.readLink(absolutePath).pipe(
+              Effect.as(true),
+              Effect.orElseSucceed(() => false),
+            ),
+      ),
+      Effect.orElseSucceed(() => true),
+    );
+
+  const ignoredEntriesMatch = (
+    cwd: string,
+    workingIgnored: ReadonlySet<string>,
+    persistentIgnored: ReadonlySet<string>,
+  ) =>
+    Effect.gen(function* () {
+      for (const entry of persistentIgnored) {
+        if (!workingIgnored.has(entry)) {
+          return false;
+        }
+      }
+      const droppedEntries = [...workingIgnored].filter((entry) => !persistentIgnored.has(entry));
+      const existing = yield* Effect.forEach(
+        droppedEntries,
+        (entry) => worktreePathExists(path.join(cwd, entry)),
+        { concurrency: 16 },
+      );
+      return !existing.includes(true);
+    });
+
+  const removeStaleIndexLock = (persistentIndexPath: string) =>
+    Effect.gen(function* () {
+      const lockPath = `${persistentIndexPath}.lock`;
+      const info = yield* fs.stat(lockPath);
+      const modifiedAt = info.mtime?.getTime();
+      if (modifiedAt !== undefined && Date.now() - modifiedAt > STALE_INDEX_LOCK_MS) {
+        yield* fs.remove(lockPath, { force: true });
+      }
+    }).pipe(Effect.ignore);
+
+  const captureTreeWithPersistentIndex = (
+    cwd: string,
+    key: string,
+    location: CheckpointIndexLocation,
+  ): Effect.Effect<string | null> =>
+    Effect.gen(function* () {
+      const operation = "CheckpointStore.captureCheckpoint";
+      const state = persistentIndexStates.get(key);
+      if (!state) {
+        return null;
+      }
+      const [workingFingerprint, persistentFingerprint] = yield* Effect.all([
+        fingerprint(location.workingIndexPath),
+        fingerprint(location.persistentIndexPath),
+      ]);
+      if (
+        workingFingerprint !== state.workingIndexFingerprint ||
+        persistentFingerprint !== state.persistentIndexFingerprint
+      ) {
+        return null;
+      }
+
+      const persistentEnv = { GIT_INDEX_FILE: location.persistentIndexPath };
+      const [, workingIgnored] = yield* Effect.all(
+        [
+          git.execute({ operation, cwd, args: ["add", "-A", "--", "."], env: persistentEnv }),
+          listIgnoredIndexEntries(cwd, location.workingIndexPath),
+        ],
+        { concurrency: "unbounded" },
+      );
+      const [writeTreeResult, persistentIgnored] = yield* Effect.all(
+        [
+          git.execute({ operation, cwd, args: ["write-tree"], env: persistentEnv }),
+          listIgnoredIndexEntries(cwd, location.persistentIndexPath),
+        ],
+        { concurrency: "unbounded" },
+      );
+      const treeOid = writeTreeResult.stdout.trim();
+      if (
+        treeOid.length === 0 ||
+        !(yield* ignoredEntriesMatch(cwd, workingIgnored, persistentIgnored))
+      ) {
+        return null;
+      }
+
+      const nextPersistentFingerprint = yield* fingerprint(location.persistentIndexPath);
+      if (nextPersistentFingerprint === null) {
+        return null;
+      }
+      persistentIndexStates.set(key, {
+        workingIndexFingerprint: state.workingIndexFingerprint,
+        persistentIndexFingerprint: nextPersistentFingerprint,
+      });
+      return treeOid;
+    }).pipe(
+      Effect.catch((error) =>
+        Effect.logDebug("persistent checkpoint index unavailable; reseeding", {
+          cwd,
+          detail: error.message,
+        }).pipe(
+          Effect.andThen(removeStaleIndexLock(location.persistentIndexPath)),
+          Effect.as(null),
+        ),
+      ),
+      Effect.tap((treeOid) =>
+        treeOid === null ? Effect.sync(() => persistentIndexStates.delete(key)) : Effect.void,
+      ),
+    );
+
+  const installPersistentIndex = (input: {
+    readonly key: string;
+    readonly location: CheckpointIndexLocation;
+    readonly tempIndexPath: string;
+    readonly workingIndexFingerprint: string;
+  }) => {
+    const stagingPath = `${input.location.persistentIndexPath}.${randomUUID()}.tmp`;
+    return Effect.gen(function* () {
+      persistentIndexStates.delete(input.key);
+      const tempIndexInfo = yield* fs.stat(input.tempIndexPath);
+      yield* fs.copyFile(input.tempIndexPath, stagingPath);
+      if (tempIndexInfo.mtime !== undefined) {
+        yield* fs.utimes(
+          stagingPath,
+          tempIndexInfo.atime ?? tempIndexInfo.mtime,
+          tempIndexInfo.mtime,
+        );
+      }
+      yield* fs.rename(stagingPath, input.location.persistentIndexPath);
+      const persistentIndexFingerprint = yield* fingerprint(input.location.persistentIndexPath);
+      if (persistentIndexFingerprint !== null) {
+        persistentIndexStates.set(input.key, {
+          workingIndexFingerprint: input.workingIndexFingerprint,
+          persistentIndexFingerprint,
+        });
+      }
+    }).pipe(
+      Effect.catch((error) =>
+        Effect.logDebug("failed to persist checkpoint index", {
+          path: input.location.persistentIndexPath,
+          detail: error.message,
+        }).pipe(Effect.andThen(fs.remove(stagingPath, { force: true }).pipe(Effect.ignore))),
+      ),
+    );
+  };
+
+  const captureTreeWithTemporaryIndex = (
+    cwd: string,
+    key: string,
+    location: CheckpointIndexLocation | null,
+  ) =>
+    Effect.acquireUseRelease(
+      fs.makeTempDirectory({ prefix: "synara-fs-checkpoint-" }),
+      (tempDir) =>
+        Effect.gen(function* () {
+          const operation = "CheckpointStore.captureCheckpoint";
+          const tempIndexPath = path.join(tempDir, `index-${randomUUID()}`);
+          const indexEnv = { GIT_INDEX_FILE: tempIndexPath };
+
+          const seed = yield* seedCheckpointIndex(location, tempIndexPath);
+          const workingIndexInfo = seed?.indexInfo ?? null;
+          if (workingIndexInfo === null && (yield* hasHeadCommit(cwd))) {
+            yield* git.execute({ operation, cwd, args: ["read-tree", "HEAD"], env: indexEnv });
+          }
+          if (workingIndexInfo !== null) {
+            yield* git.execute({
+              operation,
+              cwd,
+              args: ["update-index", "--really-refresh"],
+              env: indexEnv,
+              allowNonZeroExit: true,
+            });
+
+            if (workingIndexInfo.mtime !== undefined) {
+              yield* fs.utimes(
+                tempIndexPath,
+                workingIndexInfo.atime ?? workingIndexInfo.mtime,
+                workingIndexInfo.mtime,
+              );
+            }
+          }
+
+          yield* git.execute({ operation, cwd, args: ["add", "-A", "--", "."], env: indexEnv });
+          const writeTreeResult = yield* git.execute({
+            operation,
+            cwd,
+            args: ["write-tree"],
+            env: indexEnv,
+          });
+          const treeOid = writeTreeResult.stdout.trim();
+          if (treeOid.length === 0) {
+            return yield* new GitCommandError({
+              operation,
+              command: "git write-tree",
+              cwd,
+              detail: "git write-tree returned an empty tree oid.",
+            });
+          }
+
+          if (location !== null && seed !== null && seed.supportsPersistentIndex) {
+            yield* installPersistentIndex({
+              key,
+              location,
+              tempIndexPath,
+              workingIndexFingerprint: fingerprintOf(seed.indexInfo),
+            });
+          }
+          return treeOid;
+        }),
+      (tempDir) => fs.remove(tempDir, { recursive: true }),
+    );
 
   const resolveCheckpointCommit = (
     cwd: string,
@@ -145,87 +454,24 @@ const makeCheckpointStore = Effect.gen(function* () {
         }
       }
 
-      yield* Effect.acquireUseRelease(
-        fs.makeTempDirectory({ prefix: "synara-fs-checkpoint-" }),
-        (tempDir) =>
+      const key = path.resolve(input.cwd);
+      yield* worktreeLock(key)
+        .withPermits(1)(
           Effect.gen(function* () {
-            const tempIndexPath = path.join(tempDir, `index-${randomUUID()}`);
-            const commitEnv: NodeJS.ProcessEnv = {
-              ...process.env,
-              GIT_INDEX_FILE: tempIndexPath,
-              GIT_AUTHOR_NAME: "Synara",
-              GIT_AUTHOR_EMAIL: "synara@users.noreply.github.com",
-              GIT_COMMITTER_NAME: "Synara",
-              GIT_COMMITTER_EMAIL: "synara@users.noreply.github.com",
-            };
-
-            const workingIndexInfo = yield* seedCheckpointIndex(input.cwd, tempIndexPath);
-            if (workingIndexInfo === null && (yield* hasHeadCommit(input.cwd))) {
-              yield* git.execute({
-                operation,
-                cwd: input.cwd,
-                args: ["read-tree", "HEAD"],
-                env: commitEnv,
-              });
-            }
-            if (workingIndexInfo !== null) {
-              // A copied index can describe a rapid same-size rewrite as clean
-              // when its cached stat tuple still matches. Really-refresh makes
-              // Git verify those racily-clean entries and leaves changed paths
-              // for the following add to hash, without discarding the cache for
-              // the rest of a large workspace.
-              yield* git.execute({
-                operation,
-                cwd: input.cwd,
-                args: ["update-index", "--really-refresh"],
-                env: commitEnv,
-                allowNonZeroExit: true,
-              });
-
-              // Copying or refreshing the temporary index advances its file
-              // timestamp. Git uses that timestamp to decide whether an entry
-              // whose cached stat tuple still matches is "racily clean" and
-              // needs hashing. Restore the working index's original timestamp
-              // so rapid same-size rewrites remain newer than (or equal to) the
-              // index snapshot and `git add` verifies their contents.
-              if (workingIndexInfo.mtime !== undefined) {
-                yield* fs.utimes(
-                  tempIndexPath,
-                  workingIndexInfo.atime ?? workingIndexInfo.mtime,
-                  workingIndexInfo.mtime,
-                );
-              }
-            }
-
-            yield* git.execute({
-              operation,
-              cwd: input.cwd,
-              args: ["add", "-A", "--", "."],
-              env: commitEnv,
-            });
-
-            const writeTreeResult = yield* git.execute({
-              operation,
-              cwd: input.cwd,
-              args: ["write-tree"],
-              env: commitEnv,
-            });
-            const treeOid = writeTreeResult.stdout.trim();
-            if (treeOid.length === 0) {
-              return yield* new GitCommandError({
-                operation,
-                command: "git write-tree",
-                cwd: input.cwd,
-                detail: "git write-tree returned an empty tree oid.",
-              });
-            }
+            const location = yield* resolveIndexLocation(input.cwd, key);
+            const persistentTreeOid =
+              location === null
+                ? null
+                : yield* captureTreeWithPersistentIndex(input.cwd, key, location);
+            const treeOid =
+              persistentTreeOid ?? (yield* captureTreeWithTemporaryIndex(input.cwd, key, location));
 
             const message = `Synara checkpoint ref=${input.checkpointRef}`;
             const commitTreeResult = yield* git.execute({
               operation,
               cwd: input.cwd,
               args: ["commit-tree", treeOid, "-m", message],
-              env: commitEnv,
+              env: CHECKPOINT_COMMIT_IDENTITY_ENV,
             });
             const commitOid = commitTreeResult.stdout.trim();
             if (commitOid.length === 0) {
@@ -243,19 +489,19 @@ const makeCheckpointStore = Effect.gen(function* () {
               args: ["update-ref", input.checkpointRef, commitOid],
             });
           }),
-        (tempDir) => fs.remove(tempDir, { recursive: true }),
-      ).pipe(
-        Effect.catchTags({
-          PlatformError: (error) =>
-            Effect.fail(
-              new CheckpointInvariantError({
-                operation: "CheckpointStore.captureCheckpoint",
-                detail: "Failed to capture checkpoint.",
-                cause: error,
-              }),
-            ),
-        }),
-      );
+        )
+        .pipe(
+          Effect.catchTags({
+            PlatformError: (error) =>
+              Effect.fail(
+                new CheckpointInvariantError({
+                  operation: "CheckpointStore.captureCheckpoint",
+                  detail: "Failed to capture checkpoint.",
+                  cause: error,
+                }),
+              ),
+          }),
+        );
     });
 
   const captureCheckpoint: CheckpointStoreShape["captureCheckpoint"] = (input) =>
@@ -377,10 +623,11 @@ const makeCheckpointStore = Effect.gen(function* () {
       return true;
     });
 
-  const diffCheckpoints: CheckpointStoreShape["diffCheckpoints"] = (input) =>
+  const resolveDiffCommits = (
+    operation: string,
+    input: DiffCheckpointFilesInput,
+  ): Effect.Effect<readonly [string, string], GitCommandError> =>
     Effect.gen(function* () {
-      const operation = "CheckpointStore.diffCheckpoints";
-
       let [fromCommitOid, toCommitOid] = yield* Effect.all(
         [
           resolveCheckpointCommit(input.cwd, input.fromCheckpointRef),
@@ -404,11 +651,20 @@ const makeCheckpointStore = Effect.gen(function* () {
           detail: "Checkpoint ref is unavailable for diff operation.",
         });
       }
+      return [fromCommitOid, toCommitOid] as const;
+    });
+
+  const diffCheckpoints: CheckpointStoreShape["diffCheckpoints"] = (input) =>
+    Effect.gen(function* () {
+      const operation = "CheckpointStore.diffCheckpoints";
+      const [fromCommitOid, toCommitOid] = yield* resolveDiffCommits(operation, input);
 
       const result = yield* git.execute({
         operation,
         cwd: input.cwd,
         args: [
+          "-c",
+          "core.quotePath=false",
           "diff",
           "--patch",
           "--minimal",
@@ -423,6 +679,30 @@ const makeCheckpointStore = Effect.gen(function* () {
       });
 
       return result.stdout;
+    });
+
+  const diffCheckpointFiles: CheckpointStoreShape["diffCheckpointFiles"] = (input) =>
+    Effect.gen(function* () {
+      const operation = "CheckpointStore.diffCheckpointFiles";
+      const [fromCommitOid, toCommitOid] = yield* resolveDiffCommits(operation, input);
+      const result = yield* git.execute({
+        operation,
+        cwd: input.cwd,
+        args: [
+          "diff",
+          "--raw",
+          "--numstat",
+          "-z",
+          "--minimal",
+          "--no-color",
+          "--no-ext-diff",
+          "--no-textconv",
+          fromCommitOid,
+          toCommitOid,
+        ],
+        maxOutputBytes: CHECKPOINT_DIFF_MAX_OUTPUT_BYTES,
+      });
+      return parseCheckpointFilesFromRawNumstat(result.stdout);
     });
 
   // Rolls the working tree back to `treeOid` for the provided paths without
@@ -692,6 +972,7 @@ const makeCheckpointStore = Effect.gen(function* () {
     hasCheckpointRef,
     restoreCheckpoint,
     diffCheckpoints,
+    diffCheckpointFiles,
     reverseCheckpointDiff,
     deleteCheckpointRefs,
   } satisfies CheckpointStoreShape;

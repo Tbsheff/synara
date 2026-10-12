@@ -22,6 +22,74 @@ import {
 } from "./collapsedRepliesFixture";
 import { isComputerToolName } from "./lib/computerToolPresentation";
 
+function toolPayload(id: string) {
+  return {
+    itemType: "command_execution",
+    data: { item: { id, command: `run ${id}` } },
+  };
+}
+
+describe("deriveWorkLogEntries identity", () => {
+  const activities = [
+    makeActivity({
+      id: "merged-started",
+      kind: "tool.started",
+      turnId: "turn-1",
+      createdAt: "2026-01-01T00:00:01.000Z",
+      payload: toolPayload("tool-merged"),
+    }),
+    makeActivity({
+      id: "merged-completed",
+      kind: "tool.completed",
+      turnId: "turn-1",
+      createdAt: "2026-01-01T00:00:02.000Z",
+      payload: toolPayload("tool-merged"),
+    }),
+    makeActivity({
+      id: "stale-started",
+      kind: "tool.started",
+      turnId: "turn-1",
+      createdAt: "2026-01-01T00:00:03.000Z",
+      payload: toolPayload("tool-stale"),
+    }),
+  ];
+
+  it("returns the same entry objects when activities are unchanged", () => {
+    const options = {
+      visibleTurnIds: new Set(["turn-1"]),
+      latestTurnState: "completed" as const,
+      latestTurnCompletedAt: "2026-01-01T00:00:05.000Z",
+    };
+    const first = deriveWorkLogEntries(activities, TurnId.makeUnsafe("turn-1"), options);
+    const second = deriveWorkLogEntries(activities, TurnId.makeUnsafe("turn-1"), {
+      ...options,
+      visibleTurnIds: new Set(["turn-1"]),
+    });
+
+    expect(first).toHaveLength(2);
+    expect(first[1]?.liveActivity?.state).toBe("completed");
+    expect(second).toHaveLength(first.length);
+    second.forEach((entry, index) => expect(entry).toBe(first[index]));
+  });
+
+  it("settles again when the terminal turn state changes", () => {
+    const turnId = TurnId.makeUnsafe("turn-1");
+    const completed = deriveWorkLogEntries(activities, turnId, {
+      latestTurnState: "completed",
+      latestTurnCompletedAt: "2026-01-01T00:00:05.000Z",
+    });
+    const failed = deriveWorkLogEntries(activities, turnId, {
+      latestTurnState: "error",
+      latestTurnCompletedAt: "2026-01-01T00:00:05.000Z",
+    });
+
+    expect(failed[0]).toBe(completed[0]);
+    expect(failed[1]).not.toBe(completed[1]);
+    expect(failed[1]?.liveActivity?.state).toBe("failed");
+    expect(failed[1]?.toolStatus).toBe("failed");
+  });
+});
+
 describe("deriveWorkLogEntries", () => {
   it("pairs an answered question with its answers in one exchange row", () => {
     const questions = [

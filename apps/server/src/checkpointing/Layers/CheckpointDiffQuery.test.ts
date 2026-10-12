@@ -112,6 +112,7 @@ describe("CheckpointDiffQueryLive", () => {
           diffCheckpointsCalls.push({ fromCheckpointRef, toCheckpointRef, cwd, ignoreWhitespace });
           return "diff patch";
         }),
+      diffCheckpointFiles: () => Effect.succeed([]),
       deleteCheckpointRefs: () => Effect.void,
     };
 
@@ -197,6 +198,7 @@ describe("CheckpointDiffQueryLive", () => {
           diffCheckpointsCalls.push({ fromCheckpointRef, toCheckpointRef, cwd, ignoreWhitespace });
           return "full diff patch";
         }),
+      diffCheckpointFiles: () => Effect.succeed([]),
       deleteCheckpointRefs: () => Effect.void,
     };
 
@@ -251,6 +253,7 @@ describe("CheckpointDiffQueryLive", () => {
       restoreCheckpoint: () => Effect.succeed(true),
       reverseCheckpointDiff: () => Effect.succeed(true),
       diffCheckpoints: () => Effect.succeed(""),
+      diffCheckpointFiles: () => Effect.succeed([]),
       deleteCheckpointRefs: () => Effect.void,
     };
 
@@ -303,6 +306,7 @@ describe("CheckpointDiffQueryLive", () => {
       restoreCheckpoint: () => Effect.succeed(true),
       reverseCheckpointDiff: () => Effect.succeed(true),
       diffCheckpoints: () => Effect.succeed("diff patch"),
+      diffCheckpointFiles: () => Effect.succeed([]),
       deleteCheckpointRefs: () => Effect.void,
     };
 
@@ -356,6 +360,7 @@ describe("CheckpointDiffQueryLive", () => {
       restoreCheckpoint: () => Effect.succeed(true),
       reverseCheckpointDiff: () => Effect.succeed(true),
       diffCheckpoints: () => Effect.succeed("diff patch"),
+      diffCheckpointFiles: () => Effect.succeed([]),
       deleteCheckpointRefs: () => Effect.void,
     };
 
@@ -414,6 +419,7 @@ describe("CheckpointDiffQueryLive", () => {
           diffCheckpointsCalls.push({ cwd });
           return "diff patch";
         }),
+      diffCheckpointFiles: () => Effect.succeed([]),
       deleteCheckpointRefs: () => Effect.void,
     };
 
@@ -468,6 +474,7 @@ describe("CheckpointDiffQueryLive", () => {
       restoreCheckpoint: () => Effect.succeed(true),
       reverseCheckpointDiff: () => Effect.succeed(true),
       diffCheckpoints: () => Effect.succeed("diff patch"),
+      diffCheckpointFiles: () => Effect.succeed([]),
       deleteCheckpointRefs: () => Effect.void,
     };
 
