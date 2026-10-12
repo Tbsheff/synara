@@ -141,7 +141,7 @@ export const ServerSettings = Schema.Struct({
   enableProviderUpdateChecks: Schema.Boolean.pipe(Schema.withDecodingDefault(() => true)),
   keepAwakeMode: KeepAwakeMode.pipe(Schema.withDecodingDefault(() => DEFAULT_KEEP_AWAKE_MODE)),
   warmSessionLimit: Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 32 })).pipe(
-    Schema.withDecodingDefault(() => 4),
+    Schema.withDecodingDefault(() => 2),
   ),
   warmSessionIdleTimeoutMinutes: Schema.Int.check(
     Schema.isBetween({ minimum: 1, maximum: 240 }),

@@ -281,11 +281,16 @@ Codex and Claude opt in through adapter capabilities. Archived threads, expired 
 subagents, cache-review holds, disabled providers, active work, and stale account or model
 selections do not pre-warm. Unsaved drafts with no durable workspace still start on their first send.
 
-The server keeps at most four idle sessions for pre-warm, evicting the least recently used idle
+The server keeps at most two idle sessions for pre-warm, evicting the least recently used idle
 session when it needs space. Active turns and background tasks do not count and are never evicted
-for space. Server settings `warmSessionLimit` (0 disables pre-warm; maximum 32) and
+for space. Pending approvals and queued messages also block idle teardown. Server settings
+`warmSessionLimit` (default 2; 0 disables pre-warm; older saved values above 2 use 2) and
 `warmSessionIdleTimeoutMinutes` (1–240; default 15) control this policy. The timeout applies on the
-next idle schedule; `SYNARA_PROVIDER_RUNTIME_IDLE_STOP_MS` remains an operator override.
+next idle schedule; `SYNARA_PROVIDER_RUNTIME_IDLE_STOP_MS` remains an operator override when
+memory permits. Every 15 seconds, idle sessions check system free RAM. Below 10% of total RAM
+or 1.5 GiB, warm and resumable agent sessions expire after one idle minute, even if the operator
+disabled normal idle expiry. A shorter configured timeout stays shorter. Running turns,
+provider background tasks, pending approvals, and queued messages prevent teardown.
 
 Saved model and access-mode changes use the existing session reconfiguration path before the
 next send. A warm request must match the thread’s saved provider account; it cannot move a native

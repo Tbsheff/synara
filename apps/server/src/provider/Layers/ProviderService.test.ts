@@ -8488,12 +8488,13 @@ warmPool.layer("ProviderService warm pool", (it) => {
             ),
           ),
         );
-      for (const id of ids.slice(0, 4)) assert.isTrue(yield* warm(id));
+      for (const id of ids.slice(0, 2)) assert.isTrue(yield* warm(id));
+      yield* sleep(2);
       assert.isTrue(yield* warm(ids[0]!));
-      assert.equal(warmPool.codex.startSession.mock.calls.length, 4);
+      assert.equal(warmPool.codex.startSession.mock.calls.length, 2);
       assert.isTrue(yield* warm(ids[4]!));
       const live = yield* provider.listSessions();
-      assert.equal(live.length, 4);
+      assert.equal(live.length, 2);
       assert.isTrue(live.some((session) => session.threadId === ids[0]));
       assert.isFalse(live.some((session) => session.threadId === ids[1]));
       assert.equal(warmPool.codex.sendTurn.mock.calls.length, 0);
@@ -8556,6 +8557,127 @@ warmPool.layer("ProviderService warm pool", (it) => {
       for (const threadId of [active, idle, next]) yield* provider.stopSession({ threadId });
       yield* settings.updateSettings({ warmSessionLimit: 4 });
     }),
+  );
+});
+
+const warmWorkHolds = new Set<ThreadId>();
+const pressureWarm = makeProviderServiceLayer({
+  runtimeIdleStopMs: 900_000,
+  canStopIdleSession: (threadId) => Effect.succeed(!warmWorkHolds.has(threadId)),
+});
+pressureWarm.layer("ProviderService memory pressure", (it) => {
+  it.effect(
+    "expires warm and agent sessions when memory falls after admission, but protects work",
+    () =>
+      Effect.gen(function* () {
+        const provider = yield* ProviderService;
+        const free = vi.spyOn(os, "freemem").mockReturnValue(8 * 1024 ** 3);
+        vi.spyOn(os, "totalmem").mockReturnValue(16 * 1024 ** 3);
+        const timers = vi.spyOn(globalThis, "setTimeout");
+        const startedAt = Date.now();
+        const expire = () => {
+          const index = timers.mock.calls.findLastIndex(([, ms]) => ms === 15_000);
+          assert.isAtLeast(index, 0);
+          const callback = timers.mock.calls[index]![0] as () => void;
+          clearTimeout(timers.mock.results[index]!.value);
+          timers.mockClear();
+          const now = vi.spyOn(Date, "now").mockReturnValue(startedAt + 61_000);
+          callback();
+          now.mockRestore();
+        };
+        try {
+          for (const kind of [
+            "warm",
+            "agent",
+            "running",
+            "approval",
+            "approval-event",
+            "queued",
+            "background",
+          ] as const) {
+            timers.mockClear();
+            const threadId = asThreadId(`pressure-${kind}`);
+            const start = provider.startSession(threadId, {
+              provider: "codex",
+              threadId,
+              runtimeMode: "approval-required",
+            });
+            if (kind === "agent") {
+              yield* start;
+              yield* pressureWarm.codex.waitForRuntimeSubscribers();
+              pressureWarm.codex.emit({
+                type: "turn.completed",
+                eventId: asEventId("pressure-agent-idle"),
+                provider: "codex",
+                threadId,
+                createdAt: new Date().toISOString(),
+                payload: { state: "completed" },
+              });
+              yield* waitUntil(() => timers.mock.calls.some(([, ms]) => ms === 15_000));
+            } else {
+              yield* provider.prewarmSession!(
+                { threadId, provider: "codex" },
+                start.pipe(Effect.as(true)),
+              );
+            }
+            if (kind === "running")
+              pressureWarm.codex.updateSession(threadId, (session) => ({
+                ...session,
+                status: "running",
+                activeTurnId: asTurnId("pressure-turn"),
+              }));
+            if (kind === "approval" || kind === "queued") warmWorkHolds.add(threadId);
+            if (kind === "approval-event") {
+              yield* pressureWarm.codex.waitForRuntimeSubscribers();
+              pressureWarm.codex.emit({
+                type: "request.opened",
+                eventId: asEventId("pressure-approval"),
+                provider: "codex",
+                threadId,
+                requestId: RuntimeRequestId.makeUnsafe("pressure-approval"),
+                createdAt: new Date().toISOString(),
+                payload: { requestType: "command-execution" },
+              });
+              yield* sleep(25);
+            }
+            if (kind === "background") {
+              yield* pressureWarm.codex.waitForRuntimeSubscribers();
+              pressureWarm.codex.emit({
+                type: "task.started",
+                eventId: asEventId("pressure-task"),
+                provider: "codex",
+                threadId,
+                createdAt: new Date().toISOString(),
+                payload: { taskId: "pressure-task", taskKind: "agent" },
+              });
+              yield* waitUntilEffect(() => provider.hasLiveRuntimeTasks!({ threadId }));
+            }
+            free.mockReturnValue(512 * 1024 ** 2);
+            if (kind === "warm") {
+              free.mockReturnValue(8 * 1024 ** 3);
+              expire();
+              yield* sleep(25);
+              assert.isTrue(yield* pressureWarm.codex.adapter.hasSession(threadId));
+              free.mockReturnValue(512 * 1024 ** 2);
+            }
+            expire();
+            if (kind === "warm" || kind === "agent") {
+              yield* waitUntilEffect(() =>
+                pressureWarm.codex.adapter.hasSession(threadId).pipe(Effect.map((live) => !live)),
+              );
+            } else {
+              yield* sleep(25);
+              assert.isTrue(yield* pressureWarm.codex.adapter.hasSession(threadId));
+            }
+            yield* provider.stopSession({ threadId });
+            warmWorkHolds.delete(threadId);
+            free.mockReturnValue(8 * 1024 ** 3);
+          }
+        } finally {
+          warmWorkHolds.clear();
+          vi.restoreAllMocks();
+        }
+      }),
   );
 });
 
