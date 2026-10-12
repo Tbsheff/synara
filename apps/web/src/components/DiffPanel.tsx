@@ -1601,6 +1601,7 @@ export default function DiffPanel({
 
   return (
     <DiffWorkerPoolProvider
+      fileCount={renderableFiles.length}
       enabled={
         renderableFiles.length > 0 &&
         !!activeThreadContext &&

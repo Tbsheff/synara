@@ -103,6 +103,18 @@ detached runtime cache, then checks that GC frees the buffer:
 bun run --cwd apps/web test:browser --root "$PWD/apps/web" src/components/terminal/terminalWebglDisposal.browser.tsx
 ```
 
+Diff surfaces share a workload-sized pool through Pierre's public manager and
+context APIs. Pass the parsed file count to `DiffWorkerPoolProvider`; do not
+start workers while a diff query is still empty. A size change remounts Pierre
+renderers because they retain their initial manager. Keep panel controls above
+the provider. The regressions cover lazy startup, growth, shrinking, sharing,
+refresh state, and close during initialization:
+
+```bash
+bun run test:web:focused src/lib/diffWorkerPool.test.ts
+bun run --cwd apps/web test:browser --root "$PWD/apps/web" src/components/DiffWorkerPoolProvider.browser.tsx src/components/PatchDiffBody.workers.browser.tsx
+```
+
 The pinned `@effect/platform-node-shared` patch preserves Windows spawn options
 and rejects invalid PIDs before converting child handles into process-group
 signals. Windows group cleanup must launch `taskkill` directly with
