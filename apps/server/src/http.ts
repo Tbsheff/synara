@@ -37,6 +37,7 @@ import {
   resolveAttachmentRelativePath,
 } from "./attachmentPaths";
 import { resolveAttachmentPathById } from "./attachmentStore.ts";
+import { SAFE_IMAGE_FILE_EXTENSIONS } from "./imageMime.ts";
 import { authErrorResponse, makeEffectAuthRequest } from "./auth/effectHttp";
 import { AuthError, ServerAuth } from "./auth/Services/ServerAuth";
 import { SessionCredentialService } from "./auth/Services/SessionCredentialService";
@@ -122,6 +123,9 @@ const SVG_DOCUMENT_SECURITY_HEADERS = {
   "Content-Security-Policy": "sandbox; default-src 'none'; style-src 'unsafe-inline'",
   "X-Content-Type-Options": "nosniff",
 } as const;
+const SCRIPTLESS_RASTER_IMAGE_EXTENSIONS: ReadonlySet<string> = new Set(
+  [...SAFE_IMAGE_FILE_EXTENSIONS].filter((extension) => extension !== ".svg"),
+);
 export const AUTH_JSON_BODY_MAX_BYTES = 16 * 1024;
 const decodeBootstrapInput = Schema.decodeUnknownEffect(AuthBootstrapInput);
 const decodeCreatePairingCredentialInput = Schema.decodeUnknownEffect(
@@ -1487,6 +1491,16 @@ export const attachmentsEffectRouteLayer = HttpRouter.add(
       headers: {
         "Cache-Control": "private, no-store",
         Pragma: "no-cache",
+        ...SVG_DOCUMENT_SECURITY_HEADERS,
+        ...(SCRIPTLESS_RASTER_IMAGE_EXTENSIONS.has(nodePath.extname(filePath).toLowerCase())
+          ? {}
+          : {
+              "Content-Disposition": attachmentContentDisposition(
+                Option.isSome(managedBlob)
+                  ? managedBlob.value.originalName
+                  : nodePath.basename(filePath),
+              ),
+            }),
       },
     });
   }).pipe(Effect.catchTag("AuthError", (error) => Effect.succeed(authErrorResponse(error)))),
