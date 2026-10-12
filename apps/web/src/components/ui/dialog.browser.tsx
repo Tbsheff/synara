@@ -21,8 +21,8 @@ it("disables shared dialog motion when the reader requests reduced motion", asyn
     features: [{ name: "prefers-reduced-motion", value: "reduce" }],
   });
   try {
-    expect(getComputedStyle(popup).transitionDuration).toBe("0s");
-    expect(getComputedStyle(backdrop).transitionDuration).toBe("0s");
+    expect(getComputedStyle(popup).transitionProperty).toBe("none");
+    expect(getComputedStyle(backdrop).transitionProperty).toBe("none");
   } finally {
     await protocol.send("Emulation.setEmulatedMedia", { features: [] });
   }
