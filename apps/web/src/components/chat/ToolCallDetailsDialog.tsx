@@ -6,6 +6,7 @@
 
 import type { FileChangeEntry, TranscriptNotice, WebSearchResult } from "@synara/contracts";
 import type { ReactNode } from "react";
+import { useScrollTailFollow } from "~/hooks/useScrollTailFollow";
 import { useTheme } from "~/hooks/useTheme";
 import { getRenderablePatch, buildFileDiffRenderKey } from "~/lib/diffRendering";
 import { createMarkdownCodeFence, formatShellTranscript } from "~/lib/toolCallDetailsFormatting";
@@ -381,9 +382,16 @@ function PlainTextBlock(props: {
   children: string;
   tone?: "default" | "error";
   dataAttr?: string;
+  followTail?: boolean;
 }) {
+  const tailFollow = useScrollTailFollow<HTMLPreElement>({
+    enabled: props.followTail === true,
+    content: props.children,
+  });
   return (
     <pre
+      ref={tailFollow.ref}
+      onScroll={tailFollow.onScroll}
       className={cn(
         PLAIN_TEXT_BLOCK_CLASS_NAME,
         "px-3 py-2.5",
@@ -400,6 +408,7 @@ export function TypedCommandDetails(props: { view: TypedCommandView; running: bo
   const { view, running } = props;
   const hasSplitOutput = Boolean(view.stdout || view.stderr);
   const emptyOutput = !view.output && !hasSplitOutput;
+  const outputStreaming = running || view.isLiveOutput;
   return (
     <div className={DETAIL_CARD_CLASS_NAME} data-command-shell-card="true">
       <div className="space-y-1 border-b border-border/45 px-3 py-2">
@@ -421,6 +430,7 @@ export function TypedCommandDetails(props: { view: TypedCommandView; running: bo
       {view.output ? (
         <PlainTextBlock
           dataAttr={view.isLiveOutput ? "data-command-live-output" : "data-command-output"}
+          followTail={outputStreaming}
         >
           {view.output}
         </PlainTextBlock>
@@ -428,13 +438,15 @@ export function TypedCommandDetails(props: { view: TypedCommandView; running: bo
       {view.stdout ? (
         <div data-command-stdout="true">
           {view.stderr ? <div className={DETAIL_HEADER_CLASS_NAME}>Stdout</div> : null}
-          <PlainTextBlock>{view.stdout}</PlainTextBlock>
+          <PlainTextBlock followTail={outputStreaming}>{view.stdout}</PlainTextBlock>
         </div>
       ) : null}
       {view.stderr ? (
         <div data-command-stderr="true">
           <div className={cn(DETAIL_HEADER_CLASS_NAME, "text-destructive/80")}>Stderr</div>
-          <PlainTextBlock tone="error">{view.stderr}</PlainTextBlock>
+          <PlainTextBlock tone="error" followTail={outputStreaming}>
+            {view.stderr}
+          </PlainTextBlock>
         </div>
       ) : null}
       {emptyOutput ? (

@@ -22,6 +22,9 @@ const FOLLOW_TOLERANCE_PX = 96;
 const DETACHED_OFFSET_PX = 400;
 const STABLE_ROW_FRAMES = 6;
 const FOLLOWED_TAIL_LINE_COUNTS = [6, 11] as const;
+const CLIPPED_TAIL_LINE_COUNTS = [40, 60, 80] as const;
+const BOX_BOTTOM_SLACK_PX = 1;
+const BOX_READER_SCROLL_UP_PX = 120;
 const THREAD_ID = "thread-live";
 const TURN_ID = "turn-live";
 const LIVE_ITEM_ID = "call-live";
@@ -224,6 +227,21 @@ function liveOutputIsClipped(): boolean {
   return output !== null && output.scrollHeight > output.clientHeight;
 }
 
+function liveOutputBox(): HTMLElement {
+  const output = document.querySelector<HTMLElement>("[data-command-live-output]");
+  if (!output) throw new Error("live output box not rendered");
+  return output;
+}
+
+function liveOutputDistanceFromBottomPx(): number {
+  const box = liveOutputBox();
+  return box.scrollHeight - box.clientHeight - box.scrollTop;
+}
+
+function liveOutputLastLine(): string | undefined {
+  return document.querySelector("[data-command-live-output]")?.textContent?.split("\n").at(-1);
+}
+
 async function waitForStableLiveRowHeight(): Promise<void> {
   let previous = -1;
   let stableFrames = 0;
@@ -336,6 +354,90 @@ describe("MessagesTimeline live tool output", () => {
       await expect
         .poll(() => distanceFromBottomPx(harness), { timeout: 5_000 })
         .toBeLessThanOrEqual(FOLLOW_TOLERANCE_PX);
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("tails the clipped live output box while its reader stays at the box bottom", async () => {
+    const harnessRef: { current: Harness | null } = { current: null };
+    const screen = await render(<LiveOutputTimeline harnessRef={harnessRef} />);
+    try {
+      await mountAtBottom(harnessRef);
+      for (const lines of CLIPPED_TAIL_LINE_COUNTS) {
+        pushLiveTail(lines);
+        await expect
+          .poll(() => liveOutputLastLine(), { timeout: 5_000 })
+          .toBe(`test output line ${lines - 1}`);
+        await settleFrames(2);
+        expect(liveOutputIsClipped()).toBe(true);
+        expect(liveOutputDistanceFromBottomPx()).toBeLessThanOrEqual(BOX_BOTTOM_SLACK_PX);
+      }
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("stops tailing the box when its reader scrolls up in it, without moving the transcript", async () => {
+    const harnessRef: { current: Harness | null } = { current: null };
+    const screen = await render(<LiveOutputTimeline harnessRef={harnessRef} />);
+    try {
+      const harness = await mountAtBottom(harnessRef);
+      const [firstLines, secondLines, thirdLines] = CLIPPED_TAIL_LINE_COUNTS;
+      pushLiveTail(firstLines);
+      await expect
+        .poll(() => liveOutputDistanceFromBottomPx(), { timeout: 5_000 })
+        .toBeLessThanOrEqual(BOX_BOTTOM_SLACK_PX);
+      const box = liveOutputBox();
+      box.scrollTop -= BOX_READER_SCROLL_UP_PX;
+      await settleFrames(2);
+      const readerBoxScrollTop = box.scrollTop;
+
+      pushLiveTail(secondLines);
+      await expect
+        .poll(() => liveOutputLastLine(), { timeout: 5_000 })
+        .toBe(`test output line ${secondLines - 1}`);
+      await settleFrames(3);
+      expect(Math.abs(box.scrollTop - readerBoxScrollTop)).toBeLessThanOrEqual(1);
+      expect(distanceFromBottomPx(harness)).toBeLessThanOrEqual(FOLLOW_TOLERANCE_PX);
+
+      box.scrollTop = box.scrollHeight - box.clientHeight;
+      await settleFrames(2);
+      pushLiveTail(thirdLines);
+      await expect
+        .poll(() => liveOutputLastLine(), { timeout: 5_000 })
+        .toBe(`test output line ${thirdLines - 1}`);
+      await settleFrames(2);
+      expect(liveOutputDistanceFromBottomPx()).toBeLessThanOrEqual(BOX_BOTTOM_SLACK_PX);
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("tails the box without moving a detached transcript reader", async () => {
+    const harnessRef: { current: Harness | null } = { current: null };
+    const screen = await render(<LiveOutputTimeline harnessRef={harnessRef} />);
+    try {
+      const harness = await mountAtBottom(harnessRef);
+      pushLiveTail(CLIPPED_TAIL_LINE_COUNTS[0]);
+      await expect
+        .poll(() => liveOutputDistanceFromBottomPx(), { timeout: 5_000 })
+        .toBeLessThanOrEqual(BOX_BOTTOM_SLACK_PX);
+      await waitForStableLiveRowHeight();
+      harness.setFollow(false);
+      await settleFrames(2);
+      const container = scrollContainer(harness);
+      container.scrollTop -= DETACHED_OFFSET_PX;
+      await settleFrames(2);
+      const readerScrollTop = container.scrollTop;
+
+      pushLiveTail(CLIPPED_TAIL_LINE_COUNTS[1]);
+      await expect
+        .poll(() => liveOutputLastLine(), { timeout: 5_000 })
+        .toBe(`test output line ${CLIPPED_TAIL_LINE_COUNTS[1] - 1}`);
+      await settleFrames(3);
+      expect(liveOutputDistanceFromBottomPx()).toBeLessThanOrEqual(BOX_BOTTOM_SLACK_PX);
+      expect(Math.abs(container.scrollTop - readerScrollTop)).toBeLessThanOrEqual(1);
     } finally {
       await screen.unmount();
     }
