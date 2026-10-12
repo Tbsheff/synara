@@ -367,6 +367,53 @@ export function splitMarkdownBlocks(markdown: string): MarkdownBlock[] {
   return blocks;
 }
 
+interface MarkdownBlockText extends MarkdownBlock {
+  readonly text: string;
+  readonly sourceText: string;
+}
+
+export function createMarkdownBlockTextCache() {
+  let sealed = new Map<number, MarkdownBlockText>();
+  return (
+    markdown: string,
+    source: string,
+    blocks: readonly MarkdownBlock[],
+  ): MarkdownBlockText[] => {
+    const nextSealed = new Map<number, MarkdownBlockText>();
+    const result = blocks.map((block, index) => {
+      const isTail = index === blocks.length - 1;
+      const text = markdown.slice(block.start, block.end);
+      const sourceText = source.slice(block.start, isTail ? undefined : block.end);
+      const previous = sealed.get(block.start);
+      if (
+        !isTail &&
+        previous?.end === block.end &&
+        previous.line === block.line &&
+        previous.text === text &&
+        previous.sourceText === sourceText
+      ) {
+        nextSealed.set(block.start, previous);
+        return previous;
+      }
+      const ownedText = text.length === markdown.length ? markdown : text.split("").join("");
+      const value = {
+        ...block,
+        text: ownedText,
+        sourceText:
+          sourceText === text
+            ? ownedText
+            : sourceText.length === source.length
+              ? source
+              : sourceText.split("").join(""),
+      };
+      if (!isTail) nextSealed.set(block.start, value);
+      return value;
+    });
+    sealed = nextSealed;
+    return result;
+  };
+}
+
 interface SourcePoint {
   readonly line: number;
   readonly column: number;

@@ -74,6 +74,7 @@ import {
   createStreamingMarkdownRepair,
 } from "../lib/markdownStreamingRepair";
 import {
+  createMarkdownBlockTextCache,
   remarkMarkdownBlockOrigin,
   splitMarkdownBlocks,
   type MarkdownBlock,
@@ -1319,7 +1320,13 @@ const MARKDOWN_COMPONENTS: Components = {
     const fence = parseCodeFenceInfo(rawFenceInfo);
     const blockStart = node?.position?.start?.offset ?? 0;
     const blockState = isStreaming
-      ? classifyStreamingCodeBlock(parsedText, blockStart, node?.position?.end?.offset)
+      ? classifyStreamingCodeBlock(
+          parsedText,
+          blockStart - context.sourceBase,
+          node?.position?.end?.offset === undefined
+            ? undefined
+            : node.position.end.offset - context.sourceBase,
+        )
       : "settled";
     const sourceOffset = locateInSource(context, code, blockStart);
     const highlightedFallback = (
@@ -1688,10 +1695,15 @@ function ChatMarkdown({
   const [hasStreamed, setHasStreamed] = useState(isLive);
   if (isLive && !hasStreamed) setHasStreamed(true);
   const splitsIntoBlocks = hasStreamed && !isUserVariant && !parseHtml;
+  const materializeBlocks = useMemo(() => createMarkdownBlockTextCache(), [revealKey]);
   const blocks = useMemo(
     () =>
-      splitsIntoBlocks ? splitMarkdownBlocks(renderedText) : singleMarkdownBlock(renderedText),
-    [renderedText, splitsIntoBlocks],
+      materializeBlocks(
+        renderedText,
+        sourceText,
+        splitsIntoBlocks ? splitMarkdownBlocks(renderedText) : singleMarkdownBlock(renderedText),
+      ),
+    [materializeBlocks, renderedText, sourceText, splitsIntoBlocks],
   );
   const composerChipsRemarkPlugin = useMemo(
     () =>
@@ -1796,15 +1808,11 @@ function ChatMarkdown({
           <Fragment key={block.start}>
             {index > 0 ? "\n" : null}
             <MarkdownBlockView
-              text={renderedText.slice(block.start, block.end)}
+              text={block.text}
               origin={block.start}
               line={block.line}
-              sourceText={
-                index === lastBlockIndex
-                  ? sourceText.slice(block.start)
-                  : sourceText.slice(block.start, block.end)
-              }
-              parsedText={index === lastBlockIndex && isLive ? renderedText : ""}
+              sourceText={block.sourceText}
+              parsedText={index === lastBlockIndex && isLive ? block.text : ""}
               isStreaming={index === lastBlockIndex && isLive}
               baseContext={baseContext}
               remarkPlugins={remarkPlugins}
