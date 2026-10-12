@@ -20,6 +20,7 @@ import {
   automationContinuesThread,
   automationRequiresTargetThread,
 } from "@synara/shared/automationMode";
+import { runtimeModeEscalatesPrivilege } from "@synara/shared/runtimeMode";
 import { Effect, Option, Schema } from "effect";
 
 import type { AutomationServiceShape } from "../automation/Services/AutomationService.ts";
@@ -279,26 +280,61 @@ export function makeAgentGatewayAutomationTools(
       }),
     );
 
+  const callerRunsAutomation = (
+    definition: AutomationDefinition,
+    context: { readonly callerThreadId: string; readonly callerTurnId: string | null },
+  ) =>
+    automationService
+      .resolveCallerRun({
+        callerThreadId: ThreadId.makeUnsafe(context.callerThreadId),
+        callerTurnId: context.callerTurnId ? TurnId.makeUnsafe(context.callerTurnId) : null,
+      })
+      .pipe(
+        Effect.mapError((error) => new ToolInputError(errorText(error))),
+        Effect.map(
+          (callerRun) => Option.isSome(callerRun) && callerRun.value.automationId === definition.id,
+        ),
+      );
+
+  const assertCallerPrivilegesCoverAutomation = (
+    caller: OrchestrationThreadShell,
+    definition: AutomationDefinition,
+  ) =>
+    Effect.gen(function* () {
+      if (runtimeModeEscalatesPrivilege(caller.runtimeMode, definition.runtimeMode)) {
+        return yield* Effect.fail(
+          new ToolInputError(
+            `Automation "${definition.id}" runs in "${definition.runtimeMode}" mode but your thread runs in "${caller.runtimeMode}"; you cannot change higher-privileged automations. Ask the user to do this or to elevate your thread.`,
+          ),
+        );
+      }
+      if (caller.envMode === "worktree" && definition.worktreeMode !== "worktree") {
+        return yield* Effect.fail(
+          new ToolInputError(
+            `Automation "${definition.id}" can run on the shared local checkout but your thread is isolated in a worktree; you cannot change it. Ask the user to do this from a local thread.`,
+          ),
+        );
+      }
+      if (definition.targetThreadId && definition.targetThreadId !== caller.id) {
+        const target = yield* requireThreadShell(definition.targetThreadId);
+        yield* assertCallerMayDriveThread(caller, target);
+      }
+    });
+
   const assertCallerMayManageAutomation = (
     caller: OrchestrationThreadShell,
     definition: AutomationDefinition,
     context: { readonly callerThreadId: string; readonly callerTurnId: string | null },
-  ) =>
+  ): Effect.Effect<"source" | "run" | "target", ToolInputError> =>
     Effect.gen(function* () {
-      if (definition.sourceThreadId === caller.id) return;
+      if (definition.sourceThreadId === caller.id) return "source" as const;
       // A standalone run executes in a per-run thread that matches neither source nor
       // target, so without this branch an automation could never retire itself.
-      const callerRun = yield* automationService
-        .resolveCallerRun({
-          callerThreadId: ThreadId.makeUnsafe(context.callerThreadId),
-          callerTurnId: context.callerTurnId ? TurnId.makeUnsafe(context.callerTurnId) : null,
-        })
-        .pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
-      if (Option.isSome(callerRun) && callerRun.value.automationId === definition.id) return;
+      if (yield* callerRunsAutomation(definition, context)) return "run" as const;
       if (definition.targetThreadId) {
         const target = yield* requireThreadShell(definition.targetThreadId);
         yield* assertCallerMayDriveThread(caller, target);
-        return;
+        return "target" as const;
       }
       return yield* Effect.fail(
         new ToolInputError(
@@ -732,7 +768,10 @@ export function makeAgentGatewayAutomationTools(
         const automationId = readStringArg(args, "automationId", { required: true })!;
         const caller = yield* requireThreadShell(context.callerThreadId);
         const { definition } = yield* requireAutomationDefinition(automationId);
-        yield* assertCallerMayManageAutomation(caller, definition, context);
+        const access = yield* assertCallerMayManageAutomation(caller, definition, context);
+        if (access !== "run") {
+          yield* assertCallerPrivilegesCoverAutomation(caller, definition);
+        }
         if (definition.proposalState === "pending") {
           throw new ToolInputError(
             "Pending proposals must be accepted or dismissed by the user before they can be updated.",
@@ -883,10 +922,18 @@ export function makeAgentGatewayAutomationTools(
     handler: (args, context) =>
       Effect.gen(function* () {
         const automationIdArg = readStringArg(args, "automationId");
+        const content = readMemoryContent(args);
+        if (automationIdArg !== undefined) {
+          const caller = yield* requireThreadShell(context.callerThreadId);
+          const { definition } = yield* requireAutomationDefinition(automationIdArg);
+          if (!(yield* callerRunsAutomation(definition, context))) {
+            yield* assertCallerPrivilegesCoverAutomation(caller, definition);
+          }
+        }
         const memory = yield* automationService
           .updateMemory({
             automationId: automationIdArg ? AutomationId.makeUnsafe(automationIdArg) : null,
-            content: readMemoryContent(args),
+            content,
             callerThreadId: ThreadId.makeUnsafe(context.callerThreadId),
             callerTurnId: context.callerTurnId ? TurnId.makeUnsafe(context.callerTurnId) : null,
           })

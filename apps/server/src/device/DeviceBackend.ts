@@ -79,6 +79,10 @@ export interface DeviceKeyEvent {
   readonly direction: "down" | "up";
 }
 
+export interface DeviceCallOptions {
+  readonly signal?: AbortSignal | undefined;
+}
+
 export interface DeviceBackend {
   readonly platform: DevicePlatform;
 
@@ -98,19 +102,28 @@ export interface DeviceBackend {
   boot(udid: string): Promise<DeviceDescriptor>;
   shutdown(udid: string): Promise<void>;
 
-  install(udid: string, appPath: string): Promise<DeviceInstallAppResult>;
+  install(
+    udid: string,
+    appPath: string,
+    options?: DeviceCallOptions,
+  ): Promise<DeviceInstallAppResult>;
   launch(
     udid: string,
     bundleId: string,
     launchArguments?: readonly string[],
+    options?: DeviceCallOptions,
   ): Promise<DeviceLaunchAppResult>;
-  openUrl(udid: string, url: string): Promise<void>;
+  openUrl(udid: string, url: string, options?: DeviceCallOptions): Promise<void>;
 
-  tap(udid: string, x: number, y: number): Promise<void>;
-  swipe(udid: string, gesture: DeviceSwipeGesture): Promise<void>;
-  typeText(udid: string, text: string): Promise<void>;
-  keyEvent(udid: string, event: DeviceKeyEvent): Promise<void>;
-  pressButton(udid: string, button: DeviceHardwareButton): Promise<void>;
+  tap(udid: string, x: number, y: number, options?: DeviceCallOptions): Promise<void>;
+  swipe(udid: string, gesture: DeviceSwipeGesture, options?: DeviceCallOptions): Promise<void>;
+  typeText(udid: string, text: string, options?: DeviceCallOptions): Promise<void>;
+  keyEvent(udid: string, event: DeviceKeyEvent, options?: DeviceCallOptions): Promise<void>;
+  pressButton(
+    udid: string,
+    button: DeviceHardwareButton,
+    options?: DeviceCallOptions,
+  ): Promise<void>;
 
   /** `save` writes the PNG beside recordings and reports its path. */
   screenshot(
@@ -119,7 +132,7 @@ export interface DeviceBackend {
   ): Promise<DeviceScreenshotResult>;
   startRecording(udid: string): Promise<DeviceStartRecordingResult>;
   stopRecording(udid: string): Promise<DeviceStopRecordingResult>;
-  describeUi(udid: string): Promise<DeviceDescribeUiResult>;
+  describeUi(udid: string, options?: DeviceCallOptions): Promise<DeviceDescribeUiResult>;
 
   /**
    * Begin (or join) the encoded video stream for a device. Calling twice for

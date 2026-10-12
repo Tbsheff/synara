@@ -53,6 +53,7 @@ import {
   DeviceBackendError,
   type DeviceBackend,
   type DeviceFrameListener,
+  type DeviceCallOptions,
   type DeviceKeyEvent,
   type DeviceListOptions,
   type DeviceSwipeGesture,
@@ -317,6 +318,7 @@ export class IosSimulatorBackend implements DeviceBackend {
   private readonly recordingStarts = new Map<string, Promise<DeviceStartRecordingResult>>();
   private readonly recordingStops = new Map<string, Promise<DeviceStopRecordingResult>>();
   private readonly reservedRecordingPaths = new Set<string>();
+  private helperAttachmentQueue: Promise<void> = Promise.resolve();
   private disposed = false;
 
   constructor(options: IosSimulatorBackendOptions = {}) {
@@ -505,8 +507,14 @@ export class IosSimulatorBackend implements DeviceBackend {
     }
   }
 
-  async install(udid: string, appPath: string): Promise<DeviceInstallAppResult> {
+  async install(
+    udid: string,
+    appPath: string,
+    options: DeviceCallOptions = {},
+  ): Promise<DeviceInstallAppResult> {
+    options.signal?.throwIfAborted();
     const bundleId = await this.readBundleIdentifier(appPath);
+    options.signal?.throwIfAborted();
     const result = await this.simctl(["install", udid, appPath]);
     if (result.code !== 0) throw this.simctlError("install", result);
     return { udid, bundleId };
@@ -516,7 +524,9 @@ export class IosSimulatorBackend implements DeviceBackend {
     udid: string,
     bundleId: string,
     launchArguments: readonly string[] = [],
+    options: DeviceCallOptions = {},
   ): Promise<DeviceLaunchAppResult> {
+    options.signal?.throwIfAborted();
     const result = await this.simctl(["launch", udid, bundleId, ...launchArguments]);
     if (result.code !== 0) throw this.simctlError("launch", result);
     // `simctl launch` prints `<bundleId>: <pid>`.
@@ -524,7 +534,8 @@ export class IosSimulatorBackend implements DeviceBackend {
     return { udid, bundleId, pid: match ? Number.parseInt(match[1]!, 10) : null };
   }
 
-  async openUrl(udid: string, url: string): Promise<void> {
+  async openUrl(udid: string, url: string, options: DeviceCallOptions = {}): Promise<void> {
+    options.signal?.throwIfAborted();
     const result = await this.simctl(["openurl", udid, url]);
     if (result.code !== 0) throw this.simctlError("openurl", result);
   }
@@ -682,59 +693,116 @@ export class IosSimulatorBackend implements DeviceBackend {
     udid: string,
     method: string,
     buildParams: (helper: HelperClient) => Record<string, unknown>,
+    signal: AbortSignal | undefined,
   ): Promise<void> {
     await this.assertCapability("hid");
+    signal?.throwIfAborted();
+    await this.withExclusiveHelperAttachment(() =>
+      this.injectInputBound(udid, method, buildParams, signal),
+    );
+  }
+
+  private async injectInputBound(
+    udid: string,
+    method: string,
+    buildParams: (helper: HelperClient) => Record<string, unknown>,
+    signal: AbortSignal | undefined,
+  ): Promise<void> {
+    signal?.throwIfAborted();
     const helper = await this.attachedHelper(udid);
+    signal?.throwIfAborted();
     try {
-      await this.helperRequest(method, buildParams(helper));
+      await this.helperRequestOn(helper, method, buildParams(helper));
       return;
     } catch (error) {
       if (!isInputNotDeliveredError(error)) throw error;
     }
+    signal?.throwIfAborted();
     const rebound = await this.attachedHelper(udid, { force: true });
-    await this.helperRequest(method, buildParams(rebound));
+    signal?.throwIfAborted();
+    await this.helperRequestOn(rebound, method, buildParams(rebound));
   }
 
-  async tap(udid: string, x: number, y: number): Promise<void> {
-    await this.injectInput(udid, HELPER_METHODS.tap, (helper) => helper.normalize(x, y));
+  private withExclusiveHelperAttachment<A>(work: () => Promise<A>): Promise<A> {
+    const result = this.helperAttachmentQueue.then(work);
+    this.helperAttachmentQueue = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
   }
 
-  async swipe(udid: string, gesture: DeviceSwipeGesture): Promise<void> {
-    await this.injectInput(udid, HELPER_METHODS.swipe, (helper) => {
-      const start = helper.normalize(gesture.fromX, gesture.fromY);
-      const end = helper.normalize(gesture.toX, gesture.toY);
-      return {
-        startX: start.x,
-        startY: start.y,
-        endX: end.x,
-        endY: end.y,
-        durationMs: gesture.durationMs,
-      };
+  async tap(udid: string, x: number, y: number, options: DeviceCallOptions = {}): Promise<void> {
+    await this.injectInput(
+      udid,
+      HELPER_METHODS.tap,
+      (helper) => helper.normalize(x, y),
+      options.signal,
+    );
+  }
+
+  async swipe(
+    udid: string,
+    gesture: DeviceSwipeGesture,
+    options: DeviceCallOptions = {},
+  ): Promise<void> {
+    await this.injectInput(
+      udid,
+      HELPER_METHODS.swipe,
+      (helper) => {
+        const start = helper.normalize(gesture.fromX, gesture.fromY);
+        const end = helper.normalize(gesture.toX, gesture.toY);
+        return {
+          startX: start.x,
+          startY: start.y,
+          endX: end.x,
+          endY: end.y,
+          durationMs: gesture.durationMs,
+        };
+      },
+      options.signal,
+    );
+  }
+
+  async typeText(udid: string, text: string, options: DeviceCallOptions = {}): Promise<void> {
+    await this.injectInput(udid, HELPER_METHODS.text, () => ({ text }), options.signal);
+  }
+
+  async keyEvent(
+    udid: string,
+    event: DeviceKeyEvent,
+    options: DeviceCallOptions = {},
+  ): Promise<void> {
+    await this.assertCapability("hid");
+    const { signal } = options;
+    signal?.throwIfAborted();
+    // The helper takes one USB HID usage per call and tracks held modifiers
+    // itself, so a chord is sent as its modifier keys around the main key.
+    await this.withExclusiveHelperAttachment(async () => {
+      for (const modifier of event.modifiers) {
+        const usage = HID_MODIFIER_USAGES[modifier];
+        if (usage === undefined) continue;
+        await this.injectInputBound(
+          udid,
+          HELPER_METHODS.key,
+          () => ({ usage, phase: event.direction }),
+          signal,
+        );
+      }
+      await this.injectInputBound(
+        udid,
+        HELPER_METHODS.key,
+        () => ({ usage: event.keyCode, phase: event.direction }),
+        signal,
+      );
     });
   }
 
-  async typeText(udid: string, text: string): Promise<void> {
-    await this.injectInput(udid, HELPER_METHODS.text, () => ({ text }));
-  }
-
-  async keyEvent(udid: string, event: DeviceKeyEvent): Promise<void> {
-    // The helper takes one USB HID usage per call and tracks held modifiers
-    // itself, so a chord is sent as its modifier keys around the main key.
-    for (const modifier of event.modifiers) {
-      const usage = HID_MODIFIER_USAGES[modifier];
-      if (usage === undefined) continue;
-      await this.injectInput(udid, HELPER_METHODS.key, () => ({
-        usage,
-        phase: event.direction,
-      }));
-    }
-    await this.injectInput(udid, HELPER_METHODS.key, () => ({
-      usage: event.keyCode,
-      phase: event.direction,
-    }));
-  }
-
-  async pressButton(udid: string, button: DeviceHardwareButton): Promise<void> {
+  async pressButton(
+    udid: string,
+    button: DeviceHardwareButton,
+    options: DeviceCallOptions = {},
+  ): Promise<void> {
     if (button === "rotate") {
       // Rotation is a Simulator.app window command, not a HID button: there is
       // no HID usage for it and no simctl equivalent. Simulator.app posts a
@@ -747,14 +815,17 @@ export class IosSimulatorBackend implements DeviceBackend {
         "Rotating a headless simulator is not supported; rotate the device from inside the app or use Simulator.app.",
       );
     }
-    await this.assertCapability("hid");
-    await this.injectInput(udid, HELPER_METHODS.button, () => ({ name: button }));
+    await this.injectInput(udid, HELPER_METHODS.button, () => ({ name: button }), options.signal);
   }
 
-  async describeUi(udid: string): Promise<DeviceDescribeUiResult> {
+  async describeUi(udid: string, options: DeviceCallOptions = {}): Promise<DeviceDescribeUiResult> {
     await this.assertCapability("accessibility");
-    await this.attachedHelper(udid);
-    const result = await this.helperRequest(HELPER_METHODS.describeUi, {});
+    options.signal?.throwIfAborted();
+    const result = await this.withExclusiveHelperAttachment(async () => {
+      options.signal?.throwIfAborted();
+      const helper = await this.attachedHelper(udid);
+      return await this.helperRequestOn(helper, HELPER_METHODS.describeUi, {});
+    });
     const tree = (result as { tree?: unknown } | null)?.tree;
     if (typeof tree !== "object" || tree === null) {
       throw new DeviceBackendError("Device helper returned no accessibility tree");
@@ -775,8 +846,10 @@ export class IosSimulatorBackend implements DeviceBackend {
     // the encoder to compress it.
     await this.assertCapability("framebuffer");
     await this.assertCapability("encoder");
-    const helper = await this.attachedHelper(udid);
-    await helper.startStream(udid, onFrame);
+    await this.withExclusiveHelperAttachment(async () => {
+      const helper = await this.attachedHelper(udid);
+      await helper.startStream(udid, onFrame);
+    });
   }
 
   async detachStream(udid: string): Promise<void> {
@@ -1176,8 +1249,11 @@ export class IosSimulatorBackend implements DeviceBackend {
 
   // ── Helper lifecycle ───────────────────────────────────────────────
 
-  private async helperRequest(method: string, params: Record<string, unknown>): Promise<unknown> {
-    const helper = await this.requireHelper();
+  private async helperRequestOn(
+    helper: HelperClient,
+    method: string,
+    params: Record<string, unknown>,
+  ): Promise<unknown> {
     try {
       return await helper.request(method, params);
     } catch (error) {

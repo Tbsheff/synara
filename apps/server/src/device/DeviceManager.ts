@@ -50,6 +50,7 @@ import {
 import {
   DeviceBackendError,
   type DeviceBackend,
+  type DeviceCallOptions,
   type DeviceKeyEvent,
   type DeviceSwipeGesture,
 } from "./DeviceBackend.ts";
@@ -540,8 +541,8 @@ export class DeviceManager {
 
   // ── Control plane ──────────────────────────────────────────────────
 
-  async tap(udid: string, x: number, y: number): Promise<void> {
-    await this.backend.tap(udid, x, y);
+  async tap(udid: string, x: number, y: number, options: DeviceCallOptions = {}): Promise<void> {
+    await this.backend.tap(udid, x, y, options);
   }
 
   /**
@@ -554,10 +555,11 @@ export class DeviceManager {
   async tapElement(
     udid: string,
     target: DeviceUiTarget,
-    options: { readonly maxScrolls?: number | undefined } = {},
+    options: { readonly maxScrolls?: number | undefined } & DeviceCallOptions = {},
   ): Promise<DeviceUiTargetMatch> {
     const match = await this.scrollToElement(udid, target, options);
-    await this.backend.tap(udid, match.point.x, match.point.y);
+    options.signal?.throwIfAborted();
+    await this.backend.tap(udid, match.point.x, match.point.y, { signal: options.signal });
     return match;
   }
 
@@ -578,10 +580,11 @@ export class DeviceManager {
   async scrollToElement(
     udid: string,
     target: DeviceUiTarget,
-    options: { readonly maxScrolls?: number | undefined } = {},
+    options: { readonly maxScrolls?: number | undefined } & DeviceCallOptions = {},
   ): Promise<DeviceUiTargetMatch> {
     const maxScrolls = options.maxScrolls ?? DEVICE_DEFAULT_MAX_SCROLLS;
-    let tree = await this.describeUi(udid);
+    const call = { signal: options.signal };
+    let tree = await this.describeUi(udid, call);
     let match = this.locate(tree.root, target);
     let previousPosition: string | null = null;
 
@@ -592,8 +595,9 @@ export class DeviceManager {
         match === null ? this.pageDownStep(tree.root) : planScrollStep(match.node, tree.root);
       if (step === null) return match as DeviceUiTargetMatch;
 
-      await this.backend.swipe(udid, step);
-      tree = await this.describeUi(udid);
+      options.signal?.throwIfAborted();
+      await this.backend.swipe(udid, step, call);
+      tree = await this.describeUi(udid, call);
       match = this.locate(tree.root, target);
 
       // A list at its end keeps rendering the same thing; swiping again would
@@ -653,36 +657,53 @@ export class DeviceManager {
     return visibleLabels(root).join("|");
   }
 
-  async swipe(udid: string, gesture: DeviceSwipeGesture): Promise<void> {
-    await this.backend.swipe(udid, gesture);
+  async swipe(
+    udid: string,
+    gesture: DeviceSwipeGesture,
+    options: DeviceCallOptions = {},
+  ): Promise<void> {
+    await this.backend.swipe(udid, gesture, options);
   }
 
-  async typeText(udid: string, text: string): Promise<void> {
-    await this.backend.typeText(udid, text);
+  async typeText(udid: string, text: string, options: DeviceCallOptions = {}): Promise<void> {
+    await this.backend.typeText(udid, text, options);
   }
 
-  async keyEvent(udid: string, event: DeviceKeyEvent): Promise<void> {
-    await this.backend.keyEvent(udid, event);
+  async keyEvent(
+    udid: string,
+    event: DeviceKeyEvent,
+    options: DeviceCallOptions = {},
+  ): Promise<void> {
+    await this.backend.keyEvent(udid, event, options);
   }
 
-  async pressButton(udid: string, button: DeviceHardwareButton): Promise<void> {
-    await this.backend.pressButton(udid, button);
+  async pressButton(
+    udid: string,
+    button: DeviceHardwareButton,
+    options: DeviceCallOptions = {},
+  ): Promise<void> {
+    await this.backend.pressButton(udid, button, options);
   }
 
-  async install(udid: string, appPath: string): Promise<DeviceInstallAppResult> {
-    return await this.backend.install(udid, appPath);
+  async install(
+    udid: string,
+    appPath: string,
+    options: DeviceCallOptions = {},
+  ): Promise<DeviceInstallAppResult> {
+    return await this.backend.install(udid, appPath, options);
   }
 
   async launch(
     udid: string,
     bundleId: string,
     launchArguments?: readonly string[],
+    options: DeviceCallOptions = {},
   ): Promise<DeviceLaunchAppResult> {
-    return await this.backend.launch(udid, bundleId, launchArguments);
+    return await this.backend.launch(udid, bundleId, launchArguments, options);
   }
 
-  async openUrl(udid: string, url: string): Promise<void> {
-    await this.backend.openUrl(udid, url);
+  async openUrl(udid: string, url: string, options: DeviceCallOptions = {}): Promise<void> {
+    await this.backend.openUrl(udid, url, options);
   }
 
   async screenshot(
@@ -709,8 +730,8 @@ export class DeviceManager {
     return result;
   }
 
-  async describeUi(udid: string): Promise<DeviceDescribeUiResult> {
-    return await this.backend.describeUi(udid);
+  async describeUi(udid: string, options: DeviceCallOptions = {}): Promise<DeviceDescribeUiResult> {
+    return await this.backend.describeUi(udid, options);
   }
 
   // ── Agent integration ──────────────────────────────────────────────

@@ -1367,10 +1367,7 @@ export const makeAgentGateway = Effect.gen(function* () {
       return true;
     }
     const taskConsent = name !== "computer_read_clipboard" && context.callerTurnId !== null;
-    const requestApproval = taskConsent
-      ? computerApprovalGate.requestTask.bind(computerApprovalGate)
-      : computerApprovalGate.request.bind(computerApprovalGate);
-    const approved = await requestApproval({
+    const approvalInput = {
       threadId: context.callerThreadId,
       turnId: context.callerTurnId ?? "",
       signal,
@@ -1380,7 +1377,10 @@ export const makeAgentGateway = Effect.gen(function* () {
         context,
         taskConsent ? (deviceTool ? "device-task" : "computer-task") : undefined,
       ),
-    });
+    };
+    const approved = taskConsent
+      ? await computerApprovalGate.requestTask(approvalInput, deviceTool ? "device" : "computer")
+      : await computerApprovalGate.request(approvalInput);
     if (approved && !deviceTool) {
       await Effect.runPromise(
         surfaceComputerControlDisclosure(context.callerThreadId, context.callerTurnId),
