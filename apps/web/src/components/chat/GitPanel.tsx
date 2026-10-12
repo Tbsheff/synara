@@ -4,19 +4,19 @@
 // Depends on: gitReactQuery (diff queries + stage/unstage mutations), diffRendering (patch parsing),
 //             @pierre/diffs FileDiff for the per-file viewer.
 //
-// The pane derives its cwd like DockTerminalPane (thread worktree or project cwd) and reads the
 // staged/unstaged patches, parsing them into file lists. Stage/unstage are index mutations routed
 // through GitCore; on settle we invalidate the per-cwd git caches so both lists stay in sync.
 
 import { type FileDiffMetadata } from "@pierre/diffs/react";
-import { type ProjectId, type ThreadId } from "@synara/contracts";
+import { type ProjectId, type ThreadEnvironmentMode, type ThreadId } from "@synara/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { useTheme } from "~/hooks/useTheme";
 import {
   buildFileDiffRenderKey,
   getRenderablePatch,
+  resolveFileDiffActionPaths,
   resolveFileDiffPath,
   sortFileDiffsByPath,
   splitRepoRelativePath,
@@ -24,14 +24,26 @@ import {
 } from "~/lib/diffRendering";
 import {
   gitQueryKeys,
+  gitDiscardFileMutationOptions,
   gitStageFilesMutationOptions,
   gitUnstageFilesMutationOptions,
   gitWorkingTreeDiffQueryOptions,
 } from "~/lib/gitReactQuery";
 import { PlusIcon, RefreshCwIcon, ResetIcon } from "~/lib/icons";
+import { resolveDiffEnvironmentState } from "~/lib/threadEnvironment";
 import { cn } from "~/lib/utils";
 import { useStore } from "~/store";
 import { createProjectSelector, createThreadWorkspaceMetadataSelector } from "~/storeSelectors";
+import {
+  AlertDialog,
+  AlertDialogPopup,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogClose,
+} from "../ui/alert-dialog";
+import { toastManager } from "../ui/toast";
 import { Alert } from "../ui/alert";
 import { Button } from "../ui/button";
 import { IconButton } from "../ui/icon-button";
@@ -61,7 +73,7 @@ function parsePatchToSortedFiles(
   return renderable?.kind === "files" ? sortFileDiffsByPath(renderable.files) : [];
 }
 
-function GitFileRow(props: {
+export function GitFileRow(props: {
   fileDiff: FileDiffMetadata;
   theme: "light" | "dark";
   isSelected: boolean;
@@ -101,11 +113,11 @@ function GitFileRow(props: {
       <IconButton
         size="icon-xs"
         variant="ghost"
-        className="shrink-0 opacity-0 group-hover:opacity-100 data-[disabled]:opacity-40"
+        className="shrink-0 opacity-0 group-focus-within:opacity-100 group-hover:opacity-100 focus-visible:opacity-100 data-[disabled]:opacity-40"
         label={props.actionLabel}
         tooltip={props.actionLabel}
         disabled={props.actionDisabled}
-        onClick={() => props.onAction([filePath])}
+        onClick={() => props.onAction(resolveFileDiffActionPaths([props.fileDiff]))}
       >
         {props.actionIcon === "stage" ? (
           <PlusIcon className="size-3.5" />
@@ -132,7 +144,7 @@ function GitFileSection(props: {
   onAction: (paths: string[]) => void;
 }) {
   const stat = summarizeFileDiffStats(props.files);
-  const allPaths = props.files.map((file) => resolveFileDiffPath(file));
+  const allPaths = resolveFileDiffActionPaths(props.files);
   return (
     <section className="min-w-0">
       <header className="flex items-center gap-2 px-1.5 py-1">
@@ -191,6 +203,15 @@ function SelectedFileDiff(props: { fileDiff: FileDiffMetadata; theme: "light" | 
   );
 }
 
+export function resolveGitPanelWorkspace(input: {
+  projectCwd: string | null;
+  envMode: ThreadEnvironmentMode | undefined;
+  worktreePath: string | null;
+}): { pending: boolean; cwd: string | null } {
+  const { pending, cwd } = resolveDiffEnvironmentState(input);
+  return { pending, cwd };
+}
+
 export function GitPanel(props: {
   hostThreadId: ThreadId;
   projectId: ProjectId | null;
@@ -199,16 +220,21 @@ export function GitPanel(props: {
   const queryClient = useQueryClient();
   const { resolvedTheme } = useTheme();
   const theme = resolvedTheme as "light" | "dark";
-  // Shell-only, like DockTerminalPane: only `worktreePath` is read here, and the
-  // full thread selector would re-render the pane on every streamed token.
   const threadWorkspace = useStore(
     useMemo(() => createThreadWorkspaceMetadataSelector(props.hostThreadId), [props.hostThreadId]),
   );
   const project = useStore(
     useMemo(() => createProjectSelector(props.projectId), [props.projectId]),
   );
-  const cwd = threadWorkspace.worktreePath ?? project?.cwd ?? null;
+  const { pending: worktreePending, cwd } = resolveGitPanelWorkspace({
+    projectCwd: project?.cwd ?? null,
+    envMode: threadWorkspace.envMode,
+    worktreePath: threadWorkspace.worktreePath,
+  });
 
+  const [discardTarget, setDiscardTarget] = useState<{ cwd: string; filePath: string } | null>(
+    null,
+  );
   const [selected, setSelected] = useState<SelectedFile | null>(null);
 
   // No fixed polling: turn-driven file changes already push-invalidate the
@@ -230,7 +256,18 @@ export function GitPanel(props: {
 
   const stageMutation = useMutation(gitStageFilesMutationOptions({ cwd, queryClient }));
   const unstageMutation = useMutation(gitUnstageFilesMutationOptions({ cwd, queryClient }));
-  const mutating = stageMutation.isPending || unstageMutation.isPending;
+  useEffect(() => setDiscardTarget(null), [cwd]);
+  const discardMutation = useMutation(gitDiscardFileMutationOptions({ cwd, queryClient }));
+  const discardQuery = useQuery(
+    gitWorkingTreeDiffQueryOptions({
+      cwd: discardTarget?.cwd ?? null,
+      filePath: discardTarget?.filePath,
+      enabled: discardTarget !== null && discardTarget.cwd === cwd,
+    }),
+  );
+  const discardPreview = getRenderablePatch(discardQuery.data?.patch, "git-discard");
+  const mutating =
+    stageMutation.isPending || unstageMutation.isPending || discardMutation.isPending;
 
   const stage = (paths: string[]) => {
     if (!cwd || paths.length === 0) return;
@@ -287,6 +324,13 @@ export function GitPanel(props: {
         : null;
   const hasChanges = stagedFiles.length > 0 || unstagedFiles.length > 0;
 
+  if (worktreePending) {
+    return (
+      <PanelStateMessage>
+        Source control will be available once the worktree is ready for this chat.
+      </PanelStateMessage>
+    );
+  }
   if (!cwd) {
     return <PanelStateMessage>Source control is unavailable for this thread.</PanelStateMessage>;
   }
@@ -365,6 +409,93 @@ export function GitPanel(props: {
         ) : null}
       </div>
 
+      {selectedFileDiff ? (
+        <div className="flex justify-end border-t border-border/70 px-2 py-1">
+          <Button
+            size="xs"
+            variant="ghost"
+            disabled={mutating}
+            onClick={() =>
+              setDiscardTarget({ cwd, filePath: resolveFileDiffPath(selectedFileDiff) })
+            }
+          >
+            Discard file changes…
+          </Button>
+        </div>
+      ) : null}
+      <AlertDialog
+        open={discardTarget !== null && discardTarget.cwd === cwd}
+        onOpenChange={(open) => {
+          if (!open && !discardMutation.isPending) setDiscardTarget(null);
+        }}
+      >
+        <AlertDialogPopup>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Discard file changes?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Discard all staged and unstaged edits to {discardTarget?.filePath}. Synara saves a
+              recovery checkpoint first.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="max-h-64 overflow-auto px-4">
+            {discardQuery.error ? (
+              <Alert variant="error">{discardQuery.error.message}</Alert>
+            ) : null}
+            {discardMutation.error ? (
+              <Alert variant="error">{discardMutation.error.message}</Alert>
+            ) : null}
+            {discardPreview?.kind === "files" ? (
+              discardPreview.files.map((file) => (
+                <SelectedFileDiff
+                  key={buildFileDiffRenderKey(file)}
+                  fileDiff={file}
+                  theme={theme}
+                />
+              ))
+            ) : (
+              <pre className="whitespace-pre-wrap text-ui-sm">
+                {discardQuery.data?.patch ?? "Loading changes…"}
+              </pre>
+            )}
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogClose
+              render={<Button variant="outline" disabled={discardMutation.isPending} />}
+            >
+              Cancel
+            </AlertDialogClose>
+            <Button
+              variant="destructive"
+              disabled={
+                discardMutation.isPending ||
+                discardQuery.isFetching ||
+                !discardQuery.data ||
+                discardQuery.data.truncated ||
+                !!discardQuery.error
+              }
+              onClick={() => {
+                if (!discardTarget || discardTarget.cwd !== cwd || !discardQuery.data) return;
+                void discardMutation
+                  .mutateAsync({
+                    filePath: discardTarget.filePath,
+                    expectedPatch: discardQuery.data.patch,
+                  })
+                  .then((result) => {
+                    setDiscardTarget(null);
+                    toastManager.add({
+                      type: "success",
+                      title: "File changes discarded",
+                      description: `Recovery checkpoint: ${result.recoveryRef}`,
+                    });
+                  })
+                  .catch(() => undefined);
+              }}
+            >
+              Discard changes
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogPopup>
+      </AlertDialog>
       <div className="diff-panel-viewport min-h-0 min-w-0 flex-1 overflow-hidden border-t border-border/70">
         {selectedFileDiff ? (
           <SelectedFileDiff

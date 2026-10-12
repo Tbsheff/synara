@@ -28,6 +28,7 @@ import type {
   GitPullResult,
   GitRemoveIndexLockInput,
   GitRemoveWorktreeInput,
+  GitRunStackedActionInput,
   GitStashAndCheckoutInput,
   GitStashDropInput,
   GitStashInfoInput,
@@ -298,6 +299,7 @@ export interface GitCoreShape {
   readonly prepareCommitContext: (
     cwd: string,
     filePaths?: readonly string[],
+    commitScope?: GitRunStackedActionInput["commitScope"],
   ) => Effect.Effect<GitPreparedCommitContext | null, GitCommandError>;
 
   /**
@@ -495,6 +497,12 @@ export interface GitCoreShape {
   /**
    * Stage the provided paths into the index (`git add`).
    */
+  readonly discardFile: (
+    cwd: string,
+    filePath: string,
+    expectedPatch: string,
+  ) => Effect.Effect<{ recoveryRef: string }, GitCommandError>;
+
   readonly stageFiles: (
     cwd: string,
     paths: readonly string[],

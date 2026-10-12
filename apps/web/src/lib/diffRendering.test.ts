@@ -13,6 +13,7 @@ import {
   resolveDiffCopyText,
   PARTIAL_DIFF_COPY_NOTICE,
   resolveFileDiffStatByChangedPath,
+  resolveFileDiffActionPaths,
   resolveFileDiffPath,
   resolveFileDiffPrevPath,
   sortFileDiffsByPath,
@@ -176,6 +177,64 @@ describe("resolveFileDiffPrevPath", () => {
       ].join("\n"),
     );
     expect(resolveFileDiffPrevPath(changed)).toBeNull();
+  });
+
+  it("keeps real top-level a/ and b/ directories in parsed paths", () => {
+    const edited = parseSingleFile(
+      [
+        "diff --git a/a/x.ts b/a/x.ts",
+        "index 1111111..2222222 100644",
+        "--- a/a/x.ts",
+        "+++ b/a/x.ts",
+        "@@ -1,1 +1,1 @@",
+        "-const x = 1;",
+        "+const x = 2;",
+        "",
+      ].join("\n"),
+    );
+    expect(resolveFileDiffPath(edited)).toBe("a/x.ts");
+
+    const renamed = parseSingleFile(
+      [
+        "diff --git a/a/old.ts b/b/new.ts",
+        "similarity index 100%",
+        "rename from a/old.ts",
+        "rename to b/new.ts",
+        "",
+      ].join("\n"),
+    );
+    expect(resolveFileDiffPath(renamed)).toBe("b/new.ts");
+    expect(resolveFileDiffPrevPath(renamed)).toBe("a/old.ts");
+  });
+});
+
+describe("resolveFileDiffActionPaths", () => {
+  it("includes the rename source so staging a rename does not leave the deletion behind", () => {
+    const renderable = getRenderablePatch(
+      [
+        "diff --git a/src/old.ts b/src/new.ts",
+        "similarity index 100%",
+        "rename from src/old.ts",
+        "rename to src/new.ts",
+        "diff --git a/src/one.ts b/src/one.ts",
+        "index 1111111..2222222 100644",
+        "--- a/src/one.ts",
+        "+++ b/src/one.ts",
+        "@@ -1,1 +1,1 @@",
+        "-const one = 1;",
+        "+const one = 2;",
+        "",
+      ].join("\n"),
+      "action-paths:test",
+    );
+    if (renderable?.kind !== "files") throw new Error("expected parsed files");
+    const files = renderable.files;
+    expect(resolveFileDiffActionPaths(files)).toEqual(["src/new.ts", "src/old.ts", "src/one.ts"]);
+    expect(resolveFileDiffActionPaths([...files, ...files])).toEqual([
+      "src/new.ts",
+      "src/old.ts",
+      "src/one.ts",
+    ]);
   });
 });
 

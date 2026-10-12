@@ -62,6 +62,7 @@ import { useComposerDraftStore } from "../composerDraftStore";
 import type { DiffRenderMode } from "./chat/chatHeaderControls";
 import {
   areAllRenderableFilesCollapsed,
+  shouldFallBackToBranchScope,
   DIFF_PANEL_PICKER_SCOPE_OPTIONS,
   isDiffPanelRepoScopeOption,
   isStaleDiffTurnSelection,
@@ -778,16 +779,27 @@ export default function DiffPanel({
         : null;
   const branchHasCommittedChanges = (gitStatusQuery.data?.aheadCount ?? 0) > 0;
 
+  const initialScopeSettledRef = useRef(false);
   useEffect(() => {
+    if (!diffOpen) {
+      initialScopeSettledRef.current = false;
+      return;
+    }
     if (
-      diffOpen &&
-      diffViewKind === "repo" &&
-      repoDiffScope === "workingTree" &&
-      hasResolvedRepoPatch &&
-      hasNoRepoChanges &&
-      branchHasCommittedChanges
+      shouldFallBackToBranchScope({
+        diffOpen,
+        diffViewKind,
+        repoDiffScope,
+        hasResolvedRepoPatch,
+        hasNoRepoChanges,
+        branchHasCommittedChanges,
+        initialScopeSettled: initialScopeSettledRef.current,
+      })
     ) {
       setRepoDiffScope("branch");
+    }
+    if (diffViewKind === "repo" && hasResolvedRepoPatch) {
+      initialScopeSettledRef.current = true;
     }
   }, [
     branchHasCommittedChanges,
@@ -1214,6 +1226,7 @@ export default function DiffPanel({
   );
   const selectRepoScope = useCallback(
     (scope: DiffPanelRepoScopeOption) => {
+      initialScopeSettledRef.current = true;
       setDiffViewKind("repo");
       setRepoDiffScope(scope);
       if (selectedTurnId !== null) {
@@ -1228,6 +1241,7 @@ export default function DiffPanel({
       if (trimmed.length === 0 || !activeCwd) {
         return;
       }
+      initialScopeSettledRef.current = true;
       setDiffViewKind("repo");
       setRepoDiffCompareRef(activeCwd, trimmed);
       setRepoDiffScope("ref");

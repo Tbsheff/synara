@@ -327,20 +327,11 @@ export function getRenderablePatch(
   }
 }
 
-// Resolve the working-tree-relative path for a parsed file diff, stripping the
-// conventional `a/` / `b/` patch prefixes so callers can match git status paths.
 export function resolveFileDiffPath(fileDiff: FileDiffMetadata): string {
-  const raw = fileDiff.name ?? fileDiff.prevName ?? "";
-  if (raw.startsWith("a/") || raw.startsWith("b/")) {
-    return raw.slice(2);
-  }
-  return raw;
+  return fileDiff.name ?? fileDiff.prevName ?? "";
 }
 
 // Resolve the pre-change path for a parsed file diff (the old side of a
-// rename/move), stripping the conventional `a/` patch prefix. Returns null for
-// files that were not renamed or moved: the parser also fills `prevName` for
-// added files, where it is `/dev/null` or a copy of the new name.
 export function resolveFileDiffPrevPath(fileDiff: FileDiffMetadata): string | null {
   if (
     fileDiff.prevName === undefined ||
@@ -348,11 +339,17 @@ export function resolveFileDiffPrevPath(fileDiff: FileDiffMetadata): string | nu
   ) {
     return null;
   }
-  const raw = fileDiff.prevName;
-  if (raw.startsWith("a/") || raw.startsWith("b/")) {
-    return raw.slice(2);
+  return fileDiff.prevName;
+}
+
+export function resolveFileDiffActionPaths(fileDiffs: readonly FileDiffMetadata[]): string[] {
+  const paths = new Set<string>();
+  for (const fileDiff of fileDiffs) {
+    paths.add(resolveFileDiffPath(fileDiff));
+    const prevPath = resolveFileDiffPrevPath(fileDiff);
+    if (prevPath) paths.add(prevPath);
   }
-  return raw;
+  return [...paths];
 }
 
 // Symlinks (120000) show their target path but the workspace read/write path

@@ -227,3 +227,128 @@ it("owns failure details per action when the retained control changes workspace"
     useStore.setState({ threadShellById: previousShell });
   }
 });
+
+it("carries the commit dialog selection into Create PR", async () => {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const api = {
+    git: {
+      status: vi.fn(async () => ({
+        ...status,
+        workingTree: {
+          files: [
+            { path: "README.md", insertions: 1, deletions: 0 },
+            { path: "src/b.ts", insertions: 2, deletions: 0 },
+          ],
+          insertions: 3,
+          deletions: 0,
+        },
+      })),
+      listBranches: vi.fn(async () => branches),
+      onActionProgress: () => () => {},
+      runStackedAction: vi.fn(async () => {
+        throw new Error("GitHub CLI failed");
+      }),
+    },
+  };
+  const previousApi = window.nativeApi;
+  Object.defineProperty(window, "nativeApi", { configurable: true, value: api });
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  try {
+    flushSync(() =>
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <ToastProvider>
+            <GitActionsControl gitCwd="/repo/pr-carry" activeThreadId={null} />
+          </ToastProvider>
+        </QueryClientProvider>,
+      ),
+    );
+    await vi.waitFor(() => expect(api.git.listBranches).toHaveBeenCalled());
+    await page.getByRole("button", { name: "Git action options", exact: true }).click();
+    await page.getByRole("menuitem", { name: "Commit", exact: true }).click();
+    await page.getByRole("textbox", { name: "Commit message" }).fill("Keep this message");
+    await page.getByRole("dialog").getByRole("button", { name: "Edit", exact: true }).click();
+    await page.getByRole("dialog").getByRole("checkbox").nth(2).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Create PR", exact: true }).click();
+    await page.getByRole("textbox", { name: "Pull request title" }).fill("My PR");
+    await page
+      .getByRole("dialog")
+      .getByRole("button", { name: /^Create PR/ })
+      .click();
+    await vi.waitFor(() => expect(api.git.runStackedAction).toHaveBeenCalledTimes(1));
+    expect(api.git.runStackedAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "commit_push_pr",
+        commitMessage: "Keep this message",
+        filePaths: ["README.md"],
+        prTitle: "My PR",
+      }),
+    );
+  } finally {
+    flushSync(() => root.unmount());
+    host.remove();
+    await queryClient.cancelQueries();
+    queryClient.clear();
+    Object.defineProperty(window, "nativeApi", { configurable: true, value: previousApi });
+  }
+});
+
+it("reopens Create PR with the typed title and description after a failure", async () => {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const api = {
+    git: {
+      status: vi.fn(async () => status),
+      listBranches: vi.fn(async () => branches),
+      onActionProgress: () => () => {},
+      runStackedAction: vi.fn(async () => {
+        throw new Error("GitHub CLI failed");
+      }),
+    },
+  };
+  const previousApi = window.nativeApi;
+  Object.defineProperty(window, "nativeApi", { configurable: true, value: api });
+  const host = document.createElement("div");
+  document.body.append(host);
+  const root = createRoot(host);
+  try {
+    flushSync(() =>
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <ToastProvider>
+            <GitActionsControl gitCwd="/repo/pr-draft" activeThreadId={null} />
+          </ToastProvider>
+        </QueryClientProvider>,
+      ),
+    );
+    await vi.waitFor(() => expect(api.git.listBranches).toHaveBeenCalled());
+    await page.getByRole("button", { name: "Git action options", exact: true }).click();
+    await page.getByRole("menuitem", { name: "Create PR", exact: true }).click();
+    await page.getByRole("textbox", { name: "Pull request title" }).fill("My PR");
+    await page.getByRole("textbox", { name: "Pull request description" }).fill("Why it matters");
+    await page
+      .getByRole("dialog")
+      .getByRole("button", { name: /^Create PR/ })
+      .click();
+    await vi.waitFor(() => {
+      const descriptions = Array.from(document.querySelectorAll('[data-slot="toast-description"]'));
+      expect(descriptions.some((element) => element.textContent === "GitHub CLI failed")).toBe(
+        true,
+      );
+    });
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const title = document.querySelector<HTMLInputElement>('[aria-label="Pull request title"]');
+    const description = document.querySelector<HTMLTextAreaElement>(
+      '[aria-label="Pull request description"]',
+    );
+    expect(title?.value).toBe("My PR");
+    expect(description?.value).toBe("Why it matters");
+  } finally {
+    flushSync(() => root.unmount());
+    host.remove();
+    await queryClient.cancelQueries();
+    queryClient.clear();
+    Object.defineProperty(window, "nativeApi", { configurable: true, value: previousApi });
+  }
+});

@@ -36,7 +36,7 @@ import {
   type ProjectDigestGenerationResult,
 } from "../Services/TextGeneration.ts";
 import { GitCoreLive } from "./GitCore.ts";
-import { GitCore } from "../Services/GitCore.ts";
+import { GitCore, type GitCoreShape } from "../Services/GitCore.ts";
 import { createGitHubCliWithFakeGh, type FakeGhScenario } from "../testing/fakeGitHubCli.ts";
 import { makeGitManager } from "./GitManager.ts";
 import { ServerConfig } from "../../config.ts";
@@ -333,6 +333,7 @@ function runStackedAction(
     commitMessage?: string;
     featureBranch?: boolean;
     filePaths?: readonly string[];
+    commitScope?: "staged" | "all";
     prTitle?: string;
     prBody?: string;
     prDraft?: boolean;
@@ -342,6 +343,7 @@ function runStackedAction(
 ) {
   return manager.runStackedAction(
     {
+      commitScope: "all",
       ...input,
       actionId: input.actionId ?? "test-action-id",
     },
@@ -382,6 +384,7 @@ function makeManager(input?: {
   ghScenario?: FakeGhScenario;
   github?: GitHubCliShape;
   textGeneration?: Partial<FakeGitTextGeneration>;
+  wrapGitCore?: (core: GitCoreShape) => GitCoreShape;
 }) {
   const { service: gitHubCli, ghCalls } = createGitHubCliWithFakeGh(input?.ghScenario);
   const textGeneration = createTextGeneration(input?.textGeneration);
@@ -389,10 +392,23 @@ function makeManager(input?: {
     prefix: "synara-git-manager-test-",
   });
 
-  const gitCoreLayer = GitCoreLive.pipe(
+  const liveGitCoreLayer = GitCoreLive.pipe(
     Layer.provideMerge(NodeServices.layer),
     Layer.provideMerge(ServerConfigLayer),
   );
+  const wrapGitCore = input?.wrapGitCore;
+  const gitCoreLayer = wrapGitCore
+    ? Layer.mergeAll(
+        Layer.effect(
+          GitCore,
+          Effect.gen(function* () {
+            return wrapGitCore(yield* GitCore);
+          }),
+        ).pipe(Layer.provide(liveGitCoreLayer)),
+        NodeServices.layer,
+        ServerConfigLayer,
+      )
+    : liveGitCoreLayer;
 
   const managerLayer = Layer.mergeAll(
     Layer.succeed(GitHubCli, input?.github ?? gitHubCli),
@@ -2779,6 +2795,152 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
     }),
   );
 
+  it.effect("commits only the staged index when changes are staged and no files are selected", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("synara-git-commit-scope-");
+      yield* initRepo(repoDir);
+      fs.writeFileSync(path.join(repoDir, "staged.txt"), "staged\n");
+      fs.writeFileSync(path.join(repoDir, "unstaged.txt"), "unstaged\n");
+      yield* runGit(repoDir, ["add", "staged.txt"]);
+      const { manager } = yield* makeManager();
+
+      const result = yield* runStackedAction(manager, {
+        cwd: repoDir,
+        action: "commit",
+        commitScope: undefined,
+        commitMessage: "Commit staged work",
+      });
+
+      expect(result.commit.status).toBe("created");
+      expect(
+        (yield* runGit(repoDir, ["show", "--name-only", "--format=", "HEAD"])).stdout.trim(),
+      ).toBe("staged.txt");
+      expect((yield* runGit(repoDir, ["status", "--porcelain"])).stdout.trim()).toBe(
+        "?? unstaged.txt",
+      );
+    }),
+  );
+
+  it.effect("fails a staged-only commit when nothing is staged", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("synara-git-commit-scope-");
+      yield* initRepo(repoDir);
+      fs.writeFileSync(path.join(repoDir, "unstaged.txt"), "unstaged\n");
+      const { manager } = yield* makeManager();
+      const headBefore = (yield* runGit(repoDir, ["rev-parse", "HEAD"])).stdout.trim();
+
+      const error = yield* runStackedAction(manager, {
+        cwd: repoDir,
+        action: "commit",
+        commitMessage: "Commit staged work",
+        commitScope: "staged",
+      }).pipe(Effect.flip);
+
+      expect(error.message).toContain("There are no staged changes to commit.");
+      expect((yield* runGit(repoDir, ["rev-parse", "HEAD"])).stdout.trim()).toBe(headBefore);
+      expect((yield* runGit(repoDir, ["status", "--porcelain"])).stdout.trim()).toBe(
+        "?? unstaged.txt",
+      );
+    }),
+  );
+
+  it.effect("completes a worktree handoff when reading the new worktree state fails", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("synara-git-manager-");
+      yield* initRepo(repoDir);
+      fs.writeFileSync(path.join(repoDir, "uncommitted.txt"), "draft change\n");
+      const { manager } = yield* makeManager({
+        wrapGitCore: (core) => ({
+          ...core,
+          statusDetails: (cwd) =>
+            cwd === repoDir
+              ? core.statusDetails(cwd)
+              : Effect.fail(
+                  new GitCommandError({
+                    operation: "GitCore.statusDetails",
+                    command: "git status",
+                    cwd,
+                    detail: "status unavailable",
+                  }),
+                ),
+        }),
+      });
+
+      const result = yield* handoffThread(manager, {
+        cwd: repoDir,
+        targetMode: "worktree",
+        currentBranch: "main",
+        worktreePath: null,
+        associatedWorktreePath: null,
+        associatedWorktreeBranch: null,
+        associatedWorktreeRef: null,
+        preferredLocalBranch: "main",
+        preferredWorktreeBaseBranch: "main",
+        preferredNewWorktreeName: "worktree/status-failure",
+      });
+
+      expect(result.targetMode).toBe("worktree");
+      expect(result.changesTransferred).toBe(true);
+      expect(result.branch).toBe("worktree/status-failure");
+      expect(
+        fs.readFileSync(path.join(result.worktreePath as string, "uncommitted.txt"), "utf8"),
+      ).toBe("draft change\n");
+      expect((yield* runGit(repoDir, ["stash", "list"])).stdout.trim()).toBe("");
+    }),
+  );
+
+  it.effect("keeps the handoff stash until the applied result is persisted", () =>
+    Effect.gen(function* () {
+      const handoffInput = (repoDir: string, name: string) => ({
+        cwd: repoDir,
+        targetMode: "worktree" as const,
+        currentBranch: "main",
+        worktreePath: null,
+        associatedWorktreePath: null,
+        associatedWorktreeBranch: null,
+        associatedWorktreeRef: null,
+        preferredLocalBranch: "main",
+        preferredWorktreeBaseBranch: "main",
+        preferredNewWorktreeName: name,
+      });
+      const { manager } = yield* makeManager();
+
+      const failingRepo = yield* makeTempDir("synara-git-manager-");
+      yield* initRepo(failingRepo);
+      fs.writeFileSync(path.join(failingRepo, "uncommitted.txt"), "draft change\n");
+      const persistedOnFailure: string[] = [];
+      const failedPersist = yield* manager.handoffThread(
+        handoffInput(failingRepo, "worktree/persist-failure"),
+        {
+          onApplied: (result) => {
+            persistedOnFailure.push(result.worktreePath ?? "");
+            return Effect.fail(new Error("database unavailable"));
+          },
+        },
+      );
+      expect(failedPersist.changesTransferred).toBe(true);
+      expect(persistedOnFailure).toEqual([failedPersist.worktreePath]);
+      expect((yield* runGit(failingRepo, ["stash", "list"])).stdout.trim()).not.toBe("");
+
+      const persistingRepo = yield* makeTempDir("synara-git-manager-");
+      yield* initRepo(persistingRepo);
+      fs.writeFileSync(path.join(persistingRepo, "uncommitted.txt"), "draft change\n");
+      let stashCountWhenPersisted: number | null = null;
+      const capturedGitCore = yield* GitCore;
+      yield* manager.handoffThread(handoffInput(persistingRepo, "worktree/persist-success"), {
+        onApplied: () =>
+          runGit(persistingRepo, ["stash", "list"]).pipe(
+            Effect.provideService(GitCore, capturedGitCore),
+            Effect.map((stashes) => {
+              stashCountWhenPersisted = stashes.stdout.trim().split("\n").filter(Boolean).length;
+            }),
+          ),
+      });
+      expect(stashCountWhenPersisted).toBe(1);
+      expect((yield* runGit(persistingRepo, ["stash", "list"])).stdout.trim()).toBe("");
+    }),
+  );
+
   it.effect("creates a new handoff worktree on a named branch instead of detached HEAD", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("synara-git-manager-");
@@ -2896,6 +3058,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
           recoverable: true,
           cwd: repoDir,
           action: "commit_push" as const,
+          commitScope: "all" as const,
           commitMessage: "Survive reconnect",
         };
         const first = yield* observe(input).pipe(Stream.runDrain, Effect.forkChild);

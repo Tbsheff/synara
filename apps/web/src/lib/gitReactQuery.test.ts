@@ -1,13 +1,28 @@
 import { QueryClient, QueryObserver } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
 
-const { readWorkingTreeDiff } = vi.hoisted(() => ({
+const {
+  readWorkingTreeDiff,
+  runStackedAction,
+  preparePullRequestThread,
+  handoffThread,
+  flushWorkspaceEditors,
+} = vi.hoisted(() => ({
   readWorkingTreeDiff: vi.fn(async (input: { filePath?: string }) => ({
     patch: input.filePath ?? "all",
     truncated: false,
   })),
+  runStackedAction: vi.fn(async () => ({})),
+  preparePullRequestThread: vi.fn(async () => ({})),
+  handoffThread: vi.fn(async () => ({})),
+  flushWorkspaceEditors: vi.fn(async () => true),
 }));
-vi.mock("../nativeApi", () => ({ ensureNativeApi: () => ({ git: { readWorkingTreeDiff } }) }));
+vi.mock("../nativeApi", () => ({
+  ensureNativeApi: () => ({
+    git: { readWorkingTreeDiff, runStackedAction, preparePullRequestThread, handoffThread },
+  }),
+}));
+vi.mock("./workspaceEditorSession", () => ({ flushWorkspaceEditors }));
 import {
   gitQueryKeys,
   gitStatusQueryOptions,
@@ -17,6 +32,8 @@ import {
   isGitExpensiveReadCapacityError,
   gitMutationKeys,
   gitRunStackedActionMutationOptions,
+  gitHandoffThreadMutationOptions,
+  gitPreparePullRequestThreadMutationOptions,
   refreshGitActionAvailability,
   refreshGitQueriesForCwd,
   refreshGitWorkingTreeDiffsForCwd,
@@ -66,6 +83,58 @@ describe("git mutation options", () => {
   it("attaches cwd-scoped mutation key for runStackedAction", () => {
     const options = gitRunStackedActionMutationOptions({ cwd: "/repo/a", queryClient });
     expect(options.mutationKey).toEqual(gitMutationKeys.runStackedAction("/repo/a"));
+  });
+
+  it("does not commit while an editor in the same workspace fails to save", async () => {
+    flushWorkspaceEditors.mockResolvedValueOnce(false);
+    runStackedAction.mockClear();
+    const options = gitRunStackedActionMutationOptions({ cwd: "/repo/a", queryClient });
+    const run = options.mutationFn as (args: {
+      actionId: string;
+      action: "commit";
+    }) => Promise<unknown>;
+    await expect(run({ actionId: "action-1", action: "commit" })).rejects.toThrow(
+      /save editor changes/,
+    );
+    expect(flushWorkspaceEditors).toHaveBeenCalledWith(queryClient, "/repo/a");
+    expect(runStackedAction).not.toHaveBeenCalled();
+  });
+
+  it("does not check out a pull request branch while an editor fails to save", async () => {
+    flushWorkspaceEditors.mockResolvedValueOnce(false);
+    preparePullRequestThread.mockClear();
+    const options = gitPreparePullRequestThreadMutationOptions({ cwd: "/repo/a", queryClient });
+    const run = options.mutationFn as (args: {
+      reference: string;
+      mode: "local";
+    }) => Promise<unknown>;
+    await expect(run({ reference: "12", mode: "local" })).rejects.toThrow(/save editor changes/);
+    expect(preparePullRequestThread).not.toHaveBeenCalled();
+  });
+
+  it("does not hand off a thread while an editor fails to save", async () => {
+    flushWorkspaceEditors.mockResolvedValueOnce(false);
+    handoffThread.mockClear();
+    const options = gitHandoffThreadMutationOptions({ cwd: "/repo/a", queryClient });
+    const run = options.mutationFn as (args: Record<string, unknown>) => Promise<unknown>;
+    await expect(run({ threadId: "thread-1", target: "local" })).rejects.toThrow(
+      /save editor changes/,
+    );
+    expect(handoffThread).not.toHaveBeenCalled();
+  });
+
+  it("forwards the commit scope to the stacked action", async () => {
+    runStackedAction.mockClear();
+    const options = gitRunStackedActionMutationOptions({ cwd: "/repo/a", queryClient });
+    const run = options.mutationFn as (args: {
+      actionId: string;
+      action: "commit";
+      commitScope: "staged";
+    }) => Promise<unknown>;
+    await run({ actionId: "action-2", action: "commit", commitScope: "staged" });
+    expect(runStackedAction).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "commit", commitScope: "staged" }),
+    );
   });
 
   it("does not keep a completed stacked action pending while Git queries refresh", async () => {

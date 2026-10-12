@@ -137,6 +137,7 @@ import {
   discardPendingGitHandoff,
   gitHandoffMetadataCommand,
   recordGitHandoffResult,
+  makeGitHandoffResultRecorder,
 } from "./gitHandoffOperations";
 import { DEFAULT_RESOLVED_KEYBINDINGS, Keybindings } from "./keybindings";
 import { createLocalPreviewGrant } from "./localImageFiles";
@@ -2226,6 +2227,17 @@ const makeWsRpcHandlersLayer = () =>
             ).pipe(Effect.as({ ok: true })),
             "Failed to stage files",
           ),
+        [WS_METHODS.gitDiscardFile]: (input) =>
+          rpcEffect(
+            refreshGitStatusAfter(
+              input.cwd,
+              git.withMutation(
+                input.cwd,
+                git.discardFile(input.cwd, input.filePath, input.expectedPatch),
+              ),
+            ),
+            "Failed to discard file",
+          ),
         [WS_METHODS.gitUnstageFiles]: (input) =>
           rpcEffect(
             refreshGitStatusAfter(
@@ -2248,13 +2260,14 @@ const makeWsRpcHandlersLayer = () =>
                 });
               }
               if (operation.phase === "completed") return operation.result;
+              const onApplied = yield* makeGitHandoffResultRecorder(commandId);
 
               const result =
                 operation.phase === "git_applied"
                   ? operation.result
                   : yield* refreshGitStatusAfter(
                       input.cwd,
-                      gitManager.handoffThread(gitInput).pipe(
+                      gitManager.handoffThread(gitInput, { onApplied }).pipe(
                         Effect.catch((error) =>
                           discardPendingGitHandoff(commandId).pipe(
                             Effect.catch(() => Effect.void),
