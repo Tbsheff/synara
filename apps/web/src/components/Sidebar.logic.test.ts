@@ -1288,6 +1288,49 @@ describe("buildProjectThreadTree", () => {
     ]);
   });
 
+  it("returns when the selected thread has a self or cyclic parent link", () => {
+    const rows = buildProjectThreadTree({
+      threads: [
+        makeThread({
+          id: ThreadId.makeUnsafe("thread-root"),
+          createdAt: "2026-03-09T10:03:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.makeUnsafe("thread-self"),
+          parentThreadId: ThreadId.makeUnsafe("thread-self"),
+          createdAt: "2026-03-09T10:02:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.makeUnsafe("thread-loop-a"),
+          parentThreadId: ThreadId.makeUnsafe("thread-loop-b"),
+          createdAt: "2026-03-09T10:01:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.makeUnsafe("thread-loop-b"),
+          parentThreadId: ThreadId.makeUnsafe("thread-loop-a"),
+          createdAt: "2026-03-09T10:00:00.000Z",
+        }),
+      ],
+      forceVisibleThreadId: ThreadId.makeUnsafe("thread-self"),
+    });
+    const loopRows = buildProjectThreadTree({
+      threads: [
+        makeThread({
+          id: ThreadId.makeUnsafe("thread-loop-a"),
+          parentThreadId: ThreadId.makeUnsafe("thread-loop-b"),
+        }),
+        makeThread({
+          id: ThreadId.makeUnsafe("thread-loop-b"),
+          parentThreadId: ThreadId.makeUnsafe("thread-loop-a"),
+        }),
+      ],
+      forceVisibleThreadId: ThreadId.makeUnsafe("thread-loop-a"),
+    });
+
+    expect(rows.map((row) => row.thread.id)).toEqual([ThreadId.makeUnsafe("thread-root")]);
+    expect(loopRows).toEqual([]);
+  });
+
   it("hides subagent subtrees whose parent is not in the list", () => {
     // Regression: archiving (or deleting) a parent removes it from the sidebar
     // list; its subagent children must stay hidden instead of surfacing as

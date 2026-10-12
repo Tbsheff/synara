@@ -26,6 +26,7 @@ import {
 import { normalizeWorkspaceRootForComparison } from "@synara/shared/threadWorkspace";
 import { Effect } from "effect";
 
+import { findReadModelThread } from "./indexedReadModel.ts";
 import { OrchestrationCommandInvariantError } from "./Errors.ts";
 
 function invariantError(commandType: string, detail: string): OrchestrationCommandInvariantError {
@@ -99,7 +100,7 @@ export function findThreadById(
   readModel: OrchestrationReadModel,
   threadId: ThreadId,
 ): OrchestrationThread | undefined {
-  return readModel.threads.find((thread) => thread.id === threadId);
+  return findReadModelThread(readModel, threadId);
 }
 
 export function findProjectById(

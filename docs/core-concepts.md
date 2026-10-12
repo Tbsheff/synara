@@ -35,7 +35,11 @@ is cancelled, the task and its prompt remain available for retry.
   The command palette searches titles, project metadata, and settled user/assistant messages
   across saved chats, including chats not recently opened. Archived, deleted, and subagent
   chats stay out of message results. Every search word must match the message body;
-  the server returns at most 50 hits with short excerpts. Message matching ignores ASCII letter case.
+  the server returns at most 50 hits per page with short excerpts. Message matching ignores ASCII letter case.
+  The search API accepts the previous page's `nextCursor` as `cursor` and can include archived
+  chats with `includeArchived: true`. Each message hit includes its `messageId` and archive state.
+  The palette must opt into these API options to show archived results, load more pages, or jump
+  to a matched message. The server scans saved bodies in chunks so writes can run between reads.
   Archiving the open thread or marking it **Done** opens the most recently used unfinished chat
   across projects, ordered by its last human message (or creation time). If none remains, New
   thread reopens an unsent draft. Actions on other threads keep the current chat open.
@@ -334,6 +338,10 @@ follow a successful commit or push, so inspect the current branch before retryin
 
 Synara's checkpoint and revert controls can help recover task work, but committed Git history remains
 the strongest boundary for important changes.
+
+Thread detail includes the latest 500 completed checkpoints, in turn order. Server checkpoint
+history supports pages with `checkpointLimit` and `beforeCheckpointTurnCount`. Export and
+file-undo reads retain full checkpoint history; exact-turn diff reads can reach older checkpoints.
 
 Pre-turn checkpoint and Hub output baselines share a five-second preparation budget, including
 queued work. Operators can set `SYNARA_PRE_TURN_BASELINE_TIMEOUT_MS` from 1,000 to 30,000 milliseconds;

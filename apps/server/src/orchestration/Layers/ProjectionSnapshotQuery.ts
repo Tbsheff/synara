@@ -96,6 +96,7 @@ const decodeThreadDetailSnapshot = Schema.decodeUnknownEffect(OrchestrationThrea
 const decodeModelSelection = Schema.decodeUnknownEffect(ModelSelection);
 const ModelSelectionJsonUnknown = Schema.fromJsonString(Schema.Unknown);
 const MAX_THREAD_MESSAGES = 2_000;
+const MAX_THREAD_CHECKPOINTS = 500;
 // Bulk read-model snapshot: stays aligned with the in-memory projector window
 // (`orchestration/projector.ts`), which trims every live thread to the same cap.
 const MAX_SNAPSHOT_THREAD_ACTIVITIES = 500;
@@ -218,6 +219,11 @@ const SpaceIdLookupInput = Schema.Struct({
 });
 const ThreadIdLookupInput = Schema.Struct({
   threadId: ThreadId,
+});
+const ThreadCheckpointLookupInput = Schema.Struct({
+  threadId: ThreadId,
+  maxCheckpoints: Schema.optional(Schema.Number),
+  beforeCheckpointTurnCount: Schema.optional(NonNegativeInt),
 });
 const StaleInFlightThreadLookupInput = Schema.Struct({
   updatedBefore: IsoDateTime,
@@ -2474,11 +2480,11 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
   });
 
   const listCheckpointRowsByThread = SqlSchema.findAll({
-    Request: ThreadIdLookupInput,
+    Request: ThreadCheckpointLookupInput,
     Result: ProjectionCheckpointDbRowSchema,
-    execute: ({ threadId }) =>
+    execute: ({ threadId, maxCheckpoints, beforeCheckpointTurnCount }) =>
       sql`
-        SELECT
+        SELECT * FROM (SELECT
           thread_id AS "threadId",
           turn_id AS "turnId",
           checkpoint_turn_count AS "checkpointTurnCount",
@@ -2493,7 +2499,10 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         WHERE thread_id = ${threadId}
           AND checkpoint_turn_count IS NOT NULL
           AND completed_at IS NOT NULL
-        ORDER BY checkpoint_turn_count ASC
+          ${beforeCheckpointTurnCount === undefined ? sql`` : sql`AND checkpoint_turn_count < ${beforeCheckpointTurnCount}`}
+        ORDER BY checkpoint_turn_count DESC
+        LIMIT ${maxCheckpoints ?? -1}
+        ) ORDER BY "checkpointTurnCount" ASC
       `,
   });
 
@@ -3267,7 +3276,20 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         return Option.none<ProjectionThreadCheckpointContext>();
       }
 
-      const checkpointRows = yield* listCheckpointRowsByThread({ threadId }).pipe(
+      const checkpointRows = yield* listCheckpointRowsByThread({
+        threadId,
+        ...(options?.checkpointLimit === undefined
+          ? {}
+          : {
+              maxCheckpoints: Math.max(
+                1,
+                Math.min(MAX_THREAD_CHECKPOINTS, Math.floor(options.checkpointLimit)),
+              ),
+            }),
+        ...(options?.beforeCheckpointTurnCount === undefined
+          ? {}
+          : { beforeCheckpointTurnCount: options.beforeCheckpointTurnCount }),
+      }).pipe(
         Effect.mapError(
           toPersistenceSqlOrDecodeError(
             "ProjectionSnapshotQuery.getThreadCheckpointContext:listCheckpoints:query",
@@ -3618,7 +3640,10 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             ),
           ),
         ),
-        listCheckpointRowsByThread({ threadId }).pipe(
+        listCheckpointRowsByThread({
+          threadId,
+          ...(options.messageLimit === null ? {} : { maxCheckpoints: MAX_THREAD_CHECKPOINTS }),
+        }).pipe(
           Effect.mapError(
             toPersistenceSqlOrDecodeError(
               `${options.tracePrefix}:listCheckpoints:query`,
