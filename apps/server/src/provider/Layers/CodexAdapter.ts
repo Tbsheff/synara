@@ -4135,6 +4135,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
     return {
       provider: PROVIDER,
       capabilities: {
+        supportsSessionPrewarm: true,
         sessionModelSwitch: "in-session",
         supportsSkillMentions: true,
         supportsSkillDiscovery: true,

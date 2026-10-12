@@ -23,7 +23,8 @@ export type ProviderIntentEvent = Extract<
       | "thread.user-input-response-requested"
       | "thread.conversation-rollback-requested"
       | "thread.message-edit-resend-requested"
-      | "thread.session-stop-requested";
+      | "thread.session-stop-requested"
+      | "thread.session-warm-requested";
   }
 >;
 
@@ -48,6 +49,7 @@ const PROVIDER_INTENT_EVENT_TYPES = new Set<ProviderIntentEvent["type"]>([
   "thread.conversation-rollback-requested",
   "thread.message-edit-resend-requested",
   "thread.session-stop-requested",
+  "thread.session-warm-requested",
 ]);
 
 export const isProviderIntentEventType = (
@@ -65,7 +67,8 @@ export const isReplaySafeClaimedProviderIntent = (event: ProviderIntentEvent): b
   // The claimed handler only performs the idempotent durable enqueue. Queue
   // draining runs after the delivery settles, so replay never repeats provider
   // dispatch as part of this claim.
-  event.type === "thread.turn-queued";
+  event.type === "thread.turn-queued" ||
+  event.type === "thread.session-warm-requested";
 
 export const isProviderSideEffectIntent = (event: ProviderIntentEvent): boolean =>
   event.type !== "thread.created" &&

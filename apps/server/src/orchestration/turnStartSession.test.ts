@@ -56,9 +56,9 @@ describe("deriveTurnStartSession", () => {
     ).toBe(false);
   });
 
-  it("preserves established provider settings when restarting an idle session", () => {
+  it("keeps a live idle session working without a start state", () => {
     expect(derive(makeSession("ready"))).toMatchObject({
-      status: "starting",
+      status: "running",
       providerName: "codex",
       runtimeMode: "approval-required",
       activeTurnId: null,

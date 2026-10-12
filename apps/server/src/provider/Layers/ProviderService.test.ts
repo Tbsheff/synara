@@ -471,6 +471,7 @@ function makeFakeCodexAdapter(
     capabilities: {
       sessionModelSwitch: "in-session",
       supportsTurnSteering: true,
+      supportsSessionPrewarm: provider === "codex" || provider === "claudeAgent",
       ...(options?.conversationRollback
         ? { conversationRollback: options.conversationRollback }
         : {}),
@@ -8455,6 +8456,255 @@ liveFallback.layer("ProviderServiceLive live-fallback settled turns", (it) => {
       assert.equal(binding?.status, "stopped");
       const payload = binding?.runtimePayload as Record<string, unknown> | undefined;
       assert.notEqual(payload?.activeTurnId, asTurnId("turn-many-settled-1"));
+    }),
+  );
+});
+
+const warmPool = makeProviderServiceLayer({ runtimeIdleStopMs: 60_000 });
+warmPool.layer("ProviderService warm pool", (it) => {
+  it.effect("bounds idle pre-warm, reuses a slot, and sends no prompt", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const settings = yield* ServerSettingsService;
+      yield* settings.updateSettings({ warmSessionLimit: 4 });
+      warmPool.codex.startSession.mockClear();
+      warmPool.codex.sendTurn.mockClear();
+      warmPool.codex.startReview.mockClear();
+      const ids = ["warm-a", "warm-b", "warm-c", "warm-d", "warm-e"].map(asThreadId);
+      const warm = (threadId: ThreadId) =>
+        provider.prewarmSession!(
+          { threadId, provider: "codex" },
+          provider.listSessions().pipe(
+            Effect.flatMap((sessions) =>
+              sessions.some((session) => session.threadId === threadId)
+                ? Effect.succeed(true)
+                : provider
+                    .startSession(threadId, {
+                      provider: "codex",
+                      threadId,
+                      runtimeMode: "approval-required",
+                    })
+                    .pipe(Effect.as(true)),
+            ),
+          ),
+        );
+      for (const id of ids.slice(0, 4)) assert.isTrue(yield* warm(id));
+      assert.isTrue(yield* warm(ids[0]!));
+      assert.equal(warmPool.codex.startSession.mock.calls.length, 4);
+      assert.isTrue(yield* warm(ids[4]!));
+      const live = yield* provider.listSessions();
+      assert.equal(live.length, 4);
+      assert.isTrue(live.some((session) => session.threadId === ids[0]));
+      assert.isFalse(live.some((session) => session.threadId === ids[1]));
+      assert.equal(warmPool.codex.sendTurn.mock.calls.length, 0);
+      assert.equal(warmPool.codex.startReview.mock.calls.length, 0);
+      for (const id of ids) yield* provider.stopSession({ threadId: id });
+    }),
+  );
+  it.effect("refuses unsupported providers and a disabled pool before starting", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const settings = yield* ServerSettingsService;
+      const start = vi.fn(() => Effect.succeed(true));
+      assert.isFalse(
+        yield* provider.prewarmSession!(
+          { threadId: asThreadId("warm-unsupported"), provider: "antigravity" },
+          Effect.suspend(start),
+        ),
+      );
+      yield* settings.updateSettings({ warmSessionLimit: 0 });
+      assert.isFalse(
+        yield* provider.prewarmSession!(
+          { threadId: asThreadId("warm-disabled"), provider: "codex" },
+          Effect.suspend(start),
+        ),
+      );
+      assert.equal(start.mock.calls.length, 0);
+      yield* settings.updateSettings({ warmSessionLimit: 4 });
+    }),
+  );
+  it.effect("does not evict active turns when idle capacity fills", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const settings = yield* ServerSettingsService;
+      yield* settings.updateSettings({ warmSessionLimit: 1 });
+      const active = asThreadId("warm-active");
+      const idle = asThreadId("warm-idle");
+      const next = asThreadId("warm-next");
+      const warm = (threadId: ThreadId) =>
+        provider.prewarmSession!(
+          { threadId, provider: "codex" },
+          provider
+            .startSession(threadId, {
+              provider: "codex",
+              threadId,
+              runtimeMode: "approval-required",
+            })
+            .pipe(Effect.as(true)),
+        );
+      yield* warm(active);
+      yield* provider.sendTurn({ threadId: active, input: "user turn" });
+      warmPool.codex.updateSession(active, (session) => ({
+        ...session,
+        status: "running",
+        activeTurnId: asTurnId("active-turn"),
+      }));
+      yield* warm(idle);
+      yield* warm(next);
+      assert.isTrue(yield* warmPool.codex.adapter.hasSession(active));
+      assert.isFalse(yield* warmPool.codex.adapter.hasSession(idle));
+      for (const threadId of [active, idle, next]) yield* provider.stopSession({ threadId });
+      yield* settings.updateSettings({ warmSessionLimit: 4 });
+    }),
+  );
+});
+
+const warmIdle = makeProviderServiceLayer({ runtimeIdleStopMs: 100 });
+warmIdle.layer("ProviderService warm idle expiry", (it) => {
+  it.effect("stops a prompt-free session without a resume cursor", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const threadId = asThreadId("warm-empty-claude");
+      const original = warmIdle.claude.startSession.getMockImplementation()!;
+      warmIdle.claude.startSession.mockImplementationOnce((input) =>
+        original(input).pipe(
+          Effect.map((session) => {
+            const empty = { ...session, resumeCursor: undefined };
+            warmIdle.claude.updateSession(threadId, () => empty);
+            return empty;
+          }),
+        ),
+      );
+      warmIdle.claude.sendTurn.mockClear();
+      yield* provider.prewarmSession!(
+        { threadId, provider: "claudeAgent" },
+        provider
+          .startSession(threadId, {
+            provider: "claudeAgent",
+            threadId,
+            runtimeMode: "approval-required",
+          })
+          .pipe(Effect.as(true)),
+      );
+      yield* waitUntil(
+        () => warmIdle.claude.stopSession.mock.calls.some(([id]) => id === threadId),
+        5_000,
+      );
+      assert.isFalse(yield* warmIdle.claude.adapter.hasSession(threadId));
+      assert.equal(warmIdle.claude.sendTurn.mock.calls.length, 0);
+      yield* provider.stopSession({ threadId });
+    }),
+  );
+  it.effect("a send invalidates the warm idle timer", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const threadId = asThreadId("warm-send-before-expiry");
+      yield* provider.prewarmSession!(
+        { threadId, provider: "codex" },
+        provider
+          .startSession(threadId, { provider: "codex", threadId, runtimeMode: "approval-required" })
+          .pipe(Effect.as(true)),
+      );
+      yield* provider.sendTurn({ threadId, input: "user turn" });
+      yield* sleep(180);
+      assert.isTrue(yield* warmIdle.codex.adapter.hasSession(threadId));
+      yield* provider.stopSession({ threadId });
+    }),
+  );
+});
+
+const warmWithoutTimeout = makeProviderServiceLayer({ runtimeIdleStopMs: 0 });
+warmWithoutTimeout.layer("ProviderService warm cap without idle expiry", (it) => {
+  it.effect("keeps the pool bounded when the operator disables the idle timer", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const settings = yield* ServerSettingsService;
+      yield* settings.updateSettings({ warmSessionLimit: 1 });
+      for (const threadId of [asThreadId("warm-no-timeout-a"), asThreadId("warm-no-timeout-b")]) {
+        assert.isTrue(
+          yield* provider.prewarmSession!(
+            { threadId, provider: "codex" },
+            provider
+              .startSession(threadId, {
+                provider: "codex",
+                threadId,
+                runtimeMode: "approval-required",
+              })
+              .pipe(Effect.as(true)),
+          ),
+        );
+      }
+      assert.equal((yield* provider.listSessions()).length, 1);
+    }),
+  );
+});
+
+const warmSettlement = makeProviderServiceLayer({ runtimeIdleStopMs: 60_000 });
+warmSettlement.layer("ProviderService warm admission during settlement", (it) => {
+  it.effect("rechecks capacity when an active turn settles during another startup", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const settings = yield* ServerSettingsService;
+      yield* settings.updateSettings({ warmSessionLimit: 1 });
+      const active = asThreadId("warm-settling-active");
+      const next = asThreadId("warm-settling-next");
+      yield* provider.prewarmSession!(
+        { threadId: active, provider: "codex" },
+        provider
+          .startSession(active, {
+            provider: "codex",
+            threadId: active,
+            runtimeMode: "approval-required",
+          })
+          .pipe(Effect.as(true)),
+      );
+      const turn = yield* provider.sendTurn({ threadId: active, input: "user turn" });
+      warmSettlement.codex.updateSession(active, (session) => ({
+        ...session,
+        status: "running",
+        activeTurnId: turn.turnId,
+      }));
+      yield* warmSettlement.codex.waitForRuntimeSubscribers();
+      yield* provider.prewarmSession!(
+        { threadId: next, provider: "codex" },
+        Effect.gen(function* () {
+          yield* provider.startSession(next, {
+            provider: "codex",
+            threadId: next,
+            runtimeMode: "approval-required",
+          });
+          warmSettlement.codex.updateSession(active, (session) => ({
+            ...session,
+            status: "ready",
+            activeTurnId: undefined,
+          }));
+          warmSettlement.codex.emit({
+            type: "turn.completed",
+            eventId: asEventId("warm-settled-during-start"),
+            provider: "codex",
+            threadId: active,
+            turnId: turn.turnId,
+            createdAt: new Date().toISOString(),
+            payload: { state: "completed" },
+          });
+          yield* waitUntilEffect(
+            () =>
+              directory
+                .getBinding(active)
+                .pipe(
+                  Effect.map(
+                    (binding) => Option.isSome(binding) && binding.value.status === "stopped",
+                  ),
+                ),
+            2_000,
+          );
+          return true;
+        }),
+      );
+      const idle = yield* provider.listSessions();
+      assert.equal(idle.length, 1);
+      assert.equal(idle[0]?.threadId, next);
     }),
   );
 });

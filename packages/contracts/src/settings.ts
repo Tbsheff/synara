@@ -140,6 +140,12 @@ export const ServerSettings = Schema.Struct({
   enableAssistantStreaming: Schema.Boolean.pipe(Schema.withDecodingDefault(() => true)),
   enableProviderUpdateChecks: Schema.Boolean.pipe(Schema.withDecodingDefault(() => true)),
   keepAwakeMode: KeepAwakeMode.pipe(Schema.withDecodingDefault(() => DEFAULT_KEEP_AWAKE_MODE)),
+  warmSessionLimit: Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 32 })).pipe(
+    Schema.withDecodingDefault(() => 4),
+  ),
+  warmSessionIdleTimeoutMinutes: Schema.Int.check(
+    Schema.isBetween({ minimum: 1, maximum: 240 }),
+  ).pipe(Schema.withDecodingDefault(() => 15)),
   lowerProviderProcessPriority: Schema.Boolean.pipe(Schema.withDecodingDefault(() => true)),
   defaultThreadEnvMode: ThreadEnvironmentMode.pipe(Schema.withDecodingDefault(() => "local")),
   addProjectBaseDirectory: StringSetting.pipe(Schema.withDecodingDefault(() => "")),
@@ -207,6 +213,12 @@ export const ServerSettingsPatch = Schema.Struct({
   enableAssistantStreaming: Schema.optionalKey(Schema.Boolean),
   enableProviderUpdateChecks: Schema.optionalKey(Schema.Boolean),
   keepAwakeMode: Schema.optionalKey(KeepAwakeMode),
+  warmSessionLimit: Schema.optionalKey(
+    Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 32 })),
+  ),
+  warmSessionIdleTimeoutMinutes: Schema.optionalKey(
+    Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 240 })),
+  ),
   lowerProviderProcessPriority: Schema.optionalKey(Schema.Boolean),
   defaultThreadEnvMode: Schema.optionalKey(ThreadEnvironmentMode),
   addProjectBaseDirectory: Schema.optionalKey(StringSetting),

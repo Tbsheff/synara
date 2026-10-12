@@ -874,7 +874,7 @@ export function threadHasProviderLockingActivity(
 ): boolean {
   return (
     thread.latestTurn !== null ||
-    thread.session !== null ||
+    thread.session?.activeTurnId != null ||
     threadHasProviderLockingMessages(thread)
   );
 }
@@ -1407,12 +1407,7 @@ export function threadErrorBannerContextFor(
 /** Fail-open bound for the post-ack "awaiting turn start" Thinking bridge. */
 export const LOCAL_DISPATCH_TURN_TAKEOVER_TIMEOUT_MS = 60_000;
 
-export type WorkingLabel =
-  | "Loading"
-  | "Thinking"
-  | "Checking message delivery…"
-  | `Starting ${string}…`
-  | (string & {});
+export type WorkingLabel = "Working" | "Thinking" | "Checking message delivery…" | (string & {});
 
 export function resolveWorkingLabel(input: {
   isSendBusy: boolean;
@@ -1424,11 +1419,9 @@ export function resolveWorkingLabel(input: {
 }): WorkingLabel {
   if (input.isSettlingTurnDispatch) return "Checking message delivery…";
   if (input.isSendBusy && !input.turnTakenOver) {
-    return "Loading";
+    return "Working";
   }
-  if (input.isConnecting && input.providerName) {
-    return `Starting ${input.providerName}…`;
-  }
+  if (input.isConnecting) return "Working";
   return input.statusText ?? "Thinking";
 }
 
@@ -1436,7 +1429,7 @@ export const WORKING_LABEL_MIN_HOLD_MS = 600;
 export const WORKING_LABEL_REVERT_DELAY_MS = 3_000;
 
 export function isProgressStepWorkingLabel(label: WorkingLabel): boolean {
-  return label === "Loading" || (label.startsWith("Starting ") && label.endsWith("…"));
+  return label === "Working";
 }
 
 export function isFreeTextWorkingLabel(label: WorkingLabel): boolean {

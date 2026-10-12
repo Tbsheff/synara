@@ -1,3 +1,4 @@
+import { isCurrentWarmSessionRequest } from "../warmSessionRequest.ts";
 import { appendAppSnapPromptContext } from "../../provider/appSnapPromptContext.ts";
 import { isServerBetaFeatureEnabled } from "../../betaFeatureGate";
 import { computerActivationMetadata } from "../../computer/computerActivation.ts";
@@ -1651,7 +1652,12 @@ const make = Effect.gen(function* () {
       createdAt,
     });
     const session = (yield* resolveThread(threadId))?.session;
-    if (session?.status !== "starting") return;
+    if (
+      !session ||
+      (session.status !== "starting" && session.status !== "running") ||
+      session.activeTurnId !== null
+    )
+      return;
     yield* setThreadSession({
       threadId,
       expectedSession: session,
@@ -2199,6 +2205,7 @@ const make = Effect.gen(function* () {
       : (boundProvider ?? desiredProvider);
     if (
       establishedProvider !== undefined &&
+      (thread.latestTurn !== null || thread.messages.length > 0) &&
       requestedProviderInstanceChanged &&
       !providerRebindRequested
     ) {
@@ -4717,7 +4724,10 @@ const make = Effect.gen(function* () {
                     (session) => session.threadId === event.payload.threadId,
                   );
                   if (
-                    optimisticSession?.status === "starting" &&
+                    optimisticSession &&
+                    (optimisticSession.status === "starting" ||
+                      optimisticSession.status === "running") &&
+                    optimisticSession.activeTurnId === null &&
                     runtime &&
                     runtime.activeTurnId == null
                   ) {
@@ -6979,7 +6989,11 @@ const make = Effect.gen(function* () {
     detail: string,
   ) {
     const session = (yield* resolveThread(event.payload.threadId))?.session;
-    if (session?.status !== "starting" || session.activeTurnId !== null) {
+    if (
+      !session ||
+      (session.status !== "starting" && session.status !== "running") ||
+      session.activeTurnId !== null
+    ) {
       return;
     }
 
@@ -7011,7 +7025,11 @@ const make = Effect.gen(function* () {
   ) {
     const createdAt = new Date().toISOString();
     const thread = yield* resolveThread(event.payload.threadId);
-    if (thread?.session?.status === "starting" && thread.session.activeTurnId === null) {
+    if (
+      thread?.session &&
+      (thread.session.status === "starting" || thread.session.status === "running") &&
+      thread.session.activeTurnId === null
+    ) {
       yield* setThreadSessionError({
         threadId: event.payload.threadId,
         runtimeMode: thread.runtimeMode,
@@ -7225,6 +7243,46 @@ const make = Effect.gen(function* () {
               createdAt: event.payload.updatedAt,
             });
           }
+          return;
+        }
+        case "thread.session-warm-requested": {
+          const thread = yield* resolveThread(event.payload.threadId);
+          if (
+            !providerService.prewarmSession ||
+            !isCurrentWarmSessionRequest(thread, event.payload, Date.now()) ||
+            !thread ||
+            isExpiredSidechat(thread)
+          )
+            return;
+          const settings = yield* serverSettings.getSettings;
+          const instance = resolveProviderInstance(settings, {
+            instanceId: resolveModelSelectionInstanceId(thread.modelSelection),
+          });
+          if (!instance?.enabled || instance.driver !== thread.modelSelection.provider) return;
+          if (
+            providerService.hasLiveRuntimeTasks &&
+            (yield* providerService.hasLiveRuntimeTasks({ threadId: thread.id }))
+          )
+            return;
+          yield* providerService
+            .prewarmSession(
+              { threadId: thread.id, provider: instance.driver },
+              Effect.gen(function* () {
+                const current = yield* resolveThread(thread.id);
+                if (
+                  !current ||
+                  !isCurrentWarmSessionRequest(current, event.payload, Date.now()) ||
+                  isExpiredSidechat(current)
+                )
+                  return false;
+                yield* ensureSessionForThread(current.id, event.occurredAt, {
+                  modelSelection: current.modelSelection,
+                  runtimeMode: current.runtimeMode,
+                });
+                return true;
+              }),
+            )
+            .pipe(Effect.catchCause(() => Effect.void));
           return;
         }
         case "thread.turn-queued":

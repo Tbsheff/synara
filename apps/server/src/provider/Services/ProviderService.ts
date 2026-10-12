@@ -88,6 +88,11 @@ export interface PersistedProviderSessionProfile {
  * ProviderServiceShape - Service API for provider session and turn orchestration.
  */
 export interface ProviderServiceShape {
+  readonly prewarmSession?: (
+    input: { readonly threadId: ThreadId; readonly provider: ProviderKind },
+    start: Effect.Effect<boolean, unknown>,
+  ) => Effect.Effect<boolean, unknown>;
+
   readonly startClaudeCompaction?: (input: {
     readonly threadId: ThreadId;
     readonly turnId: TurnId;

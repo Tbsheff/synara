@@ -304,6 +304,8 @@ describe("wsNativeApi", () => {
       settings: {
         enableAssistantStreaming: true,
         enableProviderUpdateChecks: true,
+        warmSessionLimit: 4,
+        warmSessionIdleTimeoutMinutes: 15,
         keepAwakeMode: "off",
         lowerProviderProcessPriority: true,
         defaultThreadEnvMode: "local",

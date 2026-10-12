@@ -1856,6 +1856,16 @@ const ThreadMessageEditAndResendCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+const ThreadSessionWarmCommand = Schema.Struct({
+  type: Schema.Literal("thread.session.warm"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  modelSelection: ModelSelection,
+  runtimeMode: RuntimeMode,
+  interactionMode: ProviderInteractionMode,
+  createdAt: IsoDateTime,
+});
+
 const ThreadSessionStopCommand = Schema.Struct({
   type: Schema.Literal("thread.session.stop"),
   commandId: CommandId,
@@ -1905,6 +1915,7 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadMessageEditAndResendCommand,
   ThreadActivityAppendCommand,
   ThreadSessionStopCommand,
+  ThreadSessionWarmCommand,
 ]);
 export type DispatchableClientOrchestrationCommand =
   typeof DispatchableClientOrchestrationCommand.Type;
@@ -1942,6 +1953,7 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadMessageEditAndResendCommand,
   ThreadActivityAppendCommand,
   ThreadSessionStopCommand,
+  ThreadSessionWarmCommand,
 ]);
 export type ClientOrchestrationCommand = typeof ClientOrchestrationCommand.Type;
 
@@ -2140,6 +2152,7 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.conversation-rolled-back",
   "thread.message-edit-resend-requested",
   "thread.session-stop-requested",
+  "thread.session-warm-requested",
   "thread.session-set",
   "thread.proposed-plan-upserted",
   "thread.turn-diff-completed",
@@ -2534,6 +2547,15 @@ export const ThreadMessageEditResendRequestedPayload = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+export const ThreadSessionWarmRequestedPayload = Schema.Struct({
+  threadId: ThreadId,
+  modelSelection: ModelSelection,
+  runtimeMode: RuntimeMode,
+  interactionMode: ProviderInteractionMode,
+  createdAt: IsoDateTime,
+});
+export type ThreadSessionWarmRequestedPayload = typeof ThreadSessionWarmRequestedPayload.Type;
+
 export const ThreadSessionStopRequestedPayload = Schema.Struct({
   threadId: ThreadId,
   createdAt: IsoDateTime,
@@ -2763,6 +2785,11 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.message-edit-resend-requested"),
     payload: ThreadMessageEditResendRequestedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.session-warm-requested"),
+    payload: ThreadSessionWarmRequestedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

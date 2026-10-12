@@ -78,7 +78,7 @@ export function deriveTurnStartSession(input: {
 
   return {
     threadId: input.threadId,
-    status: "starting",
+    status: input.currentSession?.status === "ready" ? "running" : "starting",
     providerName: sessionProviderName ?? input.providerName,
     ...(sessionProviderInstanceId !== undefined
       ? { providerInstanceId: sessionProviderInstanceId }

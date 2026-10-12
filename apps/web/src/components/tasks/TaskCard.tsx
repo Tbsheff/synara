@@ -136,7 +136,7 @@ export function TaskCard({
         // Linked, but the chat has not reached this window yet: no second Start meanwhile.
         <>
           <TaskWell>
-            <span className="shimmer text-ui-sm">{status.detail ?? "Starting the agent…"}</span>
+            <span className="shimmer text-ui-sm">{status.detail ?? "Working"}</span>
           </TaskWell>
           <TaskActionRow>
             <TaskPillButton onClick={openChat}>Open chat</TaskPillButton>

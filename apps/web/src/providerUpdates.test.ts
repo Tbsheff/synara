@@ -57,6 +57,8 @@ function serverSettings(overrides: Partial<ServerSettings["providers"]> = {}): S
   return {
     enableAssistantStreaming: false,
     enableProviderUpdateChecks: true,
+    warmSessionLimit: 4,
+    warmSessionIdleTimeoutMinutes: 15,
     keepAwakeMode: "off",
     lowerProviderProcessPriority: true,
     defaultThreadEnvMode: "local",
