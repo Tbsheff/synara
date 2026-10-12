@@ -153,15 +153,16 @@ it("finds a thread through server message hits when its messages are not loaded"
       },
     ],
   });
-  const { onOpenThread } = await renderPalette({ ...thread, messages: [] });
-  await page.getByPlaceholder("Search chats or run a command").fill("webhook retries");
+  const { onOpenThread, onOpenChange } = await renderPalette({ ...thread, messages: [] });
+  await page.getByPlaceholder("Search chats or run a command").fill("  webhook retries  ");
 
   const result = page.getByRole("option", { name: /Fix login flow/ });
   await expect.element(result).toHaveTextContent("refund webhook retries three times");
   await expect.element(result).toHaveTextContent("2 chat hits");
   expect(searchThreads).toHaveBeenCalledWith({ query: "webhook retries", limit: 50 });
   await result.click();
-  expect(onOpenThread).toHaveBeenCalledWith(thread.id);
+  expect(onOpenThread).toHaveBeenCalledExactlyOnceWith(thread.id, "webhook retries");
+  expect(onOpenChange).toHaveBeenCalledExactlyOnceWith(false);
 });
 
 it("shows only unique matching metadata so a space match is not buried behind project names", async () => {
