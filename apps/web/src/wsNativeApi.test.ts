@@ -308,6 +308,7 @@ describe("wsNativeApi", () => {
         warmSessionIdleTimeoutMinutes: 15,
         keepAwakeMode: "off",
         lowerProviderProcessPriority: true,
+        codexAppServerMode: "shared",
         defaultThreadEnvMode: "local",
         addProjectBaseDirectory: "",
         githubInboxIncludeUpstreams: false,
