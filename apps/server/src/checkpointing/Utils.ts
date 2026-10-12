@@ -7,9 +7,18 @@ import {
   type ThreadId,
   TurnId,
 } from "@synara/contracts";
+import { desktopFlavorFromBundleId } from "@synara/shared/betaFeatures";
+import { SYNARA_DESKTOP_BUNDLE_ID_ENV } from "@synara/shared/desktopIdentity";
 import { resolveThreadWorkspaceCwd as resolveSharedThreadWorkspaceCwd } from "@synara/shared/threadEnvironment";
 
 export const CHECKPOINT_REFS_PREFIX = "refs/synara/checkpoints";
+export const BETA_CHECKPOINT_REFS_PREFIX = "refs/synara-beta/checkpoints";
+
+export function checkpointRefsPrefix(env: NodeJS.ProcessEnv = process.env): string {
+  return desktopFlavorFromBundleId(env[SYNARA_DESKTOP_BUNDLE_ID_ENV]) === "beta"
+    ? BETA_CHECKPOINT_REFS_PREFIX
+    : CHECKPOINT_REFS_PREFIX;
+}
 
 const MANAGED_CHECKPOINT_REF_PATTERN =
   /^refs\/([A-Za-z0-9._-]+)\/checkpoints\/([A-Za-z0-9_-]+)\/(turn|message-start|turn-start|turn-live|revert-rescue)\/([A-Za-z0-9_-]+)$/;
@@ -44,7 +53,7 @@ export function isManagedCheckpointRefForThread(value: string, threadId: ThreadI
 
 export function checkpointRefForThreadTurn(threadId: ThreadId, turnCount: number): CheckpointRef {
   return CheckpointRef.makeUnsafe(
-    `${CHECKPOINT_REFS_PREFIX}/${Encoding.encodeBase64Url(threadId)}/turn/${turnCount}`,
+    `${checkpointRefsPrefix()}/${Encoding.encodeBase64Url(threadId)}/turn/${turnCount}`,
   );
 }
 
@@ -63,13 +72,13 @@ export function checkpointRefForThreadMessageStart(
   messageId: MessageId,
 ): CheckpointRef {
   return CheckpointRef.makeUnsafe(
-    `${CHECKPOINT_REFS_PREFIX}/${Encoding.encodeBase64Url(threadId)}/message-start/${Encoding.encodeBase64Url(messageId)}`,
+    `${checkpointRefsPrefix()}/${Encoding.encodeBase64Url(threadId)}/message-start/${Encoding.encodeBase64Url(messageId)}`,
   );
 }
 
 export function checkpointRefForThreadTurnStart(threadId: ThreadId, turnId: TurnId): CheckpointRef {
   return CheckpointRef.makeUnsafe(
-    `${CHECKPOINT_REFS_PREFIX}/${Encoding.encodeBase64Url(threadId)}/turn-start/${Encoding.encodeBase64Url(turnId)}`,
+    `${checkpointRefsPrefix()}/${Encoding.encodeBase64Url(threadId)}/turn-start/${Encoding.encodeBase64Url(turnId)}`,
   );
 }
 
@@ -90,7 +99,7 @@ export function checkpointRefForThreadTurnStartInManagedFamily(
 // on every live recompute; it never becomes a durable checkpoint.
 export function checkpointRefForThreadTurnLive(threadId: ThreadId, turnId: TurnId): CheckpointRef {
   return CheckpointRef.makeUnsafe(
-    `${CHECKPOINT_REFS_PREFIX}/${Encoding.encodeBase64Url(threadId)}/turn-live/${Encoding.encodeBase64Url(turnId)}`,
+    `${checkpointRefsPrefix()}/${Encoding.encodeBase64Url(threadId)}/turn-live/${Encoding.encodeBase64Url(turnId)}`,
   );
 }
 
@@ -104,7 +113,7 @@ export function checkpointRefForThreadRevertRescue(
   token: string,
 ): CheckpointRef {
   return CheckpointRef.makeUnsafe(
-    `${CHECKPOINT_REFS_PREFIX}/${Encoding.encodeBase64Url(threadId)}/revert-rescue/${token}`,
+    `${checkpointRefsPrefix()}/${Encoding.encodeBase64Url(threadId)}/revert-rescue/${token}`,
   );
 }
 
