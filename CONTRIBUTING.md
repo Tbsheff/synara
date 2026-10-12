@@ -92,6 +92,17 @@ typing, undo, and redo with the real editor browser tests before removing it:
 bun run --cwd apps/web test:browser src/components/codeEditor/CodeEditorPane.browser.tsx
 ```
 
+The pinned `@xterm/addon-webgl` patch registers the cursor-blink manager for
+disposal in both JS distributions and the TypeScript source. The app disposes
+the addon on detach, before terminal disposal. Keep this patch when updating
+xterm until the upstream addon releases its blink timers through `dispose()`.
+The browser regression fills and focuses a real WebGL terminal, expires its
+detached runtime cache, then checks that GC frees the buffer:
+
+```bash
+bun run --cwd apps/web test:browser --root "$PWD/apps/web" src/components/terminal/terminalWebglDisposal.browser.tsx
+```
+
 The pinned `@effect/platform-node-shared` patch preserves Windows spawn options
 and rejects invalid PIDs before converting child handles into process-group
 signals. Windows group cleanup must launch `taskkill` directly with
