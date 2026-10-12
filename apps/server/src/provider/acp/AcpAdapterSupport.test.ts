@@ -3,6 +3,7 @@ import * as AcpErrors from "./AcpErrors.ts";
 
 import {
   canonicalItemTypeFromAcpToolKind,
+  acpApprovalDecisionUnavailableIssue,
   classifyAcpPromptTurnCompletion,
   mapAcpToAdapterError,
   readAcpFailedToolDetail,
@@ -42,6 +43,26 @@ describe("AcpAdapterSupport", () => {
     expect(selectAcpPermissionOptionId("acceptForSession", options)).toBe("allow-session");
     expect(selectAcpPermissionOptionId("decline", options)).toBe("deny-now");
     expect(selectAcpPermissionOptionId("cancel", options)).toBeUndefined();
+  });
+
+  it("never turns a one-time approval into a persistent ACP grant", () => {
+    const persistentOnly = [
+      { kind: "reject_once", optionId: "deny-now" },
+      { kind: "allow_always", optionId: "allow-session" },
+    ] as const;
+
+    expect(selectAcpPermissionOptionId("accept", persistentOnly)).toBeUndefined();
+    expect(selectAcpPermissionOptionId("acceptForSession", persistentOnly)).toBe("allow-session");
+    expect(acpApprovalDecisionUnavailableIssue("accept", persistentOnly)).toContain(
+      "Always allow this session",
+    );
+    expect(acpApprovalDecisionUnavailableIssue("acceptForSession", persistentOnly)).toBeUndefined();
+    expect(acpApprovalDecisionUnavailableIssue("decline", persistentOnly)).toBeUndefined();
+    expect(
+      acpApprovalDecisionUnavailableIssue("acceptForSession", [
+        { kind: "reject_once", optionId: "deny-now" },
+      ]),
+    ).toContain("Decline");
   });
 
   it("prefers request-scoped Full Access approvals and falls back to persistent grants", () => {

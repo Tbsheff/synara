@@ -89,7 +89,7 @@ export function mapAcpToAdapterError(
   });
 }
 
-type AcpPermissionOptionLike = {
+export type AcpPermissionOptionLike = {
   readonly kind: "allow_once" | "allow_always" | "reject_once" | "reject_always";
   readonly optionId: string;
 };
@@ -106,13 +106,20 @@ export function selectAcpPermissionOptionId(
     return undefined;
   }
 
-  const preferredKinds =
+  return findFirstAcpPermissionOptionId(
+    options,
     decision === "acceptForSession"
-      ? (["allow_always", "allow_once"] as const)
+      ? ["allow_always", "allow_once"]
       : decision === "accept"
-        ? (["allow_once", "allow_always"] as const)
-        : (["reject_once", "reject_always"] as const);
+        ? ["allow_once"]
+        : ["reject_once", "reject_always"],
+  );
+}
 
+function findFirstAcpPermissionOptionId(
+  options: ReadonlyArray<AcpPermissionOptionLike>,
+  preferredKinds: ReadonlyArray<AcpPermissionOptionLike["kind"]>,
+): string | undefined {
   for (const kind of preferredKinds) {
     const optionId = options.find((option) => option.kind === kind)?.optionId.trim();
     if (optionId) {
@@ -122,6 +129,21 @@ export function selectAcpPermissionOptionId(
   return undefined;
 }
 
+export function acpApprovalDecisionUnavailableIssue(
+  decision: ProviderApprovalDecision,
+  options: ReadonlyArray<AcpPermissionOptionLike>,
+): string | undefined {
+  if (decision !== "accept" && decision !== "acceptForSession") {
+    return undefined;
+  }
+  if (selectAcpPermissionOptionId(decision, options) !== undefined) {
+    return undefined;
+  }
+  return options.some((option) => option.kind === "allow_always" && option.optionId.trim())
+    ? "This provider can allow this request only for the rest of the session. Choose Always allow this session or Decline."
+    : "This provider offers no way to allow this request. Choose Decline.";
+}
+
 export function selectAcpFullAccessPermissionOptionId(
   options: ReadonlyArray<AcpPermissionOptionLike>,
 ): string | undefined {
@@ -129,7 +151,7 @@ export function selectAcpFullAccessPermissionOptionId(
   // ACP agents that expose only the protocol's persistent allow option. Every
   // supported adapter re-applies its native interaction mode before a turn, and
   // Plan-mode reverse requests are still rejected by resolveAcpPermissionPolicy.
-  return selectAcpPermissionOptionId("accept", options);
+  return findFirstAcpPermissionOptionId(options, ["allow_once", "allow_always"]);
 }
 
 /** Full access never blocks on a human prompt, even if an agent offers no allow option. */

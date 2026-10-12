@@ -66,7 +66,7 @@ import { ServerConfig, type ServerConfigShape } from "../../config.ts";
 import { buildProviderChildEnvironment } from "../../providerChildEnvironment.ts";
 import { buildProviderProcessEnv } from "../providerProcessEnv.ts";
 import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
-import { loadProviderPromptImageBlocks } from "../promptAttachments.ts";
+import { loadProviderPromptImageBlocks, stripPromptImageData } from "../promptAttachments.ts";
 import { settleConcurrentTeardowns } from "../settleConcurrentTeardowns.ts";
 import {
   ProviderAdapterProcessError,
@@ -81,6 +81,8 @@ import {
   readAcpFailedToolDetail,
   resolveAcpPermissionPolicy,
   selectAcpPermissionOptionId,
+  acpApprovalDecisionUnavailableIssue,
+  type AcpPermissionOptionLike,
 } from "../acp/AcpAdapterSupport.ts";
 import {
   acceptAcpPlanUpdate,
@@ -139,6 +141,7 @@ import { resolveProviderSessionInstanceId } from "../Services/ProviderAdapter.ts
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 
 const PROVIDER = "grok" as const;
+
 export const resolveGrokStartInstanceId = resolveProviderSessionInstanceId;
 
 export const takeGrokSynaraHarnessPolicyTextPart = (
@@ -337,6 +340,7 @@ export interface GrokAdapterLiveOptions {
 interface PendingApproval {
   readonly decision: Deferred.Deferred<ProviderApprovalDecision>;
   readonly kind: string | "unknown";
+  readonly options: ReadonlyArray<AcpPermissionOptionLike>;
 }
 
 interface PendingUserInput {
@@ -1282,7 +1286,11 @@ export function makeGrokAdapter(
                 const requestId = ApprovalRequestId.makeUnsafe(crypto.randomUUID());
                 const runtimeRequestId = RuntimeRequestId.makeUnsafe(requestId);
                 const decision = yield* Deferred.make<ProviderApprovalDecision>();
-                pendingApprovals.set(requestId, { decision, kind: permissionRequest.kind });
+                pendingApprovals.set(requestId, {
+                  decision,
+                  kind: permissionRequest.kind,
+                  options: params.options,
+                });
                 yield* offerRuntimeEvent(
                   input.lifecycleGeneration,
                   makeAcpRequestOpenedEvent({
@@ -1897,6 +1905,7 @@ export function makeGrokAdapter(
         if (harnessPolicy) {
           promptParts.unshift(harnessPolicy);
         }
+        const completedTurnPrompt = stripPromptImageData(promptParts, input.attachments);
 
         // A stop can land while the pre-prompt work or attachment reads above were
         // in flight; opening the turn now would publish turn.started (and a
@@ -1968,7 +1977,7 @@ export function makeGrokAdapter(
                   return;
                 }
                 const completedCost = finalizeAcpActiveTurnCost(ctx);
-                ctx.turns.push({ id: turnId, items: [{ prompt: promptParts, error }] });
+                ctx.turns.push({ id: turnId, items: [{ prompt: completedTurnPrompt, error }] });
                 const detail = error.message;
                 ctx.session = {
                   ...ctx.session,
@@ -2027,7 +2036,7 @@ export function makeGrokAdapter(
                   return;
                 }
                 const completedCost = finalizeAcpActiveTurnCost(ctx);
-                ctx.turns.push({ id: turnId, items: [{ prompt: promptParts, result }] });
+                ctx.turns.push({ id: turnId, items: [{ prompt: completedTurnPrompt, result }] });
                 const { lastError: _lastError, ...sessionWithoutLastError } = ctx.session;
                 ctx.session = {
                   ...sessionWithoutLastError,
@@ -2077,7 +2086,10 @@ export function makeGrokAdapter(
                 return;
               }
               const completedCost = finalizeAcpActiveTurnCost(ctx);
-              ctx.turns.push({ id: turnId, items: [{ prompt: promptParts, interrupted: true }] });
+              ctx.turns.push({
+                id: turnId,
+                items: [{ prompt: completedTurnPrompt, interrupted: true }],
+              });
               const { lastError: _lastError, ...sessionWithoutLastError } = ctx.session;
               ctx.session = {
                 ...sessionWithoutLastError,
@@ -2174,6 +2186,14 @@ export function makeGrokAdapter(
             provider: PROVIDER,
             method: "session/request_permission",
             detail: `Unknown pending approval request: ${requestId}`,
+          });
+        }
+        const unavailableIssue = acpApprovalDecisionUnavailableIssue(decision, pending.options);
+        if (unavailableIssue !== undefined) {
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: "session/request_permission",
+            issue: unavailableIssue,
           });
         }
         yield* Deferred.succeed(pending.decision, decision);
@@ -2683,6 +2703,7 @@ export function makeGrokAdapter(
       provider: PROVIDER,
       capabilities: {
         sessionModelSwitch: "restart-session",
+        conversationRollback: "restart-session",
       },
       startSession,
       sendTurn,

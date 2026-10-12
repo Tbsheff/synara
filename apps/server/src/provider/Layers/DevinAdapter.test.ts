@@ -2090,6 +2090,65 @@ describe("Devin permission requests", () => {
     );
   });
 
+  it("refuses Approve once when the agent offers only a persistent grant", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const handles = makePermissionRuntime();
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* DevinAdapter;
+        const threadId = ThreadId.makeUnsafe("thread-devin-permission-persistent-only");
+        const opened: Array<{ requestId?: unknown }> = [];
+        yield* adapter.streamEvents.pipe(
+          Stream.runForEach((event) =>
+            Effect.sync(() => {
+              if (event.type === "request.opened") opened.push({ requestId: event.requestId });
+            }),
+          ),
+          Effect.forkScoped,
+        );
+        yield* adapter.startSession({
+          provider: "devin",
+          threadId,
+          runtimeMode: "approval-required",
+          cwd: process.cwd(),
+        });
+        yield* adapter.sendTurn({ threadId, input: "work", attachments: [] });
+
+        const pending = yield* handles
+          .requestPermission({
+            ...makePermissionParams("persistent-only-call"),
+            options: [
+              { optionId: "allow-always", kind: "allow_always", name: "Always allow" },
+              { optionId: "reject-once", kind: "reject_once", name: "Reject" },
+            ],
+          })
+          .pipe(Effect.forkChild);
+        yield* flushTimers();
+        expect(opened).toHaveLength(1);
+        const requestId = opened[0]!.requestId as never;
+
+        const refused = yield* Effect.flip(adapter.respondToRequest(threadId, requestId, "accept"));
+        expect(refused._tag).toBe("ProviderAdapterValidationError");
+        expect(pending.pollUnsafe()).toBeUndefined();
+
+        yield* adapter.respondToRequest(threadId, requestId, "decline");
+        const response = yield* Fiber.join(pending);
+        expect(response).toEqual({
+          outcome: { outcome: "selected", optionId: "reject-once" },
+        });
+      }).pipe(
+        Effect.scoped,
+        Effect.provide(
+          makeDevinAdapterTestLayer(handles.runtime, handles.completeProcessedEvent, {
+            turnIdleMs: 3_600_000,
+            toolIdleMs: 3_600_000,
+          }),
+        ),
+      ),
+    );
+  });
+
   it("falls back to the session label only when no tool state exists", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);

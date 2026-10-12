@@ -14,7 +14,9 @@ import { ServerConfig } from "../../config";
 import { AntigravityAdapter } from "../Services/AntigravityAdapter";
 import {
   makeAntigravityAdapterLive,
+  readCompleteAntigravityLines,
   type AntigravityAdapterDependencies,
+  type AntigravityLineReadOptions,
 } from "./AntigravityAdapter";
 
 const encode = (records: unknown[]) => records.map((record) => JSON.stringify(record)).join("\n");
@@ -38,12 +40,14 @@ const envelope = (error?: string, num_turns = 1, status = error ? "ERROR" : "SUC
 });
 async function runPrintTurn(input: {
   stdout?: string;
+  stderr?: string;
   code?: number | null;
   signal?: NodeJS.Signals | null;
   hooks?: string[];
   transcript?: unknown[];
   stop?: boolean;
   interrupt?: boolean;
+  readLimits?: AntigravityLineReadOptions;
 }) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "synara-antigravity-output-"));
   let child: ChildProcess;
@@ -94,6 +98,7 @@ async function runPrintTurn(input: {
         ];
         yield* Effect.promise(() => fs.writeFile(eventFile, hooks.join("\n") + "\n"));
         if (input.stdout) child!.stdout!.emit("data", input.stdout);
+        if (input.stderr) child!.stderr!.emit("data", input.stderr);
         if (input.interrupt) yield* adapter.interruptTurn(threadId);
         child!.emit("close", input.code === undefined ? 0 : input.code, input.signal ?? null);
         const events = Array.from(yield* Fiber.join(eventsFiber).pipe(Effect.timeout("3 seconds")));
@@ -104,6 +109,15 @@ async function runPrintTurn(input: {
           makeAntigravityAdapterLive({
             ensurePlugin: async () => undefined,
             spawnProcess,
+            ...(input.readLimits
+              ? {
+                  readCompleteLines: (file, offset, options) =>
+                    readCompleteAntigravityLines(file, offset, {
+                      ...options,
+                      ...input.readLimits,
+                    }),
+                }
+              : {}),
             teardownProcessTree: async () => ({ escalated: false, signalErrors: [] }),
           }).pipe(
             Layer.provideMerge(ServerConfig.layerTest(root, { prefix: "antigravity-output-" })),
@@ -128,6 +142,11 @@ const transcriptToolStep = (step: number) => ({
   step_index: step,
   type: "PLANNER_RESPONSE",
   tool_calls: [{ name: "run_command", args: { CommandLine: "echo same" } }],
+});
+const transcriptCommandStep = (index: number) => ({
+  step_index: index,
+  type: "PLANNER_RESPONSE",
+  tool_calls: [{ name: "run_command", args: { CommandLine: `echo ${index}` } }],
 });
 describe("Antigravity structured output lifecycle", () => {
   it.each(["{example}", '{"answer":42}', "Long response ".repeat(12000)])(
@@ -214,6 +233,63 @@ describe("Antigravity structured output lifecycle", () => {
         await runPrintTurn({ stdout: encode([done, envelope(undefined, 2, "CANCELED")]), code: 1 }),
       ),
     ).toMatchObject({ state: "interrupted" });
+  });
+  it("keeps bounded output tails while completing from the parsed result", async () => {
+    const noise = `${"x".repeat(1023)}\n`.repeat(2048);
+    const events = await runPrintTurn({
+      stdout: `${noise}${encode([done, envelope()])}\n`,
+      stderr: noise,
+    });
+    const completed = events.find((e) => e.type === "turn.completed");
+    expect(completed?.payload).toMatchObject({ state: "completed" });
+    expect(textPayloads(events)).toEqual([{ streamKind: "assistant_text", delta: "Finished" }]);
+    const rawPayload = completed?.raw?.payload as Record<string, unknown>;
+    expect(rawPayload).toMatchObject({
+      result: { state: "completed", responseChars: "Finished".length },
+      stdoutTruncatedChars: expect.any(Number),
+      stderrTruncatedChars: expect.any(Number),
+    });
+    expect(rawPayload.stdoutTruncatedChars).toBeGreaterThan(0);
+    expect(rawPayload.stderrTruncatedChars).toBeGreaterThan(0);
+    expect(rawPayload).not.toHaveProperty("stdout");
+    expect(rawPayload).not.toHaveProperty("stderr");
+    expect(JSON.stringify(rawPayload).length).toBeLessThan(256 * 1024);
+  });
+  it("skips an oversized hook record with a warning and keeps later hooks", async () => {
+    const events = await runPrintTurn({
+      stdout: encode([done, envelope()]),
+      hooks: [`pre-tool\t${"o".repeat(20_000)}`, preToolHook(2), postToolHook(2)],
+      readLimits: { chunkBytes: 1024, maxRecordBytes: 4096, maxPollBytes: 8192 },
+    });
+    expect(events.filter((e) => e.type === "runtime.warning")).toEqual([
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          detail: expect.objectContaining({ source: "hook", oversizedRecords: 1 }),
+        }),
+      }),
+    ]);
+    expect(
+      events.filter((e) => e.type === "item.started" && e.payload.itemType === "command_execution"),
+    ).toHaveLength(1);
+    expect(terminalPayload(events)).toMatchObject({ state: "completed" });
+  });
+  it("reads a transcript larger than one poll without replaying earlier turns", async () => {
+    const history = Array.from({ length: 200 }, (_, index) => transcriptCommandStep(index));
+    const events = await runPrintTurn({
+      stdout: encode([done, envelope()]),
+      transcript: [
+        ...history,
+        { step_index: 200, type: "USER_INPUT" },
+        transcriptCommandStep(201),
+        ...Array.from({ length: 5 }, (_, index) => transcriptCommandStep(index + 202)),
+      ],
+      readLimits: { chunkBytes: 1024, maxRecordBytes: 2048, maxPollBytes: 4096 },
+    });
+    const started = events.filter(
+      (e) => e.type === "item.started" && e.payload.itemType === "command_execution",
+    );
+    expect(started).toHaveLength(6);
+    expect(terminalPayload(events)).toMatchObject({ state: "completed" });
   });
   it("does not complete terminal status INVALID on exit zero", async () => {
     expect(

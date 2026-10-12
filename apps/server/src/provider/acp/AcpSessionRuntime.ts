@@ -719,7 +719,23 @@ const makeOfficialSdkClient = Effect.fnUntraced(function* (
       : Promise.reject(acpSdk.RequestError.methodNotFound(method));
 
   const outgoing = yield* Queue.bounded<Uint8Array>(256);
-  yield* Stream.fromQueue(outgoing).pipe(Stream.run(child.stdin), Effect.forkIn(runtimeScope));
+  yield* Stream.fromQueue(outgoing).pipe(
+    Stream.run(child.stdin),
+    Effect.catchCause((cause) => {
+      if (Cause.hasInterruptsOnly(cause)) return Effect.void;
+      const squashed = Cause.squash(cause);
+      const error = new Error(
+        `ACP stdin write failed: ${squashed instanceof Error ? squashed.message : String(squashed)}`,
+        { cause: squashed },
+      );
+      return Effect.sync(() => {
+        transportFailure ??= error;
+        callbackAbort.abort(transportFailure);
+        connection?.close(transportFailure);
+      }).pipe(Effect.andThen(Queue.shutdown(outgoing)));
+    }),
+    Effect.forkIn(runtimeScope),
+  );
   const output = new WritableStream<Uint8Array>({
     write: (chunk) =>
       Effect.runPromise(

@@ -60,7 +60,7 @@ import {
 } from "../../agentGateway/sessionLease.ts";
 import { ServerConfig, type ServerConfigShape } from "../../config.ts";
 import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
-import { loadProviderPromptImageBlocks } from "../promptAttachments.ts";
+import { loadProviderPromptImageBlocks, stripPromptImageData } from "../promptAttachments.ts";
 import { settleConcurrentTeardowns } from "../settleConcurrentTeardowns.ts";
 import {
   ProviderAdapterProcessError,
@@ -75,6 +75,8 @@ import {
   readAcpFailedToolDetail,
   resolveAcpPermissionPolicy,
   selectAcpPermissionOptionId,
+  acpApprovalDecisionUnavailableIssue,
+  type AcpPermissionOptionLike,
 } from "../acp/AcpAdapterSupport.ts";
 import {
   acceptAcpPlanUpdate,
@@ -206,6 +208,7 @@ export interface CursorAdapterLiveOptions {
 interface PendingApproval {
   readonly decision: Deferred.Deferred<ProviderApprovalDecision>;
   readonly kind: string | "unknown";
+  readonly options: ReadonlyArray<AcpPermissionOptionLike>;
 }
 
 interface PendingUserInput {
@@ -954,6 +957,7 @@ export function makeCursorAdapter(
                 pendingApprovals.set(requestId, {
                   decision,
                   kind: permissionRequest.kind,
+                  options: params.options,
                 });
                 yield* offerRuntimeEvent(
                   input.lifecycleGeneration,
@@ -1366,6 +1370,7 @@ export function makeCursorAdapter(
         if (harnessPolicy) {
           promptParts.unshift(harnessPolicy);
         }
+        const completedTurnPrompt = stripPromptImageData(promptParts, input.attachments);
 
         ctx.activeTurnId = turnId;
         ctx.activeTurnFailedToolDetail = undefined;
@@ -1405,7 +1410,7 @@ export function makeCursorAdapter(
                   return;
                 }
                 const completedCost = finalizeCursorActiveTurnCost(ctx);
-                ctx.turns.push({ id: turnId, items: [{ prompt: promptParts, error }] });
+                ctx.turns.push({ id: turnId, items: [{ prompt: completedTurnPrompt, error }] });
                 const detail = error.message;
                 ctx.session = {
                   ...ctx.session,
@@ -1439,7 +1444,7 @@ export function makeCursorAdapter(
                   return;
                 }
                 const completedCost = finalizeCursorActiveTurnCost(ctx);
-                ctx.turns.push({ id: turnId, items: [{ prompt: promptParts, result }] });
+                ctx.turns.push({ id: turnId, items: [{ prompt: completedTurnPrompt, result }] });
                 const { lastError: _lastError, ...sessionWithoutLastError } = ctx.session;
                 ctx.session = {
                   ...sessionWithoutLastError,
@@ -1475,7 +1480,10 @@ export function makeCursorAdapter(
                 return;
               }
               const completedCost = finalizeCursorActiveTurnCost(ctx);
-              ctx.turns.push({ id: turnId, items: [{ prompt: promptParts, interrupted: true }] });
+              ctx.turns.push({
+                id: turnId,
+                items: [{ prompt: completedTurnPrompt, interrupted: true }],
+              });
               const { lastError: _lastError, ...sessionWithoutLastError } = ctx.session;
               ctx.session = {
                 ...sessionWithoutLastError,
@@ -1571,6 +1579,14 @@ export function makeCursorAdapter(
             provider: PROVIDER,
             method: "session/request_permission",
             detail: `Unknown pending approval request: ${requestId}`,
+          });
+        }
+        const unavailableIssue = acpApprovalDecisionUnavailableIssue(decision, pending.options);
+        if (unavailableIssue !== undefined) {
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: "session/request_permission",
+            issue: unavailableIssue,
           });
         }
         yield* Deferred.succeed(pending.decision, decision);
@@ -1966,6 +1982,7 @@ export function makeCursorAdapter(
       provider: PROVIDER,
       capabilities: {
         sessionModelSwitch: "in-session",
+        conversationRollback: "restart-session",
         supportsRuntimeModelList: true,
       },
       startSession,

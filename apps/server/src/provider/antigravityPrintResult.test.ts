@@ -161,4 +161,48 @@ describe("Antigravity print result", () => {
       parseAntigravityPrintResult(encode([response, { event: "error", message: "" }])),
     ).toMatchObject({ completedResponse: false, state: "failed" });
   });
+
+  it("bounds unterminated records, response text, and the plain-text fallback", () => {
+    const limits = { maxRecordChars: 1024, maxResultChars: 512 };
+    const plain = createAntigravityPrintResultParser(limits);
+    for (let index = 0; index < 100; index += 1) plain.write("y".repeat(1000));
+    expect(plain.finish()).toBeUndefined();
+    expect(plain.plainTextFallback()).toHaveLength(512);
+    expect(plain.truncation()).toMatchObject({ droppedFallbackChars: 100_000 - 512 });
+
+    const structured = createAntigravityPrintResultParser(limits);
+    structured.write(`${encode([response])}\n`);
+    for (let index = 0; index < 100; index += 1) structured.write("z".repeat(1000));
+    structured.write("\n");
+    structured.write(
+      `${encode([
+        {
+          event: "step_update",
+          step_update: {
+            step_index: 2,
+            step_type: "agent_response",
+            state: "DONE",
+            text_delta: "r".repeat(900),
+          },
+        },
+        { event: "result", result: { status: "SUCCESS" } },
+      ])}\n`,
+    );
+    const result = structured.finish();
+    expect(result).toMatchObject({ state: "completed", completedResponse: false });
+    expect(result?.response).toHaveLength(512);
+    expect(structured.plainTextFallback()).toBe("");
+    expect(structured.truncation()).toMatchObject({
+      oversizedRecords: 1,
+      droppedRecordChars: 100_000,
+      droppedResponseChars: 900 - 512,
+    });
+
+    const enveloped = createAntigravityPrintResultParser(limits);
+    enveloped.write(
+      `${encode([{ event: "result", result: { status: "SUCCESS", response: "e".repeat(800) } }])}\n`,
+    );
+    expect(enveloped.finish()?.response).toHaveLength(512);
+    expect(enveloped.truncation()).toMatchObject({ droppedResponseChars: 800 - 512 });
+  });
 });

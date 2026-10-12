@@ -82,6 +82,7 @@ const POLL_INTERVAL_MS = 75;
 const MODEL_DISCOVERY_TIMEOUT_MS = 30_000;
 const PLUGIN_INSTALL_TIMEOUT_MS = 45_000;
 const HELPER_OUTPUT_MAX_CHARS = 128 * 1024;
+const TURN_OUTPUT_TAIL_MAX_CHARS = 64 * 1024;
 const WINDOWS_PROMPT_MAX_CHARS = 24_000;
 
 type TranscriptStep = {
@@ -163,8 +164,10 @@ type AntigravitySessionContext = ToolSurfaceCounters & {
   modelName?: string | undefined;
   modelOptions?: AntigravityModelOptions | undefined;
   processedHookBytes: number;
+  hookDiscardOffset?: number | undefined;
   hookPollPromise?: Promise<void>;
   processedTranscriptBytes: number;
+  transcriptDiscardOffset?: number | undefined;
   processedTranscriptPath?: string | undefined;
   processedSteps: Set<number>;
   pendingTools: PendingTool[];
@@ -422,9 +425,36 @@ export function buildAntigravityHookConfig(
   };
 }
 
-function appendBoundedOutput(current: string, chunk: unknown): string {
+function appendBoundedOutput(
+  current: string,
+  chunk: unknown,
+  maxChars: number = HELPER_OUTPUT_MAX_CHARS,
+): string {
   const next = current + String(chunk);
-  return next.length > HELPER_OUTPUT_MAX_CHARS ? next.slice(-HELPER_OUTPUT_MAX_CHARS) : next;
+  return next.length > maxChars ? next.slice(-maxChars) : next;
+}
+
+function createOutputTail(maxChars: number) {
+  let tail = "";
+  let receivedChars = 0;
+  let hasContent = false;
+  return {
+    append(chunk: unknown) {
+      const text = String(chunk);
+      receivedChars += text.length;
+      if (!hasContent && text.trim()) hasContent = true;
+      tail = appendBoundedOutput(tail, text, maxChars);
+    },
+    get text() {
+      return tail;
+    },
+    get hasContent() {
+      return hasContent;
+    },
+    get truncatedChars() {
+      return receivedChars - tail.length;
+    },
+  };
 }
 
 export async function runAntigravityHelperProcess(
@@ -481,28 +511,101 @@ export async function runAntigravityHelperProcess(
   });
 }
 
+function transcriptStepIndex(step: TranscriptStep): number {
+  return typeof step.step_index === "number" ? step.step_index : Number.MAX_SAFE_INTEGER;
+}
+
+export const ANTIGRAVITY_FILE_READ_CHUNK_BYTES = 64 * 1024;
+export const ANTIGRAVITY_FILE_RECORD_MAX_BYTES = 8 * 1024 * 1024;
+export const ANTIGRAVITY_FILE_POLL_MAX_BYTES = 16 * 1024 * 1024;
+
+export type AntigravityLineReadOptions = {
+  readonly discarding?: boolean;
+  readonly chunkBytes?: number;
+  readonly maxRecordBytes?: number;
+  readonly maxPollBytes?: number;
+};
+
+export type AntigravityLineBatch = {
+  lines: string[];
+  nextOffset: number;
+  oversizedRecords: number;
+  discarding: boolean;
+  hasMore: boolean;
+};
+
 export async function readCompleteAntigravityLines(
   filePath: string,
   offset: number,
-): Promise<{ lines: string[]; nextOffset: number }> {
+  options: AntigravityLineReadOptions = {},
+): Promise<AntigravityLineBatch> {
+  const maxRecordBytes = options.maxRecordBytes ?? ANTIGRAVITY_FILE_RECORD_MAX_BYTES;
+  const chunkBytes = options.chunkBytes ?? ANTIGRAVITY_FILE_READ_CHUNK_BYTES;
+  const maxPollBytes = Math.max(
+    options.maxPollBytes ?? ANTIGRAVITY_FILE_POLL_MAX_BYTES,
+    maxRecordBytes + chunkBytes,
+  );
   const file = await fs.open(filePath, "r");
   try {
-    const stats = await file.stat();
-    const start = offset <= stats.size ? offset : 0;
-    const remaining = stats.size - start;
-    if (remaining === 0) return { lines: [], nextOffset: start };
-    const buffer = Buffer.allocUnsafe(remaining);
-    const { bytesRead } = await file.read(buffer, 0, remaining, start);
-    const contents = buffer.subarray(0, bytesRead);
-    const lastNewline = contents.lastIndexOf(0x0a);
-    if (lastNewline < 0) return { lines: [], nextOffset: start };
+    const { size } = await file.stat();
+    const start = offset <= size ? offset : 0;
+    let discarding = start === offset && options.discarding === true;
+    let position = start;
+    let nextOffset = start;
+    let oversizedRecords = 0;
+    let partial: Buffer[] = [];
+    let partialBytes = 0;
+    const lines: string[] = [];
+    const chunk = Buffer.allocUnsafe(Math.max(1, Math.min(chunkBytes, size - start)));
+    while (position < size && position - start < maxPollBytes) {
+      const length = Math.min(chunk.length, size - position, maxPollBytes - (position - start));
+      const { bytesRead } = await file.read(chunk, 0, length, position);
+      if (bytesRead === 0) break;
+      const bytes = chunk.subarray(0, bytesRead);
+      const chunkStart = position;
+      position += bytesRead;
+      let lineStart = 0;
+      for (
+        let newline = bytes.indexOf(0x0a);
+        newline !== -1;
+        newline = bytes.indexOf(0x0a, lineStart)
+      ) {
+        const segment = bytes.subarray(lineStart, newline);
+        if (discarding) {
+          discarding = false;
+        } else if (partialBytes + segment.length > maxRecordBytes) {
+          oversizedRecords += 1;
+        } else {
+          const line = (partialBytes > 0 ? Buffer.concat([...partial, segment]) : segment)
+            .toString("utf8")
+            .replace(/\r$/, "");
+          if (line) lines.push(line);
+        }
+        partial = [];
+        partialBytes = 0;
+        lineStart = newline + 1;
+        nextOffset = chunkStart + lineStart;
+      }
+      const tail = bytes.subarray(lineStart);
+      if (!discarding && partialBytes + tail.length > maxRecordBytes) {
+        oversizedRecords += 1;
+        discarding = true;
+        partial = [];
+        partialBytes = 0;
+      }
+      if (discarding) {
+        nextOffset = position;
+      } else if (tail.length > 0) {
+        partial.push(Buffer.from(tail));
+        partialBytes += tail.length;
+      }
+    }
     return {
-      lines: contents
-        .subarray(0, lastNewline + 1)
-        .toString("utf8")
-        .split(/\r?\n/g)
-        .filter(Boolean),
-      nextOffset: start + lastNewline + 1,
+      lines,
+      nextOffset,
+      oversizedRecords,
+      discarding,
+      hasMore: position < size && nextOffset > start,
     };
   } finally {
     await file.close();
@@ -1720,53 +1823,130 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
       }
     };
 
-    const readTranscript = async (context: AntigravitySessionContext) => {
-      if (!context.transcriptPath) return;
-      const turnAtStart = context.activeTurnId;
-      const isInitialRead = context.processedTranscriptPath !== context.transcriptPath;
-      if (isInitialRead) context.processedTranscriptBytes = 0;
-      let batch: Awaited<ReturnType<typeof readCompleteAntigravityLines>>;
-      try {
-        batch = await readCompleteLines(context.transcriptPath, context.processedTranscriptBytes);
-      } catch {
-        return;
-      }
-      if (context.stopped || context.activeTurnId !== turnAtStart) return;
-      context.processedTranscriptBytes = batch.nextOffset;
-      context.processedTranscriptPath = context.transcriptPath;
-      const steps = batch.lines.flatMap((line) => {
+    const warnOversizedRecords = (
+      context: AntigravitySessionContext,
+      source: "hook" | "transcript",
+      count: number,
+    ) => {
+      const limitMiB = ANTIGRAVITY_FILE_RECORD_MAX_BYTES / (1024 * 1024);
+      offer({
+        ...base(context),
+        type: "runtime.warning",
+        payload: {
+          message: `Antigravity skipped ${count} ${source} record${count === 1 ? "" : "s"} larger than ${limitMiB} MiB.`,
+          detail: {
+            source,
+            oversizedRecords: count,
+            maxRecordBytes: ANTIGRAVITY_FILE_RECORD_MAX_BYTES,
+          },
+        },
+      } satisfies ProviderRuntimeEvent);
+    };
+
+    const readNewLines = async function* (
+      context: AntigravitySessionContext,
+      source: "hook" | "transcript",
+      filePath: string,
+      turnAtStart: TurnId | undefined,
+      outcome: { aborted: boolean },
+    ): AsyncGenerator<string> {
+      for (;;) {
+        const offset =
+          source === "hook" ? context.processedHookBytes : context.processedTranscriptBytes;
+        const discardOffset =
+          source === "hook" ? context.hookDiscardOffset : context.transcriptDiscardOffset;
+        let batch: AntigravityLineBatch;
         try {
-          return [JSON.parse(line) as TranscriptStep];
+          batch = await readCompleteLines(filePath, offset, {
+            discarding: discardOffset === offset,
+          });
         } catch {
-          return [];
+          outcome.aborted = true;
+          return;
         }
-      });
-      const latestUserIndex = isInitialRead
-        ? steps.reduce(
-            (latest, step) =>
-              step.type === "USER_INPUT" && typeof step.step_index === "number"
-                ? Math.max(latest, step.step_index)
-                : latest,
-            -1,
-          )
-        : -1;
-      for (const step of steps) {
-        const idx = typeof step.step_index === "number" ? step.step_index : Number.MAX_SAFE_INTEGER;
-        if (idx > latestUserIndex) {
-          processTranscriptStep(context, step);
+        if (context.stopped || context.activeTurnId !== turnAtStart) {
+          outcome.aborted = true;
+          return;
         }
+        const nextDiscardOffset = batch.discarding ? batch.nextOffset : undefined;
+        if (source === "hook") {
+          context.processedHookBytes = batch.nextOffset;
+          context.hookDiscardOffset = nextDiscardOffset;
+        } else {
+          context.processedTranscriptBytes = batch.nextOffset;
+          context.transcriptDiscardOffset = nextDiscardOffset;
+        }
+        if (batch.oversizedRecords > 0)
+          warnOversizedRecords(context, source, batch.oversizedRecords);
+        yield* batch.lines;
+        if (!batch.hasMore) return;
       }
     };
 
+    const readTranscript = async (context: AntigravitySessionContext) => {
+      const transcriptPath = context.transcriptPath;
+      if (!transcriptPath) return;
+      const turnAtStart = context.activeTurnId;
+      const isInitialRead = context.processedTranscriptPath !== transcriptPath;
+      if (isInitialRead) {
+        context.processedTranscriptBytes = 0;
+        delete context.transcriptDiscardOffset;
+      }
+      let latestUserIndex = -1;
+      let initialSteps: TranscriptStep[] = [];
+      const outcome = { aborted: false };
+      for await (const line of readNewLines(
+        context,
+        "transcript",
+        transcriptPath,
+        turnAtStart,
+        outcome,
+      )) {
+        let step: TranscriptStep;
+        try {
+          step = JSON.parse(line) as TranscriptStep;
+        } catch {
+          continue;
+        }
+        if (!isInitialRead) {
+          if (transcriptStepIndex(step) > latestUserIndex) processTranscriptStep(context, step);
+          continue;
+        }
+        if (
+          step.type === "USER_INPUT" &&
+          typeof step.step_index === "number" &&
+          step.step_index > latestUserIndex
+        ) {
+          latestUserIndex = step.step_index;
+          initialSteps = initialSteps.filter(
+            (pending) => transcriptStepIndex(pending) > latestUserIndex,
+          );
+        }
+        if (transcriptStepIndex(step) > latestUserIndex) initialSteps.push(step);
+      }
+      if (outcome.aborted) return;
+      context.processedTranscriptPath = transcriptPath;
+      for (const step of initialSteps) processTranscriptStep(context, step);
+    };
+
     const markExistingTranscriptStepsProcessed = async (context: AntigravitySessionContext) => {
-      if (!context.transcriptPath) return;
+      const transcriptPath = context.transcriptPath;
+      if (!transcriptPath) return;
+      let offset = 0;
+      let discarding = false;
       try {
-        const batch = await readCompleteLines(context.transcriptPath, 0);
-        context.processedTranscriptBytes = batch.nextOffset;
-        context.processedTranscriptPath = context.transcriptPath;
+        for (;;) {
+          const batch = await readCompleteLines(transcriptPath, offset, { discarding });
+          offset = batch.nextOffset;
+          discarding = batch.discarding;
+          if (!batch.hasMore) break;
+        }
       } catch {
         return;
       }
+      context.processedTranscriptBytes = offset;
+      context.transcriptDiscardOffset = discarding ? offset : undefined;
+      context.processedTranscriptPath = transcriptPath;
     };
 
     /**
@@ -1943,15 +2123,14 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
       const completionSequenceBeforePoll = context.backgroundCompletionSequence;
       let latestStopStepIndex: number | undefined;
       let sawStopWithoutStepIndex = false;
-      let batch: Awaited<ReturnType<typeof readCompleteAntigravityLines>>;
-      try {
-        batch = await readCompleteLines(context.eventFile, context.processedHookBytes);
-      } catch {
-        return;
-      }
-      if (context.stopped || context.activeTurnId !== turnAtStart) return;
-      context.processedHookBytes = batch.nextOffset;
-      for (const line of batch.lines) {
+      const hookRead = { aborted: false };
+      for await (const line of readNewLines(
+        context,
+        "hook",
+        context.eventFile,
+        turnAtStart,
+        hookRead,
+      )) {
         if (context.stopped || context.activeTurnId !== turnAtStart) return;
         const tab = line.indexOf("\t");
         if (tab < 0) continue;
@@ -2211,6 +2390,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
           }
         }
       }
+      if (hookRead.aborted) return;
       await readTranscript(context);
       if (context.stopped || context.activeTurnId !== turnAtStart) return;
       const completionStepIndex = context.latestBackgroundCompletionStepIndex;
@@ -2357,6 +2537,14 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
 
     const sendTurn: AntigravityAdapterShape["sendTurn"] = (input) =>
       Effect.gen(function* () {
+        if (input.interactionMode === "plan") {
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: "sendTurn",
+            issue:
+              "Antigravity CLI print mode cannot keep a turn read-only. Switch off Plan mode to use this provider.",
+          });
+        }
         const context = yield* requireSession(input.threadId);
         // Refresh the stored capability projection at dispatch: a
         // computer-control change between turns must reach this turn's mint,
@@ -2467,6 +2655,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
         }
         context.eventFile = eventFile;
         context.processedHookBytes = 0;
+        delete context.hookDiscardOffset;
         context.processedSteps.clear();
         yield* Effect.promise(() => markExistingTranscriptStepsProcessed(context));
         context.pendingTools = [];
@@ -2556,16 +2745,16 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
             context.harnessPolicyDelivered = true;
           }
         });
-        let stdout = "";
-        let stderr = "";
+        const stdoutTail = createOutputTail(TURN_OUTPUT_TAIL_MAX_CHARS);
+        const stderrTail = createOutputTail(TURN_OUTPUT_TAIL_MAX_CHARS);
         const outputParser = createAntigravityPrintResultParser();
         child.stdout.setEncoding("utf8");
         child.stderr.setEncoding("utf8");
         child.stdout.on("data", (chunk) => {
           outputParser.write(String(chunk));
-          stdout += chunk;
+          stdoutTail.append(chunk);
         });
-        child.stderr.on("data", (chunk) => (stderr += chunk));
+        child.stderr.on("data", (chunk) => stderrTail.append(chunk));
         const timer = setInterval(() => {
           if (ownsTurn()) void pollHookFile(context);
         }, POLL_INTERVAL_MS);
@@ -2618,7 +2807,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
               return;
             }
             const printResult = outputParser.finish();
-            const responseText = printResult?.response ?? stdout.trim();
+            const responseText = printResult?.response ?? outputParser.plainTextFallback().trim();
             if (!context.sawAssistant && responseText) {
               emitTextItem(
                 context,
@@ -2642,7 +2831,7 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
               context.stopTeardownRequested === true &&
               printResult?.completedResponse === true &&
               context.sawAssistant &&
-              !stderr.trim() &&
+              !stderrTail.hasContent &&
               context.pendingTools.length === 0 &&
               context.pendingBackgroundTasks.size === 0 &&
               context.pendingAnonymousBackgroundTasks.length === 0;
@@ -2655,12 +2844,17 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
               !completedAfterStopTeardown &&
               ((code ?? 1) !== 0 ||
                 (printResult !== undefined && printResult.state !== "completed"));
-            if (failed && stderr.trim()) {
+            const stderrText = stderrTail.text.trim();
+            if (failed && stderrText) {
               offer({
                 ...base(context, { includeTurn: false }),
                 type: "runtime.error",
-                payload: { message: stderr.trim(), class: "provider_error" },
-                raw: raw("stderr", { code, stderr }),
+                payload: { message: stderrText, class: "provider_error" },
+                raw: raw("stderr", {
+                  code,
+                  stderrTail: stderrTail.text,
+                  stderrTruncatedChars: stderrTail.truncatedChars,
+                }),
               } satisfies ProviderRuntimeEvent);
             }
             settleActiveTurn(context, {
@@ -2670,14 +2864,34 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
                 ? {
                     errorMessage:
                       printResult?.error ||
-                      stderr.trim() ||
+                      stderrText ||
                       (printResult?.state === undefined && printResult !== undefined
                         ? "Antigravity CLI exited without a complete result."
                         : undefined) ||
                       `Antigravity CLI exited with code ${code ?? 1}.`,
                   }
                 : {}),
-              raw: raw("process-exit", { code, signal, stdout, stderr }),
+              raw: raw("process-exit", {
+                code,
+                signal,
+                ...(printResult
+                  ? {
+                      result: {
+                        state: printResult.state,
+                        completedResponse: printResult.completedResponse,
+                        responseChars: printResult.response.length,
+                        ...(printResult.error
+                          ? { error: printResult.error.slice(0, TURN_OUTPUT_TAIL_MAX_CHARS) }
+                          : {}),
+                      },
+                    }
+                  : {}),
+                ...outputParser.truncation(),
+                stdoutTail: stdoutTail.text,
+                stdoutTruncatedChars: stdoutTail.truncatedChars,
+                stderrTail: stderrTail.text,
+                stderrTruncatedChars: stderrTail.truncatedChars,
+              }),
             });
             await fs.rm(runDir, { recursive: true, force: true }).catch(() => undefined);
           })();
