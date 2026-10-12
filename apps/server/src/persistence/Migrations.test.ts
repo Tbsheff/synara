@@ -638,6 +638,7 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         [132, "PluginStorage"],
         [133, "ProposedPlanPartial"],
         [134, "CloudSubmissions"],
+        [135, "DropUnusedReceiptSequenceIndex"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -724,6 +725,7 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
           { migration_id: 132, name: "PluginStorage" },
           { migration_id: 133, name: "ProposedPlanPartial" },
           { migration_id: 134, name: "CloudSubmissions" },
+          { migration_id: 135, name: "DropUnusedReceiptSequenceIndex" },
         ],
       );
       const groupConfigColumns = yield* sql<{ readonly name: string }>`
@@ -890,6 +892,7 @@ agentGatewayRetentionLegacyLayer(
           [132, "PluginStorage"],
           [133, "ProposedPlanPartial"],
           [134, "CloudSubmissions"],
+          [135, "DropUnusedReceiptSequenceIndex"],
         ]);
 
         const columns = yield* sql<{ readonly name: string }>`
@@ -1019,6 +1022,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [132, "PluginStorage"],
         [133, "ProposedPlanPartial"],
         [134, "CloudSubmissions"],
+        [135, "DropUnusedReceiptSequenceIndex"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -1089,6 +1093,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [132, "PluginStorage"],
           [133, "ProposedPlanPartial"],
           [134, "CloudSubmissions"],
+          [135, "DropUnusedReceiptSequenceIndex"],
         ],
       );
 
@@ -1213,6 +1218,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [132, "PluginStorage"],
         [133, "ProposedPlanPartial"],
         [134, "CloudSubmissions"],
+        [135, "DropUnusedReceiptSequenceIndex"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -1279,6 +1285,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [132, "PluginStorage"],
           [133, "ProposedPlanPartial"],
           [134, "CloudSubmissions"],
+          [135, "DropUnusedReceiptSequenceIndex"],
         ],
       );
       const preservedSpaces = yield* sql<{ readonly spaceId: string }>`

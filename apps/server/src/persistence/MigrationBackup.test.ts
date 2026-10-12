@@ -1052,7 +1052,7 @@ describe("migration backups", () => {
 
   it("skips the snapshot when every pending migration is additive-only and still prunes", async () => {
     const dbPath = await makeDbPath();
-    const lastNonAdditiveMigrationId = 128;
+    const lastNonAdditiveMigrationId = 135;
     expect(pendingMigrationsAreAdditiveOnly([lastNonAdditiveMigrationId])).toBe(false);
 
     await runWithDatabase(
