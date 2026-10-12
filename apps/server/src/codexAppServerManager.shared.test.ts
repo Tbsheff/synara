@@ -137,6 +137,7 @@ async function fixture(mode: ServerSettings["codexAppServerMode"] = "shared") {
     manager,
     root,
     home,
+    binaryPath,
     children,
     requests,
     loaded,
@@ -150,6 +151,24 @@ async function fixture(mode: ServerSettings["codexAppServerMode"] = "shared") {
 }
 
 describe("shared Codex manager", () => {
+  it("shares metadata discovery with live threads across working directories", async () => {
+    const h = await fixture();
+    await h.start("a");
+    mkdirSync(path.join(h.root, "other-project"));
+    await h.manager.listModels({
+      cwd: path.join(h.root, "other-project"),
+      codexOptions: {
+        binaryPath: h.binaryPath,
+        homePath: h.home,
+        accountId: "test",
+        environment: { HOME: h.root, SYNARA_HOME: path.join(h.root, "synara") },
+      },
+    });
+    expect(h.children).toHaveLength(1);
+    expect(h.requests.filter((r) => r.method === "initialize")).toHaveLength(1);
+    expect(h.manager.hasSession(ThreadId.makeUnsafe("a"))).toBe(true);
+  });
+
   it("starts three native threads with one process and distinct MCP tokens", async () => {
     const h = await fixture();
     await Promise.all([h.start("a"), h.start("b"), h.start("c")]);

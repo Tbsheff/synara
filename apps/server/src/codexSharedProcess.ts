@@ -41,6 +41,7 @@ export interface CodexSharedMessage {
 }
 
 interface Member {
+  readonly sessionId?: string;
   readonly message: (message: CodexSharedMessage) => void;
   readonly failure: (error: Error, code: number | null, signal: NodeJS.Signals | null) => void;
 }
@@ -69,6 +70,7 @@ export class CodexSharedProcess<T extends object> {
   readonly writer: CodexJsonlWriter;
   readonly members = new Map<T, Member>();
   readonly routes = new Map<string, T>();
+  private readonly threadOwners = new Map<string, T | string>();
   private readonly controls = new JsonRpcStdioRequestRegistry({
     responseError: ({ method, error }) => new Error(`${method} failed: ${String(error.message)}`),
   });
@@ -179,8 +181,11 @@ export class CodexSharedProcess<T extends object> {
 
   bind(owner: T, id: string): void {
     const previous = this.routes.get(id);
-    if (previous && previous !== owner)
+    const identity = this.members.get(owner)?.sessionId ?? owner;
+    const original = this.threadOwners.get(id);
+    if ((previous && previous !== owner) || (original !== undefined && original !== identity))
       throw new Error("Codex native thread is already owned by another Synara session.");
+    this.threadOwners.set(id, identity);
     this.routes.set(id, owner);
     const buffered = this.early.get(id);
     this.early.delete(id);
@@ -393,7 +398,7 @@ export class CodexSharedProcess<T extends object> {
       }).catch(() => undefined);
     } else if (!id && GLOBAL_NOTIFICATIONS.has(message.method)) {
       for (const candidate of this.members.keys()) this.deliver(candidate, message);
-    } else if (id && this.hasThreadOpenRequest()) {
+    } else if (id && !this.threadOwners.has(id) && this.hasThreadOpenRequest()) {
       const bytes = Buffer.byteLength(JSON.stringify(message));
       if (this.earlyBytes + bytes > 16 * 1024 * 1024)
         throw new Error("Shared Codex startup event buffer exceeded its byte limit.");

@@ -40,6 +40,33 @@ const runWithSettings = <A, E>(
 ) => Effect.runPromise(effect.pipe(Effect.provide(testLayer)) as Effect.Effect<A, E, never>);
 
 describe("ServerSettingsService", () => {
+  it("defaults Codex process sharing on and persists the dedicated fallback across restart", async () => {
+    expect(Schema.decodeSync(ServerSettingsSchema)({}).codexAppServerMode).toBe("shared");
+    const settings = await runWithSettings(
+      Effect.gen(function* () {
+        const service = yield* ServerSettingsService;
+        const config = yield* ServerConfig;
+        yield* service.start;
+        yield* service.updateSettings({ codexAppServerMode: "per-session" });
+        return yield* Effect.gen(function* () {
+          const restarted = yield* ServerSettingsService;
+          yield* restarted.start;
+          return yield* restarted.getSettingsView;
+        }).pipe(
+          Effect.provide(
+            ServerSettingsLive.pipe(
+              Layer.provide(Layer.merge(NodeServices.layer, Layer.succeed(ServerConfig, config))),
+            ),
+          ),
+        );
+      }),
+    );
+    expect(settings.codexAppServerMode).toBe("per-session");
+    expect(() =>
+      Schema.decodeUnknownSync(ServerSettingsPatchSchema)({ codexAppServerMode: "invalid" }),
+    ).toThrow();
+  });
+
   it("defaults keep awake to off", () => {
     expect(Schema.decodeSync(ServerSettingsSchema)({}).keepAwakeMode).toBe("off");
   });

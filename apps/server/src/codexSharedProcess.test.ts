@@ -228,6 +228,51 @@ describe("Codex shared process routing", () => {
 });
 
 describe("Codex shared process lifecycle", () => {
+  it("keeps retired native threads bound to their original Synara identity", async () => {
+    const h = harness();
+    const p = await h.acquire();
+    p.add(h.owners[0]!, { sessionId: "synara-a", message: vi.fn(), failure: vi.fn() });
+    p.bind(h.owners[0]!, "native-a");
+    await p.release(h.owners[0]!);
+    expect(() => p.bind(h.owners[1]!, "native-a")).toThrow("already owned");
+    const restored = {};
+    const messages = vi.fn();
+    p.add(restored, { sessionId: "synara-a", message: messages, failure: vi.fn() });
+    p.bind(restored, "native-a");
+    h.emit({
+      method: "item/agentMessage/delta",
+      params: { threadId: "native-a", delta: "restored" },
+    });
+    expect(messages).toHaveBeenCalledTimes(1);
+    await h.registry.stopAll();
+  });
+
+  it("waits for a cancelled thread open before releasing its native lease", async () => {
+    const h = harness();
+    const p = await h.acquire();
+    const id = p.allocateRequest(h.owners[0]!, "thread/start", {});
+    p.forgetRequest(id);
+    const released = p.release(h.owners[0]!);
+    h.loaded.add("late-native");
+    h.emit({ id, result: { thread: { id: "late-native" } } });
+    await released;
+    expect(h.loaded.has("late-native")).toBe(false);
+    expect(h.teardown).not.toHaveBeenCalled();
+    await h.registry.stopAll();
+  });
+
+  it("refuses an unproven unload without killing other hosted threads", async () => {
+    const h = harness();
+    const p = await h.acquire();
+    p.bind(h.owners[0]!, "native-a");
+    h.loaded.add("native-a");
+    h.blockUnload();
+    await expect(p.release(h.owners[0]!)).rejects.toThrow("did not unload");
+    expect(p.members.has(h.owners[0]!)).toBe(true);
+    expect(h.teardown).not.toHaveBeenCalled();
+    await h.registry.stopAll();
+  });
+
   it("unloads only the released thread and keeps other sessions live", async () => {
     const h = harness();
     const p = await h.acquire();

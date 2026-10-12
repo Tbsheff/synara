@@ -100,6 +100,7 @@ An externally managed OpenCode server must be configured by its operator.
 The Synara server, terminals opened by the user, Git checkpoint helpers, and brief version,
 authentication, and dedicated Codex/Claude model-list probes keep their existing priority.
 ACP/OpenCode discovery uses the shared agent process/server and retains its agent priority.
+Shared Codex metadata discovery also uses the account process and its selected priority.
 Auxiliary Codex/Claude model-generation processes use the agent priority. Priority changes are best effort: an OS
 failure is logged and the agent launch continues. Lower CPU priority improves scheduling
 under contention; it does not impose a CPU quota or guarantee response times under overload.
@@ -245,6 +246,8 @@ In Beta and source builds, Codex sessions share an app-server when their process
 match. Stable keeps one app-server per session. The server setting `codexAppServerMode`
 defaults to `"shared"`; set it to `"per-session"` through `server.updateSettings` and restart
 the affected sessions to use the fallback. Stable ignores the saved shared preference.
+Metadata discovery leases the same compatible process, including requests for another
+project directory. Discovery leases use the existing short idle timeout and load no native thread.
 
 The registry key hashes the effective environment (including `CODEX_HOME` and the source
 continuation home), account ID, auth identity, account config snapshot, resolved executable
@@ -259,6 +262,8 @@ One process owns the pipe and assigns unique request IDs. Responses return to th
 session; native thread IDs route notifications, approvals, tool output, and known native
 subagent events. Unowned requests receive an error. The registry does not guess an owner
 from whichever turn is active. Account notifications use an explicit process-wide allowlist.
+Within a process, a released native thread ID keeps its original Synara identity; another
+Synara thread cannot claim it and receive late events.
 
 Stopping a session interrupts and unloads its native threads, then releases its lease.
 Other hosted sessions keep running. The last lease starts a one-second shutdown grace;

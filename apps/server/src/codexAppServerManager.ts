@@ -1413,6 +1413,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     configSnapshot: string,
     versionGate: Promise<void>,
     signal?: AbortSignal,
+    dedicatedLowerPriority?: boolean,
   ): Promise<{
     child: ChildProcessWithoutNullStreams;
     sharedProcess?: CodexSharedProcess<CodexSessionContext>;
@@ -1474,7 +1475,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     signal?.throwIfAborted();
     return {
       child: this.spawnAppServer({
-        lowerPriority,
+        lowerPriority: dedicatedLowerPriority ?? lowerPriority,
         binaryPath: launch.binaryPath,
         cwd,
         env: launch.env,
@@ -1490,6 +1491,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     }
     this.requestRegistry(context).processStarted();
     shared.add(context, {
+      sessionId: context.session.threadId,
       message: (message: CodexSharedMessage) => {
         if (context.stopping) return;
         if (this.isServerRequest(message)) {
@@ -3402,9 +3404,6 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       // Retirement already fenced writes. Revoke reads and drain the old MCP
       // client too; neither a delayed request nor a descendant gets the new key.
       context.gatewaySessionLease.release();
-      // A settled native child can still retain its own MCP client. Until all
-      // native clients can be rotated together, preserve full process recovery
-      // whenever this process contains anything besides the parent thread.
       if (
         context.sharedProcess &&
         [...context.sharedProcess.routes].some(
@@ -4417,12 +4416,16 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     const appServerLaunch = await resolveCodexNativeLaunch(codexBinaryPath, processLaunch.env, {
       cwd: normalizedCwd,
     });
-    const child = this.spawnAppServer({
-      lowerPriority: false,
-      binaryPath: appServerLaunch.binaryPath,
-      cwd: normalizedCwd,
-      env: appServerLaunch.env,
-    });
+    const { child, sharedProcess } = await this.acquireSessionProcess(
+      appServerLaunch,
+      normalizedCwd,
+      normalizedCodexOptions,
+      launchAuthFingerprint,
+      processLaunch.authTracking?.sourceConfigSnapshot ?? "",
+      Promise.resolve(),
+      undefined,
+      false,
+    );
     const context: CodexSessionContext = {
       session: {
         provider: "codex",
@@ -4440,8 +4443,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         sparkEnabled: true,
       },
       child,
-      stdoutFramer: new CodexJsonlFramer(),
-      stdinWriter: new CodexJsonlWriter(child.stdin),
+      ...(sharedProcess ? { sharedProcess } : {}),
+      stdoutFramer: sharedProcess?.framer ?? new CodexJsonlFramer(),
+      stdinWriter: sharedProcess?.writer ?? new CodexJsonlWriter(child.stdin),
       pending: new Map(),
       pendingApprovals: new Map(),
       pendingUserInputs: new Map(),
@@ -4459,18 +4463,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     };
 
     this.discoverySessions.set(discoveryKey, context);
-    this.attachProcessListeners(context);
+    this.attachSessionProcess(context);
     try {
-      await this.sendRequest(context, "initialize", buildCodexInitializeParams());
-      this.assertContextAuthCurrent(context);
-      await this.writeMessage(context, { method: "initialized" });
-      await this.registerSynaraSkillsRoot(context);
-      try {
-        const accountReadResponse = await this.sendRequest(context, "account/read", {});
-        context.account = readCodexAccountSnapshot(accountReadResponse);
-      } catch {
-        // Discovery can still function without account metadata.
-      }
+      await this.initializeSessionProcess(context);
       this.assertContextAuthCurrent(context);
       this.updateSession(context, { status: "ready" });
       this.scheduleDiscoverySessionIdleStop(discoveryKey);
@@ -4546,6 +4541,13 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     }
     if (context.stopPromise) {
       return context.stopPromise;
+    }
+
+    if (context.sharedProcess) {
+      await this.stopSharedSessionContext(context, false);
+      if (this.discoverySessions.get(discoveryKey) === context)
+        this.discoverySessions.delete(discoveryKey);
+      return;
     }
 
     context.stopping = true;
