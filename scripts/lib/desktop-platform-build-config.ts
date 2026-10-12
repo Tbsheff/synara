@@ -46,11 +46,13 @@ export const MAC_ICON_ASSETS_CAR_BUNDLE_PATH = "Resources/Assets.car";
 export { SYNARA_BETA_WINDOWS_INSTALLER_GUID };
 const MAC_DMG_ICON_PATH = "icon.icns";
 const NODE_PTY_ASAR_UNPACK_GLOBS = ["node_modules/node-pty/**"] as const;
+export const ELECTRON_LANGUAGES = ["en", "en-US"] as const;
 
 export interface DesktopPlatformBuildConfig {
   readonly afterSign?: string;
   readonly afterPack?: string;
   readonly asarUnpack?: ReadonlyArray<string>;
+  readonly electronLanguages?: ReadonlyArray<string>;
   readonly dmg?: Record<string, unknown>;
   readonly extraFiles?: ReadonlyArray<Record<string, string>>;
   readonly extraResources?: ReadonlyArray<Record<string, string>>;
@@ -110,7 +112,11 @@ export function createDesktopPlatformBuildConfig(
     diagnostics: preserveDependencyDiagnostics(process.env),
     linuxGlibc: typeof report?.header?.glibcVersionRuntime === "string",
   });
-  const nativePackaging = { asarUnpack: [...NODE_PTY_ASAR_UNPACK_GLOBS], files };
+  const nativePackaging = {
+    asarUnpack: [...NODE_PTY_ASAR_UNPACK_GLOBS],
+    electronLanguages: [...ELECTRON_LANGUAGES],
+    files,
+  };
 
   if (input.platform === "mac") {
     const mac = {
@@ -179,6 +185,7 @@ export function createDesktopPlatformBuildConfig(
         MAC_APPSNAP_HELPER_ASAR_EXCLUSION,
         MAC_WINDOW_MATERIAL_ADDON_ASAR_EXCLUSION,
         "!apps/desktop/resources/cua-driver/**",
+        "!apps/desktop/prod-resources/cua-driver/**",
       ],
       extraFiles: [
         { from: "apps/desktop/resources/cua-driver", to: "Resources/cua-driver" },

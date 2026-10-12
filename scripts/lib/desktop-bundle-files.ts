@@ -9,10 +9,14 @@ const DIAGNOSTIC_FILES = [
   // sources: extension loaders and native helpers can legitimately need them.
   // Remove only TypeScript, retaining vendored licenses and other source assets.
   "!node_modules/effect/src/**/*.ts",
+  "!node_modules/**/node_modules/effect/src/**/*.ts",
   "!node_modules/@effect/{platform-node,platform-node-shared,sql-sqlite-bun}/src/**/*.ts",
   "!node_modules/openai/src/**/*.ts",
   "!node_modules/@anthropic-ai/sdk/src/**/*.ts",
 ] as const;
+
+const CLAUDE_AGENT_SDK_NATIVE_BINARIES = "!node_modules/@anthropic-ai/claude-agent-sdk-*/**";
+const UNUSED_STEALTH_BROWSER_DRIVER = "!node_modules/patchright-core/**";
 
 export function preserveDependencyDiagnostics(env: NodeJS.ProcessEnv): boolean {
   return [env.SYNARA_WEB_SOURCEMAP, env.SYNARA_SERVER_SOURCEMAP, env.SYNARA_DESKTOP_SOURCEMAP].some(
@@ -71,5 +75,7 @@ export function createDesktopBundleFilePatterns(
   if (platform === "linux" && options.linuxGlibc) {
     files.push("!node_modules/@anthropic-ai/claude-agent-sdk-linux-*-musl/**");
   }
+  if (platform !== "linux") files.push(CLAUDE_AGENT_SDK_NATIVE_BINARIES);
+  files.push(UNUSED_STEALTH_BROWSER_DRIVER);
   return files;
 }

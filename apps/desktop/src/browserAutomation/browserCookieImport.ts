@@ -108,6 +108,7 @@ export class BrowserCookieImport {
           headless: false,
           adBlock: false,
           parkBackgroundPages: false,
+          stealthRuntimeFix: false,
           policy: new NetworkPolicy({ allowLoopback: true }),
         });
         const result = await browser.syncCookies({

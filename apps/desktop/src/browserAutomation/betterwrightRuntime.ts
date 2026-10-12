@@ -90,6 +90,7 @@ async function runConnectedBetterwright<T>(options: BetterwrightRunOptions): Pro
       headless: false,
       adBlock: false,
       parkBackgroundPages: false,
+      stealthRuntimeFix: false,
       policy: new NetworkPolicy({ allowLoopback: true }),
     });
     const result = await Promise.race([

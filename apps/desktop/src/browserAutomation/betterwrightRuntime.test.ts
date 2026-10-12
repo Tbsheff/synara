@@ -246,7 +246,11 @@ describe("Betterwright runtime errors", () => {
         revokeAll: expect.any(Function),
       }),
     );
-    expect(options).toMatchObject({ downloadPolicy: "deny", credentialCapture: false });
+    expect(options).toMatchObject({
+      downloadPolicy: "deny",
+      credentialCapture: false,
+      stealthRuntimeFix: false,
+    });
     expect(options).not.toHaveProperty("provider");
     expect(options).not.toHaveProperty("hostOwnedTarget");
   });
