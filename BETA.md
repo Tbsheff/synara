@@ -239,6 +239,20 @@ directories — a leaked lock directory would make beta refuse to start while th
 stable process is alive. Nothing is ever written into the stable home: the
 marker and the result both live in the beta home.
 
+The copy shares no live work with Stable:
+
+- Automations arrive turned off, with no scheduler lease and no active run.
+  PR Auto-fix watches arrive paused. Turn them on in Beta to run them there.
+- A chat whose worktree lives in Stable's `worktrees` folder arrives with its
+  worktree detached ("Worktree pending"). Beta refuses to run it there; switch
+  it to the local project or fork it into a new worktree.
+- Beta writes checkpoint refs under `refs/synara-beta/checkpoints`. The import
+  copies Stable's checkpoint refs in each project repository into that
+  namespace and only reads Stable's own refs. If a repository is missing, its
+  older diffs and Undo are unavailable in Beta.
+- Beta keeps scratch folders for chats without a project in its own cache
+  folder. An imported chat gets a new, empty scratch folder.
+
 ## Leaving beta
 
 Beta shows **Switch back to Synara** under **Settings → General**. It opens
