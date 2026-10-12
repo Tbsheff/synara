@@ -1671,13 +1671,19 @@ function projectReasoningActivity(
     summary: "Reasoning trace",
     payload: toActivityPayload({
       ...(event.payload.status ? { status: event.payload.status } : {}),
-      ...(detail !== undefined ? { detail } : {}),
       reasoning,
       data: { toolCallId: reasoningItemId },
     }),
     turnId: toTurnId(event.turnId) ?? null,
     ...maybeSequence,
   };
+}
+
+function normalizeRateLimitResetsAt(value: unknown): string | undefined {
+  if (typeof value === "string") return value;
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+  const resetsAt = new Date(value * 1000);
+  return Number.isNaN(resetsAt.getTime()) ? undefined : resetsAt.toISOString();
 }
 
 export function projectProviderRuntimeActivities(
@@ -2393,13 +2399,7 @@ export function projectProviderRuntimeActivities(
       }
       const status = rl.status;
       // Normalize resetsAt: Claude SDK sends Unix seconds (number), Codex may send ISO string
-      const resetsAtRaw = rl.resetsAt;
-      const resetsAt =
-        typeof resetsAtRaw === "number"
-          ? new Date(resetsAtRaw * 1000).toISOString()
-          : typeof resetsAtRaw === "string"
-            ? resetsAtRaw
-            : undefined;
+      const resetsAt = normalizeRateLimitResetsAt(rl.resetsAt);
       // Preserve per-window rate limit breakdown when the provider sends it.
       // Claude SDK may include a `limits` array with per-window entries
       // (e.g. { window: "5h", utilization: 0.06, resetsAt: ... }).
@@ -2412,13 +2412,7 @@ export function projectProviderRuntimeActivities(
             typeof (l as Record<string, unknown>).window === "string",
         )
         .map((l) => {
-          const lResetsAtRaw = l.resetsAt;
-          const lResetsAt =
-            typeof lResetsAtRaw === "number"
-              ? new Date(lResetsAtRaw * 1000).toISOString()
-              : typeof lResetsAtRaw === "string"
-                ? lResetsAtRaw
-                : undefined;
+          const lResetsAt = normalizeRateLimitResetsAt(l.resetsAt);
           const limit = { window: l.window as string } as {
             window: string;
             utilization?: number;
@@ -2432,9 +2426,10 @@ export function projectProviderRuntimeActivities(
           }
           return limit;
         });
+      const { resetsAt: _rawResetsAt, ...rlWithoutResetsAt } = rl;
       const normalizedPayload = {
         provider: event.provider,
-        ...rl,
+        ...rlWithoutResetsAt,
         ...(resetsAt ? { resetsAt } : {}),
         ...(typeof rl.utilization === "number" ? { utilization: rl.utilization } : {}),
         ...(limits && limits.length > 0 ? { limits } : {}),

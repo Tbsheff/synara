@@ -1861,6 +1861,13 @@ function applyTypedActivityFields(
   const reasoning = decodeOptionalField(payload.reasoning, decodeReasoningDetails);
   if (reasoning) {
     entry.reasoning = reasoning;
+    const reasoningDetail =
+      entry.detail === undefined && reasoning.redacted !== true && reasoning.summary
+        ? stripTrailingExitCode(stripTerminalControlSequences(reasoning.summary)).output
+        : undefined;
+    if (reasoningDetail) {
+      entry.detail = reasoningDetail;
+    }
   }
 }
 
