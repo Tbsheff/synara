@@ -6,11 +6,13 @@
 // Layer: Web domain helpers (no React)
 // Exports: pullRequestDetailInputKey, pullRequestPaneTabLabel, pullRequestDetailInputFromPane,
 //          describePullRequestState, stripHtmlComments, PullRequestTimelineEvent,
-//          buildPullRequestTimelineEvents
 
 import type {
+  PullRequestAction,
+  PullRequestActionInput,
   PullRequestDetail,
   PullRequestDetailInput,
+  PullRequestMergeMethod,
   PullRequestState,
 } from "@synara/contracts";
 
@@ -166,5 +168,19 @@ export function describePullRequestChecksBrief(
   return {
     tone: failing > 0 ? "failure" : pending > 0 ? "pending" : successful > 0 ? "success" : "none",
     label,
+  };
+}
+
+export function buildPullRequestActionInput(
+  input: PullRequestDetailInput,
+  action: PullRequestAction,
+  method: PullRequestMergeMethod | undefined,
+  headSha: string | null | undefined,
+): PullRequestActionInput {
+  return {
+    ...input,
+    action,
+    ...(method ? { mergeMethod: method } : {}),
+    ...(action === "merge" && headSha ? { expectedHeadSha: headSha } : {}),
   };
 }

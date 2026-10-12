@@ -18,7 +18,10 @@ import {
   withStableCheckKeys,
 } from "~/components/chat/environment/environmentPullRequest.logic";
 import { ChatBubbleIcon, GitBranchIcon, UsersIcon } from "~/lib/icons";
-import { pullRequestCommentMutationOptions } from "~/lib/pullRequestReactQuery";
+import {
+  pullRequestActionMutationOptions,
+  pullRequestCommentMutationOptions,
+} from "~/lib/pullRequestReactQuery";
 import { formatRelativeTime } from "~/lib/relativeTime";
 import { ensureNativeApi } from "~/nativeApi";
 import { describePullRequestState } from "./pullRequestDetail.logic";
@@ -43,6 +46,7 @@ import {
   PR_FINE_TEXT_CLASS_NAME,
   PR_META_TEXT_CLASS_NAME,
 } from "./pullRequestText";
+import { toastManager } from "~/components/ui/toast";
 import { cn } from "~/lib/utils";
 
 /** A branch name in the Branch meta row (head and base render identically). Plain text at the
@@ -94,6 +98,8 @@ export function GitHubItemComments({
   warning,
   target,
   mutation,
+  onReview,
+  onResolve,
 }: {
   comments: ReadonlyArray<PullRequestComment>;
   itemUrl: string;
@@ -102,6 +108,10 @@ export function GitHubItemComments({
   warning: string | null;
   target: GitHubCommentTarget;
   mutation: GitHubCommentMutation;
+  onReview?:
+    | ((action: "approve" | "request_changes" | "review_comment", body: string) => Promise<unknown>)
+    | undefined;
+  onResolve?: ((threadId: string, resolved: boolean) => void) | undefined;
 }) {
   return (
     <div className="space-y-2">
@@ -119,17 +129,26 @@ export function GitHubItemComments({
               prUrl={itemUrl}
               workspaceRoot={workspaceRoot}
               defaultOpen={index >= comments.length - 2}
+              target={target}
+              mutation={mutation}
+              onResolve={onResolve}
+              replyCommentId={
+                comments.find((root) => root.threadId === comment.threadId && !root.replyToId)
+                  ?.databaseId
+              }
             />
           ))}
         </div>
       )}
-      <PullRequestCommentComposer target={target} mutation={mutation} />
+      <PullRequestCommentComposer target={target} mutation={mutation} onReview={onReview} />
     </div>
   );
 }
 
 function PullRequestComments({ detail }: { detail: PullRequestDetail }) {
   const commentMutation = usePullRequestCommentMutation();
+  const queryClient = useQueryClient();
+  const actionMutation = useMutation(pullRequestActionMutationOptions(queryClient));
   return (
     <GitHubItemComments
       comments={detail.comments}
@@ -137,13 +156,46 @@ function PullRequestComments({ detail }: { detail: PullRequestDetail }) {
       workspaceRoot={detail.workspaceRoot}
       warning={
         detail.commentsIncomplete
-          ? "Some unresolved review comments could not be loaded. Check GitHub for the complete review."
+          ? "Some review comments could not be loaded. Check GitHub for the complete review."
           : detail.commentsTruncated
-            ? "More unresolved review comments may be available on GitHub."
+            ? "More review comments may be available on GitHub."
             : null
       }
       target={detail}
-      mutation={commentMutation}
+      mutation={{
+        ...commentMutation,
+        isPending: commentMutation.isPending || actionMutation.isPending,
+      }}
+      onReview={
+        detail.state === "open" && !detail.isDraft && detail.headSha
+          ? (action, body) =>
+              actionMutation.mutateAsync({
+                projectId: detail.projectId,
+                repository: detail.repository,
+                number: detail.number,
+                action,
+                expectedHeadSha: detail.headSha!,
+                ...(body ? { body } : {}),
+              })
+          : undefined
+      }
+      onResolve={(reviewThreadId, resolved) => {
+        void actionMutation
+          .mutateAsync({
+            projectId: detail.projectId,
+            repository: detail.repository,
+            number: detail.number,
+            action: resolved ? "resolve_thread" : "unresolve_thread",
+            reviewThreadId,
+          })
+          .catch((error: unknown) =>
+            toastManager.add({
+              type: "error",
+              title: "Could not update review thread",
+              description: error instanceof Error ? error.message : "Review thread update failed.",
+            }),
+          );
+      }}
     />
   );
 }

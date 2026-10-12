@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import type { PullRequestComment, PullRequestCommit } from "@synara/contracts";
+import { ProjectId, type PullRequestComment, type PullRequestCommit } from "@synara/contracts";
 
 import type { RightDockPane } from "~/rightDockStore.logic";
 
 import {
+  buildPullRequestActionInput,
   buildPullRequestTimelineEvents,
   pullRequestDetailInputFromPane,
   stripHtmlComments,
@@ -218,5 +219,30 @@ describe("describePullRequestChecksBrief", () => {
         { status: "success" },
       ]),
     ).toEqual({ tone: "failure", label: "1 failing, 1 pending, 1 successful" });
+  });
+});
+
+describe("buildPullRequestActionInput", () => {
+  const input = { projectId: ProjectId.makeUnsafe("project-1"), repository: "acme/app", number: 7 };
+
+  it("binds a merge to the head commit the user reviewed", () => {
+    expect(buildPullRequestActionInput(input, "merge", "squash", "abc123")).toEqual({
+      ...input,
+      action: "merge",
+      mergeMethod: "squash",
+      expectedHeadSha: "abc123",
+    });
+  });
+
+  it("sends no head binding when the head is unknown or the action is not a merge", () => {
+    expect(buildPullRequestActionInput(input, "merge", "merge", null)).toEqual({
+      ...input,
+      action: "merge",
+      mergeMethod: "merge",
+    });
+    expect(buildPullRequestActionInput(input, "close", undefined, "abc123")).toEqual({
+      ...input,
+      action: "close",
+    });
   });
 });

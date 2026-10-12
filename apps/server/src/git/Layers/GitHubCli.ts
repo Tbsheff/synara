@@ -51,7 +51,7 @@ const PULL_REQUEST_DIFF_MAX_BYTES = 8 * 1024 * 1024;
 const GITHUB_HOST = "github.com";
 
 export const PULL_REQUEST_DETAIL_JSON_FIELDS =
-  "number,title,body,url,author,state,isDraft,mergeable,mergeStateStatus,additions,deletions,changedFiles,headRefName,baseRefName,reviewDecision,reviewRequests,reviews,comments,statusCheckRollup,commits,labels,maintainerCanModify,createdAt,updatedAt,mergedAt,closedAt";
+  "number,title,body,url,author,state,isDraft,mergeable,mergeStateStatus,additions,deletions,changedFiles,headRefName,baseRefName,reviewDecision,reviewRequests,reviews,comments,statusCheckRollup,commits,labels,maintainerCanModify,createdAt,updatedAt,mergedAt,closedAt,headRefOid";
 
 /**
  * GitHub's primary ("API rate limit exceeded"), secondary ("secondary rate limit"), and abuse
@@ -319,6 +319,7 @@ const RawPullRequestDetailSchema = Schema.Struct({
   commits: Schema.optional(Schema.NullOr(Schema.Array(RawCommitSchema))),
   maintainerCanModify: Schema.optional(Schema.NullOr(Schema.Boolean)),
   closedAt: Schema.optional(Schema.NullOr(Schema.String)),
+  headRefOid: Schema.optional(Schema.NullOr(Schema.String)),
 });
 
 const RawGitHubPullRequestWithChecksSchema = Schema.Struct({
@@ -332,7 +333,10 @@ const PULL_REQUEST_REVIEW_THREAD_PAGE_LIMIT = 5;
 const PULL_REQUEST_REVIEW_COMMENT_LIMIT = 20;
 const PULL_REQUEST_STACK_ENTRY_LIMIT = 100;
 const PULL_REQUEST_ASYNC_MERGE_POLL_LIMIT = 300;
-
+const PULL_REQUEST_HEAD_CHANGED_DETAIL =
+  "This pull request changed after you reviewed it. Review the new changes and try again.";
+const PULL_REQUEST_HEAD_CHANGED_PATTERN =
+  /head branch was modified|head.*(?:sha|commit).*(?:match|changed)|sha.*(?:match|changed)/i;
 // GraphQL review-threads query: resolved threads are filtered after fetch because GitHub's
 // reviewThreads connection does not expose an unresolved-only argument.
 const PULL_REQUEST_REVIEW_THREADS_QUERY = `query($owner: String!, $repo: String!, $number: Int!, $first: Int!, $after: String) {
@@ -340,10 +344,17 @@ const PULL_REQUEST_REVIEW_THREADS_QUERY = `query($owner: String!, $repo: String!
     pullRequest(number: $number) {
       reviewThreads(first: $first, after: $after) {
         nodes {
+          id
           isResolved
-          comments(first: 1) {
+          line
+          originalLine
+          diffSide
+          comments(first: 100) {
+            pageInfo { hasNextPage endCursor }
             nodes {
               id
+              databaseId
+              replyTo { id }
               body
               path
               url
@@ -402,6 +413,8 @@ const RawGraphQlErrorSchema = Schema.Struct({
 
 const RawReviewThreadCommentSchema = Schema.Struct({
   id: TrimmedNonEmptyString,
+  databaseId: Schema.optional(Schema.NullOr(PositiveInt)),
+  replyTo: Schema.optional(Schema.NullOr(Schema.Struct({ id: Schema.String }))),
   body: Schema.optional(Schema.NullOr(Schema.String)),
   path: Schema.optional(Schema.NullOr(Schema.String)),
   url: Schema.optional(Schema.NullOr(Schema.String)),
@@ -416,10 +429,20 @@ const RawReviewThreadCommentSchema = Schema.Struct({
 });
 
 const RawReviewThreadSchema = Schema.Struct({
+  id: Schema.optional(Schema.String),
+  line: Schema.optional(Schema.NullOr(PositiveInt)),
+  originalLine: Schema.optional(Schema.NullOr(PositiveInt)),
+  diffSide: Schema.optional(Schema.NullOr(Schema.Literals(["LEFT", "RIGHT"]))),
   isResolved: Schema.optional(Schema.NullOr(Schema.Boolean)),
   comments: Schema.optional(
     Schema.NullOr(
       Schema.Struct({
+        pageInfo: Schema.optional(
+          Schema.Struct({
+            hasNextPage: Schema.Boolean,
+            endCursor: Schema.optional(Schema.NullOr(Schema.String)),
+          }),
+        ),
         nodes: Schema.optional(
           Schema.NullOr(Schema.Array(Schema.NullOr(RawReviewThreadCommentSchema))),
         ),
@@ -427,6 +450,21 @@ const RawReviewThreadSchema = Schema.Struct({
     ),
   ),
 });
+
+const RawReviewThreadRepliesResponseSchema = Schema.Struct({
+  errors: Schema.optional(Schema.NullOr(Schema.Array(Schema.NullOr(RawGraphQlErrorSchema)))),
+  data: Schema.optional(
+    Schema.NullOr(Schema.Struct({ node: Schema.optional(Schema.NullOr(RawReviewThreadSchema)) })),
+  ),
+});
+const PULL_REQUEST_REVIEW_THREAD_REPLIES_QUERY = `query($id: ID!, $after: String!) {
+  node(id: $id) { ... on PullRequestReviewThread {
+    comments(first: 100, after: $after) {
+      pageInfo { hasNextPage endCursor }
+      nodes { id databaseId replyTo { id } body path url createdAt author { login } }
+    }
+  } }
+}`;
 
 const RawReviewThreadsResponseSchema = Schema.Struct({
   errors: Schema.optional(Schema.NullOr(Schema.Array(Schema.NullOr(RawGraphQlErrorSchema)))),
@@ -545,6 +583,7 @@ const RawAsyncMergeResultSchema = Schema.Struct({
   details: Schema.Struct({
     message: Schema.optional(Schema.NullOr(Schema.String)),
     uuid: Schema.optional(Schema.NullOr(Schema.String)),
+    expected_head_sha: Schema.optional(Schema.NullOr(Schema.String)),
   }),
 });
 
@@ -789,6 +828,7 @@ function normalizePullRequestDetail(
     mergedAt: raw.mergedAt?.trim() || null,
     closedAt: raw.closedAt?.trim() || null,
     maintainerCanModify: raw.maintainerCanModify === true,
+    headSha: raw.headRefOid?.trim() || null,
     reviewers: [...reviewers.values()],
     checks: normalizeDetailedChecks(raw),
     comments: normalizeDetailComments(raw),
@@ -809,25 +849,35 @@ function normalizePullRequestDetail(
 
 function normalizePullRequestReviewComments(
   raw: Schema.Schema.Type<typeof RawReviewThreadsResponseSchema>,
+  includeResolved = false,
 ): GitPullRequestComment[] {
   const threads = raw.data?.repository?.pullRequest?.reviewThreads?.nodes ?? [];
   const comments: GitPullRequestComment[] = [];
   for (const thread of threads) {
-    if (!thread || thread.isResolved === true) {
+    if (!thread || (!includeResolved && thread.isResolved === true)) {
       continue;
     }
-    const rootComment = thread.comments?.nodes?.find((node) => node !== null) ?? null;
-    if (!rootComment) {
-      continue;
+    const nodes = thread.comments?.nodes?.filter((node) => node !== null) ?? [];
+    for (const comment of includeResolved ? nodes : nodes.slice(0, 1)) {
+      comments.push({
+        id: comment.id,
+        author: comment.author?.login?.trim() || null,
+        body: comment.body ?? "",
+        path: comment.path ?? null,
+        url: comment.url ?? null,
+        createdAt: comment.createdAt?.trim() || null,
+        ...(includeResolved
+          ? {
+              threadId: thread.id,
+              resolved: thread.isResolved === true,
+              line: thread.line ?? thread.originalLine ?? null,
+              side: thread.diffSide ?? null,
+              replyToId: comment.replyTo?.id ?? null,
+              ...(comment.databaseId ? { databaseId: comment.databaseId } : {}),
+            }
+          : {}),
+      });
     }
-    comments.push({
-      id: rootComment.id,
-      author: rootComment.author?.login?.trim() || null,
-      body: rootComment.body ?? "",
-      path: rootComment.path?.trim() || null,
-      url: rootComment.url ?? null,
-      createdAt: rootComment.createdAt?.trim() || null,
-    });
   }
   return comments;
 }
@@ -2030,6 +2080,7 @@ const makeGitHubCli = Effect.gen(function* () {
     readonly repository: string;
     readonly number: number;
     readonly mergeMethod: "merge" | "squash" | "rebase";
+    readonly expectedHeadSha: string | undefined;
   }): Effect.Effect<
     { readonly mergeOutcome: "merged" | "enqueued" | "unavailable" },
     GitHubCliError
@@ -2039,7 +2090,11 @@ const makeGitHubCli = Effect.gen(function* () {
       const submission = yield* execute({
         cwd: input.cwd,
         args: ["api", "--hostname", GITHUB_HOST, "--method", "PUT", endpoint, "--input", "-"],
-        stdin: JSON.stringify({ merge_method: input.mergeMethod, merge_action: "default" }),
+        stdin: JSON.stringify({
+          merge_method: input.mergeMethod,
+          merge_action: "default",
+          sha: input.expectedHeadSha,
+        }),
         // A duplicate in-flight request is HTTP 409 but returns the existing UUID, while a
         // closed/draft PR is HTTP 400 with a terminal `failed` result. Both bodies are useful.
         allowNonZeroExit: true,
@@ -2053,6 +2108,15 @@ const makeGitHubCli = Effect.gen(function* () {
         return { mergeOutcome: "unavailable" };
       }
       let result = yield* decodeAsyncMergeResult(submission);
+      if (
+        submission.code !== 0 &&
+        result.status === "pending" &&
+        result.details.expected_head_sha !== input.expectedHeadSha
+      )
+        return yield* new GitHubCliError({
+          operation: "runPullRequestAction",
+          detail: PULL_REQUEST_HEAD_CHANGED_DETAIL,
+        });
 
       for (let pollCount = 0; pollCount <= PULL_REQUEST_ASYNC_MERGE_POLL_LIMIT; pollCount += 1) {
         switch (result.status) {
@@ -2060,15 +2124,21 @@ const makeGitHubCli = Effect.gen(function* () {
             return { mergeOutcome: "merged" };
           case "enqueued":
             return { mergeOutcome: "enqueued" };
-          case "failed":
+          case "failed": {
+            const message = result.details.message?.trim();
             return yield* Effect.fail(
               new GitHubCliError({
                 operation: "runPullRequestAction",
                 detail:
-                  result.details.message?.trim() || "GitHub could not merge the pull request.",
+                  input.expectedHeadSha !== undefined &&
+                  message !== undefined &&
+                  PULL_REQUEST_HEAD_CHANGED_PATTERN.test(message)
+                    ? PULL_REQUEST_HEAD_CHANGED_DETAIL
+                    : message || "GitHub could not merge the pull request.",
                 reason: "other",
               }),
             );
+          }
           case "pending": {
             const uuid = result.details.uuid?.trim();
             if (!uuid) {
@@ -2464,11 +2534,21 @@ const makeGitHubCli = Effect.gen(function* () {
             const reference = String(input.number);
             const repoArgs = ["--repo", repositorySelector(repository)];
             if (input.action === "merge") {
+              const expectedHeadSha = input.expectedHeadSha;
+              if (!expectedHeadSha)
+                return Effect.fail(
+                  new GitHubCliError({
+                    operation: "runPullRequestAction",
+                    detail:
+                      "The reviewed head commit is required. Reload this pull request before merging.",
+                  }),
+                );
               return runAsyncPullRequestMerge({
                 cwd: input.cwd,
                 repository,
                 number: input.number,
                 mergeMethod: input.mergeMethod ?? "merge",
+                expectedHeadSha,
               }).pipe(
                 Effect.flatMap((result) =>
                   result.mergeOutcome !== "unavailable"
@@ -2481,10 +2561,134 @@ const makeGitHubCli = Effect.gen(function* () {
                           reference,
                           ...repoArgs,
                           `--${input.mergeMethod ?? "merge"}`,
+                          ...(expectedHeadSha !== undefined
+                            ? ["--match-head-commit", expectedHeadSha]
+                            : []),
                         ],
-                      }).pipe(Effect.as({ mergeOutcome: "merged" as const })),
+                      }).pipe(
+                        Effect.as({ mergeOutcome: "merged" as const }),
+                        Effect.mapError((error) =>
+                          expectedHeadSha !== undefined &&
+                          PULL_REQUEST_HEAD_CHANGED_PATTERN.test(error.detail)
+                            ? new GitHubCliError({
+                                operation: "runPullRequestAction",
+                                detail: PULL_REQUEST_HEAD_CHANGED_DETAIL,
+                                reason: "other",
+                                cause: error,
+                              })
+                            : error,
+                        ),
+                      ),
                 ),
               );
+            }
+            if (
+              input.action === "approve" ||
+              input.action === "request_changes" ||
+              input.action === "review_comment"
+            ) {
+              return Effect.gen(function* () {
+                const detail = yield* service.getPullRequestDetail({
+                  cwd: input.cwd,
+                  repository,
+                  number: input.number,
+                });
+                const viewer = yield* service.getViewerLogin({ cwd: input.cwd });
+                if (
+                  detail.state !== "open" ||
+                  detail.isDraft ||
+                  (input.action !== "review_comment" &&
+                    detail.author?.login.toLowerCase() === viewer.toLowerCase())
+                ) {
+                  return yield* new GitHubCliError({
+                    operation: "runPullRequestAction",
+                    detail: "This pull request cannot receive this review.",
+                  });
+                }
+                if (!input.expectedHeadSha || detail.headSha !== input.expectedHeadSha)
+                  return yield* new GitHubCliError({
+                    operation: "runPullRequestAction",
+                    detail: PULL_REQUEST_HEAD_CHANGED_DETAIL,
+                  });
+                if (input.action !== "approve" && !input.body?.trim())
+                  return yield* new GitHubCliError({
+                    operation: "runPullRequestAction",
+                    detail: "A review comment is required.",
+                  });
+                yield* execute({
+                  cwd: input.cwd,
+                  args: [
+                    "api",
+                    "--hostname",
+                    GITHUB_HOST,
+                    "--method",
+                    "POST",
+                    `repos/${repository}/pulls/${input.number}/reviews`,
+                    "--input",
+                    "-",
+                  ],
+                  stdin: JSON.stringify({
+                    event:
+                      input.action === "approve"
+                        ? "APPROVE"
+                        : input.action === "request_changes"
+                          ? "REQUEST_CHANGES"
+                          : "COMMENT",
+                    commit_id: input.expectedHeadSha,
+                    ...(input.body ? { body: input.body } : {}),
+                  }),
+                });
+                return { mergeOutcome: null };
+              });
+            }
+            if (input.action === "resolve_thread" || input.action === "unresolve_thread") {
+              return Effect.gen(function* () {
+                const [owner = "", repo = ""] = repository.split("/");
+                const threads = yield* service.getPullRequestReviewComments({
+                  cwd: input.cwd,
+                  host: GITHUB_HOST,
+                  owner,
+                  repo,
+                  number: input.number,
+                  includeResolved: true,
+                });
+                if (
+                  !input.reviewThreadId ||
+                  !threads.comments.some((comment) => comment.threadId === input.reviewThreadId)
+                )
+                  return yield* new GitHubCliError({
+                    operation: "runPullRequestAction",
+                    detail: "The review thread does not belong to this pull request.",
+                  });
+                const mutation =
+                  input.action === "resolve_thread"
+                    ? "resolveReviewThread"
+                    : "unresolveReviewThread";
+                const result = yield* execute({
+                  cwd: input.cwd,
+                  args: ["api", "graphql", "--hostname", GITHUB_HOST, "--input", "-"],
+                  stdin: JSON.stringify({
+                    query: `mutation($id: ID!) { ${mutation}(input: {threadId: $id}) { thread { id isResolved } } }`,
+                    variables: { id: input.reviewThreadId },
+                  }),
+                });
+                const response = yield* Effect.try({
+                  try: () => JSON.parse(result.stdout) as { errors?: Array<{ message?: string }> },
+                  catch: (cause) =>
+                    new GitHubCliError({
+                      operation: "runPullRequestAction",
+                      detail: "Invalid review-thread response",
+                      cause,
+                    }),
+                });
+                const error = getGraphQlErrorDetail(response);
+                if (error)
+                  return yield* new GitHubCliError({
+                    operation: "runPullRequestAction",
+                    detail: error,
+                  });
+                return { mergeOutcome: null };
+              });
             }
             let args: string[];
             switch (input.action) {
@@ -2510,24 +2714,35 @@ const makeGitHubCli = Effect.gen(function* () {
     commentOnPullRequest: (input) =>
       validateRepository(input.repository, "commentOnPullRequest").pipe(
         Effect.flatMap((repository) =>
-          // Body travels over stdin (--body-file -): argv is visible in process listings and
-          // is echoed back inside process-runner failure messages, so it must never carry
-          // user-authored content.
-          execute({
-            cwd: input.cwd,
-            args: [
-              "pr",
-              "comment",
-              String(input.number),
-              "--repo",
-              repositorySelector(repository),
-              "--body-file",
-              "-",
-            ],
-            stdin: input.body,
-          }),
+          input.replyToCommentId !== undefined
+            ? execute({
+                cwd: input.cwd,
+                args: [
+                  "api",
+                  "--hostname",
+                  GITHUB_HOST,
+                  "--method",
+                  "POST",
+                  `repos/${repository}/pulls/${input.number}/comments/${input.replyToCommentId}/replies`,
+                  "--input",
+                  "-",
+                ],
+                stdin: JSON.stringify({ body: input.body }),
+              }).pipe(Effect.asVoid)
+            : execute({
+                cwd: input.cwd,
+                args: [
+                  "pr",
+                  "comment",
+                  String(input.number),
+                  "--repo",
+                  repositorySelector(repository),
+                  "--body-file",
+                  "-",
+                ],
+                stdin: input.body,
+              }).pipe(Effect.asVoid),
         ),
-        Effect.asVoid,
       ),
     listOpenPullRequests: (input) =>
       listPullRequestsWithState(input, {
@@ -2598,7 +2813,7 @@ const makeGitHubCli = Effect.gen(function* () {
             "--hostname",
             input.host,
             "-f",
-            `query=${PULL_REQUEST_REVIEW_THREADS_QUERY}`,
+            `query=${input.includeResolved ? PULL_REQUEST_REVIEW_THREADS_QUERY : PULL_REQUEST_REVIEW_THREADS_QUERY.replace("comments(first: 100)", "comments(first: 1)")}`,
             "-F",
             `owner=${input.owner}`,
             "-F",
@@ -2629,8 +2844,77 @@ const makeGitHubCli = Effect.gen(function* () {
             );
           }
 
-          const remaining = PULL_REQUEST_REVIEW_COMMENT_LIMIT - comments.length;
-          const pageComments = normalizePullRequestReviewComments(decoded);
+          const pageComments = normalizePullRequestReviewComments(decoded, input.includeResolved);
+          if (input.includeResolved) {
+            for (const thread of decoded.data?.repository?.pullRequest?.reviewThreads?.nodes ??
+              []) {
+              let next = thread?.comments?.pageInfo;
+              const seen = new Set<string>();
+              while (next?.hasNextPage) {
+                const cursor = next.endCursor;
+                if (
+                  !thread?.id ||
+                  !cursor ||
+                  seen.has(cursor) ||
+                  pageComments.length + comments.length >= 1000
+                ) {
+                  truncated = true;
+                  break;
+                }
+                seen.add(cursor);
+                const rawReplies = yield* execute({
+                  cwd: input.cwd,
+                  args: [
+                    "api",
+                    "graphql",
+                    "--hostname",
+                    input.host,
+                    "-f",
+                    `query=${PULL_REQUEST_REVIEW_THREAD_REPLIES_QUERY}`,
+                    "-F",
+                    `id=${thread.id}`,
+                    "-F",
+                    `after=${cursor}`,
+                  ],
+                });
+                const replies = yield* decodeGitHubJson(
+                  rawReplies.stdout.trim(),
+                  RawReviewThreadRepliesResponseSchema,
+                  "getPullRequestReviewComments",
+                  "GitHub CLI returned invalid review replies JSON.",
+                );
+                const error = getGraphQlErrorDetail(replies);
+                if (error)
+                  return yield* new GitHubCliError({
+                    operation: "getPullRequestReviewComments",
+                    detail: error,
+                  });
+                if (!replies.data?.node?.comments) {
+                  truncated = true;
+                  break;
+                }
+                pageComments.push(
+                  ...normalizePullRequestReviewComments(
+                    {
+                      data: {
+                        repository: {
+                          pullRequest: {
+                            reviewThreads: {
+                              nodes: [{ ...thread, comments: replies.data.node.comments }],
+                            },
+                          },
+                        },
+                      },
+                    },
+                    true,
+                  ),
+                );
+                next = replies.data.node.comments.pageInfo;
+              }
+            }
+          }
+          const remaining =
+            (input.includeResolved ? 1000 : PULL_REQUEST_REVIEW_COMMENT_LIMIT) - comments.length;
           if (pageComments.length > remaining) {
             truncated = true;
           }
@@ -2640,7 +2924,7 @@ const makeGitHubCli = Effect.gen(function* () {
           const canFetchNextPage =
             pageInfo.hasNextPage &&
             pageInfo.endCursor !== null &&
-            comments.length < PULL_REQUEST_REVIEW_COMMENT_LIMIT &&
+            comments.length < (input.includeResolved ? 1000 : PULL_REQUEST_REVIEW_COMMENT_LIMIT) &&
             fetchedPages < PULL_REQUEST_REVIEW_THREAD_PAGE_LIMIT;
           // hasNextPage alone marks truncation: a null endCursor still means threads remain,
           // we just cannot page to them.

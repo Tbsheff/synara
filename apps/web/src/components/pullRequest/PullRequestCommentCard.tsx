@@ -1,10 +1,4 @@
 // FILE: PullRequestCommentCard.tsx
-// Purpose: One review/issue comment as a plain collapsible row (hairline-separated, no card
-//          chrome): avatar + author leading, timestamp + per-row collapse chevron trailing,
-//          finding-style comments elevated into a title + severity subheading, and a "Reply"
-//          affordance that always opens the comment's own GitHub URL externally (falling back
-//          to the PR URL when the comment has none) — never the in-app browser, since replying
-//          has to happen on GitHub itself.
 // Layer: Pull request presentation
 // Exports: PullRequestCommentCard
 
@@ -22,6 +16,12 @@ import {
 } from "./pullRequestText";
 import { ensureNativeApi } from "~/nativeApi";
 import { PullRequestActorLabel } from "./PullRequestActorLabel";
+import {
+  PullRequestCommentComposer,
+  type GitHubCommentTarget,
+  type GitHubCommentMutation,
+} from "./PullRequestCommentComposer";
+import { Button } from "~/components/ui/button";
 import { PullRequestMarkdown } from "./PullRequestMarkdown";
 import { parseFindingComment, type PullRequestCommentSeverity } from "./pullRequestComment.logic";
 
@@ -36,6 +36,10 @@ export function PullRequestCommentCard({
   prUrl,
   workspaceRoot,
   defaultOpen: defaultOpenProp,
+  target,
+  mutation,
+  onResolve,
+  replyCommentId,
 }: {
   comment: PullRequestComment;
   prUrl: string;
@@ -43,8 +47,13 @@ export function PullRequestCommentCard({
   /** Long threads start older comments collapsed so the tab doesn't eagerly render
    *  dozens of markdown trees. */
   defaultOpen?: boolean;
+  target?: GitHubCommentTarget;
+  mutation?: GitHubCommentMutation;
+  onResolve?: ((threadId: string, resolved: boolean) => void) | undefined;
+  replyCommentId?: number | undefined;
 }) {
   const defaultOpen = defaultOpenProp ?? true;
+  const [replying, setReplying] = useState(false);
   const [open, setOpen] = useState(defaultOpen);
   const finding = parseFindingComment(comment.body);
   const replyUrl = comment.url ?? prUrl;
@@ -77,6 +86,9 @@ export function PullRequestCommentCard({
               )}
             >
               {comment.path}
+              {comment.line ? `:${comment.line} (${comment.side ?? "RIGHT"})` : ""}
+              {comment.resolved ? " · Resolved" : ""}
+              {comment.replyToId ? " · Reply" : ""}
             </span>
           ) : null}
           {finding ? (
@@ -100,10 +112,36 @@ export function PullRequestCommentCard({
             fallback="_No review body._"
             cwd={workspaceRoot}
           />
-          <div className="mt-2 flex justify-end">
+          {replying && target && mutation && comment.databaseId ? (
+            <PullRequestCommentComposer
+              target={target}
+              mutation={{
+                isPending: mutation.isPending,
+                mutateAsync: (input) =>
+                  mutation.mutateAsync({
+                    ...input,
+                    replyToCommentId: replyCommentId ?? comment.databaseId!,
+                  }),
+              }}
+            />
+          ) : null}
+          <div className="mt-2 flex justify-end gap-2">
+            {comment.threadId && onResolve ? (
+              <Button
+                variant="ghost"
+                size="xs"
+                disabled={mutation?.isPending}
+                onClick={() => onResolve(comment.threadId!, !comment.resolved)}
+              >
+                {comment.resolved ? "Reopen thread" : "Resolve thread"}
+              </Button>
+            ) : null}
             <button
               type="button"
-              onClick={() => void ensureNativeApi().shell.openExternal(replyUrl)}
+              onClick={() => {
+                if (target && mutation && comment.databaseId) setReplying(!replying);
+                else void ensureNativeApi().shell.openExternal(replyUrl);
+              }}
               className={cn(
                 PR_META_TEXT_CLASS_NAME,
                 "rounded px-1.5 py-0.5 font-medium text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground",

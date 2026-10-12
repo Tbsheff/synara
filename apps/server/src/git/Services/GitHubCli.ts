@@ -15,6 +15,7 @@ import type {
   GitPullRequestCheck,
   GitPullRequestComment,
   PullRequestActor,
+  PullRequestAction,
   PullRequestCheck,
   PullRequestComment,
   PullRequestCommit,
@@ -202,6 +203,7 @@ export interface GitHubPullRequestDetailData {
   readonly checks: ReadonlyArray<PullRequestCheck>;
   readonly comments: ReadonlyArray<PullRequestComment>;
   readonly commits: ReadonlyArray<PullRequestCommit>;
+  readonly headSha?: string | null;
 }
 
 /**
@@ -324,8 +326,11 @@ export interface GitHubCliShape {
     readonly cwd: string;
     readonly repository: string;
     readonly number: number;
-    readonly action: "merge" | "ready" | "draft" | "close" | "reopen";
+    readonly action: PullRequestAction;
     readonly mergeMethod?: PullRequestMergeMethod;
+    readonly expectedHeadSha?: string;
+    readonly body?: string;
+    readonly reviewThreadId?: string;
   }) => Effect.Effect<{ readonly mergeOutcome: "merged" | "enqueued" | null }, GitHubCliError>;
 
   /**
@@ -336,6 +341,7 @@ export interface GitHubCliShape {
     readonly repository: string;
     readonly number: number;
     readonly body: string;
+    readonly replyToCommentId?: number;
   }) => Effect.Effect<void, GitHubCliError>;
 
   /**
@@ -395,6 +401,7 @@ export interface GitHubCliShape {
     readonly owner: string;
     readonly repo: string;
     readonly number: number;
+    readonly includeResolved?: boolean;
   }) => Effect.Effect<GitHubPullRequestReviewCommentsResult, GitHubCliError>;
 
   /**
