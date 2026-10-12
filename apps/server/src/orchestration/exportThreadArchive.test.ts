@@ -191,3 +191,45 @@ describe("exportThreadArchive", () => {
     );
   });
 });
+
+it("exports ordered work, outcomes and turn links in both archive files", async () => {
+  const activities = [
+    {
+      id: "a2",
+      tone: "tool",
+      kind: "tool.completed",
+      summary: "Build failed",
+      turnId: "turn-a",
+      sequence: 2,
+      createdAt: "2026-06-28T00:00:02.000Z",
+      payload: {
+        commandExecution: {
+          command: "make",
+          output: "compiler error",
+          exitCode: 1,
+          outputTruncated: true,
+        },
+      },
+    },
+    {
+      id: "a1",
+      tone: "info",
+      kind: "approval.resolved",
+      summary: "Approved build",
+      turnId: "turn-a",
+      sequence: 1,
+      createdAt: "2026-06-28T00:00:01.000Z",
+      payload: { decision: "approved" },
+    },
+  ] as unknown as OrchestrationThread["activities"];
+  const entries = readZip(await buildThreadArchiveBytes({ ...sampleThread(), activities }));
+  const json = JSON.parse(
+    entries.find((entry) => entry.name === "thread.json")!.data.toString("utf8"),
+  );
+  expect(json.activities).toEqual([activities[1], activities[0]]);
+  const markdown = entries.find((entry) => entry.name === "transcript.md")!.data.toString("utf8");
+  expect(markdown).toContain("<details>");
+  expect(markdown).toContain("turn-a");
+  expect(markdown).toContain("compiler error");
+  expect(markdown.indexOf("Approved build")).toBeLessThan(markdown.indexOf("Build failed"));
+});
