@@ -42,8 +42,12 @@ describe("CheckpointStoreLive", () => {
     });
     const execute = vi.fn<GitCoreShape["execute"]>((input) => {
       const args = input.args.join(" ");
-      if (args === "rev-parse --git-path index") {
-        return Effect.succeed({ code: 0, stdout: "/repo/.git/index\n", stderr: "" });
+      if (args.startsWith("rev-parse --git-path index --git-path synara-checkpoint-index-")) {
+        return Effect.succeed({
+          code: 0,
+          stdout: "/repo/.git/index\n/repo/.git/synara-checkpoint-index-test\n",
+          stderr: "",
+        });
       }
       if (args === "rev-parse --verify HEAD") {
         return Effect.succeed({ code: 1, stdout: "", stderr: "" });
@@ -94,6 +98,73 @@ describe("CheckpointStoreLive", () => {
     );
   });
 
+  it("serializes captures of different refs in the same worktree", async () => {
+    let releaseAdd: (() => void) | undefined;
+    const addGate = new Promise<void>((resolve) => {
+      releaseAdd = resolve;
+    });
+    let addCalls = 0;
+    const execute = vi.fn<GitCoreShape["execute"]>((input) => {
+      const args = input.args.join(" ");
+      if (args.startsWith("rev-parse --git-path index --git-path synara-checkpoint-index-")) {
+        return Effect.succeed({
+          code: 0,
+          stdout: "/repo/.git/index\n/repo/.git/synara-checkpoint-index-test\n",
+          stderr: "",
+        });
+      }
+      if (args === "rev-parse --verify HEAD") {
+        return Effect.succeed({ code: 1, stdout: "", stderr: "" });
+      }
+      if (args === "add -A -- .") {
+        addCalls += 1;
+        return addCalls === 1
+          ? Effect.promise(() => addGate).pipe(Effect.as({ code: 0, stdout: "", stderr: "" }))
+          : Effect.succeed({ code: 0, stdout: "", stderr: "" });
+      }
+      if (args === "write-tree") {
+        return Effect.succeed({ code: 0, stdout: "tree-oid\n", stderr: "" });
+      }
+      if (args.startsWith("commit-tree ")) {
+        return Effect.succeed({ code: 0, stdout: "commit-oid\n", stderr: "" });
+      }
+      if (args.startsWith("update-ref ")) {
+        return Effect.succeed({ code: 0, stdout: "", stderr: "" });
+      }
+      throw new Error(`Unexpected git args: ${args}`);
+    });
+    const layer = CheckpointStoreLive.pipe(
+      Layer.provide(Layer.succeed(GitCore, { execute } as unknown as GitCoreShape)),
+      Layer.provide(NodeServices.layer),
+    );
+    runtime = ManagedRuntime.make(layer);
+
+    await runtime.runPromise(
+      Effect.gen(function* () {
+        const store = yield* CheckpointStore;
+        const capture = (name: string) =>
+          store
+            .captureCheckpoint({
+              cwd: "/repo",
+              checkpointRef: CheckpointRef.makeUnsafe(`refs/synara-checkpoints/thread/${name}`),
+            })
+            .pipe(Effect.forkChild);
+
+        const first = yield* capture("first");
+        yield* Effect.promise(() => waitFor(() => addCalls === 1));
+        const callsWhileBlocked = execute.mock.calls.length;
+        const second = yield* capture("second");
+        yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 25)));
+        expect(execute.mock.calls.length).toBe(callsWhileBlocked);
+
+        releaseAdd?.();
+        yield* Fiber.join(first);
+        yield* Fiber.join(second);
+        expect(addCalls).toBe(2);
+      }),
+    );
+  });
+
   it("seeds a capture from the working index so Git can reuse its stat cache", async () => {
     const tempDir = mkdtempSync(join(tmpdir(), "synara-checkpoint-index-test-"));
     const workingIndexPath = join(tempDir, "index");
@@ -105,8 +176,12 @@ describe("CheckpointStoreLive", () => {
 
     const execute = vi.fn<GitCoreShape["execute"]>((input) => {
       const args = input.args.join(" ");
-      if (args === "rev-parse --git-path index") {
-        return Effect.succeed({ code: 0, stdout: `${workingIndexPath}\n`, stderr: "" });
+      if (args.startsWith("rev-parse --git-path index --git-path synara-checkpoint-index-")) {
+        return Effect.succeed({
+          code: 0,
+          stdout: `${workingIndexPath}\n${join(tempDir, "synara-checkpoint-index-test")}\n`,
+          stderr: "",
+        });
       }
       if (args === "update-index --really-refresh") {
         const captureIndexPath = input.env?.GIT_INDEX_FILE ?? "";
@@ -167,8 +242,12 @@ describe("CheckpointStoreLive", () => {
     let addCalls = 0;
     const execute = vi.fn<GitCoreShape["execute"]>((input) => {
       const args = input.args.join(" ");
-      if (args === "rev-parse --git-path index") {
-        return Effect.succeed({ code: 0, stdout: "/repo/.git/index\n", stderr: "" });
+      if (args.startsWith("rev-parse --git-path index --git-path synara-checkpoint-index-")) {
+        return Effect.succeed({
+          code: 0,
+          stdout: "/repo/.git/index\n/repo/.git/synara-checkpoint-index-test\n",
+          stderr: "",
+        });
       }
       if (args === "rev-parse --verify HEAD") {
         return Effect.succeed({ code: 1, stdout: "", stderr: "" });
@@ -240,8 +319,12 @@ describe("CheckpointStoreLive", () => {
       if (args === `rev-parse --verify --quiet ${missingRef}^{commit}`) {
         return Effect.succeed({ code: 1, stdout: "", stderr: "" });
       }
-      if (args === "rev-parse --git-path index") {
-        return Effect.succeed({ code: 0, stdout: "/repo/.git/index\n", stderr: "" });
+      if (args.startsWith("rev-parse --git-path index --git-path synara-checkpoint-index-")) {
+        return Effect.succeed({
+          code: 0,
+          stdout: "/repo/.git/index\n/repo/.git/synara-checkpoint-index-test\n",
+          stderr: "",
+        });
       }
       if (args === "rev-parse --verify HEAD") {
         return Effect.succeed({ code: 1, stdout: "", stderr: "" });

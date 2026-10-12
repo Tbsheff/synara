@@ -1387,8 +1387,8 @@ export const makeGitManager = Effect.gen(function* () {
     },
   );
 
-  const status: GitManagerShape["status"] = Effect.fnUntraced(function* (input) {
-    const details = yield* gitCore.statusDetails(input.cwd);
+  const status: GitManagerShape["status"] = Effect.fnUntraced(function* (input, options) {
+    const details = options?.details ?? (yield* gitCore.statusDetails(input.cwd));
 
     const pr =
       details.branch !== null

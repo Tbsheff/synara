@@ -15,6 +15,7 @@ interface ParsedGitStatusPorcelain {
   readonly upstreamRef: string | null;
   readonly aheadCount: number;
   readonly behindCount: number;
+  readonly hasHead: boolean;
   readonly hasWorkingTreeChanges: boolean;
   readonly hasTrackedDeletion: boolean;
   readonly hasUntrackedDirectory: boolean;
@@ -130,6 +131,7 @@ export function parseGitStatusPorcelain(stdout: string): ParsedGitStatusPorcelai
   let upstreamRef: string | null = null;
   let aheadCount = 0;
   let behindCount = 0;
+  let hasHead = true;
   let hasWorkingTreeChanges = false;
   let hasTrackedDeletion = false;
   let hasUntrackedDirectory = false;
@@ -140,6 +142,10 @@ export function parseGitStatusPorcelain(stdout: string): ParsedGitStatusPorcelai
     if (record.startsWith("# branch.head ")) {
       const value = record.slice("# branch.head ".length).trim();
       branch = value.startsWith("(") ? null : value;
+      continue;
+    }
+    if (record.startsWith("# branch.oid ")) {
+      hasHead = record.slice("# branch.oid ".length).trim() !== "(initial)";
       continue;
     }
     if (record.startsWith("# branch.upstream ")) {
@@ -180,6 +186,7 @@ export function parseGitStatusPorcelain(stdout: string): ParsedGitStatusPorcelai
     upstreamRef,
     aheadCount,
     behindCount,
+    hasHead,
     hasWorkingTreeChanges,
     hasTrackedDeletion,
     hasUntrackedDirectory,
@@ -201,5 +208,20 @@ export function countTextFileLines(contents: Uint8Array): number {
     }
   }
 
+  return contents.at(-1) === 10 ? lineFeeds : lineFeeds + 1;
+}
+
+export const GIT_BINARY_PROBE_BYTES = 8000;
+
+export function countGitNumstatAddedLines(contents: Uint8Array, forceText = false): number | null {
+  if (contents.length === 0) return 0;
+  if (!forceText && contents.subarray(0, GIT_BINARY_PROBE_BYTES).includes(0)) return null;
+
+  let lineFeeds = 0;
+  let index = contents.indexOf(10);
+  while (index !== -1) {
+    lineFeeds += 1;
+    index = contents.indexOf(10, index + 1);
+  }
   return contents.at(-1) === 10 ? lineFeeds : lineFeeds + 1;
 }

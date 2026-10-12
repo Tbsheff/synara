@@ -34,6 +34,7 @@ import {
 import { ServiceMap } from "effect";
 import type { Effect } from "effect";
 import type { GitManagerServiceError } from "../Errors.ts";
+import type { GitStatusDetails } from "./GitCore.ts";
 
 export interface GitActionProgressReporter {
   readonly publish: (event: GitActionProgressEvent) => Effect.Effect<void, never>;
@@ -53,6 +54,7 @@ export interface GitManagerShape {
    */
   readonly status: (
     input: GitStatusInput,
+    options?: { readonly details?: GitStatusDetails },
   ) => Effect.Effect<GitStatusResult, GitManagerServiceError>;
 
   /**

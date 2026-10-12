@@ -14,7 +14,7 @@ import { ServiceMap } from "effect";
 import type { Effect } from "effect";
 
 import type { CheckpointStoreError } from "../Errors.ts";
-import { CheckpointRef } from "@synara/contracts";
+import { CheckpointRef, type OrchestrationCheckpointFile } from "@synara/contracts";
 
 export interface CaptureCheckpointInput {
   readonly cwd: string;
@@ -48,6 +48,13 @@ export interface DiffCheckpointsInput {
   readonly fallbackFromToHead?: boolean;
   readonly ignoreWhitespace: boolean;
   readonly maxOutputBytes?: number;
+}
+
+export interface DiffCheckpointFilesInput {
+  readonly cwd: string;
+  readonly fromCheckpointRef: CheckpointRef;
+  readonly toCheckpointRef: CheckpointRef;
+  readonly fallbackFromToHead?: boolean;
 }
 
 export interface ReverseCheckpointDiffInput {
@@ -113,6 +120,10 @@ export interface CheckpointStoreShape {
   readonly diffCheckpoints: (
     input: DiffCheckpointsInput,
   ) => Effect.Effect<string, CheckpointStoreError>;
+
+  readonly diffCheckpointFiles: (
+    input: DiffCheckpointFilesInput,
+  ) => Effect.Effect<ReadonlyArray<OrchestrationCheckpointFile>, CheckpointStoreError>;
 
   /**
    * Reverse only the changes between two checkpoints onto the current workspace.

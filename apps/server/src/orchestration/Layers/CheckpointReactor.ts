@@ -39,7 +39,6 @@ import { OrchestrationEventDeliveryRepository } from "../../persistence/Services
 import { OrchestrationEventDeliveryRepositoryLive } from "../../persistence/Layers/OrchestrationEventDeliveries.ts";
 import { isProviderKind } from "@synara/shared/providerInstances";
 
-import { parseCheckpointFilesFromUnifiedDiff } from "../../checkpointing/Diffs.ts";
 import {
   checkpointRefForThreadMessageStart,
   checkpointRefForThreadRevertRescue,
@@ -628,15 +627,13 @@ const make = Effect.gen(function* () {
 
     const files = fromCheckpointExists
       ? yield* checkpointStore
-          .diffCheckpoints({
+          .diffCheckpointFiles({
             cwd: input.cwd,
             fromCheckpointRef,
             toCheckpointRef: targetCheckpointRef,
             fallbackFromToHead: false,
-            ignoreWhitespace: false,
           })
           .pipe(
-            Effect.flatMap((diff) => parseCheckpointFilesFromUnifiedDiff(diff)),
             Effect.tapError((error) =>
               appendCheckpointIssueActivity({
                 threadId: input.threadId,
@@ -972,20 +969,18 @@ const make = Effect.gen(function* () {
       cwd: checkpointCwd,
       checkpointRef: liveCheckpointRef,
     });
-    const diff = yield* checkpointStore
-      .diffCheckpoints({
+    const files = yield* checkpointStore
+      .diffCheckpointFiles({
         cwd: checkpointCwd,
         fromCheckpointRef,
         toCheckpointRef: liveCheckpointRef,
         fallbackFromToHead: false,
-        ignoreWhitespace: false,
       })
-      .pipe(Effect.catch(() => Effect.succeed("")));
+      .pipe(Effect.catch(() => Effect.succeed([])));
     yield* checkpointStore
       .deleteCheckpointRefs({ cwd: checkpointCwd, checkpointRefs: [liveCheckpointRef] })
       .pipe(Effect.catch(() => Effect.void));
 
-    const files = yield* parseCheckpointFilesFromUnifiedDiff(diff);
     if (files.length === 0) {
       return;
     }

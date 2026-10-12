@@ -19,6 +19,8 @@ export interface CachedGitStatus {
 
 export const REMOTE_STATUS_CACHE_TTL_MS = 30_000;
 
+export const LOCAL_STATUS_SINGLE_FLIGHT_TTL_MS = 1_000;
+
 /**
  * Upper bound on cached working directories.
  *
@@ -103,14 +105,7 @@ export function splitRemoteStatusDetails(
   };
 }
 
-/**
- * The half of the reuse decision that depends only on the cache.
- *
- * Callers check this *before* fetching fresh status details: when the cached remote
- * metadata is absent or expired the details can never be reused, so probing git for
- * them would only be thrown away and repeated by the full status load.
- */
-export function isCachedRemoteStatusFresh(input: {
+function isCachedRemoteStatusFresh(input: {
   readonly cached: CachedGitStatus;
   readonly now?: number;
   readonly ttlMs?: number;

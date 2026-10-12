@@ -41,6 +41,7 @@ import { decodeJsonResult } from "@synara/shared/schemaJson";
 import { GitCheckoutDirtyWorktreeError, GitCommandError } from "../Errors.ts";
 import { parseGitBlamePorcelain } from "../gitBlameParsing.ts";
 import {
+  countGitNumstatAddedLines,
   countTextFileLines,
   normalizeConfiguredMergeBranch,
   parseGitStatusPorcelain,
@@ -140,9 +141,13 @@ const UNCOMMITTED_BLAME_RESULT: GitBlameLineResult = {
 };
 const WORKING_TREE_DIFF_TIMEOUT_MS = 15_000;
 const BLAME_LINE_TIMEOUT_MS = 10_000;
-const MAX_UNTRACKED_DIFF_CONCURRENCY = 4;
+const MAX_UNTRACKED_NUMSTAT_READ_CONCURRENCY = 8;
+const UNTRACKED_NUMSTAT_IN_PROCESS_MAX_BYTES = 8 * 1024 * 1024;
+const UNTRACKED_NUMSTAT_ATTRIBUTES = ["diff", "filter", "working-tree-encoding"] as const;
+const CHECK_ATTR_MAX_ARGUMENT_BYTES = 16 * 1024;
 const MAX_QUEUED_REPOSITORY_MUTATIONS = 64;
 const MOVE_AWARE_WORKING_TREE_STATUS_TIMEOUT_MS = 15_000;
+const INDEX_PATH_CACHE_MAX_ENTRIES = 256;
 const AUTO_DETACHED_WORKTREE_DIRNAME = "synara";
 const WORKTREE_OWNERSHIP_MARKER = "synara-agent-gateway-owner.json";
 const WORKTREE_TRANSFER_MAX_OUTPUT_BYTES = 64 * 1024 * 1024;
@@ -440,6 +445,77 @@ function isSuccessfulNoIndexDiff(result: ExecuteGitResult): boolean {
   // A produced diff record distinguishes the normal case. Stderr is not decisive because
   // Git may emit advisory warnings (for example, line-ending conversion) alongside it.
   return result.code === 0 || (result.code === 1 && result.stdout.length > 0);
+}
+
+type UntrackedNumstatMode = "auto" | "text" | "binary" | "git";
+
+function untrackedNumstatMode(
+  attributes: ReadonlyMap<string, string> | undefined,
+): UntrackedNumstatMode {
+  if (!attributes) return "git";
+  if (
+    attributes.get("filter") !== "unspecified" ||
+    attributes.get("working-tree-encoding") !== "unspecified"
+  ) {
+    return "git";
+  }
+  switch (attributes.get("diff")) {
+    case "unspecified":
+      return "auto";
+    case "set":
+      return "text";
+    case "unset":
+      return "binary";
+    default:
+      return "git";
+  }
+}
+
+function formatAddedFileNumstat(filePath: string, lines: number | null): string {
+  const counts = lines === null ? "-\t-" : `${lines}\t0`;
+  return `${counts}\t\0/dev/null\0${filePath}\0`;
+}
+
+function chunkByArgumentBytes(
+  values: ReadonlyArray<string>,
+  maxBytes: number,
+): ReadonlyArray<ReadonlyArray<string>> {
+  const chunks: string[][] = [];
+  let current: string[] = [];
+  let currentBytes = 0;
+  for (const value of values) {
+    const valueBytes = Buffer.byteLength(value, "utf8") + 1;
+    if (current.length > 0 && currentBytes + valueBytes > maxBytes) {
+      chunks.push(current);
+      current = [];
+      currentBytes = 0;
+    }
+    current.push(value);
+    currentBytes += valueBytes;
+  }
+  if (current.length > 0) chunks.push(current);
+  return chunks;
+}
+
+function parseCheckAttrOutputs(
+  outputs: ReadonlyArray<string>,
+): ReadonlyMap<string, ReadonlyMap<string, string>> {
+  const attributesByPath = new Map<string, Map<string, string>>();
+  for (const output of outputs) {
+    const fields = output.split("\0");
+    for (let index = 0; index + 2 < fields.length; index += 3) {
+      const filePath = fields[index]!;
+      const attribute = fields[index + 1]!;
+      const value = fields[index + 2]!;
+      let attributes = attributesByPath.get(filePath);
+      if (!attributes) {
+        attributes = new Map();
+        attributesByPath.set(filePath, attributes);
+      }
+      attributes.set(attribute, value);
+    }
+  }
+  return attributesByPath;
 }
 
 const DIRTY_WORKTREE_PATTERN =
@@ -1089,50 +1165,94 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         );
       });
 
+    const indexPathByCwd = new Map<string, string>();
+    const resolveIndexPath = (cwd: string) =>
+      Effect.gen(function* () {
+        const indexPathRaw = yield* runGitStdout("GitCore.statusDetails.moveAwareIndexPath", cwd, [
+          "rev-parse",
+          "--git-path",
+          "index",
+        ]).pipe(Effect.map((stdout) => stdout.trim()));
+        if (indexPathRaw.length === 0) return null;
+        const indexPath = resolveGitPath(cwd, indexPathRaw);
+        indexPathByCwd.delete(cwd);
+        if (indexPathByCwd.size >= INDEX_PATH_CACHE_MAX_ENTRIES) {
+          indexPathByCwd.delete(indexPathByCwd.keys().next().value!);
+        }
+        indexPathByCwd.set(cwd, indexPath);
+        return indexPath;
+      });
+
+    const copyIndexFile = (source: string, target: string) =>
+      Effect.tryPromise(() => nodeFs.copyFile(source, target)).pipe(
+        Effect.as(true),
+        Effect.catch((cause) =>
+          hasNodeErrorCode(cause, "ENOENT") ? Effect.succeed(false) : Effect.fail(cause),
+        ),
+      );
+
+    const copyRepositoryIndex = (cwd: string, target: string) =>
+      Effect.gen(function* () {
+        const cachedIndexPath = indexPathByCwd.get(cwd);
+        if (cachedIndexPath !== undefined && (yield* copyIndexFile(cachedIndexPath, target))) {
+          return true;
+        }
+        const indexPath = yield* resolveIndexPath(cwd);
+        if (indexPath === null) return false;
+        yield* copyIndexFile(indexPath, target);
+        return true;
+      });
+
     const readMoveAwareWorkingTreeSummary = (
       cwd: string,
+      untrackedPaths: ReadonlySet<string>,
+      hasHead: boolean,
     ): Effect.Effect<WorkingTreeStatSummary | null, never> =>
       Effect.scoped(
         Effect.gen(function* () {
-          const indexPathRaw = yield* runGitStdout(
-            "GitCore.statusDetails.moveAwareIndexPath",
-            cwd,
-            ["rev-parse", "--git-path", "index"],
-          ).pipe(Effect.map((stdout) => stdout.trim()));
-          if (indexPathRaw.length === 0) {
-            return null;
-          }
-
           const tempIndexDir = yield* fileSystem.makeTempDirectoryScoped({
             prefix: `synara-git-status-index-${process.pid}-`,
           });
           const tempIndexPath = nodePath.join(tempIndexDir, "index");
+          if (!(yield* copyRepositoryIndex(cwd, tempIndexPath))) {
+            return null;
+          }
+          const pathspecPath = nodePath.join(tempIndexDir, "pathspec");
           yield* Effect.tryPromise(() =>
-            nodeFs.copyFile(resolveGitPath(cwd, indexPathRaw), tempIndexPath),
-          ).pipe(
-            Effect.catch((cause) =>
-              hasNodeErrorCode(cause, "ENOENT") ? Effect.void : Effect.fail(cause),
+            nodeFs.writeFile(
+              pathspecPath,
+              [...untrackedPaths].map((filePath) => `:(top,literal)${filePath}\0`).join(""),
             ),
           );
 
           const tempIndexEnv = { GIT_INDEX_FILE: tempIndexPath };
-          // Stage into a copied index only; this lets Git detect directory refactors
-          // without touching the user's real staging area.
           yield* executeGit(
-            "GitCore.statusDetails.moveAwareAddAll",
+            "GitCore.statusDetails.moveAwareIntentToAdd",
             cwd,
-            ["add", "-A", "--", ":/"],
+            [
+              "add",
+              "--intent-to-add",
+              `--pathspec-from-file=${pathspecPath}`,
+              "--pathspec-file-nul",
+            ],
             {
               env: tempIndexEnv,
               timeoutMs: MOVE_AWARE_WORKING_TREE_STATUS_TIMEOUT_MS,
-              fallbackErrorMessage: "git add -A failed while summarizing working tree status",
+              fallbackErrorMessage: "git add -N failed while summarizing working tree status",
             },
           );
 
           const numstatStdout = yield* runGitNulMetadata(
             "GitCore.statusDetails.moveAwareNumstat",
             cwd,
-            ["diff", "--cached", "--numstat", "-z", "--find-renames"],
+            [
+              "diff",
+              "--numstat",
+              "-z",
+              "--find-renames",
+              "--ignore-submodules=dirty",
+              hasHead ? "HEAD" : EMPTY_TREE_OBJECT_ID,
+            ],
             {
               env: tempIndexEnv,
               allowNonZeroExit: true,
@@ -1700,7 +1820,11 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           hasWorkingTreeChanges &&
           untrackedFilesWithoutNumstat.size > 0 &&
           (hasTrackedDeletion || hasUntrackedDirectory)
-            ? yield* readMoveAwareWorkingTreeSummary(cwd)
+            ? yield* readMoveAwareWorkingTreeSummary(
+                cwd,
+                untrackedFilesWithoutNumstat,
+                parsedStatus.hasHead,
+              )
             : null;
         if (moveAwareWorkingTree) {
           return {
@@ -1907,6 +2031,147 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         { allowNonZeroExit: true, ...(env ? { env } : {}) },
       ).pipe(Effect.map((result) => result.stdout.split("\0").filter((entry) => entry.length > 0)));
 
+    const readUntrackedPatchWithNoIndex = (
+      cwd: string,
+      operationPrefix: string,
+      filePath: string,
+      maxOutputBytes: number,
+    ) =>
+      Effect.gen(function* () {
+        const operation = `${operationPrefix}.untrackedPatch`;
+        const args = [
+          "diff",
+          "--no-index",
+          "--patch",
+          "--no-color",
+          "--src-prefix=a/",
+          "--dst-prefix=b/",
+          "--",
+          "/dev/null",
+          filePath,
+        ];
+        const result = yield* executeGit(operation, cwd, args, {
+          allowNonZeroExit: true,
+          timeoutMs: WORKING_TREE_DIFF_TIMEOUT_MS,
+          maxOutputBytes,
+          outputMode: "truncate",
+        });
+        if (!isSuccessfulNoIndexDiff(result)) {
+          const stderr = result.stderr.trim();
+          return yield* createGitCommandError(
+            operation,
+            cwd,
+            args,
+            stderr.length > 0
+              ? stderr
+              : `${commandLabel(args)} failed: code=${result.code ?? "null"}`,
+          );
+        }
+        return result;
+      });
+
+    const withIntentToAddIndex = <A>(
+      cwd: string,
+      operationPrefix: string,
+      filePaths: ReadonlyArray<string>,
+      use: (env: NodeJS.ProcessEnv) => Effect.Effect<A, GitCommandError>,
+    ): Effect.Effect<A, GitCommandError> =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const operation = `${operationPrefix}.untrackedIntentToAdd`;
+          const addArgs = ["add", "--intent-to-add", "--force", "--pathspec-file-nul"];
+          const tempIndexDir = yield* fileSystem
+            .makeTempDirectoryScoped({ prefix: `synara-untracked-index-${process.pid}-` })
+            .pipe(
+              Effect.mapError((cause) =>
+                createGitCommandError(operation, cwd, addArgs, cause.message, cause),
+              ),
+            );
+          const pathspecPath = nodePath.join(tempIndexDir, "pathspec");
+          yield* Effect.tryPromise({
+            try: () =>
+              nodeFs.writeFile(pathspecPath, filePaths.map((filePath) => `${filePath}\0`).join("")),
+            catch: (cause) =>
+              createGitCommandError(operation, cwd, addArgs, "failed to write pathspec.", cause),
+          });
+          const env = {
+            GIT_INDEX_FILE: nodePath.join(tempIndexDir, "index"),
+            GIT_LITERAL_PATHSPECS: "1",
+          };
+          yield* executeGit(operation, cwd, [...addArgs, `--pathspec-from-file=${pathspecPath}`], {
+            env,
+            timeoutMs: WORKING_TREE_DIFF_TIMEOUT_MS,
+            fallbackErrorMessage: "git add --intent-to-add failed",
+          });
+          return yield* use(env);
+        }),
+      );
+
+    const remainingPatchBytes = (accumulator: PatchAccumulator, maxOutputBytes: number) => {
+      const separatorBytes = accumulator.bytes > 0 && !accumulator.endsWithNewline ? 1 : 0;
+      return maxOutputBytes - accumulator.bytes - separatorBytes;
+    };
+
+    const appendUntrackedPatchesWithNoIndex = (
+      cwd: string,
+      operationPrefix: string,
+      accumulator: PatchAccumulator,
+      sortedFiles: ReadonlyArray<string>,
+      maxOutputBytes: number,
+    ) =>
+      Effect.gen(function* () {
+        for (const filePath of sortedFiles) {
+          if (accumulator.truncated) break;
+          const remainingBytes = remainingPatchBytes(accumulator, maxOutputBytes);
+          if (remainingBytes <= 0) {
+            accumulator.truncated = true;
+            break;
+          }
+          const result = yield* readUntrackedPatchWithNoIndex(
+            cwd,
+            operationPrefix,
+            filePath,
+            remainingBytes,
+          );
+          appendPatchSegment(
+            accumulator,
+            result.stdout,
+            result.stdoutTruncated === true,
+            maxOutputBytes,
+          );
+        }
+        return toWorkingTreePatch(accumulator);
+      });
+
+    const readBatchedUntrackedPatch = (
+      cwd: string,
+      operationPrefix: string,
+      sortedFiles: ReadonlyArray<string>,
+      maxOutputBytes: number,
+    ) =>
+      withIntentToAddIndex(cwd, operationPrefix, sortedFiles, (env) =>
+        executeGit(
+          `${operationPrefix}.untrackedPatch`,
+          cwd,
+          [
+            "diff",
+            "--patch",
+            "--no-color",
+            "--no-ext-diff",
+            "--no-renames",
+            "--relative",
+            "--src-prefix=a/",
+            "--dst-prefix=b/",
+          ],
+          {
+            env,
+            timeoutMs: WORKING_TREE_DIFF_TIMEOUT_MS,
+            maxOutputBytes,
+            outputMode: "truncate",
+          },
+        ),
+      );
+
     const readUntrackedPatches = (
       cwd: string,
       operationPrefix: string,
@@ -1921,67 +2186,119 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         ? Effect.succeed(files)
         : listUntrackedFiles(cwd, operationPrefix);
       return resolveFiles.pipe(
-        Effect.flatMap((untrackedFiles) =>
-          Effect.gen(function* () {
-            // Sequential capture is intentional: parallel children would race for the shared
-            // budget and make the retained file prefix nondeterministic. Stop launching work as
-            // soon as the ordered prefix is full.
-            for (const filePath of untrackedFiles.toSorted()) {
-              if (accumulator.truncated) break;
-              const separatorBytes = accumulator.bytes > 0 && !accumulator.endsWithNewline ? 1 : 0;
-              const remainingBytes = maxOutputBytes - accumulator.bytes - separatorBytes;
-              if (remainingBytes <= 0) {
-                accumulator.truncated = true;
-                break;
-              }
-
-              // Git diff omits untracked files, so synthesize a normal patch for each one.
-              const operation = `${operationPrefix}.untrackedPatch`;
-              const args = [
-                "diff",
-                "--no-index",
-                "--patch",
-                "--no-color",
-                "--src-prefix=a/",
-                "--dst-prefix=b/",
-                "--",
-                "/dev/null",
-                filePath,
-              ];
-              const result = yield* executeGit(operation, cwd, args, {
-                allowNonZeroExit: true,
-                timeoutMs: WORKING_TREE_DIFF_TIMEOUT_MS,
-                maxOutputBytes: remainingBytes,
-                outputMode: "truncate",
-              });
-              const stderr = result.stderr.trim();
-              if (!isSuccessfulNoIndexDiff(result)) {
-                return yield* createGitCommandError(
-                  operation,
-                  cwd,
-                  args,
-                  stderr.length > 0
-                    ? stderr
-                    : `${commandLabel(args)} failed: code=${result.code ?? "null"}`,
-                );
-              }
-              appendPatchSegment(
-                accumulator,
-                result.stdout,
-                result.stdoutTruncated === true,
-                maxOutputBytes,
-              );
-            }
-            return toWorkingTreePatch(accumulator);
-          }),
-        ),
+        Effect.flatMap((untrackedFiles) => {
+          const sortedFiles = untrackedFiles.toSorted();
+          const perFile = appendUntrackedPatchesWithNoIndex(
+            cwd,
+            operationPrefix,
+            accumulator,
+            sortedFiles,
+            maxOutputBytes,
+          );
+          const canBatch =
+            sortedFiles.length > 1 && !sortedFiles.some((filePath) => filePath.endsWith("/"));
+          const remainingBytes = remainingPatchBytes(accumulator, maxOutputBytes);
+          if (!canBatch || remainingBytes <= 0) return perFile;
+          return readBatchedUntrackedPatch(cwd, operationPrefix, sortedFiles, remainingBytes).pipe(
+            Effect.matchEffect({
+              onFailure: (cause) =>
+                Effect.logDebug("GitCore: batched untracked patch failed", cause).pipe(
+                  Effect.andThen(perFile),
+                ),
+              onSuccess: (result) =>
+                Effect.sync(() => {
+                  appendPatchSegment(
+                    accumulator,
+                    result.stdout,
+                    result.stdoutTruncated === true,
+                    maxOutputBytes,
+                  );
+                  return toWorkingTreePatch(accumulator);
+                }),
+            }),
+          );
+        }),
       );
     };
 
-    // `git diff --no-index` exits 1 both when it found differences (the expected
-    // outcome for an untracked file vs /dev/null) and when it could not read the
-    // path (e.g. the file vanished between `ls-files` and the diff). Only the former
-    // may be treated as success: it produces a numstat record.
+    const readUntrackedNumstatWithNoIndex = (
+      cwd: string,
+      operationPrefix: string,
+      filePath: string,
+    ) => {
+      const operation = `${operationPrefix}.untrackedNumstat`;
+      const args = ["diff", "--no-index", "--numstat", "-z", "--", "/dev/null", filePath];
+      return executeGit(operation, cwd, args, {
+        allowNonZeroExit: true,
+        timeoutMs: WORKING_TREE_DIFF_TIMEOUT_MS,
+      }).pipe(
+        Effect.flatMap((result) => {
+          if (isSuccessfulNoIndexDiff(result)) {
+            return Effect.succeed(result.stdout);
+          }
+          const stderr = result.stderr.trim();
+          return Effect.fail(
+            createGitCommandError(
+              operation,
+              cwd,
+              args,
+              stderr.length > 0
+                ? stderr
+                : `${commandLabel(args)} failed: code=${result.code ?? "null"}`,
+            ),
+          );
+        }),
+      );
+    };
+
+    const readUntrackedDiffAttributes = (
+      cwd: string,
+      operationPrefix: string,
+      filePaths: ReadonlyArray<string>,
+    ) =>
+      Effect.forEach(
+        chunkByArgumentBytes(filePaths, CHECK_ATTR_MAX_ARGUMENT_BYTES),
+        (chunk) =>
+          runGitNulMetadata(`${operationPrefix}.untrackedAttributes`, cwd, [
+            "check-attr",
+            "-z",
+            ...UNTRACKED_NUMSTAT_ATTRIBUTES,
+            "--",
+            ...chunk,
+          ]),
+        { concurrency: 1 },
+      ).pipe(
+        Effect.map(parseCheckAttrOutputs),
+        Effect.catch((cause) =>
+          Effect.logDebug("GitCore: untracked attribute lookup failed", cause).pipe(
+            Effect.as(new Map<string, ReadonlyMap<string, string>>()),
+          ),
+        ),
+      );
+
+    const readUntrackedNumstatInProcess = (
+      cwd: string,
+      filePath: string,
+      attributes: ReadonlyMap<string, string> | undefined,
+    ): Effect.Effect<string | null> =>
+      Effect.tryPromise(async () => {
+        const mode = untrackedNumstatMode(attributes);
+        if (mode === "git") return null;
+        const absolutePath = nodePath.resolve(cwd, filePath);
+        const stats = await nodeFs.lstat(absolutePath);
+        let contents: Uint8Array;
+        if (stats.isSymbolicLink()) {
+          contents = await nodeFs.readlink(absolutePath, { encoding: "buffer" });
+        } else if (stats.isFile() && stats.size <= UNTRACKED_NUMSTAT_IN_PROCESS_MAX_BYTES) {
+          contents = await nodeFs.readFile(absolutePath);
+        } else {
+          return null;
+        }
+        const lines =
+          mode === "binary" ? null : countGitNumstatAddedLines(contents, mode === "text");
+        return formatAddedFileNumstat(filePath, lines);
+      }).pipe(Effect.catch(() => Effect.succeed(null)));
+
     const readUntrackedNumstats = (
       cwd: string,
       operationPrefix: string,
@@ -1992,35 +2309,26 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         : listUntrackedFiles(cwd, operationPrefix);
       return resolveFiles.pipe(
         Effect.flatMap((untrackedFiles) =>
-          Effect.forEach(
-            untrackedFiles,
-            (filePath) => {
-              const operation = `${operationPrefix}.untrackedNumstat`;
-              const args = ["diff", "--no-index", "--numstat", "-z", "--", "/dev/null", filePath];
-              return executeGit(operation, cwd, args, {
-                allowNonZeroExit: true,
-                timeoutMs: WORKING_TREE_DIFF_TIMEOUT_MS,
-              }).pipe(
-                Effect.flatMap((result) => {
-                  const stderr = result.stderr.trim();
-                  if (isSuccessfulNoIndexDiff(result)) {
-                    return Effect.succeed(result.stdout);
-                  }
-                  return Effect.fail(
-                    createGitCommandError(
-                      operation,
-                      cwd,
-                      args,
-                      stderr.length > 0
-                        ? stderr
-                        : `${commandLabel(args)} failed: code=${result.code ?? "null"}`,
-                    ),
-                  );
-                }),
-              );
-            },
-            { concurrency: MAX_UNTRACKED_DIFF_CONCURRENCY },
-          ),
+          Effect.gen(function* () {
+            if (untrackedFiles.length === 0) return [];
+            const attributesByPath = yield* readUntrackedDiffAttributes(
+              cwd,
+              operationPrefix,
+              untrackedFiles,
+            );
+            return yield* Effect.forEach(
+              untrackedFiles,
+              (filePath) =>
+                readUntrackedNumstatInProcess(cwd, filePath, attributesByPath.get(filePath)).pipe(
+                  Effect.flatMap((numstat) =>
+                    numstat === null
+                      ? readUntrackedNumstatWithNoIndex(cwd, operationPrefix, filePath)
+                      : Effect.succeed(numstat),
+                  ),
+                ),
+              { concurrency: MAX_UNTRACKED_NUMSTAT_READ_CONCURRENCY },
+            );
+          }),
         ),
       );
     };

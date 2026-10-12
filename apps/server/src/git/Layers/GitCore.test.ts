@@ -311,10 +311,10 @@ it.layer(TestLayer)("git integration", (it) => {
         yield* initRepoWithCommit(tmp);
         yield* writeTextFile(path.join(tmp, "a-first.txt"), "a\n".repeat(200));
         yield* writeTextFile(path.join(tmp, "b-second.txt"), "b\n".repeat(200));
-        const diffedFiles: string[] = [];
+        let untrackedPatchSpawns = 0;
         const core = yield* makeIsolatedGitCore((input) => {
           if (input.operation === "GitCore.readUnstagedPatch.untrackedPatch") {
-            diffedFiles.push(input.args.at(-1) ?? "");
+            untrackedPatchSpawns += 1;
             return realCore.execute({ ...input, maxOutputBytes: 64 });
           }
           return realCore.execute(input);
@@ -322,7 +322,9 @@ it.layer(TestLayer)("git integration", (it) => {
 
         const result = yield* core.readUnstagedPatch(tmp);
         expect(result.truncated).toBe(true);
-        expect(diffedFiles).toEqual(["a-first.txt"]);
+        expect(untrackedPatchSpawns).toBe(1);
+        expect(result.patch.startsWith("diff --git a/a-first.txt b/a-first.txt\n")).toBe(true);
+        expect(result.patch).not.toContain("b-second.txt");
       }),
     );
 
