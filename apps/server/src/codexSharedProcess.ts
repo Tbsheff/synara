@@ -12,6 +12,7 @@ export interface CodexSharedProcessIdentity {
   readonly version: string;
   readonly accountId: string;
   readonly authFingerprint: string;
+  readonly configSnapshot: string;
   readonly env: NodeJS.ProcessEnv;
   readonly args: readonly string[];
   readonly lowerPriority: boolean;
@@ -145,6 +146,20 @@ export class CodexSharedProcess<T extends object> {
 
   allocateRequest(owner: T, method: string, params: unknown): number {
     if (this.stopping) throw this.failed ?? new Error("Shared Codex app-server is stopping.");
+    if (
+      method.startsWith("turn/") ||
+      [
+        "review/start",
+        "thread/compact/start",
+        "thread/rollback",
+        "thread/revert",
+        "thread/unsubscribe",
+      ].includes(method)
+    ) {
+      const id = threadId(params);
+      if (!id || this.routes.get(id) !== owner)
+        throw new Error("Codex thread operation has no matching Synara session owner.");
+    }
     if (method === "thread/resume") {
       const id = threadId(params);
       if (id) this.bind(owner, id);
@@ -230,7 +245,12 @@ export class CodexSharedProcess<T extends object> {
     if (this.stopping) {
       await this.stop();
     } else {
-      await this.unload(owner);
+      try {
+        await this.unload(owner);
+      } catch (error) {
+        if (this.members.size > 1) throw error;
+        await this.stop();
+      }
     }
     this.members.delete(owner);
     for (const [id, candidate] of this.routes) if (candidate === owner) this.routes.delete(id);
@@ -240,6 +260,12 @@ export class CodexSharedProcess<T extends object> {
       this.idleTimer = setTimeout(() => void this.stop().catch(() => undefined), this.graceMs);
       this.idleTimer.unref();
     }
+  }
+
+  async interrupt(owner: T, nativeThreadId: string, turnId: string): Promise<void> {
+    if (this.routes.get(nativeThreadId) !== owner)
+      throw new Error("Codex thread interrupt has no matching owner.");
+    await this.control("turn/interrupt", { threadId: nativeThreadId, turnId });
   }
 
   stop(): Promise<void> {
@@ -341,7 +367,17 @@ export class CodexSharedProcess<T extends object> {
     }
     if (!message.method) return;
     const id = threadId(message.params);
-    const owner = id ? this.routes.get(id) : undefined;
+    let owner = id ? this.routes.get(id) : undefined;
+    if (!owner && id && message.method === "thread/started") {
+      const thread = record(record(message.params)?.thread);
+      const source = record(thread?.sessionSource ?? thread?.source);
+      const spawn = record(record(source?.subAgent)?.thread_spawn);
+      const parent = spawn?.parent_thread_id;
+      if (typeof parent === "string") {
+        owner = this.routes.get(parent);
+        if (owner) this.bind(owner, id);
+      }
+    }
     if (owner) {
       const params = record(message.params);
       const item = record(params?.item) ?? params;

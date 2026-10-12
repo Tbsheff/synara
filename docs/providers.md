@@ -241,6 +241,38 @@ and creates independent conversation copies without replacing your existing Syna
 
 Each task owns a provider session.
 
+In Beta and source builds, Codex sessions share an app-server when their process settings
+match. Stable keeps one app-server per session. The server setting `codexAppServerMode`
+defaults to `"shared"`; set it to `"per-session"` through `server.updateSettings` and restart
+the affected sessions to use the fallback. Stable ignores the saved shared preference.
+
+The registry key hashes the effective environment (including `CODEX_HOME` and the source
+continuation home), account ID, auth identity, account config snapshot, resolved executable
+path, executable file identity and CLI version, launch arguments, extra skill root, process
+priority, and platform. Keys do not expose environment values or credentials. A changed
+environment or process-wide capability creates a separate process. Shared processes start
+in the account continuation home; each native thread supplies its own project directory,
+model, approval and sandbox policy, and Synara MCP authorization header. Each turn supplies
+its own effort, collaboration mode, and developer instructions.
+
+One process owns the pipe and assigns unique request IDs. Responses return to the requesting
+session; native thread IDs route notifications, approvals, tool output, and known native
+subagent events. Unowned requests receive an error. The registry does not guess an owner
+from whichever turn is active. Account notifications use an explicit process-wide allowlist.
+
+Stopping a session interrupts and unloads its native threads, then releases its lease.
+Other hosted sessions keep running. The last lease starts a one-second shutdown grace;
+new work cancels that grace. Account auth invalidation stops all hosted sessions at once.
+A process or pipe failure fails all hosted sessions as an error, including idle sessions.
+New work waits for verified process-tree teardown before it can start a replacement.
+An unload failure retains the session stop barrier; it cannot kill another hosted session.
+
+Process sharing does **not** imply shared external MCP transports. In an isolated Codex
+0.162.1 probe, three native threads in one app-server still started three copies of a stdio
+MCP server. Codex owns those per-thread clients. Synara keeps per-thread gateway tokens in
+native thread config, so one thread cannot use another thread's caller identity. This change
+does not pool arbitrary stateful stdio servers.
+
 The session may preserve provider-specific behavior such as:
 
 - Plans
@@ -269,10 +301,10 @@ Synara does not put it in the shared Codex config or the child process environme
 This avoids process startup and initialization between ordinary replies while preserving
 the rejection of stale tool requests. It still reloads the native conversation and its MCP clients.
 
-If additional native threads remain loaded, native unloading or resume cannot be verified, or
-a turn was interrupted, failed, or aborted for inactivity, Synara uses the full process-restart
-recovery path. You can continue in the same task. Idle provider processes still shut down after
-15 minutes by default.
+If native child threads remain loaded for that session, native unloading or resume cannot be
+verified, or a turn was interrupted, failed, or aborted for inactivity, Synara reloads that
+session. Shared mode unloads only its owned threads; dedicated mode restarts its process.
+You can continue in the same task. Idle sessions still shut down after 15 minutes by default.
 
 ### Warm idle sessions
 
@@ -286,6 +318,9 @@ session when it needs space. Active turns and background tasks do not count and 
 for space. Server settings `warmSessionLimit` (0 disables pre-warm; maximum 32) and
 `warmSessionIdleTimeoutMinutes` (1–240; default 15) control this policy. The timeout applies on the
 next idle schedule; `SYNARA_PROVIDER_RUNTIME_IDLE_STOP_MS` remains an operator override.
+
+In shared Codex mode, each warm session costs one native thread slot. Sharing a process does
+not bypass the limit, extend a session lease, or change its event consumer.
 
 Saved model and access-mode changes use the existing session reconfiguration path before the
 next send. A warm request must match the thread’s saved provider account; it cannot move a native

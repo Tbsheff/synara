@@ -17,6 +17,7 @@ const identity: CodexSharedProcessIdentity = {
   version: "0.162.1",
   accountId: "account-a",
   authFingerprint: "auth-a",
+  configSnapshot: "config-a",
   env: { CODEX_HOME: "/account-a", CODEX_SQLITE_HOME: "/account-a", CUSTOM: "secret" },
   args: ["app-server"],
   lowerPriority: true,
@@ -107,6 +108,7 @@ describe("Codex shared process identity", () => {
     { version: "0.163.0" },
     { accountId: "account-b" },
     { authFingerprint: "auth-b" },
+    { configSnapshot: "config-b" },
     { lowerPriority: false },
     { platform: "win32" as const },
     { args: ["app-server", "--different-capability"] },
@@ -135,7 +137,9 @@ describe("Codex shared process routing", () => {
     const h = harness();
     const p = await h.acquire();
     h.owners.forEach((owner, i) => p.bind(owner, `native-${i}`));
-    const requests = h.owners.map((owner) => p.allocateRequest(owner, "turn/start", {}));
+    const requests = h.owners.map((owner, i) =>
+      p.allocateRequest(owner, "turn/start", { threadId: `native-${i}` }),
+    );
     for (const i of [2, 0, 1]) {
       h.emit({
         method: "item/agentMessage/delta",
@@ -185,6 +189,19 @@ describe("Codex shared process routing", () => {
     h.emit({ method: "item/agentMessage/delta", params: { delta: "private" } });
     await vi.waitFor(() => expect(h.writes.some((m) => m.id === "orphan" && m.error)).toBe(true));
     expect(h.messages.flat()).toHaveLength(0);
+    await h.registry.stopAll();
+  });
+
+  it("rejects cross-session outbound thread control", async () => {
+    const h = harness();
+    const p = await h.acquire();
+    p.bind(h.owners[0]!, "native-a");
+    expect(() =>
+      p.allocateRequest(h.owners[1]!, "turn/interrupt", { threadId: "native-a", turnId: "turn-a" }),
+    ).toThrow("no matching");
+    expect(() =>
+      p.allocateRequest(h.owners[1]!, "thread/rollback", { threadId: "native-a" }),
+    ).toThrow("no matching");
     await h.registry.stopAll();
   });
 

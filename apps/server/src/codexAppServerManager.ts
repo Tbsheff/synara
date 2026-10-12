@@ -106,6 +106,13 @@ import {
 } from "./provider/supervisedProcessTeardown.ts";
 import { ensureIsolatedScratchWorkspace, resolveScratchWorkspaceCwd } from "./scratchWorkspaces.ts";
 import { createLogger } from "./logger";
+import { codexAppServerSharedMode } from "./codexAppServerMode";
+import {
+  CodexSharedProcessRegistry,
+  codexSharedProcessKey,
+  type CodexSharedProcess,
+  type CodexSharedMessage,
+} from "./codexSharedProcess";
 import { transcribeVoiceWithChatGptSession } from "./voiceTranscription.ts";
 import {
   CodexAppServerTransportError,
@@ -214,6 +221,7 @@ type CodexSessionApprovalOverride = {
 export class CodexSessionAuthInvalidatedError extends Error {}
 
 interface CodexSessionContext {
+  sharedProcess?: CodexSharedProcess<CodexSessionContext>;
   authInvalidation?: string;
   readonly autoApproveSynaraTools?: boolean;
   readonly enableComputerControl?: boolean;
@@ -1359,6 +1367,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   // they settle, even after the caller's deadline rejects its session origin.
   // Stay below libuv's default four-worker pool so auth reads cannot occupy it all.
   private readonly authReadSlots = Semaphore.makeUnsafe(2);
+  private readonly sharedProcesses: CodexSharedProcessRegistry<CodexSessionContext>;
   constructor(
     services?: ServiceMap.ServiceMap<never>,
     options?: {
@@ -1375,6 +1384,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       readonly taskCompleteFallbackGraceMs?: number;
       readonly discoverySessionIdleMs?: number;
       readonly authRevalidationTimeoutMs?: number;
+      readonly sharedProcessGraceMs?: number;
     },
   ) {
     super();
@@ -1389,6 +1399,149 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       options?.discoverySessionIdleMs ?? CODEX_DISCOVERY_SESSION_IDLE_MS,
     );
     this.authRevalidationTimeoutMs = Math.max(1, options?.authRevalidationTimeoutMs ?? 5_000);
+    this.sharedProcesses = new CodexSharedProcessRegistry(
+      (child) => teardownChildProcessTree(child, this.teardownProcessTree),
+      options?.sharedProcessGraceMs ?? 1_000,
+    );
+  }
+
+  private async acquireSessionProcess(
+    launch: Awaited<ReturnType<typeof resolveCodexNativeLaunch>>,
+    cwd: string,
+    codexOptions: CodexDiscoveryOptions | undefined,
+    authFingerprint: string,
+    configSnapshot: string,
+    versionGate: Promise<void>,
+    signal?: AbortSignal,
+  ): Promise<{
+    child: ChildProcessWithoutNullStreams;
+    sharedProcess?: CodexSharedProcess<CodexSessionContext>;
+  }> {
+    const lowerPriority = (await this.runPromise(providerProcessPriorityEnabled)) as boolean;
+    signal?.throwIfAborted();
+    if ((await this.runPromise(codexAppServerSharedMode)) === true) {
+      signal?.throwIfAborted();
+      await versionGate;
+      signal?.throwIfAborted();
+      const binaryPath =
+        resolveExecutable(launch.binaryPath, { env: launch.env }) ?? launch.binaryPath;
+      const binaryIdentity = executableIdentity(binaryPath);
+      const version = [...codexCliVersionGates.values()].find(
+        (entry) =>
+          entry.fingerprint?.path === binaryPath && entry.fingerprint.identity === binaryIdentity,
+      )?.fingerprint?.version;
+      const processCwd = launch.env.CODEX_SQLITE_HOME?.trim();
+      if (binaryIdentity && version && processCwd) {
+        const key = codexSharedProcessKey({
+          binaryPath,
+          binaryIdentity,
+          version,
+          accountId: codexOptions?.accountId ?? "default",
+          authFingerprint,
+          configSnapshot,
+          env: launch.env,
+          args: [
+            ...buildCodexAppServerArgs(processCwd),
+            "--config",
+            "thread_unload_delay_secs=0",
+            this.synaraSkillsDir ?? "",
+          ],
+          lowerPriority,
+          platform: process.platform,
+        });
+        const sharedProcess = await this.sharedProcesses.acquire(key, () => {
+          const child = this.spawnAppServer({
+            lowerPriority,
+            binaryPath,
+            cwd: processCwd,
+            env: launch.env,
+          });
+          child.stderr.on("data", (chunk: Buffer) => {
+            if (
+              chunk
+                .toString()
+                .split(/\r?\n/g)
+                .some((line) => classifyCodexStderrLine(line))
+            )
+              log.warn("Shared Codex app-server reported a process-level stderr error.");
+          });
+          return child;
+        });
+        return { child: sharedProcess.child, sharedProcess };
+      }
+      log.warn("Codex executable identity is unavailable; using a dedicated app-server.");
+    }
+    signal?.throwIfAborted();
+    return {
+      child: this.spawnAppServer({
+        lowerPriority,
+        binaryPath: launch.binaryPath,
+        cwd,
+        env: launch.env,
+      }),
+    };
+  }
+
+  private attachSessionProcess(context: CodexSessionContext): void {
+    const shared = context.sharedProcess;
+    if (!shared) {
+      this.attachProcessListeners(context);
+      return;
+    }
+    this.requestRegistry(context).processStarted();
+    shared.add(context, {
+      message: (message: CodexSharedMessage) => {
+        if (context.stopping) return;
+        if (this.isServerRequest(message)) {
+          void this.handleServerRequest(context, message).catch((error) => shared.fail(error));
+        } else if (this.isServerNotification(message)) {
+          this.handleServerNotification(context, message);
+        } else if (this.isResponse(message)) {
+          this.handleResponse(context, message);
+        }
+      },
+      failure: (error, code, signal) => {
+        if (context.stopping) return;
+        const activeTurnId = context.session.activeTurnId;
+        this.emitLifecycleEvent(context, "session/exited", error.message, {
+          exitCode: code,
+          signal,
+          exitKind: "error",
+          ...(activeTurnId ? { turnId: activeTurnId } : {}),
+          causeAlreadyReported: true,
+        });
+        this.handleTransportFailure(context, error);
+      },
+    });
+  }
+
+  private async initializeSessionProcess(context: CodexSessionContext): Promise<void> {
+    if (context.sharedProcess) {
+      try {
+        const account = await context.sharedProcess.initialize(
+          buildCodexInitializeParams(),
+          this.synaraSkillsDir,
+        );
+        this.assertContextAuthCurrent(context);
+        context.account = readCodexAccountSnapshot(account);
+      } catch (error) {
+        context.sharedProcess.fail(error);
+        throw error;
+      }
+      return;
+    }
+    await this.sendRequest(context, "initialize", buildCodexInitializeParams());
+    this.assertContextAuthCurrent(context);
+    await this.writeMessage(context, { method: "initialized" });
+    await this.registerSynaraSkillsRoot(context);
+    try {
+      context.account = readCodexAccountSnapshot(
+        await this.sendRequest(context, "account/read", {}),
+      );
+    } catch (error) {
+      if (!this.isContextRoutable(context)) throw error;
+      log.warn("account/read failed", { error });
+    }
   }
 
   // Only the endpoint lives in shared config. Credentials travel over the owned
@@ -1528,12 +1681,14 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       const appServerLaunch = await resolveCodexNativeLaunch(codexBinaryPath, processLaunch.env, {
         cwd: resolvedCwd,
       });
-      const child = this.spawnAppServer({
-        lowerPriority: (await this.runPromise(providerProcessPriorityEnabled)) as boolean,
-        binaryPath: appServerLaunch.binaryPath,
-        cwd: resolvedCwd,
-        env: appServerLaunch.env,
-      });
+      const { child, sharedProcess } = await this.acquireSessionProcess(
+        appServerLaunch,
+        resolvedCwd,
+        normalizedCodexOptions,
+        launchAuthFingerprint,
+        processLaunch.authTracking?.sourceConfigSnapshot ?? "",
+        versionGate,
+      );
 
       context = {
         autoApproveSynaraTools: input.autoApproveSynaraTools === true,
@@ -1552,8 +1707,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
           sparkEnabled: true,
         },
         child,
-        stdoutFramer: new CodexJsonlFramer(),
-        stdinWriter: new CodexJsonlWriter(child.stdin),
+        ...(sharedProcess ? { sharedProcess } : {}),
+        stdoutFramer: sharedProcess?.framer ?? new CodexJsonlFramer(),
+        stdinWriter: sharedProcess?.writer ?? new CodexJsonlWriter(child.stdin),
         pending: new Map(),
         pendingApprovals: new Map(),
         pendingUserInputs: new Map(),
@@ -1572,31 +1728,11 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       };
 
       this.sessions.set(threadId, context);
-      this.attachProcessListeners(context);
+      this.attachSessionProcess(context);
 
       this.emitLifecycleEvent(context, "session/connecting", "Starting codex app-server");
 
-      await this.sendRequest(context, "initialize", buildCodexInitializeParams());
-      this.assertContextAuthCurrent(context);
-
-      await this.writeMessage(context, { method: "initialized" });
-      await this.registerSynaraSkillsRoot(context);
-      // Model discovery is lazy and cached by ProviderDiscoveryService. Keeping model/list
-      // out of this serial cold-start path avoids an otherwise unused request
-      // with its own 20-second deadline.
-      try {
-        const accountReadResponse = await this.sendRequest(context, "account/read", {});
-        log.info("account/read response", { accountReadResponse });
-        context.account = readCodexAccountSnapshot(accountReadResponse);
-        log.info("subscription status", {
-          type: context.account.type,
-          planType: context.account.planType,
-          sparkEnabled: context.account.sparkEnabled,
-        });
-      } catch (error) {
-        if (!this.isContextRoutable(context)) throw error;
-        log.warn("account/read failed", { error });
-      }
+      await this.initializeSessionProcess(context);
       await versionGate;
 
       const normalizedModel = resolveCodexModelForAccount(
@@ -2606,17 +2742,19 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       );
       signal?.throwIfAborted();
       const launchAuthFingerprint = processLaunch.authFingerprint;
-      const lowerPriority = (await this.runPromise(providerProcessPriorityEnabled)) as boolean;
       const appServerLaunch = await resolveCodexNativeLaunch(codexBinaryPath, processLaunch.env, {
         cwd: resolvedCwd,
       });
       signal?.throwIfAborted();
-      const child = this.spawnAppServer({
-        lowerPriority,
-        binaryPath: appServerLaunch.binaryPath,
-        cwd: resolvedCwd,
-        env: appServerLaunch.env,
-      });
+      const { child, sharedProcess } = await this.acquireSessionProcess(
+        appServerLaunch,
+        resolvedCwd,
+        normalizedCodexOptions,
+        launchAuthFingerprint,
+        processLaunch.authTracking?.sourceConfigSnapshot ?? "",
+        versionGate,
+        signal,
+      );
 
       context = {
         ...(gatewaySessionLease ? { gatewaySessionLease } : {}),
@@ -2632,8 +2770,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
           sparkEnabled: true,
         },
         child,
-        stdoutFramer: new CodexJsonlFramer(),
-        stdinWriter: new CodexJsonlWriter(child.stdin),
+        ...(sharedProcess ? { sharedProcess } : {}),
+        stdoutFramer: sharedProcess?.framer ?? new CodexJsonlFramer(),
+        stdinWriter: sharedProcess?.writer ?? new CodexJsonlWriter(child.stdin),
         pending: new Map(),
         pendingApprovals: new Map(),
         pendingUserInputs: new Map(),
@@ -2652,19 +2791,10 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       };
 
       this.sessions.set(threadId, context);
-      this.attachProcessListeners(context);
+      this.attachSessionProcess(context);
       this.emitLifecycleEvent(context, "session/connecting", "Starting codex app-server");
 
-      await this.sendRequest(context, "initialize", buildCodexInitializeParams());
-      this.assertContextAuthCurrent(context);
-      await this.writeMessage(context, { method: "initialized" });
-      await this.registerSynaraSkillsRoot(context);
-      try {
-        const accountReadResponse = await this.sendRequest(context, "account/read", {});
-        context.account = readCodexAccountSnapshot(accountReadResponse);
-      } catch {
-        // Fork can proceed without account metadata; model fallback will stay best-effort.
-      }
+      await this.initializeSessionProcess(context);
       await versionGate;
 
       const normalizedModel =
@@ -3207,6 +3337,12 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   }
 
   private async teardownContextProcess(context: CodexSessionContext): Promise<void> {
+    if (context.sharedProcess) {
+      await context.sharedProcess.release(context);
+      context.teardownCapturedBeforeExit =
+        context.sharedProcess.capturedBeforeExit || !context.sharedProcess.stopping;
+      return;
+    }
     try {
       const result = await teardownChildProcessTree(context.child, this.teardownProcessTree);
       context.teardownCapturedBeforeExit = result.capturedBeforeRootExit === true;
@@ -3269,13 +3405,22 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       // A settled native child can still retain its own MCP client. Until all
       // native clients can be rotated together, preserve full process recovery
       // whenever this process contains anything besides the parent thread.
-      const loaded = this.readObject(
-        await this.sendRequest(context, "thread/loaded/list", { limit: 100 }, 1_000),
-      );
+      if (
+        context.sharedProcess &&
+        [...context.sharedProcess.routes].some(
+          ([id, owner]) => owner === context && id !== providerThreadId,
+        )
+      )
+        return false;
+      const loaded = context.sharedProcess
+        ? { data: [...(await context.sharedProcess.loadedThreadIds())], nextCursor: null }
+        : this.readObject(
+            await this.sendRequest(context, "thread/loaded/list", { limit: 100 }, 1_000),
+          );
       if (
         !Array.isArray(loaded?.data) ||
-        loaded.data.length !== 1 ||
-        loaded.data[0] !== providerThreadId ||
+        (!context.sharedProcess && loaded.data.length !== 1) ||
+        !loaded.data.includes(providerThreadId) ||
         loaded.nextCursor !== null
       )
         return false;
@@ -3286,12 +3431,16 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       let unloaded = false;
       for (let attempt = 0; attempt < 10; attempt += 1) {
         this.assertContextAuthCurrent(context);
-        const response = this.readObject(
-          await this.sendRequest(context, "thread/loaded/list", { limit: 100 }, 1_000),
-        );
+        const response = context.sharedProcess
+          ? { data: [...(await context.sharedProcess.loadedThreadIds())], nextCursor: null }
+          : this.readObject(
+              await this.sendRequest(context, "thread/loaded/list", { limit: 100 }, 1_000),
+            );
         if (
           Array.isArray(response?.data) &&
-          response.data.length === 0 &&
+          (context.sharedProcess
+            ? !response.data.includes(providerThreadId)
+            : response.data.length === 0) &&
           response.nextCursor === null
         ) {
           unloaded = true;
@@ -3342,6 +3491,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     context: CodexSessionContext,
     emitClosedLifecycle = true,
   ): Promise<void> {
+    if (context.sharedProcess) return this.stopSharedSessionContext(context, emitClosedLifecycle);
     const threadId = context.session.threadId;
     if (context.stopPromise) {
       return context.stopPromise;
@@ -3419,6 +3569,49 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     );
     context.stopPromise = stopPromise;
     return stopPromise;
+  }
+
+  private stopSharedSessionContext(
+    context: CodexSessionContext,
+    emitClosedLifecycle: boolean,
+  ): Promise<void> {
+    if (context.stopPromise) return context.stopPromise;
+    const shared = context.sharedProcess!;
+    const activeTurnId = context.session.activeTurnId;
+    const providerThreadId = readResumeCursorThreadId(context.session.resumeCursor);
+    context.stopping = true;
+    this.clearTaskCompleteFallback(context);
+    context.gatewaySessionLease?.release();
+    this.rejectPendingRequests(
+      context,
+      context.terminalFailure?.error ?? new Error("Session stopped before request completed."),
+    );
+    const stop = (async () => {
+      await withCodexPendingSettleDeadline(
+        this.settlePendingHumanRequests(context, "session stopped"),
+      );
+      if (!shared.stopping && activeTurnId && providerThreadId) {
+        try {
+          await shared.interrupt(context, providerThreadId, activeTurnId);
+        } catch (error) {
+          if (!this.isTurnAlreadyIdleError(error)) throw error;
+        }
+      }
+      await this.teardownContextProcess(context);
+      this.updateSession(context, { status: "closed", activeTurnId: undefined });
+      if (this.sessions.get(context.session.threadId) === context) {
+        if (emitClosedLifecycle)
+          this.emitLifecycleEvent(context, "session/closed", "Session stopped");
+        this.sessions.delete(context.session.threadId);
+      }
+    })();
+    context.stopPromise = stop.catch((error: unknown) => {
+      context.teardownFailed = true;
+      context.teardownError = error instanceof Error ? error : new Error(String(error));
+      delete context.stopPromise;
+      throw error;
+    });
+    return context.stopPromise;
   }
 
   listSessions(): ProviderSession[] {
@@ -3608,6 +3801,12 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         await this.stopDiscoverySession(key);
       }),
     ]);
+    results.push(
+      await this.sharedProcesses.stopAll().then(
+        () => ({ status: "fulfilled" as const, value: undefined }),
+        (reason: unknown) => ({ status: "rejected" as const, reason }),
+      ),
+    );
     const failures = results.flatMap((result) =>
       result.status === "rejected" ? [result.reason] : [],
     );
@@ -3893,6 +4092,11 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   private invalidateContextAuth(context: CodexSessionContext, message: string): void {
     if (context.authInvalidation && context.teardownFailed !== true) return;
     context.authInvalidation = message;
+    if (context.sharedProcess) {
+      for (const owner of context.sharedProcess.members.keys()) owner.authInvalidation = message;
+      context.sharedProcess.fail(new Error(message));
+      return;
+    }
     const threadId = context.session.threadId;
     if (this.sessions.get(threadId) === context) {
       void this.stopSession(threadId).catch((error) => {
@@ -5174,8 +5378,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     params: unknown,
     timeoutMs = 20_000,
   ): Promise<TResponse> {
-    const id = context.nextRequestId;
-    context.nextRequestId += 1;
+    const id = context.sharedProcess
+      ? context.sharedProcess.allocateRequest(context, method, params)
+      : context.nextRequestId++;
 
     // The registry owns the pending map and the timeout; upstream's idle-timer kick
     // still has to happen on every settled request, success or failure.
@@ -5188,6 +5393,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         timeoutMs,
       )
       .finally(() => {
+        context.sharedProcess?.forgetRequest(id);
         this.restartDiscoverySessionIdleTimer(context);
       });
 
@@ -5215,6 +5421,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   }
 
   private writeMessage(context: CodexSessionContext, message: unknown): Promise<void> {
+    if (context.sharedProcess) return context.sharedProcess.write(message);
     return context.stdinWriter.write(message).catch((cause) => {
       this.handleTransportFailure(context, cause);
       throw cause;
@@ -5228,6 +5435,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       readonly providerThreadId: string;
     },
   ): void {
+    context.sharedProcess?.bind(context, input.providerThreadId);
     this.updateSession(context, {
       status: "ready",
       resumeCursor: { threadId: input.providerThreadId },
@@ -5982,6 +6190,7 @@ function runCodexVersionCommand(input: {
 interface CodexCliBinaryFingerprint {
   readonly path: string;
   readonly identity: string;
+  readonly version: string;
 }
 
 async function runCodexCliVersionGate(input: {
@@ -6058,7 +6267,7 @@ async function runCodexCliVersionGate(input: {
     throw new Error(formatCodexCliUpgradeMessage(parsedVersion, minimumVersion));
   }
 
-  return resolvedPath && identity ? { path: resolvedPath, identity } : null;
+  return resolvedPath && identity ? { path: resolvedPath, identity, version: parsedVersion } : null;
 }
 
 interface CodexCliVersionGateEntry {

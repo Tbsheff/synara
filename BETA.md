@@ -299,8 +299,13 @@ To put a feature behind the list:
 
 Promote a feature to Stable by deleting its entry; every gate resolves itself.
 
-The list currently contains `groups` (Hubs), `inline-html-render`, and
-`provider-cloud`, gated off in Stable.
+The list currently contains `groups` (Hubs), `inline-html-render`,
+`provider-cloud`, and `codex-shared-process`, gated off in Stable.
+Codex process sharing starts in Beta because its routing and crash handling span multiple
+sessions. Stable always uses dedicated session processes. The server setting
+`codexAppServerMode` defaults to `shared`; `per-session` restores dedicated launches without
+an app update. Existing sessions must stop and restart to use a changed launch setting.
+See [provider sessions](docs/providers.md#provider-sessions) for the registry key and MCP limit.
 [Inline HTML pages](docs/inline-html-render.md) use a caller-scoped gateway tool and
 a sandboxed transcript frame. Stable hides saved pages and code previews and does
 not list or accept the tool.
