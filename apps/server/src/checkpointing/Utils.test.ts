@@ -1,8 +1,17 @@
-import { ProjectId, ThreadId, TurnId } from "@synara/contracts";
-import { describe, expect, it } from "vitest";
+import { MessageId, ProjectId, ThreadId, TurnId } from "@synara/contracts";
+import {
+  SYNARA_BETA_BUNDLE_ID,
+  SYNARA_DESKTOP_BUNDLE_ID_ENV,
+  SYNARA_PRODUCTION_BUNDLE_ID,
+} from "@synara/shared/desktopIdentity";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  checkpointRefForThreadMessageStart,
+  checkpointRefForThreadRevertRescue,
   checkpointRefForThreadTurn,
+  checkpointRefForThreadTurnLive,
+  checkpointRefForThreadTurnStart,
   checkpointRefForThreadTurnInManagedFamily,
   checkpointRefForThreadTurnStartInManagedFamily,
   isManagedCheckpointRefForThread,
@@ -16,6 +25,35 @@ describe("managed checkpoint refs", () => {
 
   it("creates canonical Synara refs", () => {
     expect(checkpointRefForThreadTurn(threadId, 4)).toMatch(/^refs\/synara\/checkpoints\//);
+  });
+
+  describe("per-app namespace", () => {
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    const allNewRefs = () => [
+      checkpointRefForThreadTurn(threadId, 1),
+      checkpointRefForThreadTurnStart(threadId, TurnId.makeUnsafe("turn-1")),
+      checkpointRefForThreadMessageStart(threadId, MessageId.makeUnsafe("message-1")),
+      checkpointRefForThreadTurnLive(threadId, TurnId.makeUnsafe("turn-1")),
+      checkpointRefForThreadRevertRescue(threadId, "token"),
+    ];
+
+    it("keeps Stable refs under refs/synara", () => {
+      vi.stubEnv(SYNARA_DESKTOP_BUNDLE_ID_ENV, SYNARA_PRODUCTION_BUNDLE_ID);
+      for (const ref of allNewRefs()) {
+        expect(ref.startsWith("refs/synara/checkpoints/")).toBe(true);
+      }
+    });
+
+    it("writes Beta refs under refs/synara-beta so copied thread IDs never collide", () => {
+      vi.stubEnv(SYNARA_DESKTOP_BUNDLE_ID_ENV, SYNARA_BETA_BUNDLE_ID);
+      for (const ref of allNewRefs()) {
+        expect(ref.startsWith("refs/synara-beta/checkpoints/")).toBe(true);
+        expect(isManagedCheckpointRefForThread(ref, threadId)).toBe(true);
+      }
+    });
   });
 
   it("recognizes a structurally valid persisted ref for the same thread", () => {

@@ -18,8 +18,13 @@ import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 
 import { ThreadId } from "@synara/contracts";
+import {
+  SYNARA_BETA_BUNDLE_ID,
+  SYNARA_DESKTOP_BUNDLE_ID_ENV,
+  SYNARA_PRODUCTION_BUNDLE_ID,
+} from "@synara/shared/desktopIdentity";
 import { SCRATCH_WORKSPACES_DIRNAME } from "@synara/shared/threadWorkspace";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   ensureIsolatedScratchWorkspace,
@@ -120,6 +125,64 @@ describe("ensureIsolatedScratchWorkspace", () => {
       }
     },
   );
+
+  it("gives Synara Beta its own scratch root so copied thread IDs never share a folder", () => {
+    const homeDirectory = path.join(testScratchParent, "home");
+    const stableRoot = resolveScratchWorkspacesRoot({
+      homeDirectory,
+      env: { [SYNARA_DESKTOP_BUNDLE_ID_ENV]: SYNARA_PRODUCTION_BUNDLE_ID },
+    });
+    const betaRoot = resolveScratchWorkspacesRoot({
+      homeDirectory,
+      env: { [SYNARA_DESKTOP_BUNDLE_ID_ENV]: SYNARA_BETA_BUNDLE_ID },
+    });
+    expect(betaRoot).not.toBe(stableRoot);
+    expect(resolveScratchWorkspacesRoot({ homeDirectory, env: {} })).toBe(stableRoot);
+    expect(path.dirname(betaRoot)).toMatch(/\.synara-[a-f0-9]{16}$/);
+  });
+
+  it("gives an imported thread its own scratch folder instead of the other app's", () => {
+    const threadId = ThreadId.makeUnsafe("imported-scratch-thread");
+    const ownRoot = path.join(testScratchParent, "beta-cache", SCRATCH_WORKSPACES_DIRNAME);
+    const foreignRoot = path.join(testScratchParent, "stable-cache", SCRATCH_WORKSPACES_DIRNAME);
+    const legacyRoot = path.join(testScratchParent, "beta-legacy");
+    const foreignWorkspace = ensureIsolatedScratchWorkspace(threadId, foreignRoot, legacyRoot);
+    writeFileSync(path.join(foreignWorkspace, "notes.md"), "from stable");
+
+    const resolved = resolveScratchWorkspaceCwd(threadId, foreignWorkspace, {
+      workspaceRoot: ownRoot,
+      legacyWorkspaceRoot: legacyRoot,
+    });
+
+    expect(resolved).toBe(path.join(ownRoot, path.basename(foreignWorkspace)));
+    expect(statSync(resolved).isDirectory()).toBe(true);
+    writeFileSync(path.join(resolved, "notes.md"), "edited in beta");
+    expect(readFileSync(path.join(foreignWorkspace, "notes.md"), "utf8")).toBe("from stable");
+  });
+
+  describe("in Synara Beta", () => {
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    it("never adopts Stable's shared temp-folder scratch workspace", () => {
+      vi.stubEnv(SYNARA_DESKTOP_BUNDLE_ID_ENV, SYNARA_BETA_BUNDLE_ID);
+      const threadId = ThreadId.makeUnsafe(`beta-legacy-${process.pid}-${Date.now()}`);
+      const ownRoot = path.join(testScratchParent, "beta-own", SCRATCH_WORKSPACES_DIRNAME);
+      const segment = path.basename(ensureIsolatedScratchWorkspace(threadId, ownRoot, ownRoot));
+      rmSync(ownRoot, { recursive: true, force: true });
+      const sharedLegacyWorkspace = path.join(tmpdir(), SCRATCH_WORKSPACES_DIRNAME, segment);
+      mkdirSync(sharedLegacyWorkspace, { recursive: true });
+      try {
+        const resolved = resolveScratchWorkspaceCwd(threadId, sharedLegacyWorkspace, {
+          workspaceRoot: ownRoot,
+        });
+        expect(resolved).toBe(path.join(ownRoot, segment));
+      } finally {
+        rmSync(sharedLegacyWorkspace, { recursive: true, force: true });
+      }
+    });
+  });
 
   it("leaves non-scratch persisted workspaces unchanged", () => {
     const projectCwd = path.join(testScratchParent, "project");

@@ -12,11 +12,14 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
+import { Schema } from "effect";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { ThreadMetaUpdatedPayload } from "@synara/contracts";
 import {
   BETA_IMPORT_REQUEST_FILE_NAME,
   BETA_IMPORT_RESULT_FILE_NAME,
@@ -465,5 +468,260 @@ describe("copyLiveDatabase", () => {
     expect(() => copyLiveDatabase(dbPath, join(root, "staging"), () => String(tick++))).toThrow(
       /kept rewriting/,
     );
+  });
+});
+
+const sqlText = (value: string) => `'${value.replaceAll("'", "''")}'`;
+const sqlJson = (value: unknown) => sqlText(JSON.stringify(value));
+
+describe("Beta import isolation from Stable", () => {
+  async function seedStableTables(stableHome: string, statements: readonly string[]) {
+    const { DatabaseSync } = await import("node:sqlite");
+    const db = new DatabaseSync(join(stableHome, "userdata", "state.sqlite"));
+    for (const statement of statements) db.exec(statement);
+    db.close();
+  }
+
+  async function readBeta<T>(betaState: string, query: string): Promise<T[]> {
+    const { DatabaseSync } = await import("node:sqlite");
+    const db = new DatabaseSync(join(betaState, "state.sqlite"), { readOnly: true });
+    try {
+      return db.prepare(query).all() as T[];
+    } finally {
+      db.close();
+    }
+  }
+
+  async function importInto(stableHome: string, copyCheckpointRefs?: () => Promise<number>) {
+    const betaHome = join(stableHome, "..", ".synara-beta");
+    const betaState = join(betaHome, "userdata");
+    writeMarker(betaHome, stableHome);
+    const outcome = await run(
+      { betaHomeDir: betaHome, stateDir: betaState },
+      copyCheckpointRefs ? { copyCheckpointRefs } : {},
+    );
+    expect(outcome).toEqual({ consumed: true, ok: true });
+    return betaState;
+  }
+
+  it("imports schedules paused, with no scheduler lease or active run", async () => {
+    const stableHome = await seedStableHome(makeRoot());
+    await seedStableTables(stableHome, [
+      `CREATE TABLE automation_definitions (automation_id TEXT PRIMARY KEY, enabled INTEGER NOT NULL,
+         disabled_reason TEXT, disabled_at TEXT)`,
+      "INSERT INTO automation_definitions VALUES ('on', 1, NULL, NULL), ('off', 0, 'failures', 'x')",
+      `CREATE TABLE automation_scheduler_leases (lease_key TEXT PRIMARY KEY, owner_id TEXT NOT NULL,
+         lease_expires_at TEXT NOT NULL)`,
+      "INSERT INTO automation_scheduler_leases VALUES ('scheduler', 'stable-server', '2999-01-01')",
+      `CREATE TABLE automation_runs (run_id TEXT PRIMARY KEY, status TEXT NOT NULL, claimed_by TEXT,
+         lease_expires_at TEXT, finished_at TEXT, updated_at TEXT NOT NULL)`,
+      `INSERT INTO automation_runs VALUES
+         ('claimed', 'claimed', 'stable-server', '2999-01-01', NULL, 'then'),
+         ('done', 'succeeded', NULL, NULL, 'then', 'then')`,
+      `CREATE TABLE pull_request_auto_fix (thread_id TEXT NOT NULL, pull_request_url TEXT NOT NULL,
+         status TEXT NOT NULL, pause_reason TEXT, updated_at TEXT NOT NULL,
+         PRIMARY KEY (thread_id, pull_request_url))`,
+      "INSERT INTO pull_request_auto_fix VALUES ('t1', 'https://github.com/o/r/pull/1', 'watching', NULL, 'then')",
+    ]);
+
+    const betaState = await importInto(stableHome);
+
+    expect(
+      await readBeta(
+        betaState,
+        "SELECT automation_id AS id, enabled, disabled_reason AS reason FROM automation_definitions ORDER BY automation_id",
+      ),
+    ).toEqual([
+      { id: "off", enabled: 0, reason: "failures" },
+      { id: "on", enabled: 0, reason: "user" },
+    ]);
+    expect(await readBeta(betaState, "SELECT * FROM automation_scheduler_leases")).toEqual([]);
+    const runs = await readBeta<{
+      id: string;
+      status: string;
+      claimedBy: string | null;
+      lease: string | null;
+      finishedAt: string | null;
+    }>(
+      betaState,
+      "SELECT run_id AS id, status, claimed_by AS claimedBy, lease_expires_at AS lease, finished_at AS finishedAt FROM automation_runs ORDER BY run_id",
+    );
+    expect(runs[0]).toMatchObject({
+      id: "claimed",
+      status: "interrupted",
+      claimedBy: null,
+      lease: null,
+    });
+    expect(runs[0]?.finishedAt).not.toBeNull();
+    expect(runs[1]).toEqual({
+      id: "done",
+      status: "succeeded",
+      claimedBy: null,
+      lease: null,
+      finishedAt: "then",
+    });
+    expect(
+      await readBeta(betaState, "SELECT status, pause_reason AS reason FROM pull_request_auto_fix"),
+    ).toEqual([{ status: "paused", reason: null }]);
+
+    const { DatabaseSync } = await import("node:sqlite");
+    const stableDb = new DatabaseSync(join(stableHome, "userdata", "state.sqlite"), {
+      readOnly: true,
+    });
+    expect(
+      stableDb
+        .prepare("SELECT enabled FROM automation_definitions WHERE automation_id = 'on'")
+        .get(),
+    ).toEqual({ enabled: 1 });
+    stableDb.close();
+  });
+
+  it("detaches imported threads from Stable's worktrees and scratch folders", async () => {
+    const stableHome = await seedStableHome(makeRoot());
+    const stableWorktree = join(stableHome, "worktrees", "repo", "feature");
+    const externalWorktree = join(stableHome, "..", "elsewhere", "feature");
+    const threadCreated = {
+      threadId: "t-stable",
+      worktreePath: stableWorktree,
+      workingDirectory: join(stableWorktree, "packages", "app"),
+      nested: { associatedWorktreePath: stableWorktree },
+      text: `look in ${stableWorktree}`,
+    };
+    const sessionPayload = { cwd: stableWorktree, model: "m" };
+    const scratchSessionPayload = {
+      cwd: join(stableHome, "..", "Caches", ".synara-0", "synara-codex-workspaces", "t-scratch-1"),
+      model: "m",
+    };
+    const projectSessionPayload = { cwd: externalWorktree, model: "m" };
+    const metaUpdated = {
+      threadId: "t-stable",
+      envMode: "worktree",
+      branch: "feature",
+      worktreePath: stableWorktree,
+      workingDirectory: join(stableWorktree, "packages", "app"),
+      associatedWorktreePath: stableWorktree,
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    };
+    await seedStableTables(stableHome, [
+      `CREATE TABLE projection_threads (thread_id TEXT PRIMARY KEY, env_mode TEXT NOT NULL,
+         worktree_path TEXT, associated_worktree_path TEXT, working_directory TEXT)`,
+      `INSERT INTO projection_threads VALUES
+         ('t-stable', 'worktree', ${sqlText(stableWorktree)}, ${sqlText(stableWorktree)}, NULL),
+         ('t-external', 'worktree', ${sqlText(externalWorktree)}, NULL, NULL)`,
+      "CREATE TABLE orchestration_events (sequence INTEGER PRIMARY KEY, payload_json TEXT NOT NULL)",
+      `INSERT INTO orchestration_events VALUES (1, ${sqlJson(threadCreated)})`,
+      `INSERT INTO orchestration_events VALUES (2, ${sqlJson(metaUpdated)})`,
+      `CREATE TABLE provider_session_runtime (thread_id TEXT PRIMARY KEY, runtime_payload_json TEXT)`,
+      `INSERT INTO provider_session_runtime VALUES ('t-stable', ${sqlJson(sessionPayload)}),
+         ('t-scratch', ${sqlJson(scratchSessionPayload)}),
+         ('t-project', ${sqlJson(projectSessionPayload)})`,
+    ]);
+
+    const betaState = await importInto(stableHome, async () => 0);
+
+    expect(
+      await readBeta(
+        betaState,
+        "SELECT thread_id AS id, env_mode AS envMode, worktree_path AS path, associated_worktree_path AS associated FROM projection_threads ORDER BY thread_id",
+      ),
+    ).toEqual([
+      { id: "t-external", envMode: "worktree", path: externalWorktree, associated: null },
+      { id: "t-stable", envMode: "worktree", path: null, associated: null },
+    ]);
+    const [event, metaEvent] = await readBeta<{ payload: string }>(
+      betaState,
+      "SELECT payload_json AS payload FROM orchestration_events ORDER BY sequence",
+    );
+    expect(
+      Schema.decodeUnknownSync(ThreadMetaUpdatedPayload)(JSON.parse(metaEvent!.payload)),
+    ).toMatchObject({
+      branch: "feature",
+      worktreePath: null,
+      workingDirectory: null,
+      associatedWorktreePath: null,
+    });
+    expect(JSON.parse(event!.payload)).toEqual({
+      ...threadCreated,
+      worktreePath: null,
+      workingDirectory: null,
+      nested: { associatedWorktreePath: null },
+    });
+    const sessions = await readBeta<{ id: string; payload: string }>(
+      betaState,
+      "SELECT thread_id AS id, runtime_payload_json AS payload FROM provider_session_runtime ORDER BY thread_id",
+    );
+    expect(sessions.map((row) => [row.id, JSON.parse(row.payload)])).toEqual([
+      ["t-project", projectSessionPayload],
+      ["t-scratch", { model: "m" }],
+      ["t-stable", { model: "m" }],
+    ]);
+  });
+
+  it("reports repositories whose checkpoint refs could not be copied", async () => {
+    const stableHome = await seedStableHome(makeRoot());
+    const betaHome = join(stableHome, "..", ".synara-beta");
+    writeMarker(betaHome, stableHome);
+    const outcome = await run(
+      { betaHomeDir: betaHome, stateDir: join(betaHome, "userdata") },
+      { copyCheckpointRefs: async () => 2 },
+    );
+    expect(outcome).toEqual({ consumed: true, ok: true, checkpointRefCopyFailures: 2 });
+  });
+
+  it("moves checkpoint refs into Beta's namespace and copies them without touching Stable's", async () => {
+    const stableHome = await seedStableHome(makeRoot());
+    const repo = join(stableHome, "..", "repo");
+    mkdirSync(repo, { recursive: true });
+    const git = (...args: string[]) =>
+      execFileSync("git", ["-C", repo, "-c", "core.hooksPath=/dev/null", ...args], {
+        encoding: "utf8",
+      }).trim();
+    git("init", "-q");
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "c");
+    const head = git("rev-parse", "HEAD");
+    const stableRef = "refs/synara/checkpoints/dC1zdGFibGU/turn/1";
+    const stableStartRef = "refs/synara/checkpoints/dC1zdGFibGU/turn-start/dHVybi0x";
+    git("update-ref", stableRef, head);
+    git("update-ref", stableStartRef, head);
+    git(
+      "-c",
+      "user.name=t",
+      "-c",
+      "user.email=t@t",
+      "commit",
+      "-q",
+      "--allow-empty",
+      "-m",
+      "historical",
+    );
+    const historicalHead = git("rev-parse", "HEAD");
+    git("update-ref", "refs/historical/checkpoints/dC1zdGFibGU/turn/1", historicalHead);
+    await seedStableTables(stableHome, [
+      "CREATE TABLE projection_projects (project_id TEXT PRIMARY KEY, workspace_root TEXT NOT NULL)",
+      `INSERT INTO projection_projects VALUES ('p1', ${sqlText(repo)})`,
+      `CREATE TABLE projection_turns (row_id INTEGER PRIMARY KEY, thread_id TEXT NOT NULL,
+         checkpoint_ref TEXT)`,
+      `INSERT INTO projection_turns VALUES (1, 't-stable', ${sqlText(stableRef)})`,
+      "CREATE TABLE orchestration_events (sequence INTEGER PRIMARY KEY, payload_json TEXT NOT NULL)",
+      `INSERT INTO orchestration_events VALUES (1, ${sqlJson({ checkpointRef: stableRef, text: stableRef })})`,
+    ]);
+
+    const betaState = await importInto(stableHome);
+
+    const betaRef = "refs/synara-beta/checkpoints/dC1zdGFibGU/turn/1";
+    expect(await readBeta(betaState, "SELECT checkpoint_ref AS ref FROM projection_turns")).toEqual(
+      [{ ref: betaRef }],
+    );
+    const [event] = await readBeta<{ payload: string }>(
+      betaState,
+      "SELECT payload_json AS payload FROM orchestration_events",
+    );
+    expect(JSON.parse(event!.payload)).toEqual({ checkpointRef: betaRef, text: stableRef });
+    expect(git("rev-parse", betaRef)).toBe(head);
+    expect(git("rev-parse", "refs/synara-beta/checkpoints/dC1zdGFibGU/turn-start/dHVybi0x")).toBe(
+      head,
+    );
+    expect(git("rev-parse", stableRef)).toBe(head);
+    expect(git("rev-parse", stableStartRef)).toBe(head);
   });
 });

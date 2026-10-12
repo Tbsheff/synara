@@ -29,7 +29,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { join, resolve, sep } from "node:path";
 
 import {
   BETA_IMPORT_REQUEST_FILE_NAME,
@@ -37,6 +37,11 @@ import {
   SYNARA_STABLE_HOME_ENV,
   type BetaImportRequest,
 } from "@synara/shared/betaChannel";
+
+import { isScratchWorkspacePath } from "@synara/shared/threadWorkspace";
+
+import { BETA_CHECKPOINT_REFS_PREFIX, parseManagedCheckpointRef } from "./checkpointing/Utils";
+import { runProcess } from "./processRunner";
 
 /** Entries that describe this install's live runtime, not user data. */
 const EXCLUDED_STATE_ENTRIES = new Set([
@@ -326,6 +331,288 @@ function commitStagedImport(
   rmSync(backupDir, { recursive: true, force: true });
 }
 
+type StagedDatabase = InstanceType<typeof import("node:sqlite").DatabaseSync>;
+
+const BETA_CHECKPOINT_NAMESPACE = "synara-beta";
+const DETACHED_WORKTREE_KEYS = new Set([
+  "worktreePath",
+  "associatedWorktreePath",
+  "workingDirectory",
+]);
+const ACTIVE_AUTOMATION_RUN_STATUSES = ["pending", "claimed", "running", "waiting-for-approval"];
+const GIT_REF_COPY_TIMEOUT_MS = 30_000;
+
+function tableColumns(db: StagedDatabase, table: string): Set<string> {
+  const rows = db.prepare(`PRAGMA table_info(${sqlStringLiteral(table)})`).all() as Array<{
+    name: string;
+  }>;
+  return new Set(rows.map((row) => row.name));
+}
+
+function toBetaCheckpointRef(ref: string): string {
+  const parsed = parseManagedCheckpointRef(ref);
+  if (!parsed || parsed.namespace === BETA_CHECKPOINT_NAMESPACE) return ref;
+  return `${BETA_CHECKPOINT_REFS_PREFIX}/${ref.slice(`refs/${parsed.namespace}/checkpoints/`.length)}`;
+}
+
+function isWithinAny(candidate: string, roots: readonly string[]): boolean {
+  const resolved = resolve(candidate);
+  return roots.some((root) => resolved === root || resolved.startsWith(`${root}${sep}`));
+}
+
+function rewriteJsonStrings(
+  node: unknown,
+  rewrite: (key: string, value: string) => string | null,
+): boolean {
+  if (!node || typeof node !== "object") return false;
+  let changed = false;
+  for (const [key, value] of Object.entries(node)) {
+    if (typeof value === "string") {
+      const next = rewrite(key, value);
+      if (next !== value) {
+        (node as Record<string, unknown>)[key] = next;
+        changed = true;
+      }
+    } else if (rewriteJsonStrings(value, rewrite)) {
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+function disableImportedSchedules(db: StagedDatabase, now: string): void {
+  const definitions = tableColumns(db, "automation_definitions");
+  if (definitions.has("enabled")) {
+    const reason =
+      definitions.has("disabled_reason") && definitions.has("disabled_at")
+        ? ", disabled_reason = 'user', disabled_at = :now"
+        : "";
+    db.prepare(`UPDATE automation_definitions SET enabled = 0${reason} WHERE enabled <> 0`).run(
+      reason ? { now } : {},
+    );
+  }
+  if (tableColumns(db, "automation_scheduler_leases").size > 0) {
+    db.exec("DELETE FROM automation_scheduler_leases");
+  }
+  const runs = tableColumns(db, "automation_runs");
+  if (runs.has("status")) {
+    const clears = ["claimed_by", "lease_expires_at", "deferred_until"]
+      .filter((column) => runs.has(column))
+      .map((column) => `, ${column} = NULL`)
+      .join("");
+    const finished = runs.has("finished_at") ? ", finished_at = COALESCE(finished_at, :now)" : "";
+    const updated = runs.has("updated_at") ? ", updated_at = :now" : "";
+    db.prepare(
+      `UPDATE automation_runs SET status = 'interrupted'${clears}${finished}${updated}
+       WHERE status IN (${ACTIVE_AUTOMATION_RUN_STATUSES.map(sqlStringLiteral).join(", ")})`,
+    ).run(finished || updated ? { now } : {});
+  }
+  const autoFix = tableColumns(db, "pull_request_auto_fix");
+  if (autoFix.has("status")) {
+    const pauseReason = autoFix.has("pause_reason") ? ", pause_reason = NULL" : "";
+    const updated = autoFix.has("updated_at") ? ", updated_at = :now" : "";
+    db.prepare(
+      `UPDATE pull_request_auto_fix SET status = 'paused'${pauseReason}${updated}
+       WHERE status <> 'paused'`,
+    ).run(updated ? { now } : {});
+  }
+}
+
+function collectCheckpointRepositories(db: StagedDatabase): string[] {
+  const directories = new Set<string>();
+  if (tableColumns(db, "projection_projects").has("workspace_root")) {
+    for (const row of db
+      .prepare("SELECT DISTINCT workspace_root AS path FROM projection_projects")
+      .all() as Array<{ path: unknown }>) {
+      if (typeof row.path === "string" && row.path.trim() !== "") directories.add(row.path);
+    }
+  }
+  if (tableColumns(db, "projection_threads").has("worktree_path")) {
+    for (const row of db
+      .prepare(
+        "SELECT DISTINCT worktree_path AS path FROM projection_threads WHERE worktree_path IS NOT NULL",
+      )
+      .all() as Array<{ path: unknown }>) {
+      if (typeof row.path === "string" && row.path.trim() !== "") directories.add(row.path);
+    }
+  }
+  return [...directories];
+}
+
+function moveCheckpointRefsToBetaNamespace(db: StagedDatabase): void {
+  if (tableColumns(db, "projection_turns").has("checkpoint_ref")) {
+    const update = db.prepare("UPDATE projection_turns SET checkpoint_ref = ? WHERE row_id = ?");
+    for (const row of db
+      .prepare(
+        "SELECT row_id AS rowId, checkpoint_ref AS ref FROM projection_turns WHERE checkpoint_ref LIKE 'refs/%/checkpoints/%'",
+      )
+      .all() as Array<{ rowId: number; ref: string }>) {
+      const next = toBetaCheckpointRef(row.ref);
+      if (next !== row.ref) update.run(next, row.rowId);
+    }
+  }
+}
+
+function detachSourceHomeWorktrees(db: StagedDatabase, sourceWorktreeRoots: readonly string[]) {
+  const threads = tableColumns(db, "projection_threads");
+  if (!threads.has("worktree_path")) return;
+  if (!threads.has("env_mode")) {
+    throw new Error("Synara's data is too old to copy. Update Synara, then copy your data again.");
+  }
+  const pathColumns = ["worktree_path", "associated_worktree_path", "working_directory"].filter(
+    (column) => threads.has(column),
+  );
+  for (const column of pathColumns) {
+    const update = db.prepare(`UPDATE projection_threads SET ${column} = NULL WHERE thread_id = ?`);
+    for (const row of db
+      .prepare(
+        `SELECT thread_id AS threadId, ${column} AS path FROM projection_threads WHERE ${column} IS NOT NULL`,
+      )
+      .all() as Array<{ threadId: string; path: string }>) {
+      if (isWithinAny(row.path, sourceWorktreeRoots)) update.run(row.threadId);
+    }
+  }
+}
+
+function rewriteImportedEventPayloads(
+  db: StagedDatabase,
+  sourceWorktreeRoots: readonly string[],
+): void {
+  if (!tableColumns(db, "orchestration_events").has("payload_json")) return;
+  const pathNeedles = sourceWorktreeRoots.map((root) => JSON.stringify(root).slice(1, -1));
+  const update = db.prepare("UPDATE orchestration_events SET payload_json = ? WHERE sequence = ?");
+  const candidates = db
+    .prepare(
+      `SELECT sequence, payload_json AS payload FROM orchestration_events
+       WHERE instr(payload_json, '"checkpointRef"') > 0
+          OR ${pathNeedles.map(() => "instr(payload_json, ?) > 0").join(" OR ")}`,
+    )
+    .all(...pathNeedles) as Array<{ sequence: number; payload: string }>;
+  for (const row of candidates) {
+    const payload: unknown = JSON.parse(row.payload);
+    const changed = rewriteJsonStrings(payload, (key, value) => {
+      if (key === "checkpointRef") return toBetaCheckpointRef(value);
+      if (DETACHED_WORKTREE_KEYS.has(key) && isWithinAny(value, sourceWorktreeRoots)) return null;
+      return value;
+    });
+    if (changed) update.run(JSON.stringify(payload), row.sequence);
+  }
+}
+
+function forgetStableSessionCwds(db: StagedDatabase, sourceWorktreeRoots: readonly string[]) {
+  const columns = tableColumns(db, "provider_session_runtime");
+  if (!columns.has("runtime_payload_json")) return;
+  const update = db.prepare(
+    "UPDATE provider_session_runtime SET runtime_payload_json = ? WHERE thread_id = ?",
+  );
+  for (const row of db
+    .prepare(
+      "SELECT thread_id AS threadId, runtime_payload_json AS payload FROM provider_session_runtime WHERE runtime_payload_json IS NOT NULL",
+    )
+    .all() as Array<{ threadId: string; payload: string }>) {
+    let payload: unknown;
+    try {
+      payload = JSON.parse(row.payload);
+    } catch {
+      continue;
+    }
+    if (!payload || typeof payload !== "object") continue;
+    const record = payload as Record<string, unknown>;
+    if (
+      typeof record.cwd === "string" &&
+      (isWithinAny(record.cwd, sourceWorktreeRoots) || isScratchWorkspacePath(record.cwd))
+    ) {
+      delete record.cwd;
+      update.run(JSON.stringify(record), row.threadId);
+    }
+  }
+}
+
+async function isolateImportedDatabase(input: {
+  readonly dbPath: string;
+  readonly sourceWorktreeRoots: readonly string[];
+  readonly now?: string;
+}): Promise<string[]> {
+  const { DatabaseSync } = await import("node:sqlite");
+  const db = new DatabaseSync(input.dbPath);
+  try {
+    db.exec("BEGIN IMMEDIATE");
+    try {
+      const repositories = collectCheckpointRepositories(db);
+      disableImportedSchedules(db, input.now ?? new Date().toISOString());
+      moveCheckpointRefsToBetaNamespace(db);
+      detachSourceHomeWorktrees(db, input.sourceWorktreeRoots);
+      rewriteImportedEventPayloads(db, input.sourceWorktreeRoots);
+      forgetStableSessionCwds(db, input.sourceWorktreeRoots);
+      db.exec("COMMIT");
+      return repositories;
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
+  } finally {
+    db.close();
+  }
+}
+
+async function runGit(cwd: string, args: readonly string[], stdin?: string) {
+  return runProcess("git", args, {
+    cwd,
+    timeoutMs: GIT_REF_COPY_TIMEOUT_MS,
+    allowNonZeroExit: true,
+    ...(stdin === undefined ? {} : { stdin }),
+  });
+}
+
+function betaCheckpointRefUpdates(forEachRefOutput: string): string[] {
+  const targets = new Map<string, { objectName: string; fromStable: boolean }>();
+  for (const line of forEachRefOutput.split("\n")) {
+    const [objectName, refName] = line.trim().split(" ");
+    if (!objectName || !refName) continue;
+    const betaRef = toBetaCheckpointRef(refName);
+    if (betaRef === refName) continue;
+    const fromStable = refName.startsWith("refs/synara/");
+    if (targets.get(betaRef)?.fromStable && !fromStable) continue;
+    targets.set(betaRef, { objectName, fromStable });
+  }
+  return [...targets].map(([betaRef, { objectName }]) => `update ${betaRef} ${objectName}\n`);
+}
+
+async function copyCheckpointRefsToBetaNamespace(repositories: readonly string[]): Promise<number> {
+  const visitedCommonDirs = new Set<string>();
+  let failedRepositories = 0;
+  for (const repository of repositories) {
+    let commonDirPath: string;
+    try {
+      const commonDir = await runGit(repository, ["rev-parse", "--git-common-dir"]);
+      if (commonDir.code !== 0 || commonDir.stdout.trim() === "") continue;
+      commonDirPath = resolve(repository, commonDir.stdout.trim());
+    } catch {
+      continue;
+    }
+    if (visitedCommonDirs.has(commonDirPath)) continue;
+    visitedCommonDirs.add(commonDirPath);
+    try {
+      const listed = await runGit(repository, [
+        "for-each-ref",
+        "--format=%(objectname) %(refname)",
+        "refs/",
+      ]);
+      if (listed.code !== 0) {
+        failedRepositories += 1;
+        continue;
+      }
+      const updates = betaCheckpointRefUpdates(listed.stdout);
+      if (updates.length === 0) continue;
+      const updated = await runGit(repository, ["update-ref", "--stdin"], updates.join(""));
+      if (updated.code !== 0) failedRepositories += 1;
+    } catch {
+      failedRepositories += 1;
+    }
+  }
+  return failedRepositories;
+}
+
 /** Stable homes a beta may import from: the one stable handed over, else the default. */
 export function allowedImportSourceHomes(env: NodeJS.ProcessEnv = process.env): string[] {
   const handedOver = env[SYNARA_STABLE_HOME_ENV]?.trim();
@@ -338,7 +625,13 @@ export async function runBetaImportIfRequested(input: {
   /** Newest migration this beta build knows; newer source databases are refused. */
   readonly latestMigrationId: number;
   readonly allowedSourceHomes?: readonly string[];
-}): Promise<{ readonly consumed: boolean; readonly ok: boolean; readonly error?: string }> {
+  readonly copyCheckpointRefs?: (repositories: readonly string[]) => Promise<number>;
+}): Promise<{
+  readonly consumed: boolean;
+  readonly ok: boolean;
+  readonly error?: string;
+  readonly checkpointRefCopyFailures?: number;
+}> {
   const markerPath = join(input.betaHomeDir, BETA_IMPORT_REQUEST_FILE_NAME);
   if (!existsSync(markerPath)) {
     return { consumed: false, ok: true };
@@ -393,7 +686,8 @@ export async function runBetaImportIfRequested(input: {
   }
 
   try {
-    if (realpathSync(sourceHomeDir) === realpathSync(input.betaHomeDir)) {
+    const realSourceHomeDir = realpathSync(sourceHomeDir);
+    if (realSourceHomeDir === realpathSync(input.betaHomeDir)) {
       return finish(false, "import source points at the beta home itself");
     }
     for (const sourcePath of [
@@ -410,20 +704,29 @@ export async function runBetaImportIfRequested(input: {
     }
     // Validate and copy every source entry before changing Beta. An unreadable
     // secret or a linked file must not report success after replacing its DB.
+    let checkpointRefCopyFailures = 0;
     const stagedRoot = mkdtempSync(join(input.betaHomeDir, ".beta-import-"));
     try {
       const stagedStateDir = join(stagedRoot, "userdata");
-      await snapshotStableDatabase(
-        sourceDbPath,
-        join(stagedStateDir, "state.sqlite"),
-        input.latestMigrationId,
-      );
+      const stagedDbPath = join(stagedStateDir, "state.sqlite");
+      await snapshotStableDatabase(sourceDbPath, stagedDbPath, input.latestMigrationId);
+      const repositories = await isolateImportedDatabase({
+        dbPath: stagedDbPath,
+        sourceWorktreeRoots: [
+          ...new Set([join(sourceHomeDir, "worktrees"), join(realSourceHomeDir, "worktrees")]),
+        ],
+      });
+      checkpointRefCopyFailures = await (
+        input.copyCheckpointRefs ?? copyCheckpointRefsToBetaNamespace
+      )(repositories);
       const copiedEntries = copyStateEntries(sourceStateDir, stagedStateDir, input.stateDir);
       commitStagedImport(stagedStateDir, input.stateDir, copiedEntries);
     } finally {
       rmSync(stagedRoot, { recursive: true, force: true });
     }
-    return finish(true);
+    return checkpointRefCopyFailures > 0
+      ? { ...finish(true), checkpointRefCopyFailures }
+      : finish(true);
   } catch (error) {
     return finish(false, error instanceof Error ? error.message : String(error));
   }

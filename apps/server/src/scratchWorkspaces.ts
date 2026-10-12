@@ -12,13 +12,22 @@ import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 
 import type { ThreadId } from "@synara/contracts";
+import { desktopFlavorFromBundleId } from "@synara/shared/betaFeatures";
+import { SYNARA_DESKTOP_BUNDLE_ID_ENV } from "@synara/shared/desktopIdentity";
 import { SCRATCH_WORKSPACES_DIRNAME } from "@synara/shared/threadWorkspace";
 import { ensurePrivateDirectorySync } from "./privatePathPermissions";
 
-function scratchOwnerSegment(homeDirectory = homedir()): string {
+function isBetaApp(env: NodeJS.ProcessEnv): boolean {
+  return desktopFlavorFromBundleId(env[SYNARA_DESKTOP_BUNDLE_ID_ENV]) === "beta";
+}
+
+function scratchOwnerSegment(homeDirectory: string, beta: boolean): string {
   const owner =
     typeof process.getuid === "function" ? `uid:${String(process.getuid())}` : homeDirectory;
-  return createHash("sha256").update(owner).digest("hex").slice(0, 16);
+  return createHash("sha256")
+    .update(beta ? `${owner}:beta` : owner)
+    .digest("hex")
+    .slice(0, 16);
 }
 
 function scratchCacheRoot(homeDirectory: string, platform: NodeJS.Platform): string {
@@ -33,12 +42,13 @@ export function resolveScratchWorkspacesRoot(
   options: {
     readonly homeDirectory?: string;
     readonly platform?: NodeJS.Platform;
+    readonly env?: NodeJS.ProcessEnv;
   } = {},
 ): string {
   const homeDirectory = options.homeDirectory ?? homedir();
   const ownerContainer = path.join(
     scratchCacheRoot(homeDirectory, options.platform ?? process.platform),
-    `.synara-${scratchOwnerSegment(homeDirectory)}`,
+    `.synara-${scratchOwnerSegment(homeDirectory, isBetaApp(options.env ?? process.env))}`,
   );
   return path.join(ownerContainer, SCRATCH_WORKSPACES_DIRNAME);
 }
@@ -173,6 +183,18 @@ function ensurePrivateScratchWorkspace(workspaceRoot: string, workspaceSegment: 
   return workspaceDir;
 }
 
+function isOtherAppScratchWorkspace(persistedCwd: string, workspaceSegment: string): boolean {
+  const resolved = path.resolve(persistedCwd);
+  return (
+    path.basename(resolved) === workspaceSegment &&
+    path.basename(path.dirname(resolved)) === SCRATCH_WORKSPACES_DIRNAME
+  );
+}
+
+function legacyScratchRootOwnedByThisApp(): string | undefined {
+  return isBetaApp(process.env) ? undefined : path.join(tmpdir(), SCRATCH_WORKSPACES_DIRNAME);
+}
+
 export function ensureIsolatedScratchWorkspace(
   threadId: ThreadId,
   workspaceRoot = resolveScratchWorkspacesRoot(),
@@ -182,9 +204,7 @@ export function ensureIsolatedScratchWorkspace(
   const workspaceSegment = scratchWorkspaceSegment(threadId);
   const legacyRoot =
     legacyWorkspaceRoot ??
-    (workspaceRoot === defaultWorkspaceRoot
-      ? path.join(tmpdir(), SCRATCH_WORKSPACES_DIRNAME)
-      : undefined);
+    (workspaceRoot === defaultWorkspaceRoot ? legacyScratchRootOwnedByThisApp() : undefined);
   if (legacyRoot) {
     const repairedLegacyWorkspace = repairLegacyScratchWorkspace(legacyRoot, workspaceSegment);
     if (repairedLegacyWorkspace) return repairedLegacyWorkspace;
@@ -201,8 +221,7 @@ export function resolveScratchWorkspaceCwd(
   } = {},
 ): string {
   const workspaceRoot = roots.workspaceRoot ?? resolveScratchWorkspacesRoot();
-  const legacyWorkspaceRoot =
-    roots.legacyWorkspaceRoot ?? path.join(tmpdir(), SCRATCH_WORKSPACES_DIRNAME);
+  const legacyWorkspaceRoot = roots.legacyWorkspaceRoot ?? legacyScratchRootOwnedByThisApp();
   const workspaceSegment = scratchWorkspaceSegment(threadId);
   if (!persistedCwd) {
     return ensureIsolatedScratchWorkspace(threadId, workspaceRoot, legacyWorkspaceRoot);
@@ -213,12 +232,23 @@ export function resolveScratchWorkspaceCwd(
     return ensurePrivateScratchWorkspace(workspaceRoot, workspaceSegment);
   }
 
-  const legacyWorkspace = path.join(legacyWorkspaceRoot, workspaceSegment);
-  if (path.resolve(persistedCwd) === path.resolve(legacyWorkspace)) {
+  const legacyWorkspace =
+    legacyWorkspaceRoot === undefined
+      ? undefined
+      : path.join(legacyWorkspaceRoot, workspaceSegment);
+  if (
+    legacyWorkspaceRoot !== undefined &&
+    legacyWorkspace !== undefined &&
+    path.resolve(persistedCwd) === path.resolve(legacyWorkspace)
+  ) {
     return (
       repairLegacyScratchWorkspace(legacyWorkspaceRoot, workspaceSegment) ??
       ensurePrivateScratchWorkspace(workspaceRoot, workspaceSegment)
     );
+  }
+
+  if (isOtherAppScratchWorkspace(persistedCwd, workspaceSegment)) {
+    return ensurePrivateScratchWorkspace(workspaceRoot, workspaceSegment);
   }
 
   return persistedCwd;

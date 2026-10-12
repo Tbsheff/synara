@@ -316,7 +316,11 @@ const ServerConfigLive = (input: CliInput) =>
         });
         if (importResult.consumed) {
           yield* Effect.logInfo("stable→beta data import finished").pipe(
-            Effect.annotateLogs({ ok: importResult.ok, error: importResult.error ?? null }),
+            Effect.annotateLogs({
+              ok: importResult.ok,
+              error: importResult.error ?? null,
+              checkpointRefCopyFailures: importResult.checkpointRefCopyFailures ?? 0,
+            }),
           );
         }
       }
