@@ -1263,6 +1263,30 @@ function codexProcessEnvInputForOptions(
   };
 }
 
+type CodexAuthReadMemo = Map<
+  string,
+  { readonly fingerprint: string } | { readonly error: unknown }
+>;
+
+function readCurrentCodexAuthFingerprint(
+  options: CodexDiscoveryOptions | undefined,
+  authReads: CodexAuthReadMemo | undefined,
+): string {
+  if (!authReads) return codexAuthFingerprintForOptions(options);
+  const authKey = codexDiscoveryOptionsCacheKey(options);
+  const earlierRead = authReads.get(authKey);
+  if (earlierRead && "error" in earlierRead) throw earlierRead.error;
+  if (earlierRead) return earlierRead.fingerprint;
+  try {
+    const fingerprint = codexAuthFingerprintForOptions(options);
+    authReads.set(authKey, { fingerprint });
+    return fingerprint;
+  } catch (error) {
+    authReads.set(authKey, { error });
+    throw error;
+  }
+}
+
 function codexAuthFingerprintForOptions(options: CodexDiscoveryOptions | undefined): string {
   return readCodexPreparedAuthTrackingFingerprint(
     prepareCodexAuthTracking(codexProcessEnvInputForOptions(options)),
@@ -3331,8 +3355,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
    */
   inspectSessions(): CodexSessionInspection[] {
     const inspections: CodexSessionInspection[] = [];
+    const authReads: CodexAuthReadMemo = new Map();
     for (const context of this.sessions.values()) {
-      if (!this.isContextAuthCurrent(context)) {
+      if (!this.isContextAuthCurrent(context, authReads)) {
         continue;
       }
 
@@ -3763,15 +3788,15 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     }
   }
 
-  private contextAuthStalenessMessage(context: CodexSessionContext): string | undefined {
+  private contextAuthStalenessMessage(
+    context: CodexSessionContext,
+    authReads?: CodexAuthReadMemo,
+  ): string | undefined {
     if (context.authInvalidation) return context.authInvalidation;
     if (!context.authTracking || context.authFingerprint === undefined) return undefined;
     try {
-      const codexOptions = context.codexOptions;
-      const currentTracking = prepareCodexAuthTracking(
-        codexProcessEnvInputForOptions(codexOptions),
-      );
-      return readCodexPreparedAuthTrackingFingerprint(currentTracking) === context.authFingerprint
+      return readCurrentCodexAuthFingerprint(context.codexOptions, authReads) ===
+        context.authFingerprint
         ? undefined
         : "Codex authentication changed on disk; the stale app-server session was stopped and must be restarted.";
     } catch (error) {
@@ -3783,8 +3808,11 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     }
   }
 
-  private isContextAuthCurrent(context: CodexSessionContext): boolean {
-    return this.contextAuthStalenessMessage(context) === undefined;
+  private isContextAuthCurrent(
+    context: CodexSessionContext,
+    authReads?: CodexAuthReadMemo,
+  ): boolean {
+    return this.contextAuthStalenessMessage(context, authReads) === undefined;
   }
 
   private assertContextAuthCurrent(context: CodexSessionContext): void {
@@ -3818,8 +3846,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   }
 
   private pruneStaleAuthSessions(): void {
+    const authReads: CodexAuthReadMemo = new Map();
     for (const context of this.sessions.values()) {
-      const stalenessMessage = this.contextAuthStalenessMessage(context);
+      const stalenessMessage = this.contextAuthStalenessMessage(context, authReads);
       if (stalenessMessage) this.invalidateContextAuth(context, stalenessMessage);
     }
   }
@@ -3878,9 +3907,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     if (normalizedCwd) {
       for (const activeSession of this.sessions.values()) {
         if (
-          this.isContextInitializedAndRoutable(activeSession) &&
           activeSession.session.cwd === normalizedCwd &&
-          isCompatibleContext(activeSession)
+          isCompatibleContext(activeSession) &&
+          this.isContextInitializedAndRoutable(activeSession)
         ) {
           return activeSession;
         }
@@ -3888,7 +3917,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       return this.getOrCreateDiscoverySession(normalizedCwd, codexOptions, expectedAuthFingerprint);
     }
     const firstActive = Array.from(this.sessions.values()).find(
-      (context) => this.isContextInitializedAndRoutable(context) && isCompatibleContext(context),
+      (context) => isCompatibleContext(context) && this.isContextInitializedAndRoutable(context),
     );
     if (firstActive) {
       return firstActive;
@@ -3999,10 +4028,12 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       account: codexDiscoveryOptionsCacheKey(normalizedCodexOptions),
       auth: authFingerprint,
     });
-    for (const [existingKey, context] of this.discoverySessions) {
-      if (!this.isContextAuthCurrent(context)) {
-        await this.stopDiscoverySession(existingKey);
-      }
+    const authReads: CodexAuthReadMemo = new Map();
+    const staleDiscoveryKeys = Array.from(this.discoverySessions)
+      .filter(([, context]) => !this.isContextAuthCurrent(context, authReads))
+      .map(([existingKey]) => existingKey);
+    for (const existingKey of staleDiscoveryKeys) {
+      await this.stopDiscoverySession(existingKey);
     }
     const startup = this.discoverySessionStartups.get(discoveryKey);
     if (startup) {
