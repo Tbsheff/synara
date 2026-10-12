@@ -8,6 +8,9 @@ export const TERMINAL_EVENT_STREAM_CAPACITY = 4_096;
 const liveEventBytesExcludingSnapshot = (event: { readonly type: string }): number =>
   event.type === "snapshot" ? 0 : Buffer.byteLength(JSON.stringify(event));
 
+const terminalEventBytesExcludingHistory = (event: TerminalEvent): number =>
+  event.type === "output" ? Buffer.byteLength(JSON.stringify(event.data)) : 0;
+
 export function boundedTerminalEventStream(
   subscribe: (listener: (event: TerminalEvent) => void) => Effect.Effect<() => void>,
   options?: { readonly capacity?: number; readonly maxSerializedBytes?: number },
@@ -28,6 +31,7 @@ export function boundedTerminalEventStream(
         : { maxSerializedBytes: options.maxSerializedBytes }),
       overflowStrategy: "fail",
       label: "terminal.events",
+      serializedBytes: terminalEventBytesExcludingHistory,
     },
   );
 }

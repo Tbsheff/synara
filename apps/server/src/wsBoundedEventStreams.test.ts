@@ -54,6 +54,55 @@ describe("bounded websocket event streams", () => {
     expect(failureCode(exit)).toBe(ORCHESTRATION_STREAM_OVERFLOW_CODE);
   });
 
+  it("keeps terminal history snapshots outside the output byte budget", async () => {
+    const history = "\u001b[0m".repeat(16_384);
+    const received = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          let listener: ((event: TerminalEvent) => void) | undefined;
+          const stream = boundedTerminalEventStream(
+            (next) =>
+              Effect.sync(() => {
+                listener = next;
+                return () => {
+                  listener = undefined;
+                };
+              }),
+            { capacity: 8, maxSerializedBytes: 4_096 },
+          );
+          const pull = yield* Stream.toPull(stream);
+          const first = yield* Effect.forkScoped(pull);
+          while (listener === undefined) yield* Effect.yieldNow;
+          for (const terminalId of ["one", "two"]) {
+            listener({
+              type: "started",
+              threadId: "thread-1",
+              terminalId,
+              createdAt: "2026-10-11T00:00:00.000Z",
+              snapshot: {
+                threadId: "thread-1",
+                terminalId,
+                cwd: "/tmp",
+                status: "running",
+                pid: 1,
+                history,
+                exitCode: null,
+                exitSignal: null,
+                updatedAt: "2026-10-11T00:00:00.000Z",
+              },
+            });
+          }
+          yield* settle;
+          const batch = yield* Fiber.join(first);
+          const rest = batch.length < 2 ? yield* pull : [];
+          return [...batch, ...rest];
+        }),
+      ),
+    );
+
+    expect(received.map((event) => event.type)).toEqual(["started", "started"]);
+  });
+
   it("fails a Task subscriber that stops pulling and keeps snapshots outside the budget", async () => {
     const exit = await Effect.runPromise(
       Effect.scoped(

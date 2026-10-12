@@ -2340,8 +2340,6 @@ const makeWsRpcHandlersLayer = () =>
             "Failed to close terminal",
           ),
         [WS_METHODS.subscribeTerminalEvents]: (_, { clientId }) =>
-          // Terminal output is an ordered byte stream with renderer ACK accounting.
-          // Keep this lossless: dropping chunks would create holes until reattach.
           streamAdmission.guard(
             clientId,
             { key: "terminal.events" },
