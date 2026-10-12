@@ -79,22 +79,24 @@ function repairOpenFenceTail(text: string, fence: OpenFence): string {
   return isPartialClosingFence ? dropLastLine(text) : text;
 }
 
-function skipInlineCodeSpan(line: string, start: number): number {
-  let runEnd = start;
-  while (line[runEnd] === "`") runEnd += 1;
-  const runLength = runEnd - start;
-  let cursor = runEnd;
-  while (cursor < line.length) {
-    if (line[cursor] !== "`") {
-      cursor += 1;
-      continue;
-    }
-    let closeEnd = cursor;
-    while (line[closeEnd] === "`") closeEnd += 1;
-    if (closeEnd - cursor === runLength) return closeEnd;
-    cursor = closeEnd;
+function indexInlineCodeSpans(line: string): {
+  closeEnds: ReadonlyMap<number, number>;
+  runEnds: ReadonlyMap<number, number>;
+} {
+  const runs = Array.from(line.matchAll(BACKTICK_RUN_REGEX));
+  const nextByLength = new Map<number, number>();
+  const closeEnds = new Map<number, number>();
+  const runEnds = new Map<number, number>();
+  for (let index = runs.length - 1; index >= 0; index--) {
+    const run = runs[index]!;
+    const start = run.index;
+    const length = run[0].length;
+    const next = nextByLength.get(length);
+    if (next !== undefined) closeEnds.set(start, next + length);
+    runEnds.set(start, start + length);
+    nextByLength.set(length, start);
   }
-  return -1;
+  return { closeEnds, runEnds };
 }
 
 function findUnclosedDisplayMathStart(text: string): number {
@@ -113,6 +115,7 @@ function findUnclosedDisplayMathStart(text: string): number {
       if (fenceMatch) {
         fence = { marker: fenceMatch.marker, length: fenceMatch.length };
       } else {
+        const codes = indexInlineCodeSpans(line);
         let cursor = 0;
         while (cursor < line.length) {
           const char = line[cursor];
@@ -121,11 +124,8 @@ function findUnclosedDisplayMathStart(text: string): number {
             continue;
           }
           if (char === "`" && openAt === -1) {
-            const end = skipInlineCodeSpan(line, cursor);
-            if (end !== -1) {
-              cursor = end;
-              continue;
-            }
+            cursor = codes.closeEnds.get(cursor) ?? codes.runEnds.get(cursor) ?? cursor + 1;
+            continue;
           }
           if (char === "$" && line[cursor + 1] === "$") {
             openAt = openAt === -1 ? lineStart + cursor : -1;
@@ -177,6 +177,7 @@ function repairLastLine(line: string): string {
   let cutAt = line.length;
   const brackets: number[] = [];
   const delimiters: OpenDelimiter[] = [];
+  const delimiterIndexes: Record<"*" | "_", number[]> = { "*": [], _: [] };
   let openCode: { readonly position: number; readonly length: number } | null = null;
 
   let cursor = 0;
@@ -244,18 +245,22 @@ function repairLastLine(line: string): string {
       const rightFlanking =
         !isWhitespaceOrEdge(before) &&
         (!isPunctuation(before) || isWhitespaceOrEdge(after) || isPunctuation(after));
-      const openIndex = delimiters.findLastIndex((delimiter) => delimiter.char === char);
+      const openIndex = delimiterIndexes[char].at(-1) ?? -1;
       const isPartialCloser =
         after === undefined && openIndex !== -1 && runEnd - cursor < delimiters[openIndex]!.length;
       if (rightFlanking && isPartialCloser) {
         cutAt = Math.min(cutAt, cursor);
         break;
       } else if (rightFlanking && openIndex !== -1) {
+        for (const indexes of Object.values(delimiterIndexes)) {
+          while ((indexes.at(-1) ?? -1) >= openIndex) indexes.pop();
+        }
         delimiters.length = openIndex;
       } else if (after === undefined && (isWhitespaceOrEdge(before) || isPunctuation(before))) {
         cutAt = Math.min(cutAt, cursor);
         break;
       } else if (leftFlanking && (isWhitespaceOrEdge(before) || isPunctuation(before))) {
+        delimiterIndexes[char].push(delimiters.length);
         delimiters.push({ char, length: Math.min(3, runEnd - cursor), position: cursor });
       }
       cursor = runEnd;
@@ -311,8 +316,8 @@ function isCompleteTableDelimiter(line: string): boolean {
   return cells !== null && cells.every((cell) => TABLE_DELIMITER_CELL_REGEX.test(cell.trim()));
 }
 
-function repairTableTail(text: string): string {
-  const lines = text.split("\n");
+function repairTableTail(text: string, tailLines?: readonly string[]): string {
+  const lines = [...(tailLines ?? text.split("\n"))];
   const lastIndex = lines.length - 1;
   const lastLine = lines[lastIndex] ?? "";
 
@@ -325,7 +330,7 @@ function repairTableTail(text: string): string {
     const headerCells = splitMarkdownTableRowCells(lines[lastIndex - 1] ?? "")?.length ?? 0;
     if (headerCells === 0) return text;
     lines[lastIndex] = tableDelimiterRow(headerCells);
-    return lines.join("\n");
+    return `${dropLastLine(text)}${lines[lastIndex]}`;
   }
 
   if (isTableHeaderCandidate(lines, lastIndex)) {
@@ -380,4 +385,95 @@ export function repairStreamingMarkdown(text: string): string {
   }
 
   return repairTableTail(repaired);
+}
+
+interface StreamingRepairState {
+  fence: OpenFence | null;
+  mathFence: OpenFence | null;
+  mathStart: number;
+}
+
+function scanRepairLine(
+  state: StreamingRepairState,
+  line: string,
+  offset: number,
+  complete: boolean,
+): StreamingRepairState {
+  let { fence, mathFence, mathStart } = state;
+  if (fence) {
+    if (isClosingFence(line, fence)) fence = null;
+  } else {
+    const match = matchFenceLine(line);
+    if (match) fence = match;
+  }
+  if (mathFence) {
+    if (isClosingFence(line, mathFence)) mathFence = null;
+  } else if (complete && !line.trim()) mathStart = -1;
+  else {
+    const match = mathStart === -1 ? matchFenceLine(line) : null;
+    if (match) mathFence = match;
+    else {
+      const codes = indexInlineCodeSpans(line);
+      let cursor = 0;
+      while (cursor < line.length) {
+        if (line[cursor] === "\\") {
+          cursor += 2;
+          continue;
+        }
+        if (line[cursor] === "`" && mathStart === -1) {
+          cursor = codes.closeEnds.get(cursor) ?? codes.runEnds.get(cursor) ?? cursor + 1;
+          continue;
+        }
+        if (line[cursor] === "$" && line[cursor + 1] === "$") {
+          mathStart = mathStart === -1 ? offset + cursor : -1;
+          cursor += 2;
+        } else cursor++;
+      }
+    }
+  }
+  return { fence, mathFence, mathStart };
+}
+
+export function createStreamingMarkdownRepair(
+  onScan?: (text: string) => void,
+): (text: string) => string {
+  let previous = "";
+  let committedOffset = 0;
+  let state: StreamingRepairState = { fence: null, mathFence: null, mathStart: -1 };
+  let completedLines: string[] = [];
+  let previousResult = "";
+  return (text) => {
+    if (text === previous) return previousResult;
+    if (!text.startsWith(previous)) {
+      committedOffset = 0;
+      state = { fence: null, mathFence: null, mathStart: -1 };
+      completedLines = [];
+    }
+    let newline = text.indexOf("\n", committedOffset);
+    while (newline !== -1) {
+      const line = text.slice(committedOffset, newline);
+      onScan?.(line);
+      state = scanRepairLine(state, line, committedOffset, true);
+      completedLines.push(line);
+      if (completedLines.length > 2) completedLines.shift();
+      committedOffset = newline + 1;
+      newline = text.indexOf("\n", committedOffset);
+    }
+    const tail = text.slice(committedOffset);
+    onScan?.(tail);
+    const current = scanRepairLine(state, tail, committedOffset, false);
+    let repaired: string;
+    if (current.fence) repaired = repairOpenFenceTail(text, current.fence);
+    else if (current.mathStart !== -1) repaired = renderPendingDisplayMath(text, current.mathStart);
+    else {
+      let lastLine = dropTrailingBareDollar(tail);
+      if (isBlockMarkerOnlyLine(lastLine)) lastLine = "";
+      lastLine = repairLastLine(lastLine);
+      repaired = text.slice(0, committedOffset) + lastLine;
+      repaired = repairTableTail(repaired, [...completedLines, lastLine]);
+    }
+    previous = text;
+    previousResult = repaired;
+    return repaired;
+  };
 }

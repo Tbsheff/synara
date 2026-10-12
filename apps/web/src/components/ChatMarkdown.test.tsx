@@ -663,3 +663,51 @@ it("keeps dollar filenames separate from math and rejects escaped delimiters", a
   expect(markup).not.toContain("alias.md");
   expect(markup.match(/href=/g)).toHaveLength(1);
 });
+
+it("renders backslash math outside code and links", async () => {
+  const markup = await renderMarkdown(
+    String.raw`Inline \(x^2\) and display \[y^2\]. [Link](https://example.com)`,
+  );
+  expect(markup).toContain('class="katex"');
+  expect(markup).toContain('class="katex-display"');
+  const literals = await renderMarkdown("`\\(literal\\)` and [\\(label\\)](https://example.com)");
+  expect(literals).not.toContain('class="katex"');
+});
+
+it("offers a lazy diagram view for settled Mermaid source", async () => {
+  const markup = await renderMarkdown("```mermaid\ngraph TD; A-->B;\n```");
+  expect(markup).toContain('data-mermaid-block="true"');
+});
+
+it(
+  "bounds normalization time for many unmatched brackets",
+  async () => {
+    const { protectLiteralMarkdownDollars } = await import("./ChatMarkdown");
+    const source = "[".repeat(40_000) + " literal $5";
+    const start = performance.now();
+    const result = protectLiteralMarkdownDollars(source);
+    expect(performance.now() - start).toBeLessThan(1_000);
+    expect(result.startsWith("[".repeat(40_000))).toBe(true);
+  },
+  HEAVY_MODULE_TEST_TIMEOUT_MS,
+);
+
+it(
+  "keeps Markdown emphasis markers inside backslash math",
+  async () => {
+    const markup = await renderMarkdown(String.raw`Formula \(a *b* c\).`);
+    expect(markup).toContain('class="katex"');
+    expect(markup).not.toContain("<em>");
+  },
+  HEAVY_MODULE_TEST_TIMEOUT_MS,
+);
+
+it(
+  "ignores an unfinished math opener inside code before real math",
+  async () => {
+    const markup = await renderMarkdown("Use `\\(literal` then \\(x^2\\).");
+    expect(markup).toContain('class="katex"');
+    expect(markup.match(/class="katex"/g)).toHaveLength(1);
+  },
+  HEAVY_MODULE_TEST_TIMEOUT_MS,
+);
