@@ -11386,6 +11386,114 @@ describe("ChatView transcript geometry (full app)", () => {
     }
   });
 
+  it("keeps the live transcript header through provider session ready gaps", async () => {
+    const snapshot = createSnapshotForTargetUser({
+      targetMessageId: MessageId.makeUnsafe("header-ready-gap"),
+      targetText: "Keep the live header",
+      sessionStatus: "running",
+    });
+    const source = snapshot.threads[0]!;
+    const turnId = source.session!.activeTurnId!;
+    const liveThread = {
+      ...source,
+      messages: [
+        createUserMessage({
+          id: MessageId.makeUnsafe("header-ready-gap"),
+          text: "Keep the live header",
+          offsetSeconds: 1,
+        }),
+      ],
+      latestTurn: {
+        turnId,
+        state: "running" as const,
+        requestedAt: isoAt(1),
+        startedAt: isoAt(2),
+        completedAt: null,
+        assistantMessageId: null,
+      },
+    };
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: { ...snapshot, threads: [liveThread] },
+    });
+    try {
+      const selector = '[data-timeline-row-kind="working-header"]';
+      await vi.waitFor(() => expect(document.querySelector(selector)).not.toBeNull());
+      await waitForLayout();
+      const header = document.querySelector(selector);
+      for (const status of ["ready", "running", "ready", "running"] as const) {
+        const thread = {
+          ...liveThread,
+          session: {
+            ...liveThread.session!,
+            status,
+            activeTurnId: status === "running" ? turnId : null,
+          },
+        };
+        fixture.snapshot = { ...fixture.snapshot, threads: [thread] };
+        useStore.getState().syncServerThreadDetailHotPath(thread);
+        for (let frame = 0; frame < 6; frame += 1) {
+          await nextFrame();
+          expect(document.querySelector(selector)).toBe(header);
+          expect(header?.textContent).toContain("Working for");
+        }
+      }
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("keeps the landing composer mounted and steady through the first send", async () => {
+    const restoreNativeApi = installDeterministicSendNativeApi();
+    useComposerDraftStore.getState().setProjectDraftThreadId(PROJECT_ID, THREAD_ID);
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createDraftOnlySnapshot(),
+    });
+    try {
+      const editor = document.querySelector<HTMLElement>('[data-testid="composer-editor"]')!;
+      useComposerDraftStore.getState().setPrompt(THREAD_ID, "Keep the composer steady");
+      await waitForLayout();
+      const before = editor.getBoundingClientRect();
+      const samples: { sameNode: boolean; top: number; opacity: number }[] = [];
+      let sampling = true;
+      const sample = () => {
+        if (!sampling) return;
+        const current = document.querySelector<HTMLElement>('[data-testid="composer-editor"]');
+        let opacity = 1;
+        for (let node = current; node; node = node.parentElement) {
+          opacity *= Number(getComputedStyle(node).opacity);
+        }
+        samples.push({
+          sameNode: current === editor,
+          top: current?.getBoundingClientRect().top ?? -1,
+          opacity,
+        });
+        requestAnimationFrame(sample);
+      };
+      requestAnimationFrame(sample);
+      (await waitForSendButton()).click();
+      await vi.waitFor(() => {
+        expect(
+          wsRequests
+            .map(readDispatchedCommand)
+            .some((command) => command?.type === "thread.turn.start"),
+        ).toBe(true);
+      });
+      await waitForLayout();
+      sampling = false;
+      expect(samples.length).toBeGreaterThan(0);
+      expect(samples.every((sample) => sample.sameNode)).toBe(true);
+      expect(Math.min(...samples.map((sample) => sample.opacity))).toBe(1);
+      expect(
+        Math.max(...samples.map((sample) => Math.abs(sample.top - before.top))),
+      ).toBeLessThanOrEqual(1);
+    } finally {
+      await mounted.cleanup();
+      restoreNativeApi();
+    }
+  });
+
   it("keeps the first sent message visible throughout draft promotion", async () => {
     const restoreNativeApi = installDeterministicSendNativeApi();
     useComposerDraftStore.getState().setProjectDraftThreadId(PROJECT_ID, THREAD_ID);
