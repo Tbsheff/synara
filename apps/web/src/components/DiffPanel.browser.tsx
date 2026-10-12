@@ -6,7 +6,22 @@ import { page, userEvent } from "vitest/browser";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
-const { navigate } = vi.hoisted(() => ({ navigate: vi.fn() }));
+const { navigate, workerStarts } = vi.hoisted(() => ({
+  navigate: vi.fn(),
+  workerStarts: vi.fn(),
+}));
+
+vi.mock("@pierre/diffs/worker/worker.js?worker", async (importOriginal) => {
+  const { default: DiffWorker } = await importOriginal<{ default: new () => Worker }>();
+  return {
+    default: class extends DiffWorker {
+      constructor() {
+        super();
+        workerStarts();
+      }
+    },
+  };
+});
 
 vi.mock("@tanstack/react-router", () => ({
   useNavigate: () => navigate,
@@ -108,4 +123,5 @@ it("remembers stacked and split diff choices after closing and remounting the pa
     .element(page.getByRole("menuitemradio", { name: "Split diff", exact: true }))
     .toHaveAttribute("aria-checked", "true");
   await reopened.unmount();
+  expect(workerStarts).toHaveBeenCalledTimes(0);
 });

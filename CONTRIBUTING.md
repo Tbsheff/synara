@@ -70,6 +70,20 @@ For focused web tests, pass paths relative to `apps/web` through the dedicated r
 bun run test:web:focused src/path/to/example.test.ts
 ```
 
+The pinned Pierre patches limit syntax highlighting to `github-light` and
+`github-dark` with Shiki's JavaScript regex engine. They keep the language loaders
+and reject a WASM engine request. The web build checks both main and worker chunks
+for extra themes and the WASM engine. When updating Pierre or Shiki, run:
+
+```bash
+bun run test:web:focused scripts/shiki-bundle-guard.test.ts
+bun run --cwd apps/web test:browser src/lib/syntaxHighlighting.browser.ts
+bun run --cwd apps/web build
+```
+
+The browser test uses code and diff colors captured from the old factory in both
+modes. Keep this output unchanged unless the task calls for a color change.
+
 The pinned `@pierre/diffs` patch refreshes file-editor rows after line insertions
 and deletions. When upgrading the dependency, verify repeated Enter, subsequent
 typing, undo, and redo with the real editor browser tests before removing it:

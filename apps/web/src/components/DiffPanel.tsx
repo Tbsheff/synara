@@ -53,6 +53,7 @@ import {
 import { resolveDiffEnvironmentState } from "../lib/threadEnvironment";
 import { disclosureWidthClassName } from "../lib/disclosureMotion";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
+import { DiffWorkerPoolProvider } from "./DiffWorkerPoolProvider";
 import { type RepoDiffScope, useRepoDiffScope, useRepoDiffScopeStore } from "../repoDiffScopeStore";
 import { useStore } from "../store";
 import { createProjectSelector } from "../storeSelectors";
@@ -1478,7 +1479,7 @@ export default function DiffPanel({
     ],
   );
 
-  return (
+  const content = (
     <DiffPanelShell mode={mode} header={shellHeader}>
       {!activeThreadContext ? (
         <PanelStateMessage density="compact" fill="flex">
@@ -1581,9 +1582,6 @@ export default function DiffPanel({
               aria-hidden={!fileTreeOpen}
               inert={!fileTreeOpen}
             >
-              {/* Empty until first open: the wrapper stays mounted (free) so the
-                  width reveal animates, but the tree only filters/builds once the
-                  user actually opens it. */}
               {fileTreeMounted ? (
                 <ReviewFileTreePanel
                   files={renderableFiles}
@@ -1599,5 +1597,20 @@ export default function DiffPanel({
         </div>
       )}
     </DiffPanelShell>
+  );
+
+  return (
+    <DiffWorkerPoolProvider
+      enabled={
+        renderableFiles.length > 0 &&
+        !!activeThreadContext &&
+        gitRepoStatus !== false &&
+        !gitRepoStatusError &&
+        !(gitRepoStatus === undefined && diffQueriesEnabled && activeCwd) &&
+        !diffEnvironmentPending
+      }
+    >
+      {content}
+    </DiffWorkerPoolProvider>
   );
 }
