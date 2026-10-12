@@ -706,9 +706,10 @@ const makeOrchestrationEngine = Effect.gen(function* () {
             }),
         ),
         Effect.flatMap((message) => {
-          const model = findReadModelThread(commandReadModel, command.threadId) !== undefined
-            ? Effect.succeed(commandReadModel)
-            : loadThreadDetailForDecider(command, commandReadModel, command.threadId);
+          const model =
+            findReadModelThread(commandReadModel, command.threadId) !== undefined
+              ? Effect.succeed(commandReadModel)
+              : loadThreadDetailForDecider(command, commandReadModel, command.threadId);
           return model.pipe(
             Effect.map((readModel) => {
               const thread = findReadModelThread(readModel, command.threadId);
