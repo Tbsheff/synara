@@ -14,7 +14,7 @@ import {
   type ProviderRuntimeEvent,
 } from "@synara/contracts";
 import { Effect, Exit, Layer, ManagedRuntime, Option, PubSub, Scope, Stream } from "effect";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   ProviderService,
@@ -33,6 +33,12 @@ import { HubOutputReactorLive } from "./HubOutputReactor.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
 import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
+
+import * as studioOutputs from "../../studioOutputs.ts";
+vi.mock("../../studioOutputs.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../studioOutputs.ts")>();
+  return { ...actual, scanStudioWorkspaceFiles: vi.fn(actual.scanStudioWorkspaceFiles) };
+});
 
 async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
@@ -73,6 +79,7 @@ describe("HubOutputReactor", () => {
   ] as const)(
     "uses only a pre-dispatch Hub baseline when preparation is %s",
     async (preparation) => {
+      vi.mocked(studioOutputs.scanStudioWorkspaceFiles).mockClear();
       const workspaceRoot = await mkdtemp(path.join(os.tmpdir(), "synara-studio-reactor-"));
       temporaryRoots.push(workspaceRoot);
       const threadId = ThreadId.makeUnsafe("studio-thread");
@@ -188,6 +195,10 @@ describe("HubOutputReactor", () => {
         preparation === "child-own-failure"
       ) {
         await runtime.runPromise(reactor.captureBaselineBeforeTurn(threadId));
+      }
+      if (preparation === "prepared") {
+        await runtime.runPromise(reactor.captureBaselineBeforeTurn(threadId));
+        expect(studioOutputs.scanStudioWorkspaceFiles).toHaveBeenCalledTimes(1);
       }
       if (preparation === "cancelled" || preparation === "child-own-failure") {
         await runtime.runPromise(reactor.cancelPendingTurnBaseline(threadId));
