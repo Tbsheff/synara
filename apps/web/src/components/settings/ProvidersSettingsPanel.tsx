@@ -1451,75 +1451,89 @@ function ProviderAccountsControl(props: {
         role="group"
         aria-label={`${account.label} account`}
       >
-        <div className="flex items-start gap-3 border-b border-border/70 bg-muted/25 px-3 py-3">
-          <ProviderAccountAvatar provider={provider} accentColor={account.accentColor} size="md" />
-          <div className="min-w-0 flex-1">
-            <div className="flex min-w-0 items-center gap-2">
-              <span className="truncate text-ui-lg font-medium text-foreground">
-                {account.label}
-              </span>
-              {account.isDefault ? (
-                <span className="shrink-0 rounded-full border border-border/70 px-1.5 py-px text-ui-2xs font-medium text-muted-foreground">
-                  Default
+        <div className="flex flex-col gap-3 border-b border-border/70 bg-muted/25 px-3 py-3">
+          <div className="flex min-w-0 items-start gap-3">
+            <ProviderAccountAvatar
+              provider={provider}
+              accentColor={account.accentColor}
+              size="md"
+            />
+            <div className="min-w-0 flex-1">
+              <div className="flex min-w-0 items-center gap-2">
+                <span className="truncate text-ui-lg font-medium text-foreground">
+                  {account.label}
                 </span>
-              ) : null}
+                {account.isDefault ? (
+                  <span className="shrink-0 rounded-full border border-border/70 px-1.5 py-px text-ui-2xs font-medium text-muted-foreground">
+                    Default
+                  </span>
+                ) : null}
+              </div>
+              <StatusChip
+                variant="pill"
+                className={cn("mt-1 w-fit max-w-full", ACCOUNT_STATUS_PILL_CLASS_NAME[status.tone])}
+                dotClassName={ACCOUNT_STATUS_DOT_CLASS_NAME[status.tone]}
+              >
+                <span className="truncate">{status.headline}</span>
+              </StatusChip>
             </div>
-            <StatusChip
-              variant="pill"
-              className={cn("mt-1 w-fit max-w-full", ACCOUNT_STATUS_PILL_CLASS_NAME[status.tone])}
-              dotClassName={ACCOUNT_STATUS_DOT_CLASS_NAME[status.tone]}
-            >
-              <span className="truncate">{status.headline}</span>
-            </StatusChip>
           </div>
-          <Button
-            type="button"
-            size="xs"
-            variant="outline"
-            disabled={!account.enabled || liveStatus?.available === false || startingSignIn}
-            aria-label={`Sign in to ${account.label}`}
-            onClick={() => void startSignIn(account)}
+          <div
+            className="flex flex-wrap items-center gap-2"
+            role="group"
+            aria-label={`${account.label} account actions`}
           >
-            {startingSignIn ? (
-              <Loader2Icon className="size-3.5 animate-spin" />
-            ) : (
-              <PlayIcon className="size-3.5" />
-            )}
-            Sign in
-          </Button>
-          {PROVIDER_SIGN_OUT_ARGS[provider] ? (
             <Button
               type="button"
               size="xs"
               variant="outline"
               disabled={!account.enabled || liveStatus?.available === false || startingSignIn}
-              onClick={() => void startSignIn(account, "sign-out")}
-              aria-label={`Sign out of ${account.label}`}
+              aria-label={`Sign in to ${account.label}`}
+              onClick={() => void startSignIn(account)}
             >
-              Sign out
+              {startingSignIn ? (
+                <Loader2Icon className="size-3.5 animate-spin" />
+              ) : (
+                <PlayIcon className="size-3.5" />
+              )}
+              Sign in
             </Button>
-          ) : null}
-          {account.isDefault ? (
-            defaultIsCustomized ? (
-              <SettingResetButton
-                label={`${account.label} account`}
-                onClick={resetDefaultAccount}
-              />
-            ) : null
-          ) : (
-            <Button
-              type="button"
-              size="xs"
-              variant="ghost"
-              onClick={() => {
-                props.updateSettings(removeManageableProviderInstance(props.settings, instanceId));
-                setSelectedAccountId(provider);
-              }}
-            >
-              <XIcon className="size-3.5" />
-              Remove entry
-            </Button>
-          )}
+            {PROVIDER_SIGN_OUT_ARGS[provider] ? (
+              <Button
+                type="button"
+                size="xs"
+                variant="outline"
+                disabled={!account.enabled || liveStatus?.available === false || startingSignIn}
+                onClick={() => void startSignIn(account, "sign-out")}
+                aria-label={`Sign out of ${account.label}`}
+              >
+                Sign out
+              </Button>
+            ) : null}
+            {account.isDefault ? (
+              defaultIsCustomized ? (
+                <SettingResetButton
+                  label={`${account.label} account`}
+                  onClick={resetDefaultAccount}
+                />
+              ) : null
+            ) : (
+              <Button
+                type="button"
+                size="xs"
+                variant="ghost"
+                onClick={() => {
+                  props.updateSettings(
+                    removeManageableProviderInstance(props.settings, instanceId),
+                  );
+                  setSelectedAccountId(provider);
+                }}
+              >
+                <XIcon className="size-3.5" />
+                Remove entry
+              </Button>
+            )}
+          </div>
         </div>
 
         {status.detail && status.tone !== "ready" && status.tone !== "idle" ? (
