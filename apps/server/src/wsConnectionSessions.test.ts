@@ -1,4 +1,5 @@
 import { Effect, Exit, Scope } from "effect";
+import { RpcSerialization } from "effect/unstable/rpc";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -9,6 +10,7 @@ import {
   CurrentWsSessionRole,
   makeWsConnectionSessions,
   provideWsConnectionSession,
+  withoutClientReservedRpcHeaders,
   type WsConnectionSession,
 } from "./wsConnectionSessions.ts";
 
@@ -90,5 +92,35 @@ describe("WsConnectionSessions", () => {
       role: "client",
       principal: LOCAL_LOOPBACK_ATTACHMENT_PRINCIPAL,
     });
+  });
+
+  it("drops reserved and malformed client headers from decoded RPC requests", () => {
+    const parser = withoutClientReservedRpcHeaders(RpcSerialization.json, [
+      "X-Reserved",
+    ]).makeUnsafe();
+    const decode = (message: unknown) => parser.decode(JSON.stringify(message));
+    expect(
+      decode({
+        _tag: "Request",
+        id: "1",
+        tag: "a",
+        payload: {},
+        headers: [
+          ["x-RESERVED", "forged"],
+          ["x-reserved", "forged", "extra"],
+          "x-reserved",
+          ["x-trace", "kept"],
+        ],
+      }),
+    ).toEqual([
+      { _tag: "Request", id: "1", tag: "a", payload: {}, headers: [["x-trace", "kept"]] },
+    ]);
+    expect(
+      decode({ _tag: "Request", id: "2", tag: "a", payload: {}, headers: { "x-reserved": "x" } }),
+    ).toEqual([{ _tag: "Request", id: "2", tag: "a", payload: {}, headers: [] }]);
+    expect(
+      decode([{ _tag: "Request", id: "3", tag: "a", payload: {}, headers: [["X-Reserved", "x"]] }]),
+    ).toEqual([[{ _tag: "Request", id: "3", tag: "a", payload: {}, headers: [] }]]);
+    expect(decode({ _tag: "Ack", requestId: "1" })).toEqual([{ _tag: "Ack", requestId: "1" }]);
   });
 });

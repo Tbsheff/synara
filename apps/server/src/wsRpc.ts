@@ -224,6 +224,7 @@ import {
   WS_CONNECTION_SESSION_HEADER,
   WsConnectionSessions,
   WsConnectionSessionsLive,
+  withoutClientReservedRpcHeaders,
   type WsConnectionSession,
 } from "./wsConnectionSessions";
 import {
@@ -277,6 +278,13 @@ class WsRequestAdmissionMiddleware extends RpcMiddleware.Service<WsRequestAdmiss
 // same socket: one connection, one admission middleware, one exhaustive
 // handler map.
 export const WS_NEGOTIATED_REVISION_HEADER = "x-synara-negotiated-protocol-revision";
+
+export const WS_CONNECTION_SESSION_REQUIRED_CODE = "WS_CONNECTION_SESSION_REQUIRED";
+
+export const wsFeatureRpcSerialization = withoutClientReservedRpcHeaders(RpcSerialization.json, [
+  WS_CONNECTION_SESSION_HEADER,
+  WS_NEGOTIATED_REVISION_HEADER,
+]);
 
 export function negotiatedRevisionFromHeaders(headers: Headers.Headers): number {
   const revision = Number(Headers.get(headers, WS_NEGOTIATED_REVISION_HEADER) ?? Number.NaN);
@@ -400,10 +408,19 @@ const wsRequestAdmissionMiddlewareLayer = Layer.effect(
       // Handler fibers descend from the RPC server fiber (forked at layer build),
       // not from the connection's HTTP upgrade fiber, so connection-scoped
       // services must be re-provided here from the connection-session registry.
-      const scoped = provideWsConnectionSession(
-        effect,
-        connectionSessions.lookup(Headers.get(options.headers, WS_CONNECTION_SESSION_HEADER)),
+      const session = connectionSessions.lookup(
+        Headers.get(options.headers, WS_CONNECTION_SESSION_HEADER),
       );
+      if (!session) {
+        return Effect.fail(
+          new WsRpcError({
+            message: "The request has no authenticated connection session.",
+            code: WS_CONNECTION_SESSION_REQUIRED_CODE,
+            retryable: false,
+          }),
+        );
+      }
+      const scoped = provideWsConnectionSession(effect, session);
       return RpcSchema.isStreamSchema(options.rpc.successSchema)
         ? scoped
         : admission.guard(options.clientId, options.rpc._tag, scoped);
@@ -3254,7 +3271,11 @@ const makeRpcWebSocketHttpEffect = Effect.gen(function* () {
   // Keep handler-owned jobs alive for the HTTP server lifetime. Effect.provide
   // with a Layer would close its build scope as soon as this constructor returns.
   const handlers = yield* Layer.buildWithScope(
-    makeWsRpcLayer().pipe(Layer.provideMerge(RpcSerialization.layerJson)),
+    makeWsRpcLayer().pipe(
+      Layer.provideMerge(
+        Layer.succeed(RpcSerialization.RpcSerialization, wsFeatureRpcSerialization),
+      ),
+    ),
     yield* Effect.scope,
   );
   return yield* RpcServer.toHttpEffectWebsocket(AdmittedWsFeatureRpcGroup, {
