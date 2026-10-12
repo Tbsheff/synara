@@ -8228,63 +8228,68 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
     // background agent output) the message dispatches as a normal turn.
     const steerTurn: ClaudeAdapterShape["steerTurn"] = (input, options) => {
       if (isClaudeCompactionCommand(input.input)) return sendTurn(input, options);
-      return withPendingDispatch(input, () =>
-        Effect.gen(function* () {
-          const context = yield* requireSession(input.threadId);
-          const liveTurnState = context.turnState;
-          if (liveTurnState === undefined || liveTurnState.synthetic === true) {
-            return yield* sendTurn(input);
-          }
+      const steerLiveTurn: ReturnType<ClaudeAdapterShape["steerTurn"]> = Effect.gen(function* () {
+        const context = yield* requireSession(input.threadId);
+        const liveTurnState = context.turnState;
+        if (liveTurnState === undefined || liveTurnState.synthetic === true) {
+          return yield* sendTurn(input);
+        }
+        const steeredTurnId = liveTurnState.turnId;
+        const ownsSteeredTurn = () =>
+          sessions.get(input.threadId) === context && context.turnState?.turnId === steeredTurnId;
 
-          // Steering across an interaction-mode change (e.g. a plan follow-up
-          // that starts implementing) must flip the CLI's permission mode even
-          // though no new turn starts.
-          const effectiveInteractionMode = yield* applyInteractionModePermission(
-            context,
-            input.threadId,
-            input.interactionMode,
-          );
-          if (effectiveInteractionMode !== liveTurnState.interactionMode) {
-            context.turnState = {
-              ...liveTurnState,
-              interactionMode: effectiveInteractionMode,
-            };
-          }
-
-          const message = yield* buildUserMessageEffect(input, {
-            fileSystem,
-            attachmentsDir: serverConfig.attachmentsDir,
-            nativeCommandNames: yield* resolveNativeCommandNames(context, input.input),
-          });
-          yield* Queue.offer(context.promptQueue, {
-            type: "message",
-            message,
-          }).pipe(Effect.mapError((cause) => toRequestError(input.threadId, "turn/steer", cause)));
-
-          const steerText = input.input?.trim();
-          if (steerText) {
-            const stamp = yield* makeEventStamp();
-            yield* offerRuntimeEvent(context, {
-              type: "turn.steered",
-              eventId: stamp.eventId,
-              provider: PROVIDER,
-              createdAt: stamp.createdAt,
-              threadId: context.session.threadId,
-              turnId: liveTurnState.turnId,
-              payload: { message: steerText, target: "turn" },
-              providerRefs: nativeProviderRefs(context),
-            });
-          }
-
-          return {
-            threadId: context.session.threadId,
-            turnId: liveTurnState.turnId,
-            ...(context.session.resumeCursor !== undefined
-              ? { resumeCursor: context.session.resumeCursor }
-              : {}),
+        const effectiveInteractionMode = yield* applyInteractionModePermission(
+          context,
+          input.threadId,
+          input.interactionMode,
+        );
+        if (!ownsSteeredTurn()) return yield* steerLiveTurn;
+        const currentTurnState = context.turnState;
+        if (
+          currentTurnState !== undefined &&
+          effectiveInteractionMode !== currentTurnState.interactionMode
+        ) {
+          context.turnState = {
+            ...currentTurnState,
+            interactionMode: effectiveInteractionMode,
           };
-        }),
-      );
+        }
+
+        const message = yield* buildUserMessageEffect(input, {
+          fileSystem,
+          attachmentsDir: serverConfig.attachmentsDir,
+          nativeCommandNames: yield* resolveNativeCommandNames(context, input.input),
+        });
+        if (!ownsSteeredTurn()) return yield* steerLiveTurn;
+        yield* Queue.offer(context.promptQueue, {
+          type: "message",
+          message,
+        }).pipe(Effect.mapError((cause) => toRequestError(input.threadId, "turn/steer", cause)));
+
+        const steerText = input.input?.trim();
+        if (steerText) {
+          const stamp = yield* makeEventStamp();
+          yield* offerRuntimeEvent(context, {
+            type: "turn.steered",
+            eventId: stamp.eventId,
+            provider: PROVIDER,
+            createdAt: stamp.createdAt,
+            threadId: context.session.threadId,
+            turnId: steeredTurnId,
+            payload: { message: steerText, target: "turn" },
+            providerRefs: nativeProviderRefs(context),
+          });
+        }
+
+        return {
+          threadId: context.session.threadId,
+          turnId: steeredTurnId,
+          ...(context.session.resumeCursor !== undefined
+            ? { resumeCursor: context.session.resumeCursor }
+            : {}),
+        };
+      });
+      return withPendingDispatch(input, () => steerLiveTurn);
     };
 
     const interruptTurn: ClaudeAdapterShape["interruptTurn"] = (

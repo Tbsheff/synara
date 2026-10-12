@@ -153,8 +153,13 @@ class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
     this.setModelCalls.push(model);
   };
 
+  public setPermissionModeGate: Promise<void> | undefined;
+  public supportedCommandsGate: Promise<void> | undefined;
+  public supportedCommandsCalls = 0;
+
   readonly setPermissionMode = async (mode: PermissionMode): Promise<void> => {
     this.setPermissionModeCalls.push(mode);
+    await this.setPermissionModeGate;
   };
 
   readonly setMaxThinkingTokens = async (maxThinkingTokens: number | null): Promise<void> => {
@@ -190,7 +195,9 @@ class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
   readonly supportedCommands = async (): Promise<
     Array<{ name: string; description: string; argumentHint: string }>
   > => {
+    this.supportedCommandsCalls += 1;
     if (this.supportedCommandsNeverResolves) return new Promise(() => {});
+    await this.supportedCommandsGate;
     return this.supportedCommandList;
   };
 
@@ -1770,6 +1777,91 @@ describe("ClaudeAdapterLive", () => {
       Effect.provide(harness.layer),
     );
   });
+
+  const steerAcrossSettlement = (input: {
+    readonly runtimeMode: "full-access" | "approval-required";
+    readonly steer: { readonly input: string; readonly interactionMode?: "plan" };
+    readonly gate: (query: FakeClaudeQuery, gate: Promise<void>) => void;
+    readonly reachedGate: (query: FakeClaudeQuery) => boolean;
+  }) => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const turnEventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.type === "turn.started" || event.type === "turn.completed"),
+        Stream.take(3),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: input.runtimeMode,
+      });
+      const firstTurn = yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "Start the work",
+        attachments: [],
+      });
+
+      let releaseGate!: () => void;
+      input.gate(
+        harness.query,
+        new Promise<void>((resolve) => {
+          releaseGate = resolve;
+        }),
+      );
+      const steerFiber = yield* adapter
+        .steerTurn({ threadId: session.threadId, attachments: [], ...input.steer })
+        .pipe(Effect.forkChild);
+      while (!input.reachedGate(harness.query)) {
+        yield* Effect.yieldNow;
+      }
+
+      emitSuccessResult(harness.query, "sdk-session-steer", "result-first", {});
+      while ((yield* adapter.listSessions()).some((entry) => entry.activeTurnId !== undefined)) {
+        yield* Effect.yieldNow;
+      }
+      releaseGate();
+
+      const steered = yield* Fiber.join(steerFiber);
+      assert.notEqual(String(steered.turnId), String(firstTurn.turnId));
+      const turnEvents = Array.from(yield* Fiber.join(turnEventsFiber));
+      assert.deepEqual(
+        turnEvents.map((event) => [event.type, String(event.turnId)]),
+        [
+          ["turn.started", String(firstTurn.turnId)],
+          ["turn.completed", String(firstTurn.turnId)],
+          ["turn.started", String(steered.turnId)],
+        ],
+      );
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  };
+
+  it.effect("starts a new turn when the steered turn settles during a mode change", () =>
+    steerAcrossSettlement({
+      runtimeMode: "full-access",
+      steer: { input: "Plan the follow-up", interactionMode: "plan" },
+      gate: (query, gate) => {
+        query.setPermissionModeGate = gate;
+      },
+      reachedGate: (query) => query.setPermissionModeCalls.includes("plan"),
+    }),
+  );
+
+  it.effect("starts a new turn when the steered turn settles while the steer is prepared", () =>
+    steerAcrossSettlement({
+      runtimeMode: "approval-required",
+      steer: { input: "/review the tests" },
+      gate: (query, gate) => {
+        query.supportedCommandsGate = gate;
+      },
+      reachedGate: (query) => query.supportedCommandsCalls > 0,
+    }),
+  );
 
   it.effect("dispatches a steer as a normal turn when no turn is live", () => {
     const harness = makeHarness();
