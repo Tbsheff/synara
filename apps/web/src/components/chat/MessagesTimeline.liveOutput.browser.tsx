@@ -56,6 +56,7 @@ function commandEntry(input: {
   command: string;
   running: boolean;
   output?: string;
+  stream?: "output" | "stdout";
 }): TimelineEntries[number] {
   const entry: WorkLogEntry = {
     id: input.id,
@@ -71,7 +72,7 @@ function commandEntry(input: {
     commandExecution: {
       command: input.command,
       ...(input.running ? {} : { exitCode: 0 }),
-      ...(input.output !== undefined ? { output: input.output } : {}),
+      ...(input.output !== undefined ? { [input.stream ?? "output"]: input.output } : {}),
     },
   };
   return { id: `entry-${input.id}`, kind: "work", createdAt: CREATED_AT, entry };
@@ -105,7 +106,7 @@ interface Harness {
   listRef: React.RefObject<LegendListRef | null>;
   setFollow: (follow: boolean) => void;
   appendToolRows: (count: number) => void;
-  completeLiveCommand: (output: string) => void;
+  completeLiveCommand: (output: string, stream?: "output" | "stdout") => void;
   atEndReports: boolean[];
 }
 
@@ -133,7 +134,7 @@ function LiveOutputTimeline({ harnessRef }: { harnessRef: { current: Harness | n
         ),
       ]);
     },
-    completeLiveCommand: (output) => {
+    completeLiveCommand: (output, stream = "output") => {
       setEntries((current) =>
         current.map((entry) =>
           entry.id === "entry-live-command"
@@ -143,6 +144,7 @@ function LiveOutputTimeline({ harnessRef }: { harnessRef: { current: Harness | n
                 command: "bun run test",
                 running: false,
                 output,
+                stream,
               })
             : entry,
         ),
@@ -339,25 +341,37 @@ describe("MessagesTimeline live tool output", () => {
     }
   });
 
-  it("keeps a following reader at the bottom when the final output replaces the tail", async () => {
-    const harnessRef: { current: Harness | null } = { current: null };
-    const screen = await render(<LiveOutputTimeline harnessRef={harnessRef} />);
-    try {
-      const harness = await mountAtBottom(harnessRef);
-      pushLiveTail(30);
-      await settleFrames(4);
-      harness.completeLiveCommand(
-        Array.from({ length: 50 }, (_, index) => `final line ${index}`).join("\n"),
-      );
-      clearLiveToolOutputItem(THREAD_ID, LIVE_ITEM_ID);
-      await settleFrames(10);
-      await expect
-        .poll(() => distanceFromBottomPx(harness), { timeout: 5_000 })
-        .toBeLessThanOrEqual(FOLLOW_TOLERANCE_PX);
-    } finally {
-      await screen.unmount();
-    }
-  });
+  it.each(["output", "stdout"] as const)(
+    "keeps the live box at the bottom when final %s arrives",
+    async (stream) => {
+      const harnessRef: { current: Harness | null } = { current: null };
+      const screen = await render(<LiveOutputTimeline harnessRef={harnessRef} />);
+      try {
+        const harness = await mountAtBottom(harnessRef);
+        pushLiveTail(60);
+        await settleFrames(4);
+        const box = liveOutputBox();
+        expect(box.scrollTop).toBeGreaterThan(0);
+        harness.completeLiveCommand(
+          Array.from({ length: 61 }, (_, index) => `final line ${index}`).join("\n"),
+          stream,
+        );
+        clearLiveToolOutputItem(THREAD_ID, LIVE_ITEM_ID);
+        await settleFrames(10);
+        const completedBox = document.querySelector<HTMLElement>(
+          "[data-command-output], [data-command-stdout] > pre",
+        );
+        expect(completedBox).toBe(box);
+        expect(box.textContent).toContain("final line 60");
+        expect(box.scrollHeight - box.clientHeight - box.scrollTop).toBeLessThanOrEqual(1);
+        await expect
+          .poll(() => distanceFromBottomPx(harness), { timeout: 5_000 })
+          .toBeLessThanOrEqual(FOLLOW_TOLERANCE_PX);
+      } finally {
+        await screen.unmount();
+      }
+    },
+  );
 
   it("tails the clipped live output box while its reader stays at the box bottom", async () => {
     const harnessRef: { current: Harness | null } = { current: null };

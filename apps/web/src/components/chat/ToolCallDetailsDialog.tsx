@@ -385,7 +385,7 @@ function TruncatedNote(props: { children: string }) {
 function PlainTextBlock(props: {
   children: string;
   tone?: "default" | "error";
-  dataAttr?: string;
+  dataAttr?: string | undefined;
   followTail?: boolean;
 }) {
   const tailFollow = useScrollTailFollow<HTMLPreElement>({
@@ -413,6 +413,8 @@ export function TypedCommandDetails(props: { view: TypedCommandView; running: bo
   const hasSplitOutput = Boolean(view.stdout || view.stderr);
   const emptyOutput = !view.output && !hasSplitOutput;
   const outputStreaming = running || view.isLiveOutput;
+  const primaryOutput = view.output ?? view.stdout ?? view.stderr;
+  const primaryStream = view.output ? "output" : view.stdout ? "stdout" : "stderr";
   return (
     <div className={DETAIL_CARD_CLASS_NAME} data-command-shell-card="true">
       <div className="space-y-1 border-b border-border/45 px-3 py-2">
@@ -432,29 +434,35 @@ export function TypedCommandDetails(props: { view: TypedCommandView; running: bo
           <p className="text-ui-xs text-muted-foreground/68">{view.description}</p>
         ) : null}
       </div>
-      {view.output ? (
-        <div className="px-3 pt-1">
-          <CopyTextButton text={view.output} label="output" />
-        </div>
-      ) : null}
-      {view.output ? (
-        <PlainTextBlock
-          dataAttr={view.isLiveOutput ? "data-command-live-output" : "data-command-output"}
-          followTail={outputStreaming}
+      {primaryOutput ? (
+        <div
+          data-command-stdout={primaryStream === "stdout" ? "true" : undefined}
+          data-command-stderr={primaryStream === "stderr" ? "true" : undefined}
         >
-          {view.output}
-        </PlainTextBlock>
-      ) : null}
-      {view.stdout ? (
-        <div data-command-stdout="true">
           <div className="px-3 pt-1">
-            <CopyTextButton text={view.stdout} label="stdout" />
+            <CopyTextButton text={primaryOutput} label={primaryStream} />
           </div>
-          {view.stderr ? <div className={DETAIL_HEADER_CLASS_NAME}>Stdout</div> : null}
-          <PlainTextBlock followTail={outputStreaming}>{view.stdout}</PlainTextBlock>
+          {primaryStream === "stderr" ? (
+            <div className={cn(DETAIL_HEADER_CLASS_NAME, "text-destructive/80")}>Stderr</div>
+          ) : primaryStream === "stdout" && view.stderr ? (
+            <div className={DETAIL_HEADER_CLASS_NAME}>Stdout</div>
+          ) : null}
+          <PlainTextBlock
+            dataAttr={
+              view.isLiveOutput
+                ? "data-command-live-output"
+                : primaryStream === "output"
+                  ? "data-command-output"
+                  : undefined
+            }
+            tone={primaryStream === "stderr" ? "error" : "default"}
+            followTail={outputStreaming}
+          >
+            {primaryOutput}
+          </PlainTextBlock>
         </div>
       ) : null}
-      {view.stderr ? (
+      {view.stderr && primaryStream !== "stderr" ? (
         <div data-command-stderr="true">
           <div className="px-3 pt-1">
             <CopyTextButton text={view.stderr} label="stderr" />

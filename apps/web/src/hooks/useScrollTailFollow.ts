@@ -10,6 +10,7 @@ export function useScrollTailFollow<Element extends HTMLElement>(input: {
   const { enabled, content } = input;
   const elementRef = useRef<Element | null>(null);
   const readerAtTailRef = useRef(true);
+  const wasEnabledRef = useRef(false);
 
   const onScroll = useCallback(() => {
     const element = elementRef.current;
@@ -18,8 +19,10 @@ export function useScrollTailFollow<Element extends HTMLElement>(input: {
   }, []);
 
   useLayoutEffect(() => {
+    const followFinalUpdate = wasEnabledRef.current;
+    wasEnabledRef.current = enabled;
     const element = elementRef.current;
-    if (!enabled || !element || !readerAtTailRef.current) return;
+    if ((!enabled && !followFinalUpdate) || !element || !readerAtTailRef.current) return;
     const tailScrollTop = element.scrollHeight - element.clientHeight;
     if (tailScrollTop > element.scrollTop) element.scrollTop = tailScrollTop;
   }, [enabled, content]);
