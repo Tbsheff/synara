@@ -27,6 +27,7 @@ export interface CaptureCheckpointInput {
    * working tree the agent may already have modified.
    */
   readonly skipIfExists?: boolean;
+  readonly indexOnly?: boolean;
 }
 
 export interface CopyCheckpointRefInput {
@@ -39,6 +40,7 @@ export interface RestoreCheckpointInput {
   readonly cwd: string;
   readonly checkpointRef: CheckpointRef;
   readonly fallbackToHead?: boolean;
+  readonly indexOnly?: boolean;
 }
 
 export interface DiffCheckpointsInput {

@@ -3,9 +3,16 @@ import { makeDrainableWorker, startDrainableWorkerProducers } from "@synara/shar
 import { terminalScopeIdsForThread } from "@synara/shared/terminalThreads";
 import { Cause, Effect, Layer, Option, Stream } from "effect";
 
+import * as SqlClient from "effect/unstable/sql/SqlClient";
+import {
+  isManagedCheckpointRefForThread,
+  resolveProjectCwdForKind,
+} from "../../checkpointing/Utils";
+import { resolveThreadWorkspaceCwd } from "@synara/shared/threadEnvironment";
+
 import { ServerConfig } from "../../config";
 import { DeviceService } from "../../device/Services/DeviceService";
-import { GitCore } from "../../git/Services/GitCore";
+import { GitCore, type GitCoreShape } from "../../git/Services/GitCore";
 import { pruneProjectedArchivedManagedWorktrees } from "../../managedWorktrees";
 import { ProfileStatsArchive } from "../../profileStatsArchive";
 import { ProviderService } from "../../provider/Services/ProviderService";
@@ -103,6 +110,33 @@ export const closeThreadTerminalScopes = (
     }),
   ).pipe(Effect.map((results) => results.every(Boolean)));
 
+export const purgeThreadCheckpointRefs = (
+  git: Pick<GitCoreShape, "execute">,
+  cwd: string,
+  threadId: ThreadId,
+) =>
+  Effect.gen(function* () {
+    const refs = yield* git.execute({
+      operation: "ThreadDeletion.checkpointRefs",
+      cwd,
+      args: ["for-each-ref", "--format=%(refname)", "refs/"],
+    });
+    const managedRefs = refs.stdout
+      .split("\n")
+      .filter((ref) => isManagedCheckpointRefForThread(ref, threadId));
+    if (managedRefs.length === 0) return;
+    yield* Effect.forEach(
+      managedRefs,
+      (ref) =>
+        git.execute({
+          operation: "ThreadDeletion.deleteCheckpointRefs",
+          cwd,
+          args: ["update-ref", "-d", ref],
+        }),
+      { discard: true },
+    );
+  });
+
 const make = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
   const profileStatsArchive = yield* ProfileStatsArchive;
@@ -111,6 +145,39 @@ const make = Effect.gen(function* () {
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const serverConfig = yield* ServerConfig;
   const git = yield* GitCore;
+  const sql = yield* SqlClient.SqlClient;
+  const cleanupCheckpointRefs = (threadId: ThreadId) =>
+    Effect.gen(function* () {
+      const rows = yield* sql<{
+        workspaceRoot: string;
+        kind: string;
+        envMode: "local" | "worktree";
+        worktreePath: string | null;
+        workingDirectory: string | null;
+      }>`SELECT p.workspace_root AS workspaceRoot, p.kind, t.env_mode AS envMode, t.worktree_path AS worktreePath, t.working_directory AS workingDirectory FROM projection_threads t JOIN projection_projects p ON p.project_id = t.project_id WHERE t.thread_id = ${threadId} AND t.deleted_at IS NOT NULL`;
+      const row = rows[0];
+      if (!row) return;
+      const projectCwd = resolveProjectCwdForKind({
+        kind: row.kind,
+        workspaceRoot: row.workspaceRoot,
+        worktreePath: row.worktreePath,
+      });
+      const cwd = resolveThreadWorkspaceCwd({
+        projectCwd,
+        envMode: row.envMode,
+        worktreePath: row.worktreePath,
+        workingDirectory: row.workingDirectory,
+      });
+      for (const candidate of new Set([cwd, projectCwd])) {
+        if (
+          candidate &&
+          (yield* git
+            .readBranchContext(candidate)
+            .pipe(Effect.orElseSucceed(() => ({ isRepo: false })))).isRepo
+        )
+          yield* purgeThreadCheckpointRefs(git, candidate, threadId);
+      }
+    });
 
   const pruneManagedWorktreesAfterLifecycle = (context: {
     readonly eventType: ThreadDeletedEvent["type"];
@@ -202,6 +269,9 @@ const make = Effect.gen(function* () {
       return Effect.void;
     }
     return waitForThreadPurgeFence(event.payload.threadId).pipe(
+      Effect.tap((canPurge) =>
+        canPurge ? cleanupCheckpointRefs(event.payload.threadId) : Effect.void,
+      ),
       Effect.flatMap((canPurge) =>
         canPurge
           ? profileStatsArchive.purgeThreadWithStatsSnapshot({
@@ -269,6 +339,7 @@ const make = Effect.gen(function* () {
     const { threadId } = event.payload;
     yield* detachThreadDevice(threadId);
     const cleanupSucceeded = yield* cleanupThreadBeforePurge(threadId);
+
     // Reclaim while the soft-deleted projection row still names the worktree.
     // Dirty managed worktrees are snapped and left with a warning (no force).
     yield* pruneManagedWorktreesAfterLifecycle({
@@ -328,10 +399,15 @@ const make = Effect.gen(function* () {
                         ? waitForThreadPurgeFence(ThreadId.makeUnsafe(threadId)).pipe(
                             Effect.flatMap((fenced) =>
                               fenced
-                                ? pruneManagedWorktreesAfterLifecycle({
-                                    eventType: "thread.deleted",
-                                    threadId,
-                                  }).pipe(Effect.as(true))
+                                ? cleanupCheckpointRefs(ThreadId.makeUnsafe(threadId)).pipe(
+                                    Effect.andThen(
+                                      pruneManagedWorktreesAfterLifecycle({
+                                        eventType: "thread.deleted",
+                                        threadId,
+                                      }),
+                                    ),
+                                    Effect.as(true),
+                                  )
                                 : Effect.succeed(false),
                             ),
                           )

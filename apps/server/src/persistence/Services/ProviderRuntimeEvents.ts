@@ -28,6 +28,7 @@ export interface ProviderRuntimeEventRepositoryShape {
     readonly limit: number;
     /** Filter checkpoint inputs in SQL before limiting and decoding; raw reads are unchanged. */
     readonly checkpointRelevantOnly?: boolean;
+    readonly threadIds?: ReadonlyArray<string>;
   }) => Effect.Effect<
     ReadonlyArray<PersistedProviderRuntimeEvent>,
     ProviderRuntimeEventRepositoryError

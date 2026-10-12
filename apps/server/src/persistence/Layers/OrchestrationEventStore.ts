@@ -74,6 +74,7 @@ const ReadFromSequenceRequestSchema = Schema.Struct({
   throughSequenceInclusive: NonNegativeInt,
   limit: Schema.Number,
   filterEnabled: Schema.Boolean,
+  threadIds: Schema.optional(Schema.Array(Schema.String)),
   includeBoundaryEvent: Schema.Boolean,
   eventTypes: Schema.Array(Schema.String),
   activityKinds: Schema.Array(Schema.String),
@@ -390,6 +391,12 @@ export const buildReadEventRowsFromSequenceQuery = (
       : sql`
           AND ${filteredEventPredicate}
         `;
+  const threadFilter =
+    request.threadIds === undefined
+      ? sql``
+      : request.threadIds.length === 0
+        ? sql`AND 0`
+        : sql`AND (stream_id IN ${sql.in(request.threadIds)} OR event_type IN ('thread.meta-updated', 'project.meta-updated', 'thread.session-set'))`;
   return sql`
     SELECT
       sequence,
@@ -407,6 +414,7 @@ export const buildReadEventRowsFromSequenceQuery = (
     WHERE sequence > ${request.sequenceExclusive}
       AND sequence <= ${request.throughSequenceInclusive}
       ${replayFilter}
+      ${threadFilter}
     ORDER BY sequence ASC
     LIMIT ${request.limit}
   `;
@@ -683,6 +691,7 @@ const makeEventStore = Effect.gen(function* () {
           throughSequenceInclusive: normalizedThroughSequence,
           limit: pageSize,
           filterEnabled: filter !== undefined,
+          ...(filter?.threadIds ? { threadIds: [...filter.threadIds] } : {}),
           includeBoundaryEvent: filter?.includeBoundaryEvent === true,
           eventTypes: [...(filter?.eventTypes ?? [])],
           activityKinds: [...(filter?.activityKinds ?? [])],

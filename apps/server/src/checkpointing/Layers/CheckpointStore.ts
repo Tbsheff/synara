@@ -197,12 +197,13 @@ const makeCheckpointStore = Effect.gen(function* () {
               }
             }
 
-            yield* git.execute({
-              operation,
-              cwd: input.cwd,
-              args: ["add", "-A", "--", "."],
-              env: commitEnv,
-            });
+            if (!input.indexOnly)
+              yield* git.execute({
+                operation,
+                cwd: input.cwd,
+                args: ["add", "-A", "--", "."],
+                env: commitEnv,
+              });
 
             const writeTreeResult = yield* git.execute({
               operation,
@@ -354,6 +355,10 @@ const makeCheckpointStore = Effect.gen(function* () {
         return false;
       }
 
+      if (input.indexOnly) {
+        yield* git.execute({ operation, cwd: input.cwd, args: ["read-tree", commitOid] });
+        return true;
+      }
       yield* git.execute({
         operation,
         cwd: input.cwd,
@@ -425,9 +430,30 @@ const makeCheckpointStore = Effect.gen(function* () {
       return result.stdout;
     });
 
+  const LITERAL_PATHSPECS = "--literal-pathspecs";
+
+  const resolveDeletionTarget = (realCwd: string, relativePath: string) =>
+    Effect.gen(function* () {
+      const segments = relativePath.split("/");
+      if (
+        path.isAbsolute(relativePath) ||
+        segments.some((segment) => segment === "" || segment === "." || segment === "..")
+      ) {
+        return { kind: "unsafe" } as const;
+      }
+      const expectedParent = path.join(realCwd, ...segments.slice(0, -1));
+      const actualParent = yield* fs.realPath(expectedParent).pipe(Effect.option);
+      if (Option.isNone(actualParent)) {
+        return { kind: "absent" } as const;
+      }
+      if (actualParent.value !== expectedParent) {
+        return { kind: "unsafe" } as const;
+      }
+      return { kind: "safe", absolutePath: path.join(expectedParent, segments.at(-1)!) } as const;
+    });
+
   // Rolls the working tree back to `treeOid` for the provided paths without
   // touching the repository index: paths absent from the tree did not exist
-  // before the aborted apply, so they are deleted instead of restored.
   const restoreWorktreePathsFromTree = (input: {
     readonly cwd: string;
     readonly treeOid: string;
@@ -436,13 +462,22 @@ const makeCheckpointStore = Effect.gen(function* () {
     Effect.gen(function* () {
       const operation = "CheckpointStore.restoreWorktreePathsFromTree";
       if (input.paths.length === 0) {
-        return;
+        return [];
       }
 
       const trackedResult = yield* git.execute({
         operation,
         cwd: input.cwd,
-        args: ["ls-tree", "-r", "--name-only", "-z", input.treeOid, "--", ...input.paths],
+        args: [
+          LITERAL_PATHSPECS,
+          "ls-tree",
+          "-r",
+          "--name-only",
+          "-z",
+          input.treeOid,
+          "--",
+          ...input.paths,
+        ],
         allowNonZeroExit: true,
       });
       const trackedPaths = trackedResult.stdout.split("\0").filter((entry) => entry.length > 0);
@@ -450,16 +485,37 @@ const makeCheckpointStore = Effect.gen(function* () {
         yield* git.execute({
           operation,
           cwd: input.cwd,
-          args: ["restore", "--source", input.treeOid, "--worktree", "--", ...trackedPaths],
+          args: [
+            LITERAL_PATHSPECS,
+            "restore",
+            "--source",
+            input.treeOid,
+            "--worktree",
+            "--",
+            ...trackedPaths,
+          ],
         });
       }
 
       const trackedPathSet = new Set(trackedPaths);
+      const realCwd = yield* fs.realPath(input.cwd);
+      const unsafePaths: string[] = [];
       yield* Effect.forEach(
         input.paths.filter((entry) => !trackedPathSet.has(entry)),
-        (relativePath) => fs.remove(path.join(input.cwd, relativePath), { force: true }),
+        (relativePath) =>
+          Effect.gen(function* () {
+            const target = yield* resolveDeletionTarget(realCwd, relativePath);
+            if (target.kind === "unsafe") {
+              unsafePaths.push(relativePath);
+              return;
+            }
+            if (target.kind === "safe") {
+              yield* fs.remove(target.absolutePath, { force: true });
+            }
+          }),
         { discard: true },
       );
+      return unsafePaths;
     });
 
   // Fallback for undo when the working tree drifted after the checkpoint: a
@@ -509,44 +565,64 @@ const makeCheckpointStore = Effect.gen(function* () {
       });
       const preAttemptTreeOid = preAttemptTreeResult.stdout.trim();
 
-      const applied = yield* git.execute({
-        operation,
-        cwd: input.cwd,
-        args: ["apply", "--reverse", "--3way", "--whitespace=nowarn", "--", input.patchPath],
-        env: mergeIndexEnv,
-        allowNonZeroExit: true,
-      });
-      if (applied.code === 0) {
-        return;
-      }
+      return yield* Effect.uninterruptibleMask((restore) =>
+        Effect.gen(function* () {
+          const applied = yield* Effect.exit(
+            restore(
+              git.execute({
+                operation,
+                cwd: input.cwd,
+                args: [
+                  "apply",
+                  "--reverse",
+                  "--3way",
+                  "--whitespace=nowarn",
+                  "--",
+                  input.patchPath,
+                ],
+                env: mergeIndexEnv,
+                allowNonZeroExit: true,
+              }),
+            ),
+          );
+          if (Exit.isSuccess(applied) && applied.value.code === 0) {
+            return;
+          }
 
-      if (preAttemptTreeOid.length > 0) {
-        yield* restoreWorktreePathsFromTree({
-          cwd: input.cwd,
-          treeOid: preAttemptTreeOid,
-          paths: input.affectedPaths,
-        }).pipe(
-          Effect.catchCause((cause) =>
-            Effect.logWarning("failed to roll back a conflicted checkpoint undo", {
-              cwd: input.cwd,
-              cause: Cause.pretty(cause),
-            }),
-          ),
-        );
-      }
+          const unsafePaths =
+            preAttemptTreeOid.length > 0
+              ? yield* restoreWorktreePathsFromTree({
+                  cwd: input.cwd,
+                  treeOid: preAttemptTreeOid,
+                  paths: input.affectedPaths,
+                }).pipe(
+                  Effect.catchCause((cause) =>
+                    Effect.logWarning("failed to roll back a conflicted checkpoint undo", {
+                      cwd: input.cwd,
+                      cause: Cause.pretty(cause),
+                    }).pipe(Effect.as([] as ReadonlyArray<string>)),
+                  ),
+                )
+              : [];
 
-      return yield* new GitCommandError({
-        operation,
-        command: "git apply --reverse --3way",
-        cwd: input.cwd,
-        detail: [
-          "Undo could not be applied because the workspace changed since this checkpoint.",
-          input.strictApplyStderr.trim(),
-          applied.stderr.trim(),
-        ]
-          .filter((part) => part.length > 0)
-          .join(" "),
-      });
+          if (Exit.isFailure(applied)) return yield* Effect.failCause(applied.cause);
+          return yield* new GitCommandError({
+            operation,
+            command: "git apply --reverse --3way",
+            cwd: input.cwd,
+            detail: [
+              "Undo could not be applied because the workspace changed since this checkpoint.",
+              input.strictApplyStderr.trim(),
+              applied.value.stderr.trim(),
+              unsafePaths.length > 0
+                ? `These paths were left in place because they lead through a symbolic link or outside the workspace: ${unsafePaths.join(", ")}.`
+                : "",
+            ]
+              .filter((part) => part.length > 0)
+              .join(" "),
+          });
+        }),
+      );
     });
 
   const reverseCheckpointDiff: CheckpointStoreShape["reverseCheckpointDiff"] = (input) =>
@@ -618,7 +694,14 @@ const makeCheckpointStore = Effect.gen(function* () {
                 git.execute({
                   operation,
                   cwd: input.cwd,
-                  args: ["reset", "--quiet", fromCommitOid, "--", ...affectedPaths],
+                  args: [
+                    LITERAL_PATHSPECS,
+                    "reset",
+                    "--quiet",
+                    fromCommitOid,
+                    "--",
+                    ...affectedPaths,
+                  ],
                 }),
               );
               if (Exit.isFailure(resetExit)) {

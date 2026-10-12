@@ -7,6 +7,7 @@ import {
   closeThreadTerminalScopes,
   isThreadCurrentlyArchived,
 } from "./ThreadDeletionReactor";
+import * as threadDeletion from "./ThreadDeletionReactor";
 import { TerminalError } from "../../terminal/Services/Manager";
 
 describe("terminal scope cleanup", () => {
@@ -72,5 +73,33 @@ describe("cleanupSucceededUnlessInterrupted", () => {
     if (Exit.isFailure(exit)) {
       expect(Cause.hasInterruptsOnly(exit.cause)).toBe(true);
     }
+  });
+});
+
+describe("checkpoint retention", () => {
+  it("purges orphan start refs for only the deleted thread in all managed families", async () => {
+    const execute = vi
+      .fn()
+      .mockReturnValueOnce(
+        Effect.succeed({
+          code: 0,
+          stderr: "",
+          stdout:
+            "refs/synara/checkpoints/ZGVsZXRlZA/turn-start/b3JwaGFu\nrefs/legacy/checkpoints/ZGVsZXRlZA/message-start/b3JwaGFu\nrefs/synara/checkpoints/cGVlcg/turn/1\nrefs/heads/main\n",
+        }),
+      )
+      .mockReturnValue(Effect.succeed({ code: 0, stdout: "", stderr: "" }));
+    expect(typeof threadDeletion.purgeThreadCheckpointRefs).toBe("function");
+    await Effect.runPromise(
+      threadDeletion.purgeThreadCheckpointRefs(
+        { execute },
+        "/repo",
+        ThreadId.makeUnsafe("deleted"),
+      ),
+    );
+    expect(execute.mock.calls.slice(1).map(([input]) => input.args)).toEqual([
+      ["update-ref", "-d", "refs/synara/checkpoints/ZGVsZXRlZA/turn-start/b3JwaGFu"],
+      ["update-ref", "-d", "refs/legacy/checkpoints/ZGVsZXRlZA/message-start/b3JwaGFu"],
+    ]);
   });
 });

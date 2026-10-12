@@ -61,6 +61,34 @@ const readOpenTurnReplayCount = (threadId: string) =>
     return rows.filter((row) => row.event.threadId === threadId).length;
   });
 
+it.effect("does not decode another workspace's checkpoint journal rows", () =>
+  Effect.gen(function* () {
+    const repository = yield* ProviderRuntimeEventRepository;
+    const sql = yield* SqlClient.SqlClient;
+    const row = yield* repository.append({
+      ...runtimeEvent("other-workspace", ""),
+      type: "turn.completed",
+      payload: { state: "completed" },
+    });
+    yield* sql`UPDATE provider_runtime_events SET event_json = ${"invalid json"} WHERE sequence = ${row.sequence}`;
+    const result = yield* repository
+      .readAfter({
+        sequenceExclusive: 0,
+        throughSequenceInclusive: row.sequence,
+        checkpointRelevantOnly: true,
+        threadIds: ["another-thread"],
+        limit: 32,
+      })
+      .pipe(Effect.exit);
+    assert.equal(result._tag, "Success");
+    if (result._tag === "Success") assert.deepEqual(result.value, []);
+  }).pipe(
+    Effect.provide(
+      ProviderRuntimeEventRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
+    ),
+  ),
+);
+
 it.effect(
   "filters checkpoint heads before limiting or decoding while preserving the raw reader",
   () =>

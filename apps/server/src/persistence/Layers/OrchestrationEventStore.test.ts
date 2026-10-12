@@ -354,6 +354,47 @@ layer("OrchestrationEventStore", (it) => {
     }),
   );
 
+  it.effect("skips another workspace's malformed domain row before decoding", () =>
+    Effect.gen(function* () {
+      const eventStore = yield* OrchestrationEventStore;
+      const sql = yield* SqlClient.SqlClient;
+      const threadId = ThreadId.makeUnsafe("other-workspace");
+      const row = yield* eventStore.append({
+        type: "thread.activity-appended",
+        eventId: EventId.makeUnsafe("other-workspace-row"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: "2026-08-09T00:00:00.000Z",
+        commandId: null,
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        payload: {
+          threadId,
+          activity: {
+            id: EventId.makeUnsafe("other-workspace-activity"),
+            tone: "info",
+            kind: "checkpoint.test",
+            summary: "Approval",
+            payload: {},
+            turnId: null,
+            createdAt: "2026-08-09T00:00:00.000Z",
+          },
+        },
+      });
+      yield* sql`UPDATE orchestration_events SET payload_json = ${"invalid json"} WHERE sequence = ${row.sequence}`;
+      const replay = yield* Stream.runCollect(
+        eventStore.readFromSequence(0, 32, row.sequence, {
+          eventTypes: ["thread.activity-appended"],
+          threadIds: ["own-workspace"],
+        }),
+      ).pipe(Effect.exit);
+      assert.equal(replay._tag, "Success");
+      yield* sql`UPDATE orchestration_events SET payload_json = ${JSON.stringify(row.payload)} WHERE sequence = ${row.sequence}`;
+      if (replay._tag === "Success") assert.deepEqual(Array.from(replay.value), []);
+    }),
+  );
+
   it.effect("filters sparse projector replay before decoding unrelated activity payloads", () =>
     Effect.gen(function* () {
       const eventStore = yield* OrchestrationEventStore;
