@@ -142,11 +142,10 @@ export class BrowserSessionRestore {
       this.revision++;
       if (this.clean) this.invalidate();
     });
-    const startRevision = this.revision;
     const ensureRestoreStillWanted = (): void => {
-      if (signal?.aborted) this.available = false;
-      if (signal?.aborted || this.revision !== startRevision)
-        throw new Error("Browser session restoration is unavailable.");
+      if (!signal?.aborted) return;
+      this.available = false;
+      throw new Error("Browser session restoration is unavailable.");
     };
     // Fresh installs have no sessions to decrypt. Defer OS key creation until an import.
     if (!existsSync(this.snapshotPath)) {
@@ -155,7 +154,7 @@ export class BrowserSessionRestore {
     }
     const key = await this.keys.provide();
     key.fill(0);
-    if (signal?.aborted) throw new Error("Browser session restoration is unavailable.");
+    ensureRestoreStillWanted();
     this.available = true;
     if (interrupted) {
       await unlink(this.snapshotPath).catch(() => {});

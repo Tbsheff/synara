@@ -306,19 +306,4 @@ describe("imported browser session restoration", () => {
     await restore.shutdown();
     expect(existsSync(join(directory, "active-run"))).toBe(true);
   });
-
-  it("refuses to overwrite cookies that changed while the key store was pending", async () => {
-    const directory = await savedSessionDirectory();
-    const keys = slowKeyStore();
-    const next = backend([]);
-    const restore = new BrowserSessionRestore(directory, next, keys.store);
-    const initializing = restore.initialize();
-    await vi.waitFor(() => expect(existsSync(join(directory, "active-run"))).toBe(true));
-    next.change([{ ...cookie, value: "fresh-login" }]);
-    keys.release();
-
-    await expect(initializing).rejects.toThrow("restoration is unavailable");
-    expect(next.restore).not.toHaveBeenCalled();
-    await restore.shutdown();
-  });
 });

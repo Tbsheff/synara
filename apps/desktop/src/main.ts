@@ -428,10 +428,6 @@ const DESKTOP_BROWSER_HOST_CAPABILITY_FD = 3;
 const userDataPath = resolveUserDataPath();
 app.setPath("userData", userDataPath);
 
-// Beta-only diagnostics: constructed solely when the baked build flavor is
-// "beta", so production binaries never run a collection path. The payload
-// schema is an allowlist; error text may still contain fragments of user data,
-// and Electron crash dumps are raw process memory.
 const betaDiagnostics =
   desktopFlavor === "beta"
     ? new BetaDiagnostics({
