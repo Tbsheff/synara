@@ -1791,15 +1791,21 @@ export default function ChatView({
   });
   // Keep Thinking through the post-ack gap where the server has the message /
   // turn request but the provider session is not live yet (common on first send).
+  const hasPendingTurn = activeLatestTurnState === "running" && !latestTurnSettled;
   const isWorking =
-    hasLiveTurn || isSendBusy || isConnecting || isRevertingCheckpoint || isAwaitingTurnStart;
+    hasLiveTurn ||
+    hasPendingTurn ||
+    isSendBusy ||
+    isConnecting ||
+    isRevertingCheckpoint ||
+    isAwaitingTurnStart;
   const hasStreamingAssistantText =
     activeThread?.messages.some((message) => message.role === "assistant" && message.streaming) ??
     false;
   const activeTurnLayoutLive = isWorking || !latestTurnSettled;
   const activeWorkStartedAt = hasLiveTurnTail
     ? (activeLatestTurn?.startedAt ?? null)
-    : hasLiveTurn
+    : hasLiveTurn || hasPendingTurn
       ? deriveActiveWorkStartedAt(activeLatestTurn, activeThread?.session ?? null, null)
       : null;
   const activeTurnLayoutKey =
@@ -2049,8 +2055,7 @@ export default function ChatView({
   // Turn/session updates can arrive before the first transcript row. An empty
   // synced snapshot during startup must not restore the unstarted landing.
   // Terminal turns can lack start timestamps after restore/import; their state wins.
-  const hasPendingThreadWork =
-    isWorking || (activeLatestTurnState === "running" && !latestTurnSettled);
+  const hasPendingThreadWork = isWorking;
   const handleRetryThreadDetailSync = useCallback(() => {
     void retryThreadDetailSync(threadId).catch(() => undefined);
   }, [threadId]);
@@ -6603,10 +6608,6 @@ export default function ChatView({
         />
       ) : null}
 
-      {/* Thread-level errors surface in flow at the top of the transcript
-          pane (see `ThreadErrorBanner`) so they never cover message content;
-          a toast only fires for a live error on a thread that is not
-          currently visible (see `useThreadErrorToast`). */}
       <ProviderHealthBanner
         status={shouldShowProviderHealthBanner ? visibleActiveProviderStatus : null}
         onDismiss={dismissActiveProviderHealthBanner}
@@ -6625,9 +6626,8 @@ export default function ChatView({
           onClose={onCloseEditorTerminal}
         />
       ) : null}
-      {/* Main content area with optional plan sidebar */}
+
       <div ref={mainContentRef} className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden">
-        {/* Chat column */}
         <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
           <div
             aria-hidden={terminalWorkspaceTerminalTabActive}
@@ -6636,252 +6636,220 @@ export default function ChatView({
               terminalWorkspaceTerminalTabActive ? "pointer-events-none invisible" : "",
             )}
           >
-            {shouldRenderChatPaneContent && isCenteredEmptyLanding ? (
-              <div
-                className={cn(
-                  "chat-pane-enter flex min-h-0 flex-1 flex-col",
-                  CHAT_COLUMN_GUTTER_CLASS_NAME,
-                )}
-              >
-                {/* The heading floats centered in the space above the composer, which is
-                    anchored to the bottom of the pane (with its workspace-tools rail
-                    stacked on top of the input) so starting a chat keeps the composer
-                    where it lives for the rest of the conversation. */}
-                <div className="relative flex min-h-0 flex-1 items-center justify-center">
-                  {/* Pinned to the top so the heading stays optically centered; hidden on
-                      short panes where it would crowd the heading. */}
-                  <div className="absolute inset-x-0 top-4 flex justify-center px-6 [@media(max-height:620px)]:hidden">
-                    <SponsorLandingBanner className="w-full max-w-[520px]" />
-                  </div>
+            {shouldRenderChatPaneContent ? (
+              <div className="flex min-h-0 flex-1 flex-col">
+                {isCenteredEmptyLanding ? (
                   <div
-                    className={cn(
-                      "flex flex-col items-center gap-4 px-6 text-center select-none",
-                      CHAT_COLUMN_FRAME_CLASS_NAME,
-                    )}
+                    className={cn("flex min-h-0 flex-1 flex-col", CHAT_COLUMN_GUTTER_CLASS_NAME)}
+                    style={{ paddingBottom: composerOverlayHeightPx }}
                   >
-                    <SynaraLogo aria-label="Synara logo" className="size-10" />
-                    <h2
-                      data-testid="empty-landing-heading"
-                      className="text-[26px] font-normal leading-[1.15] tracking-[-0.015em] text-foreground/95 sm:text-[30px]"
-                    >
-                      {isEmptyChatLanding ? (
-                        "What should we work on?"
-                      ) : (
-                        <>
-                          What should we do in{" "}
-                          {showEmptyLandingProjectPicker ? (
-                            <ProjectPicker
-                              align="center"
-                              side="bottom"
-                              selectionMode="project"
-                              selectedProjectId={activeProject.id}
-                              selectedWorkspaceRoot={activeProject.cwd}
-                              showResetToHome
-                              onSelectProject={handleSelectProjectForEmptyDraft}
-                              onCreateProjectFromPath={handleCreateProjectFromPickerPath}
-                              onResetToHome={handleResetWorkspaceToHome}
-                              renderTrigger={
-                                <button
-                                  type="button"
-                                  data-testid="empty-landing-heading-project-trigger"
-                                  className="cursor-pointer rounded-sm text-inherit underline decoration-dotted decoration-[1.5px] underline-offset-[6px] transition-colors duration-150 ease-out hover:text-foreground/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 motion-reduce:transition-none"
-                                >
-                                  {activeProjectDisplayName ?? "this folder"}
-                                </button>
-                              }
-                            />
+                    <div className="relative flex min-h-0 flex-1 items-center justify-center">
+                      <div className="absolute inset-x-0 top-4 flex justify-center px-6 [@media(max-height:620px)]:hidden">
+                        <SponsorLandingBanner className="w-full max-w-[520px]" />
+                      </div>
+                      <div
+                        className={cn(
+                          "flex flex-col items-center gap-4 px-6 text-center select-none",
+                          CHAT_COLUMN_FRAME_CLASS_NAME,
+                        )}
+                      >
+                        <SynaraLogo aria-label="Synara logo" className="size-10" />
+                        <h2
+                          data-testid="empty-landing-heading"
+                          className="text-[26px] font-normal leading-[1.15] tracking-[-0.015em] text-foreground/95 sm:text-[30px]"
+                        >
+                          {isEmptyChatLanding ? (
+                            "What should we work on?"
                           ) : (
-                            <span className="text-inherit">
-                              {activeProjectDisplayName ?? "this folder"}
-                            </span>
+                            <>
+                              What should we do in{" "}
+                              {showEmptyLandingProjectPicker ? (
+                                <ProjectPicker
+                                  align="center"
+                                  side="bottom"
+                                  selectionMode="project"
+                                  selectedProjectId={activeProject.id}
+                                  selectedWorkspaceRoot={activeProject.cwd}
+                                  showResetToHome
+                                  onSelectProject={handleSelectProjectForEmptyDraft}
+                                  onCreateProjectFromPath={handleCreateProjectFromPickerPath}
+                                  onResetToHome={handleResetWorkspaceToHome}
+                                  renderTrigger={
+                                    <button
+                                      type="button"
+                                      data-testid="empty-landing-heading-project-trigger"
+                                      className="cursor-pointer rounded-sm text-inherit underline decoration-dotted decoration-[1.5px] underline-offset-[6px] transition-colors duration-150 ease-out hover:text-foreground/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 motion-reduce:transition-none"
+                                    >
+                                      {activeProjectDisplayName ?? "this folder"}
+                                    </button>
+                                  }
+                                />
+                              ) : (
+                                <span className="text-inherit">
+                                  {activeProjectDisplayName ?? "this folder"}
+                                </span>
+                              )}
+                              ?
+                            </>
                           )}
-                          ?
-                        </>
-                      )}
-                    </h2>
-                  </div>
-                </div>
-                <div className="w-full shrink-0 pb-3 sm:pb-4">
-                  {composerSection}
-                  <PluginHomepageSections
-                    className={cn("mt-3", COMPOSER_COLUMN_FRAME_CLASS_NAME)}
-                    context={pluginContext}
-                  />
-                  {relocateComposerLeadingControls ? (
-                    <div className={COMPOSER_COLUMN_FRAME_CLASS_NAME}>
-                      <div className="flex w-full items-center gap-1">
-                        <div className="flex shrink-0 items-center gap-1 pl-1">
-                          {renderComposerLeadingControls({ iconOnly: true })}
-                        </div>
+                        </h2>
                       </div>
                     </div>
-                  ) : null}
-                </div>
-              </div>
-            ) : null}
+                  </div>
+                ) : (
+                  <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
+                    <ChatTranscriptPane
+                      activeThreadId={activeThread.id}
+                      pluginContext={pluginContext}
+                      activeTurnId={activeTurnIdForTranscript}
+                      agentActivityDetail={openAgentActivityDetail}
+                      hasMessages={timelineEntries.length > 0}
+                      isWorking={transcriptLiveTurn.showsLiveTurn}
+                      workingLabel={resolveWorkingLabel({
+                        isSettlingTurnDispatch,
+                        isSendBusy,
+                        turnTakenOver,
+                        isConnecting,
+                        providerName: providerDisplayName,
+                        statusText: workingStatusText,
+                      })}
+                      worktreeSetup={activeWorktreeSetup}
+                      worktreeSetupPendingAction={worktreeSetupPendingAction}
+                      onResolveWorktreeSetup={onResolveWorktreeSetup}
+                      activeTurnInProgress={activeTurnInProgress}
+                      subagentsRunning={hasRunningSubagents}
+                      collapseFinishedTurns={settings.collapseFinishedTurns}
+                      activeTurnStartedAt={transcriptLiveTurn.turnStartedAt}
+                      listRef={legendListRef}
+                      timelineControllerRef={timelineControllerRef}
+                      findHighlightStore={threadFindHighlightStore}
+                      pinnedMessageIds={pinnedMessageIds}
+                      canPinMessage={canPinMessage}
+                      onTogglePinMessage={handleTogglePinMessageGuarded}
+                      onForkFromMessage={handleForkFromMessage}
+                      goalAchievements={goalAchievements}
+                      enteringUserMessageIds={enteringUserMessageIds}
+                      tailAnchorMessageId={
+                        settings.anchorSentMessagesToTop &&
+                        tailAnchor !== null &&
+                        tailAnchor.threadId === activeThread.id
+                          ? tailAnchor.messageId
+                          : null
+                      }
+                      tailAnchorScrollInFlightRef={tailAnchorScrollInFlightRef}
+                      crossTaskOrigin={resolvedCrossTaskOrigin}
+                      forkSource={forkSource}
+                      isTemporaryThread={isThreadTemporary}
+                      isLocalDraft={isLocalDraftThread}
+                      isProjectImport={activeThread.isProjectImport === true}
+                      timelineEntries={timelineEntries}
+                      messageChangeSignal={timelineMessages}
+                      turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
+                      conversationOnly={isCoordinatorConversation}
+                      hubWorkItemsByMessageId={hubWorkItemsByMessageId}
+                      threadError={activeThread?.error ?? null}
+                      threadErrorContext={threadErrorContext}
+                      recoverableTurnId={
+                        activeLatestTurnState === "error" ? activeLatestTurnId : null
+                      }
+                      turnRecoveryDisabled={
+                        isSendBusy ||
+                        isConnecting ||
+                        isWorking ||
+                        pendingApprovals.length > 0 ||
+                        pendingUserInputs.length > 0
+                      }
+                      onContinueFailedTurn={onContinueFailedTurn}
+                      onChangeRecoveryModel={() => handleModelPickerOpenChange(true)}
+                      unblockingThread={unblockingActiveThread}
+                      onDismissThreadError={dismissActiveThreadError}
+                      onUnblockThread={unblockThread}
+                      onOpenTurnDiff={onOpenTurnDiff}
+                      onOpenThread={onNavigateToThread}
+                      onOpenAutomation={onOpenAutomation}
+                      computerControlEnabled={enableComputerControl}
+                      onEnableComputerControl={handleEnableComputerControlFromDenial}
+                      revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
+                      onRevertUserMessage={onRevertUserMessage}
+                      onUndoTurnFiles={onUndoTurnFiles}
+                      onEditUserMessage={onEditUserMessage}
+                      onRespondToAsyncUserInput={onRespondToAsyncUserInput}
+                      editableUserMessageId={editableUserMessageId}
+                      isRevertingCheckpoint={isRevertingCheckpoint}
+                      onExpandTimelineImage={onExpandTimelineImage}
+                      followLiveOutput={!isUserScrollDetached}
+                      animateTailAnchorSlide={!hasStreamingAssistantText}
+                      onIsAtEndChange={onIsAtEndChange}
+                      onNavigate={onTranscriptNavigate}
+                      markdownCwd={threadWorkspaceCwd ?? undefined}
+                      resolvedTheme={resolvedTheme}
+                      chatFontSizePx={settings.chatFontSizePx}
+                      timestampFormat={timestampFormat}
+                      messageTrailAudioSource={settings.messageTrailAudioSource}
+                      messageTrailMicrophoneId={settings.messageTrailMicrophoneId}
+                      workspaceRoot={threadArtifactWorkspaceRoot ?? undefined}
+                      keybindings={keybindings}
+                      availableEditors={availableEditors}
+                      emptyStateContent={transcriptEmptyStateContent}
+                      emptyStateProjectName={activeProjectDisplayName}
+                      terminalWorkspaceTerminalTabActive={terminalWorkspaceTerminalTabActive}
+                      onMessagesScroll={onMessagesScroll}
+                      onMessagesClickCapture={onMessagesClickCapture}
+                      onMessagesMouseUp={onMessagesMouseUp}
+                      onMessagesWheel={onMessagesWheel}
+                      onMessagesPointerDown={onMessagesPointerDown}
+                      onMessagesPointerUp={onMessagesPointerUp}
+                      onMessagesPointerCancel={onMessagesPointerCancel}
+                      onMessagesTouchStart={onMessagesTouchStart}
+                      onMessagesTouchMove={onMessagesTouchMove}
+                      onMessagesTouchEnd={onMessagesTouchEnd}
+                      onOpenAgentActivity={setOpenAgentActivityId}
+                      onCloseAgentActivityDetail={closeAgentActivityDetail}
+                      scrollButtonVisible={showScrollToBottom}
+                      onScrollToBottom={onScrollToBottom}
+                      contentInsetRightPx={contentInsetRightPx}
+                      contentInsetBottomPx={composerTranscriptInsetPx}
+                      contentInsetBottomClearancePx={composerOverlayBottomClearancePx}
+                    />
 
-            {shouldRenderChatPaneContent && !isCenteredEmptyLanding ? (
-              <div className="flex min-h-0 flex-1 flex-col">
-                <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
-                  <ChatTranscriptPane
-                    activeThreadId={activeThread.id}
-                    pluginContext={pluginContext}
-                    activeTurnId={activeTurnIdForTranscript}
-                    agentActivityDetail={openAgentActivityDetail}
-                    hasMessages={timelineEntries.length > 0}
-                    isWorking={transcriptLiveTurn.showsLiveTurn}
-                    workingLabel={resolveWorkingLabel({
-                      isSettlingTurnDispatch,
-                      isSendBusy,
-                      turnTakenOver,
-                      isConnecting,
-                      providerName: providerDisplayName,
-                      statusText: workingStatusText,
-                    })}
-                    worktreeSetup={activeWorktreeSetup}
-                    worktreeSetupPendingAction={worktreeSetupPendingAction}
-                    onResolveWorktreeSetup={onResolveWorktreeSetup}
-                    activeTurnInProgress={activeTurnInProgress}
-                    subagentsRunning={hasRunningSubagents}
-                    collapseFinishedTurns={settings.collapseFinishedTurns}
-                    activeTurnStartedAt={transcriptLiveTurn.turnStartedAt}
-                    listRef={legendListRef}
-                    timelineControllerRef={timelineControllerRef}
-                    findHighlightStore={threadFindHighlightStore}
-                    pinnedMessageIds={pinnedMessageIds}
-                    canPinMessage={canPinMessage}
-                    onTogglePinMessage={handleTogglePinMessageGuarded}
-                    onForkFromMessage={handleForkFromMessage}
-                    goalAchievements={goalAchievements}
-                    enteringUserMessageIds={enteringUserMessageIds}
-                    tailAnchorMessageId={
-                      settings.anchorSentMessagesToTop &&
-                      tailAnchor !== null &&
-                      tailAnchor.threadId === activeThread.id
-                        ? tailAnchor.messageId
-                        : null
-                    }
-                    tailAnchorScrollInFlightRef={tailAnchorScrollInFlightRef}
-                    crossTaskOrigin={resolvedCrossTaskOrigin}
-                    forkSource={forkSource}
-                    isTemporaryThread={isThreadTemporary}
-                    isLocalDraft={isLocalDraftThread}
-                    isProjectImport={activeThread.isProjectImport === true}
-                    timelineEntries={timelineEntries}
-                    messageChangeSignal={timelineMessages}
-                    turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
-                    conversationOnly={isCoordinatorConversation}
-                    hubWorkItemsByMessageId={hubWorkItemsByMessageId}
-                    threadError={activeThread?.error ?? null}
-                    threadErrorContext={threadErrorContext}
-                    recoverableTurnId={
-                      activeLatestTurnState === "error" ? activeLatestTurnId : null
-                    }
-                    turnRecoveryDisabled={
-                      isSendBusy ||
-                      isConnecting ||
-                      isWorking ||
-                      pendingApprovals.length > 0 ||
-                      pendingUserInputs.length > 0
-                    }
-                    onContinueFailedTurn={onContinueFailedTurn}
-                    onChangeRecoveryModel={() => handleModelPickerOpenChange(true)}
-                    unblockingThread={unblockingActiveThread}
-                    onDismissThreadError={dismissActiveThreadError}
-                    onUnblockThread={unblockThread}
-                    onOpenTurnDiff={onOpenTurnDiff}
-                    onOpenThread={onNavigateToThread}
-                    onOpenAutomation={onOpenAutomation}
-                    computerControlEnabled={enableComputerControl}
-                    onEnableComputerControl={handleEnableComputerControlFromDenial}
-                    revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
-                    onRevertUserMessage={onRevertUserMessage}
-                    onUndoTurnFiles={onUndoTurnFiles}
-                    onEditUserMessage={onEditUserMessage}
-                    onRespondToAsyncUserInput={onRespondToAsyncUserInput}
-                    editableUserMessageId={editableUserMessageId}
-                    isRevertingCheckpoint={isRevertingCheckpoint}
-                    onExpandTimelineImage={onExpandTimelineImage}
-                    // End-follow belongs to the reader, including the gaps
-                    // between assistant text and subsequent tool/layout updates.
-                    followLiveOutput={!isUserScrollDetached}
-                    animateTailAnchorSlide={!hasStreamingAssistantText}
-                    onIsAtEndChange={onIsAtEndChange}
-                    onNavigate={onTranscriptNavigate}
-                    markdownCwd={threadWorkspaceCwd ?? undefined}
-                    resolvedTheme={resolvedTheme}
-                    chatFontSizePx={settings.chatFontSizePx}
-                    timestampFormat={timestampFormat}
-                    messageTrailAudioSource={settings.messageTrailAudioSource}
-                    messageTrailMicrophoneId={settings.messageTrailMicrophoneId}
-                    workspaceRoot={threadArtifactWorkspaceRoot ?? undefined}
-                    keybindings={keybindings}
-                    availableEditors={availableEditors}
-                    emptyStateContent={transcriptEmptyStateContent}
-                    emptyStateProjectName={activeProjectDisplayName}
-                    terminalWorkspaceTerminalTabActive={terminalWorkspaceTerminalTabActive}
-                    onMessagesScroll={onMessagesScroll}
-                    onMessagesClickCapture={onMessagesClickCapture}
-                    onMessagesMouseUp={onMessagesMouseUp}
-                    onMessagesWheel={onMessagesWheel}
-                    onMessagesPointerDown={onMessagesPointerDown}
-                    onMessagesPointerUp={onMessagesPointerUp}
-                    onMessagesPointerCancel={onMessagesPointerCancel}
-                    onMessagesTouchStart={onMessagesTouchStart}
-                    onMessagesTouchMove={onMessagesTouchMove}
-                    onMessagesTouchEnd={onMessagesTouchEnd}
-                    onOpenAgentActivity={setOpenAgentActivityId}
-                    onCloseAgentActivityDetail={closeAgentActivityDetail}
-                    scrollButtonVisible={showScrollToBottom}
-                    onScrollToBottom={onScrollToBottom}
-                    contentInsetRightPx={contentInsetRightPx}
-                    contentInsetBottomPx={composerTranscriptInsetPx}
-                    contentInsetBottomClearancePx={composerOverlayBottomClearancePx}
-                  />
-                  {/* Suggestions reserve clearance for both sets of controls.
-                      Without them, the paused banner needs its own minimum gap
-                      above the composer floating at `bottom-full`. */}
-                  {isCoordinatorConversation && activeGroupSummary?.pausedAt ? (
-                    <div
-                      className={cn(
-                        CHAT_COLUMN_GUTTER_CLASS_NAME,
-                        showCoordinatorSuggestions ? "pb-2" : "pb-28",
-                      )}
-                    >
-                      <GroupPausedBanner
-                        projectId={activeThread!.projectId}
-                        onResume={async () => {
-                          const api = readNativeApi();
-                          if (!api?.projectAgent || !activeThread) return;
-                          const overview = await api.projectAgent
-                            .resumeGroup({
-                              requestId: crypto.randomUUID(),
-                              projectId: activeThread.projectId,
-                            })
-                            .catch(() => null);
-                          if (overview) {
-                            useProjectAgentSummariesStore.getState().applyOverview(overview);
-                          }
+                    {isCoordinatorConversation && activeGroupSummary?.pausedAt ? (
+                      <div
+                        className={cn(
+                          CHAT_COLUMN_GUTTER_CLASS_NAME,
+                          showCoordinatorSuggestions ? "pb-2" : "pb-28",
+                        )}
+                      >
+                        <GroupPausedBanner
+                          projectId={activeThread!.projectId}
+                          onResume={async () => {
+                            const api = readNativeApi();
+                            if (!api?.projectAgent || !activeThread) return;
+                            const overview = await api.projectAgent
+                              .resumeGroup({
+                                requestId: crypto.randomUUID(),
+                                projectId: activeThread.projectId,
+                              })
+                              .catch(() => null);
+                            if (overview) {
+                              useProjectAgentSummariesStore.getState().applyOverview(overview);
+                            }
+                          }}
+                        />
+                      </div>
+                    ) : null}
+                    {showCoordinatorSuggestions ? (
+                      <CoordinatorSuggestions
+                        chips={coordinatorSuggestionChips}
+                        composerHeightPx={composerOverlayHeightPx}
+                        onOpenSettings={(section) => {
+                          setCoordinatorSettingsSection(section);
+                          setCoordinatorSettingsOpen(true);
                         }}
                       />
-                    </div>
-                  ) : null}
-                  {showCoordinatorSuggestions ? (
-                    <CoordinatorSuggestions
-                      chips={coordinatorSuggestionChips}
-                      composerHeightPx={composerOverlayHeightPx}
-                      onOpenSettings={(section) => {
-                        setCoordinatorSettingsSection(section);
-                        setCoordinatorSettingsOpen(true);
-                      }}
-                    />
-                  ) : null}
-                </div>
+                    ) : null}
+                  </div>
+                )}
 
-                {/* Trailing block below the transcript: the composer floats on top of it
-                    (`bottom-full`), so the transcript's scroll viewport — and therefore every
-                    row scrolling behind the frosted composer — is clipped at the composer's
-                    bottom edge. Nothing ever shows through this gutter or the BranchToolbar row. */}
                 <div className="relative z-10 w-full shrink-0">
                   <div
                     ref={composerOverlayRef}
@@ -6890,14 +6858,19 @@ export default function ChatView({
                       ENVIRONMENT_CONTENT_INSET_MOTION_CLASS,
                       CHAT_COLUMN_GUTTER_CLASS_NAME,
                     )}
-                    // Match the transcript's right inset so the composer stays aligned with chat
-                    // content (and clear of the docked Environment overlay and preview rail).
                     style={contentInsetRightPx ? { paddingRight: contentInsetRightPx } : undefined}
                   >
-                    <div className="pointer-events-auto">{composerSection}</div>
+                    <div className="pointer-events-auto">
+                      {composerSection}
+                      {isCenteredEmptyLanding ? (
+                        <PluginHomepageSections
+                          className={cn("mt-3", COMPOSER_COLUMN_FRAME_CLASS_NAME)}
+                          context={pluginContext}
+                        />
+                      ) : null}
+                    </div>
                   </div>
-                  {/* A trailing BranchToolbar only renders for legacy git threads; otherwise the
-                      composer is the last element, so give it a comfortable bottom margin. */}
+
                   <div className={cn(showTrailingBranchToolbar ? "pt-0.5" : "pt-3 sm:pt-4")} />
                   {showTrailingBranchToolbar || relocateComposerLeadingControls ? (
                     <div className={CHAT_COLUMN_GUTTER_CLASS_NAME}>
