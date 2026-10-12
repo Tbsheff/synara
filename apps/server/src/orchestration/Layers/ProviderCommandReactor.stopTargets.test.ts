@@ -445,6 +445,7 @@ describe("ProviderCommandReactor stop targets", () => {
       restoreCheckpoint,
       reverseCheckpointDiff: () => Effect.succeed(true),
       diffCheckpoints: () => Effect.succeed(""),
+      diffCheckpointFiles: () => Effect.succeed([]),
       deleteCheckpointRefs: () => Effect.void,
       ...input?.checkpointStore,
     };

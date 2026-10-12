@@ -192,6 +192,7 @@ describe("ProviderCommandReactor Beta import recovery", () => {
       restoreCheckpoint: () => Effect.succeed(true),
       reverseCheckpointDiff: () => Effect.succeed(true),
       diffCheckpoints: () => Effect.succeed(""),
+      diffCheckpointFiles: () => Effect.succeed([]),
       deleteCheckpointRefs: () => Effect.void,
     };
     const hubOutputReactor: HubOutputReactorShape = {
