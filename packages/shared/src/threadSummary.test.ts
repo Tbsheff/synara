@@ -164,6 +164,25 @@ describe("deriveThreadSummaryMetadata", () => {
     });
   });
 
+  it("does not count a partial plan as actionable", () => {
+    expect(
+      deriveThreadSummaryMetadata({
+        messages: [],
+        activities: [],
+        proposedPlans: [
+          {
+            id: "plan-partial",
+            turnId: TurnId.makeUnsafe("turn-1"),
+            updatedAt: "2026-02-27T00:06:00.000Z",
+            implementedAt: null,
+            partial: true,
+          },
+        ],
+        latestTurn: { turnId: TurnId.makeUnsafe("turn-1") },
+      }).hasActionableProposedPlan,
+    ).toBe(false);
+  });
+
   it("drops stale pending requests once failure events mark them obsolete", () => {
     const activities: OrchestrationThreadActivity[] = [
       {

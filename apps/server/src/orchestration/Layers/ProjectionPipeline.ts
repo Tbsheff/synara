@@ -2,7 +2,7 @@ import {
   makeMessageTextChunks,
   encodeMessageTextFallback,
 } from "../../persistence/messageTextChunks.ts";
-import { ApprovalRequestId, CommandId, type OrchestrationEvent } from "@synara/contracts";
+import { ApprovalRequestId, CommandId, type OrchestrationEvent, ThreadId } from "@synara/contracts";
 import { resolveHumanMessageAt } from "@synara/shared/threadSummary";
 import { isSidechatThread } from "@synara/shared/sidechatThread";
 import { clearRemovedAsyncUserInputResponses } from "@synara/shared/asyncUserInput";
@@ -262,7 +262,11 @@ const withRebuiltThreadShellSummary = Effect.fn(function* (input: {
     pendingApprovalCount: pendingCounts.pendingApprovalCount,
     pendingUserInputCount: pendingCounts.pendingUserInputCount,
     hasActionableProposedPlan:
-      Option.isSome(latestPlan) && latestPlan.value.implementedAt === null ? 1 : 0,
+      Option.isSome(latestPlan) &&
+      latestPlan.value.implementedAt === null &&
+      latestPlan.value.partial === 0
+        ? 1
+        : 0,
   } satisfies ProjectionThread;
 });
 
@@ -279,7 +283,11 @@ const withRefreshedActionablePlanSummary = Effect.fn(function* (input: {
   return {
     ...input.thread,
     hasActionableProposedPlan:
-      Option.isSome(latestPlan) && latestPlan.value.implementedAt === null ? 1 : 0,
+      Option.isSome(latestPlan) &&
+      latestPlan.value.implementedAt === null &&
+      latestPlan.value.partial === 0
+        ? 1
+        : 0,
   } satisfies ProjectionThread;
 });
 
@@ -413,6 +421,29 @@ function collectThreadAttachmentRelativePaths(
         continue;
       }
       relativePaths.add(attachmentRelativePath(attachment));
+    }
+  }
+  return relativePaths;
+}
+
+function collectActivityImageRelativePaths(
+  threadId: string,
+  activities: ReadonlyArray<{ readonly payload: unknown }>,
+): Set<string> {
+  const threadSegment = toSafeThreadAttachmentSegment(threadId);
+  const relativePaths = new Set<string>();
+  if (!threadSegment) return relativePaths;
+  for (const activity of activities) {
+    const images = payloadRecord(payloadRecord(activity.payload)?.toolCall)?.images;
+    if (!Array.isArray(images)) continue;
+    for (const image of images) {
+      const ref = payloadRecord(image);
+      if (ref?.source !== "file" || typeof ref.path !== "string") continue;
+      const fileName = ref.path.split(/[/\\]/u).at(-1) ?? "";
+      const attachmentId = parseAttachmentIdFromRelativePath(fileName);
+      if (attachmentId && parseThreadSegmentFromAttachmentId(attachmentId) === threadSegment) {
+        relativePaths.add(fileName);
+      }
     }
   }
   return relativePaths;
@@ -1218,6 +1249,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             planMarkdown: event.payload.proposedPlan.planMarkdown,
             implementedAt: event.payload.proposedPlan.implementedAt,
             implementationThreadId: event.payload.proposedPlan.implementationThreadId,
+            partial: event.payload.proposedPlan.partial === true ? 1 : 0,
             createdAt: event.payload.proposedPlan.createdAt,
             updatedAt: event.payload.proposedPlan.updatedAt,
           });
@@ -1473,9 +1505,12 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             threadId: event.payload.threadId,
             turnId,
           });
-          const pendingTurnStart = yield* projectionTurnRepository.getPendingTurnStartByThreadId({
-            threadId: event.payload.threadId,
-          });
+          const providerOriginTurn = event.payload.session.activeTurnOrigin === "provider";
+          const pendingTurnStart = providerOriginTurn
+            ? Option.none()
+            : yield* projectionTurnRepository.getPendingTurnStartByThreadId({
+                threadId: event.payload.threadId,
+              });
           if (Option.isSome(existingTurn)) {
             const nextState =
               existingTurn.value.state === "completed" || existingTurn.value.state === "error"
@@ -1533,9 +1568,11 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             });
           }
 
-          yield* projectionTurnRepository.deletePendingTurnStartByThreadId({
-            threadId: event.payload.threadId,
-          });
+          if (!providerOriginTurn) {
+            yield* projectionTurnRepository.deletePendingTurnStartByThreadId({
+              threadId: event.payload.threadId,
+            });
+          }
           return;
         }
 
@@ -2080,6 +2117,14 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           lastAppliedSequence: event.sequence,
           updatedAt: event.occurredAt,
         });
+      }
+      for (const [threadId, relativePaths] of attachmentSideEffects.prunedThreadRelativePaths) {
+        const activityRows = yield* projectionThreadActivityRepository.listByThreadId({
+          threadId: ThreadId.makeUnsafe(threadId),
+        });
+        for (const relativePath of collectActivityImageRelativePaths(threadId, activityRows)) {
+          relativePaths.add(relativePath);
+        }
       }
       for (const threadId of attachmentSideEffects.deletedThreadIds) {
         yield* managedAttachments.markCleanupByThread({

@@ -678,6 +678,70 @@ describe("makeCursorSafeSnapshotLiveStream", () => {
     expect(Array.from(items)).toEqual([{ kind: "event", event: event(6) }]);
   });
 
+  it.each([true, false])(
+    "ends a marked resume with one resumed item, also for an empty gap (batch %s)",
+    async (batchReplay) => {
+      const resume = (resumeFromSequence: number) =>
+        Effect.runPromise(
+          Effect.scoped(
+            Effect.gen(function* () {
+              const live = yield* PubSub.unbounded<OrchestrationEvent>();
+              return yield* makeCursorSafeSnapshotLiveStream({
+                subscribeLive: PubSub.subscribe(live).pipe(
+                  Effect.map((subscription) => Stream.fromEffectRepeat(PubSub.take(subscription))),
+                ),
+                snapshot: Effect.die(new Error("cursor resume must not load the snapshot")),
+                snapshotSequence: () => 0,
+                getHighWaterSequence: Effect.succeed(5),
+                resumeFromSequence,
+                batchReplay,
+                markResumed: true,
+                replay: () =>
+                  Stream.concat(
+                    Stream.fromEffect(PubSub.publish(live, event(6))).pipe(Stream.drain),
+                    Stream.make(event(4), event(5)).pipe(
+                      Stream.filter((row) => row.sequence > resumeFromSequence),
+                    ),
+                  ),
+              }).pipe(
+                Stream.takeUntil((item) => item.kind === "event" && item.event.sequence === 6),
+                Stream.runCollect,
+              );
+            }),
+          ),
+        );
+
+      expect(Array.from(await resume(5))).toEqual([
+        { kind: "resumed" },
+        { kind: "event", event: event(6) },
+      ]);
+      expect(Array.from(await resume(3))).toEqual([
+        ...(batchReplay
+          ? [{ kind: "replay", events: [event(4), event(5)] }]
+          : [
+              { kind: "event", event: event(4) },
+              { kind: "event", event: event(5) },
+            ]),
+        { kind: "resumed" },
+        { kind: "event", event: event(6) },
+      ]);
+    },
+  );
+
+  it("does not mark a snapshot start as resumed", async () => {
+    const items = await Effect.runPromise(
+      makeCursorSafeSnapshotLiveStream({
+        subscribeLive: Effect.succeed(Stream.empty),
+        snapshot: Effect.succeed({ snapshotSequence: 5 }),
+        snapshotSequence: (snapshot) => snapshot.snapshotSequence,
+        getHighWaterSequence: Effect.succeed(5),
+        markResumed: true,
+        replay: () => Stream.empty,
+      }).pipe(Stream.runCollect),
+    );
+    expect(Array.from(items)).toEqual([{ kind: "snapshot", snapshot: { snapshotSequence: 5 } }]);
+  });
+
   it("keeps per-event replay after a snapshot even when batching is requested", async () => {
     const items = await Effect.runPromise(
       Effect.scoped(

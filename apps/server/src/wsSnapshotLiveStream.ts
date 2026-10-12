@@ -21,7 +21,8 @@ const resumeReplayLimitExceeded = new ResumeReplayLimitExceeded();
 export type SnapshotLiveStreamItem<Snapshot> =
   | { readonly kind: "snapshot"; readonly snapshot: Snapshot }
   | { readonly kind: "event"; readonly event: OrchestrationEvent }
-  | { readonly kind: "replay"; readonly events: ReadonlyArray<OrchestrationEvent> };
+  | { readonly kind: "replay"; readonly events: ReadonlyArray<OrchestrationEvent> }
+  | { readonly kind: "resumed" };
 
 export interface ResnapshotReport {
   readonly snapshotSequence: number;
@@ -92,6 +93,9 @@ export function makeResnapshotEscalationTracker(): {
  * never trusted: both fall back to the full snapshot path. With `batchReplay`
  * the resume gap arrives as a single `replay` item (omitted when empty) so the
  * client can apply the whole catch-up at once; the snapshot path is unchanged.
+ * With `markResumed` a successful resume ends its replay with one `resumed`
+ * item, also when the gap is empty. It is a server-side signal that no
+ * snapshot follows; callers must not send it to clients.
  */
 export function makeCursorSafeSnapshotLiveStream<Snapshot, E>(input: {
   readonly subscribeLive: Effect.Effect<Stream.Stream<OrchestrationEvent, E>, never, Scope.Scope>;
@@ -108,6 +112,7 @@ export function makeCursorSafeSnapshotLiveStream<Snapshot, E>(input: {
   ) => Stream.Stream<OrchestrationEvent, E>;
   readonly resumeFromSequence?: number | undefined;
   readonly batchReplay?: boolean | undefined;
+  readonly markResumed?: boolean | undefined;
   /**
    * Guards the resume shortcut against a subject that no longer exists. A hard
    * purge removes a thread's rows while unrelated events keep the journal head
@@ -245,7 +250,14 @@ export function makeCursorSafeSnapshotLiveStream<Snapshot, E>(input: {
                       (event): SnapshotLiveStreamItem<Snapshot> => ({ kind: "event", event }),
                     ),
                   );
-            const replay = replayItems.pipe(Stream.ensuring(Effect.sync(releaseResumeRows)));
+            const replay = (
+              input.markResumed === true
+                ? Stream.concat(
+                    replayItems,
+                    Stream.succeed<SnapshotLiveStreamItem<Snapshot>>({ kind: "resumed" }),
+                  )
+                : replayItems
+            ).pipe(Stream.ensuring(Effect.sync(releaseResumeRows)));
             return Stream.concat(finite(replay), liveAfterFence);
           }
         }

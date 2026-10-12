@@ -200,10 +200,13 @@ function hasStructuredUserInputQuestions(payload: Record<string, unknown> | null
 
 function resolveLatestProposedPlan(input: {
   readonly proposedPlans: ReadonlyArray<
-    Pick<OrchestrationProposedPlan, "id" | "turnId" | "updatedAt" | "implementedAt">
+    Pick<OrchestrationProposedPlan, "id" | "turnId" | "updatedAt" | "implementedAt" | "partial">
   >;
   readonly latestTurn: Pick<OrchestrationLatestTurn, "turnId"> | null;
-}): Pick<OrchestrationProposedPlan, "id" | "turnId" | "updatedAt" | "implementedAt"> | null {
+}): Pick<
+  OrchestrationProposedPlan,
+  "id" | "turnId" | "updatedAt" | "implementedAt" | "partial"
+> | null {
   if (input.latestTurn?.turnId) {
     const matchingTurnPlan = [...input.proposedPlans]
       .filter((plan) => plan.turnId === input.latestTurn?.turnId)
@@ -356,7 +359,7 @@ export function deriveThreadSummaryState(input: {
     >
   >;
   readonly proposedPlans: ReadonlyArray<
-    Pick<OrchestrationProposedPlan, "id" | "turnId" | "updatedAt" | "implementedAt">
+    Pick<OrchestrationProposedPlan, "id" | "turnId" | "updatedAt" | "implementedAt" | "partial">
   >;
   readonly latestTurn: Pick<OrchestrationLatestTurn, "turnId"> | null;
 }): ThreadSummaryState {
@@ -391,7 +394,8 @@ export function deriveThreadSummaryState(input: {
     pendingUserInputCount: pendingRequestIds.userInputRequestIds.length,
     hasPendingApprovals: pendingRequestIds.approvalRequestIds.length > 0,
     hasPendingUserInput: pendingRequestIds.userInputRequestIds.length > 0,
-    hasActionableProposedPlan: latestProposedPlan?.implementedAt === null,
+    hasActionableProposedPlan:
+      latestProposedPlan?.implementedAt === null && latestProposedPlan.partial !== true,
   };
 }
 
@@ -407,7 +411,7 @@ export function deriveThreadSummaryMetadata(input: {
     >
   >;
   readonly proposedPlans: ReadonlyArray<
-    Pick<OrchestrationProposedPlan, "id" | "turnId" | "updatedAt" | "implementedAt">
+    Pick<OrchestrationProposedPlan, "id" | "turnId" | "updatedAt" | "implementedAt" | "partial">
   >;
   readonly latestTurn: Pick<OrchestrationLatestTurn, "turnId"> | null;
 }): ThreadSummaryMetadata {

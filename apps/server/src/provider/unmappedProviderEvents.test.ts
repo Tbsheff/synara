@@ -5,6 +5,7 @@ import {
   makeUnmappedProviderEventGate,
   MAX_UNMAPPED_PROVIDER_DATA_JSON_CHARS,
   sanitizeUnmappedProviderData,
+  sanitizeUnmappedProviderDetail,
   sanitizeUnmappedProviderEvent,
 } from "./unmappedProviderEvents.ts";
 
@@ -85,5 +86,31 @@ describe("unmapped provider event safety", () => {
     expect(serialized).not.toContain("message-secret");
     expect(serialized).not.toContain("delta-secret");
     expect(serialized.length).toBeLessThan(2_000);
+  });
+  it.each([
+    ["https://TOKEN@host/path?sig=abc", "https://host/path?[REDACTED]"],
+    ["https://user:pass@host:8443/a/b#frag", "https://host:8443/a/b#frag"],
+    ["wss://us:p@ss@host/socket", "wss://host/socket"],
+    ["see (https://host/x?key=k1&token=t2) now", "see (https://host/x?[REDACTED]) now"],
+    ["https://host/path?a=1#section", "https://host/path?[REDACTED]#section"],
+    ["https://host/plain/path#frag", "https://host/plain/path#frag"],
+  ])("strips URL userinfo and query strings from %s", (input, expected) => {
+    expect(sanitizeUnmappedProviderDetail(input)).toBe(expected);
+  });
+
+  it("keeps URL secrets out of detail text and nested data", () => {
+    const detail = sanitizeUnmappedProviderDetail(
+      "request to https://TOKEN@mcp.example.com/sse?sig=abc&key=k9 failed",
+    );
+    const data = JSON.stringify(
+      sanitizeUnmappedProviderData({ url: "https://TOKEN@mcp.example.com/sse?sig=abc" }),
+    );
+
+    for (const text of [detail ?? "", data]) {
+      expect(text).toContain("mcp.example.com/sse");
+      expect(text).not.toContain("TOKEN");
+      expect(text).not.toContain("abc");
+      expect(text).not.toContain("k9");
+    }
   });
 });

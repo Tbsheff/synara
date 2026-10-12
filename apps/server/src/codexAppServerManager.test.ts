@@ -43,7 +43,9 @@ import {
   CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS,
   CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS,
   __codexCliVersionGateTesting,
+  CODEX_TURN_ORIGIN_PAYLOAD_KEY,
   CodexAppServerManager,
+  classifyCodexMcpTransportLine,
   classifyCodexStderrLine,
   formatCodexThreadResumeError,
   isRecoverableThreadResumeError,
@@ -1260,6 +1262,51 @@ describe("Codex app-server teardown", () => {
     expect(manager.hasSession(threadId)).toBe(false);
     await vi.waitFor(() => expect(internals.sessions.has(threadId)).toBe(false));
     expect(teardownProcessTree).toHaveBeenCalledOnce();
+  });
+});
+
+describe("classifyCodexMcpTransportLine", () => {
+  it("strips the timestamp, level, and module and names the auth failure", () => {
+    const line =
+      "\u001b[2m2026-08-19T22:47:15.818164Z\u001b[0m \u001b[31mERROR\u001b[0m rmcp::transport::worker: worker quit with fatal: Transport channel closed, when Auth(AuthorizationRequired)";
+    expect(classifyCodexMcpTransportLine(line)).toEqual({
+      reason: "Authentication required",
+      message: "worker quit with fatal: Transport channel closed, when Auth(AuthorizationRequired)",
+    });
+  });
+
+  it("reads a quoted server name and a URL host when present", () => {
+    expect(
+      classifyCodexMcpTransportLine(
+        '2026-08-19T22:47:15Z ERROR rmcp::transport::streamable_http_client: MCP server "linear" failed: Client(HttpRequest(error sending request for url (https://user:pw@MCP.Linear.app/sse)))',
+      ),
+    ).toEqual({
+      serverName: "linear",
+      host: "mcp.linear.app",
+      reason: "HTTP request failed",
+      message:
+        'MCP server "linear" failed: Client(HttpRequest(error sending request for url (https://user:pw@MCP.Linear.app/sse)))',
+    });
+  });
+
+  it.each([
+    ["https://TOKEN@mcp.example.com/path?sig=abc", "mcp.example.com"],
+    ["https://us:p@ss@mcp.example.com:8443/sse", "mcp.example.com:8443"],
+  ])("derives the URL host after removing userinfo from %s", (url, host) => {
+    const transport = classifyCodexMcpTransportLine(
+      `2026-08-19T22:47:15Z ERROR rmcp::transport::streamable_http_client: error sending request for url (${url})`,
+    );
+    expect(transport?.host).toBe(host);
+    expect(transport?.serverName).toBeUndefined();
+  });
+
+  it("ignores lines that are not rmcp transport logs", () => {
+    expect(
+      classifyCodexMcpTransportLine(
+        "2026-02-08T04:24:20.085687Z ERROR codex_core::runtime: unrecoverable failure",
+      ),
+    ).toBeUndefined();
+    expect(classifyCodexMcpTransportLine("rmcp::transport::worker failed")).toBeUndefined();
   });
 });
 
@@ -5455,7 +5502,7 @@ describe("MCP tool call elicitation approvals", () => {
     },
   );
 
-  it("cancels non-approval elicitations and emits a warning instead of an unsupported-request error", async () => {
+  it("cancels non-approval elicitations and emits an elicitation notice instead of an unsupported-request error", async () => {
     const { manager, context, emitEvent, writeMessage } = createCollabNotificationHarness();
 
     await handleServerRequestForTest(manager, context, {
@@ -5479,11 +5526,35 @@ describe("MCP tool call elicitation approvals", () => {
     );
     expect(emitEvent).toHaveBeenCalledWith(
       expect.objectContaining({
-        kind: "error",
+        kind: "notification",
         method: "mcpServer/elicitation/request/unrenderable",
-        message: "Synara declined an MCP elicitation it cannot render yet.",
+        payload: { message: "Authenticate with the MCP server" },
       }),
     );
+    expect(emitEvent).not.toHaveBeenCalledWith(expect.objectContaining({ kind: "request" }));
+  });
+
+  it.each([
+    "item/tool/call",
+    "account/chatgptAuthTokens/refresh",
+    "attestation/generate",
+    "applyPatchApproval",
+    "execCommandApproval",
+  ])("refuses %s without emitting a request event", async (method) => {
+    const { manager, context, emitEvent, writeMessage } = createCollabNotificationHarness();
+
+    await handleServerRequestForTest(manager, context, {
+      id: 74,
+      method,
+      params: { threadId: "provider_parent", turnId: "turn_parent", callId: "call-1" },
+    });
+
+    expect(writeMessage).toHaveBeenCalledWith(context, {
+      id: 74,
+      error: { code: -32601, message: `Unsupported server request: ${method}` },
+    });
+    expect(emitEvent).not.toHaveBeenCalled();
+    expect(context.pendingApprovals.size).toBe(0);
   });
 });
 
@@ -6051,6 +6122,31 @@ describe("collab child conversation routing", () => {
       context,
       expect.objectContaining({ status: "running", activeTurnId: "turn_parent" }),
     );
+  });
+
+  it("tags turn/started with the Synara or provider origin", () => {
+    const { manager, context, emitEvent } = createCollabNotificationHarness();
+    const startTurn = (turnId: string) =>
+      handleServerNotificationForTest(manager, context, {
+        method: "turn/started",
+        params: { threadId: "provider_parent", turn: { id: turnId } },
+      });
+    const lastOrigin = () =>
+      (emitEvent.mock.calls.at(-1)?.[0] as { payload?: Record<string, unknown> } | undefined)
+        ?.payload?.[CODEX_TURN_ORIGIN_PAYLOAD_KEY];
+
+    startTurn("turn_parent");
+    expect(lastOrigin()).toBe("user");
+
+    context.session.activeTurnId = undefined as unknown as string;
+    (context as { synaraTurnStartsInFlight?: number }).synaraTurnStartsInFlight = 1;
+    startTurn("turn_synara_pending");
+    expect(lastOrigin()).toBe("user");
+
+    context.session.activeTurnId = undefined as unknown as string;
+    (context as { synaraTurnStartsInFlight?: number }).synaraTurnStartsInFlight = 0;
+    startTurn("turn_provider_wake");
+    expect(lastOrigin()).toBe("provider");
   });
 
   it("suppresses child lifecycle notifications when only the provider parent is known", () => {

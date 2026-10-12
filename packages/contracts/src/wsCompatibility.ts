@@ -9,7 +9,8 @@ export const WS_PROTOCOL_EPOCH = 1;
 // Keep older revisions out of the compatibility range: a revision-2 client would
 // call methods this server no longer serves and could not decode the new error.
 export const WS_PROTOCOL_MIN_REVISION = 3;
-export const WS_PROTOCOL_MAX_REVISION = 3;
+export const WS_PROTOCOL_MAX_REVISION = 4;
+export const WS_THREAD_LIVE_ITEMS_MIN_REVISION = 4;
 export const WS_BOOTSTRAP_METHOD = "bootstrap.negotiate";
 export const WS_BOOTSTRAP_PATH = "/ws/bootstrap";
 export const WS_NEGOTIATE_HTTP_PATH = "/ws/negotiate";

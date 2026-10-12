@@ -1838,6 +1838,78 @@ describe("orchestration projector", () => {
     expect(afterReplacement.threads[0]?.activities[1]?.summary).toBe("late updated");
   });
 
+  it("orders activities by createdAt first so mixed sequence counters match the snapshot", async () => {
+    const createdAt = "2026-10-09T20:04:00.000Z";
+    const threadId = "thread-mixed-counters";
+    let model = await Effect.runPromise(
+      projectEvent(
+        createEmptyReadModel(createdAt),
+        makeEvent({
+          sequence: 1,
+          type: "thread.created",
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: createdAt,
+          commandId: "cmd-thread-mixed-counters",
+          payload: {
+            threadId,
+            projectId: "project-1",
+            title: "Mixed counters",
+            modelSelection: { provider: "claudeAgent", model: "claude-opus-4-5" },
+            runtimeMode: "full-access",
+            branch: null,
+            worktreePath: null,
+            createdAt,
+            updatedAt: createdAt,
+          },
+        }),
+      ),
+    );
+    const activities = [
+      { id: "provider-late", at: "2026-10-09T20:10:32.257Z", sequence: 872_200 },
+      { id: "checkpoint-early", at: "2026-10-09T20:05:00.000Z", sequence: 664_015 },
+      { id: "provider-early", at: "2026-10-09T20:04:19.000Z", sequence: 872_001 },
+      { id: "checkpoint-late", at: "2026-10-09T20:10:40.000Z", sequence: 664_300 },
+      { id: "same-ms-no-sequence", at: "2026-10-09T20:04:19.000Z", sequence: undefined },
+    ];
+    for (const [index, activity] of activities.entries()) {
+      model = await Effect.runPromise(
+        projectEvent(
+          model,
+          makeEvent({
+            sequence: index + 2,
+            type: "thread.activity-appended",
+            aggregateKind: "thread",
+            aggregateId: threadId,
+            occurredAt: activity.at,
+            commandId: `cmd-${activity.id}`,
+            payload: {
+              threadId,
+              activity: {
+                id: activity.id,
+                tone: "info",
+                kind: "tool.updated",
+                summary: activity.id,
+                payload: {},
+                turnId: null,
+                ...(activity.sequence !== undefined ? { sequence: activity.sequence } : {}),
+                createdAt: activity.at,
+              },
+            },
+          }),
+        ),
+      );
+    }
+
+    expect(model.threads[0]?.activities.map((activity) => activity.id)).toEqual([
+      "same-ms-no-sequence",
+      "provider-early",
+      "checkpoint-early",
+      "provider-late",
+      "checkpoint-late",
+    ]);
+  });
+
   it("caps message and checkpoint retention for long-lived threads", async () => {
     const createdAt = "2026-03-01T10:00:00.000Z";
     const model = createEmptyReadModel(createdAt);

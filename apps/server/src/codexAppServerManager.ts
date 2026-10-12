@@ -124,6 +124,8 @@ import {
 const log = createLogger("codex");
 
 const MCP_SERVER_ELICITATION_REQUEST_METHOD = "mcpServer/elicitation/request";
+const MCP_SERVER_ELICITATION_UNRENDERABLE_METHOD = "mcpServer/elicitation/request/unrenderable";
+export const CODEX_TURN_ORIGIN_PAYLOAD_KEY = "synaraTurnOrigin";
 const MCP_TOOL_CALL_APPROVAL_KIND = "mcp_tool_call";
 
 type PendingRequestKey = string;
@@ -233,6 +235,7 @@ interface CodexSessionContext {
   collabReceiverTurns: Map<string, TurnId>;
   collabReceiverParents: Map<string, string>;
   reviewTurnIds: Set<TurnId>;
+  synaraTurnStartsInFlight?: number;
   taskCompleteFallback?:
     | {
         readonly turnId: TurnId;
@@ -1076,6 +1079,40 @@ export function classifyCodexStderrLine(rawLine: string): { message: string } | 
   return { message: normalizeCodexUserVisibleErrorMessage(line) };
 }
 
+export interface CodexMcpTransportError {
+  readonly serverName?: string;
+  readonly host?: string;
+  readonly reason: string;
+  readonly message: string;
+}
+
+const CODEX_RMCP_LOG_REGEX =
+  /^(?:\d{4}-\d{2}-\d{2}T\S+\s+)?(?:TRACE|DEBUG|INFO|WARN|ERROR)\s+(rmcp::\S*?):\s+(.*)$/;
+const CODEX_MCP_SERVER_NAME_REGEX =
+  /\b(?:mcp[_ ]server|server[_ ]name|server)\s*[=:]?\s*["'`]([A-Za-z0-9_.@-]+)["'`]/i;
+const CODEX_MCP_URL_HOST_REGEX = /\bhttps?:\/\/(?:[^/?#\s"'\\()<>]*@)?([A-Za-z0-9.-]+(?::\d+)?)/i;
+
+function codexMcpTransportReason(message: string): string {
+  if (/\bAuth(?:Required|orizationRequired)\b/.test(message)) return "Authentication required";
+  if (/\bUnexpectedContentType\b/.test(message)) return "Unexpected response content type";
+  if (/\bHttpRequest\b|\bClient\(/.test(message)) return "HTTP request failed";
+  return "Transport closed";
+}
+
+export function classifyCodexMcpTransportLine(rawLine: string): CodexMcpTransportError | undefined {
+  const match = normalizeCodexProcessLine(rawLine).match(CODEX_RMCP_LOG_REGEX);
+  const message = match?.[2]?.trim();
+  if (!match?.[1]?.startsWith("rmcp::transport") || !message) return undefined;
+  const serverName = CODEX_MCP_SERVER_NAME_REGEX.exec(message)?.[1];
+  const host = CODEX_MCP_URL_HOST_REGEX.exec(message)?.[1]?.toLowerCase();
+  return {
+    ...(serverName ? { serverName } : {}),
+    ...(host ? { host } : {}),
+    reason: codexMcpTransportReason(message),
+    message,
+  };
+}
+
 export function isRecoverableThreadResumeError(error: unknown): boolean {
   const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
   if (!message.includes("thread/resume")) {
@@ -1766,7 +1803,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     }
 
     context.activeInteractionMode = input.interactionMode ?? "default";
-    const response = await this.sendRequest(context, "turn/start", turnStartParams);
+    const response = await this.trackSynaraTurnStart(context, () =>
+      this.sendRequest(context, "turn/start", turnStartParams),
+    );
     const turnIdRaw = this.readString(this.readObject(this.readObject(response), "turn"), "id");
     if (!turnIdRaw) {
       throw new Error("turn/start response did not include a turn id.");
@@ -1856,11 +1895,13 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       throw new Error("Session is missing a provider resume thread id.");
     }
 
-    const response = await this.sendRequest(context, "review/start", {
-      threadId: providerThreadId,
-      delivery: "inline",
-      target: this.toCodexReviewTarget(input.target),
-    });
+    const response = await this.trackSynaraTurnStart(context, () =>
+      this.sendRequest(context, "review/start", {
+        threadId: providerThreadId,
+        delivery: "inline",
+        target: this.toCodexReviewTarget(input.target),
+      }),
+    );
 
     const turn = this.readObject(this.readObject(response), "turn");
     const turnIdRaw = this.readString(turn, "id");
@@ -2798,9 +2839,11 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       },
     });
     try {
-      await this.sendRequest(context, "thread/compact/start", {
-        threadId: providerThreadId,
-      });
+      await this.trackSynaraTurnStart(context, () =>
+        this.sendRequest(context, "thread/compact/start", {
+          threadId: providerThreadId,
+        }),
+      );
       await Effect.logInfo("codex app-server compact start acknowledged", {
         threadId: context.session.threadId,
         providerThreadId,
@@ -4423,12 +4466,19 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         notification.method === "turn/completed" &&
         this.readString(this.readObject(notification.params, "turn"), "status") === "completed";
     }
-    const eventPayload = gatewayTurnAuthorityRetired
+    const retiredPayload = gatewayTurnAuthorityRetired
       ? {
           ...(this.readObject(notification.params) ?? {}),
           [AGENT_GATEWAY_TURN_AUTHORITY_RETIRED]: true,
         }
       : notification.params;
+    const eventPayload =
+      notification.method === "turn/started" && !isChildConversation
+        ? {
+            ...this.readObject(retiredPayload),
+            [CODEX_TURN_ORIGIN_PAYLOAD_KEY]: this.turnStartOrigin(context),
+          }
+        : retiredPayload;
 
     this.emitEvent({
       id: EventId.makeUnsafe(randomUUID()),
@@ -4703,11 +4753,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
           _meta: null,
         },
       });
-      this.emitErrorEvent(
-        context,
-        "mcpServer/elicitation/request/unrenderable",
-        "Synara declined an MCP elicitation it cannot render yet.",
-      );
+      this.emitDeclinedElicitationNotice(context, request.params, rawRoute.turnId);
       return;
     }
     const requestKind = isMcpToolCallApproval ? "tool" : this.requestKindForMethod(request.method);
@@ -4770,6 +4816,17 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       });
     }
 
+    if (!requestKind && !isUserInputRequest) {
+      await this.writeMessage(context, {
+        id: request.id,
+        error: {
+          code: -32601,
+          message: `Unsupported server request: ${request.method}`,
+        },
+      });
+      return;
+    }
+
     this.emitEvent({
       id: EventId.makeUnsafe(randomUUID()),
       kind: "request",
@@ -4799,29 +4856,66 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       return;
     }
 
-    if (isUserInputRequest) {
-      if (userInputQuestions) {
-        // Intentionally unanswered: a human replies through respondToUserInput.
-        return;
-      }
-
-      const detail = "Codex asked a question Synara could not render, so it was declined.";
-      this.emitErrorEvent(context, "item/tool/requestUserInput/unrenderable", detail);
-      await this.writeMessage(context, {
-        id: request.id,
-        error: {
-          code: -32602,
-          message: "item/tool/requestUserInput did not include a renderable question.",
-        },
-      });
+    if (userInputQuestions) {
       return;
     }
 
+    const detail = "Codex asked a question Synara could not render, so it was declined.";
+    this.emitErrorEvent(context, "item/tool/requestUserInput/unrenderable", detail);
     await this.writeMessage(context, {
       id: request.id,
       error: {
-        code: -32601,
-        message: `Unsupported server request: ${request.method}`,
+        code: -32602,
+        message: "item/tool/requestUserInput did not include a renderable question.",
+      },
+    });
+  }
+
+  private async trackSynaraTurnStart<T>(
+    context: CodexSessionContext,
+    start: () => Promise<T>,
+  ): Promise<T> {
+    context.synaraTurnStartsInFlight = (context.synaraTurnStartsInFlight ?? 0) + 1;
+    try {
+      return await start();
+    } finally {
+      context.synaraTurnStartsInFlight = Math.max(0, (context.synaraTurnStartsInFlight ?? 1) - 1);
+    }
+  }
+
+  private turnStartOrigin(context: CodexSessionContext): "user" | "provider" {
+    return (context.synaraTurnStartsInFlight ?? 0) > 0 || context.session.activeTurnId !== undefined
+      ? "user"
+      : "provider";
+  }
+
+  private emitDeclinedElicitationNotice(
+    context: CodexSessionContext,
+    params: unknown,
+    turnId: TurnId | undefined,
+  ): void {
+    if (context.discovery) {
+      return;
+    }
+    const serverName = this.readString(params, "serverName");
+    const message = this.readString(params, "message");
+    this.emitEvent({
+      id: EventId.makeUnsafe(randomUUID()),
+      kind: "notification",
+      provider: "codex",
+      threadId: context.session.threadId,
+      createdAt: new Date().toISOString(),
+      ...(context.lifecycleGeneration !== undefined
+        ? { lifecycleGeneration: context.lifecycleGeneration }
+        : {}),
+      ...(context.session.providerInstanceId
+        ? { providerInstanceId: context.session.providerInstanceId }
+        : {}),
+      method: MCP_SERVER_ELICITATION_UNRENDERABLE_METHOD,
+      ...(turnId ? { turnId } : {}),
+      payload: {
+        ...(serverName ? { serverName } : {}),
+        ...(message ? { message } : {}),
       },
     });
   }

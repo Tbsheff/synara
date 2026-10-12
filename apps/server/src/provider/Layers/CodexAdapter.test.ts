@@ -6,20 +6,23 @@ import {
   EventId,
   ApprovalRequestId,
   ProviderItemId,
+  ProviderRuntimeEvent as ProviderRuntimeEventSchema,
   type ProviderApprovalDecision,
   type ProviderEvent,
   type ProviderInstanceId,
+  type ProviderRuntimeEvent,
   type ProviderSession,
   type ProviderStartOptions,
   type ProviderTurnStartResult,
   type ProviderUserInputAnswers,
   ThreadId,
+  TRANSCRIPT_OUTPUT_TAIL_MAX_CHARS,
   TurnId,
 } from "@synara/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { afterAll, it, vi } from "@effect/vitest";
+import { afterAll, describe, it, vi } from "@effect/vitest";
 
-import { Deferred, Effect, Fiber, FileSystem, Layer, Option, Stream } from "effect";
+import { Deferred, Effect, Fiber, FileSystem, Layer, Option, Schema, Stream } from "effect";
 
 import {
   CodexAppServerManager,
@@ -34,7 +37,11 @@ import { resolveCodexGeneratedImagesRoots } from "../../codexGeneratedImages.ts"
 import { ProviderAdapterValidationError } from "../Errors.ts";
 import { CodexAdapter } from "../Services/CodexAdapter.ts";
 import { ProviderSessionDirectory } from "../Services/ProviderSessionDirectory.ts";
-import { makeCodexAdapterLive } from "./CodexAdapter.ts";
+import {
+  CodexTranscriptTracker,
+  makeCodexAdapterLive,
+  makeCodexRuntimeEventMapper,
+} from "./CodexAdapter.ts";
 
 const asThreadId = (value: string): ThreadId => ThreadId.makeUnsafe(value);
 const asTurnId = (value: string): TurnId => TurnId.makeUnsafe(value);
@@ -2069,30 +2076,30 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
     }),
   );
 
-  it.effect("maps unrenderable MCP elicitations to runtime warnings", () =>
+  it.effect("maps declined MCP elicitations to an mcp-elicitation transcript notice", () =>
     Effect.gen(function* () {
       const adapter = yield* CodexAdapter;
       const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
 
       lifecycleManager.emit("event", {
-        id: asEventId("evt-mcp-elicitation-warning"),
-        kind: "error",
+        id: asEventId("evt-mcp-elicitation-notice"),
+        kind: "notification",
         provider: "codex",
         threadId: asThreadId("thread-1"),
         createdAt: new Date().toISOString(),
         method: "mcpServer/elicitation/request/unrenderable",
-        message: "Synara declined an MCP elicitation it cannot render yet.",
+        payload: { serverName: "linear", message: "Sign in to continue" },
       } satisfies ProviderEvent);
 
       const firstEvent = yield* Fiber.join(firstEventFiber);
       assert.equal(firstEvent._tag, "Some");
       if (firstEvent._tag !== "Some") return;
-      assert.equal(firstEvent.value.type, "runtime.warning");
-      if (firstEvent.value.type !== "runtime.warning") return;
-      assert.equal(
-        firstEvent.value.payload.message,
-        "Synara declined an MCP elicitation it cannot render yet.",
-      );
+      assert.equal(firstEvent.value.type, "transcript.notice");
+      if (firstEvent.value.type !== "transcript.notice") return;
+      assert.equal(firstEvent.value.payload.noticeKind, "mcp-elicitation");
+      assert.equal(firstEvent.value.payload.title, "linear requested information (not supported)");
+      assert.equal(firstEvent.value.payload.detail, "Sign in to continue");
+      assert.equal(firstEvent.value.payload.status, "cancelled");
     }),
   );
 
@@ -2716,9 +2723,7 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
         } satisfies ProviderEvent);
 
       emit("remoteControl/status/changed");
-      emit("skills/changed");
       emit("session/threadOpenRequested", "session");
-      // Real errors and useful unknown events must survive the filter.
       emit("session/threadOpenRequested", "error");
       emit("item/future/completed");
       emit("session/started", "session");
@@ -2774,4 +2779,705 @@ afterAll(() => {
     lifecycleManager.stopAll();
   }
   assert.ok(lifecycleManager.stopAllImpl.mock.calls.length >= 1);
+});
+
+describe("Codex runtime event mapper transcript details", () => {
+  const mapperThreadId = asThreadId("thread-mapper");
+  const mapperTurnId = asTurnId("turn-mapper");
+  let sequence = 0;
+  const native = (
+    method: string,
+    payload: Record<string, unknown>,
+    overrides: Partial<ProviderEvent> = {},
+  ): ProviderEvent => ({
+    id: asEventId(`evt-mapper-${(sequence += 1)}`),
+    kind: "notification",
+    provider: "codex",
+    threadId: mapperThreadId,
+    createdAt: "2026-10-10T00:00:00.000Z",
+    method,
+    turnId: mapperTurnId,
+    ...overrides,
+    payload,
+  });
+  const itemEvent = (
+    method: "item/started" | "item/completed",
+    item: Record<string, unknown>,
+    overrides: Partial<ProviderEvent> = {},
+  ) =>
+    native(
+      method,
+      { threadId: "provider-thread", turnId: mapperTurnId, item },
+      {
+        itemId: asItemId(String(item.id)),
+        ...overrides,
+      },
+    );
+  const decodeRuntimeEvent = Schema.decodeUnknownSync(ProviderRuntimeEventSchema);
+  const single = (events: ReadonlyArray<ProviderRuntimeEvent>): ProviderRuntimeEvent => {
+    assert.equal(events.length, 1);
+    decodeRuntimeEvent(events[0]);
+    return events[0]!;
+  };
+
+  it("keeps the agentMessage phase and reports the last final answer on turn/completed", () => {
+    const map = makeCodexRuntimeEventMapper();
+    const commentary = single(
+      map(
+        itemEvent("item/completed", {
+          type: "agentMessage",
+          id: "msg-1",
+          text: "Looking",
+          phase: "commentary",
+        }),
+        mapperThreadId,
+      ),
+    );
+    assert.equal(commentary.type, "item.completed");
+    assert.equal(
+      commentary.type === "item.completed" ? commentary.payload.phase : null,
+      "commentary",
+    );
+    map(
+      itemEvent("item/completed", {
+        type: "agentMessage",
+        id: "msg-2",
+        text: "A",
+        phase: "final_answer",
+      }),
+      mapperThreadId,
+    );
+    map(
+      itemEvent("item/completed", {
+        type: "agentMessage",
+        id: "msg-3",
+        text: "B",
+        phase: "final_answer",
+      }),
+      mapperThreadId,
+    );
+    const completed = single(
+      map(
+        native("turn/completed", { turn: { id: mapperTurnId, status: "completed" } }),
+        mapperThreadId,
+      ),
+    );
+    assert.equal(completed.type, "turn.completed");
+    assert.equal(
+      completed.type === "turn.completed" ? completed.payload.finalAssistantItemId : null,
+      "msg-3",
+    );
+
+    map(
+      itemEvent("item/completed", { type: "agentMessage", id: "msg-4", text: "C" }),
+      mapperThreadId,
+    );
+    const withoutPhase = single(
+      map(
+        native("turn/completed", { turn: { id: mapperTurnId, status: "completed" } }),
+        mapperThreadId,
+      ),
+    );
+    assert.equal(
+      withoutPhase.type === "turn.completed" ? withoutPhase.payload.finalAssistantItemId : "x",
+      undefined,
+    );
+  });
+
+  it("reads the Synara turn origin and flags messages added in provider-started turns", () => {
+    const map = makeCodexRuntimeEventMapper();
+    const started = single(
+      map(
+        native("turn/started", { turn: { id: mapperTurnId }, synaraTurnOrigin: "provider" }),
+        mapperThreadId,
+      ),
+    );
+    assert.equal(started.type === "turn.started" ? started.payload.origin : null, "provider");
+    const events = map(
+      itemEvent("item/completed", {
+        type: "userMessage",
+        id: "user-1",
+        clientId: null,
+        content: [{ type: "text", text: "Continue the goal", text_elements: [] }],
+      }),
+      mapperThreadId,
+    );
+    const notice = events.find((event) => event.type === "transcript.notice");
+    assert.equal(
+      notice?.type === "transcript.notice" ? notice.payload.noticeKind : null,
+      "user-message-injected",
+    );
+    assert.equal(
+      notice?.type === "transcript.notice" ? notice.payload.body : null,
+      "Continue the goal",
+    );
+
+    const userTurn = asTurnId("turn-user");
+    map(
+      native(
+        "turn/started",
+        { turn: { id: userTurn }, synaraTurnOrigin: "user" },
+        { turnId: userTurn },
+      ),
+      mapperThreadId,
+    );
+    const echo = map(
+      itemEvent(
+        "item/completed",
+        { type: "userMessage", id: "user-2", content: [{ type: "text", text: "hi" }] },
+        { turnId: userTurn },
+      ),
+      mapperThreadId,
+    );
+    assert.deepEqual(
+      echo.map((event) => event.type),
+      ["item.completed"],
+    );
+  });
+
+  it("emits typed command details with exact output, null exit codes, and a 20k tail", () => {
+    const map = makeCodexRuntimeEventMapper();
+    const base = {
+      type: "commandExecution",
+      id: "cmd-1",
+      command: "printf '  x  '",
+      cwd: "/repo",
+      status: "completed",
+      commandActions: [
+        { type: "read", command: "cat a.ts", name: "a.ts", path: "src/a.ts" },
+        { type: "listFiles", command: "ls", path: "src" },
+        { type: "search", command: "rg foo", query: "foo", path: null },
+      ],
+      durationMs: 1250,
+    };
+    const whitespace = single(
+      map(
+        itemEvent("item/completed", { ...base, aggregatedOutput: "  \n ", exitCode: null }),
+        mapperThreadId,
+      ),
+    );
+    assert.equal(whitespace.type, "item.completed");
+    if (whitespace.type !== "item.completed") return;
+    assert.deepEqual(whitespace.payload.command, {
+      command: "printf '  x  '",
+      cwd: "/repo",
+      exitCode: null,
+      durationMs: 1250,
+      output: "  \n ",
+      outputTotalChars: 4,
+      parsedActions: [
+        { type: "read", command: "cat a.ts", name: "a.ts", path: "src/a.ts" },
+        { type: "list_files", command: "ls", path: "src" },
+        { type: "search", command: "rg foo", query: "foo" },
+      ],
+    });
+    const data = whitespace.payload.data as { item: Record<string, unknown> };
+    assert.equal("aggregatedOutput" in data.item, false);
+    assert.equal(data.item.command, "printf '  x  '");
+
+    const padded = single(
+      map(
+        itemEvent("item/completed", {
+          ...base,
+          id: "cmd-padded",
+          aggregatedOutput: "  x  \n",
+          exitCode: 0,
+        }),
+        mapperThreadId,
+      ),
+    );
+    if (padded.type !== "item.completed") return assert.fail("expected item.completed");
+    assert.equal(padded.payload.command?.output, "  x  \n");
+    assert.equal(padded.payload.command?.outputTruncated, undefined);
+
+    const long = `${"a".repeat(10_000)}${"b".repeat(20_000)}`;
+    const truncated = single(
+      map(
+        itemEvent("item/completed", { ...base, id: "cmd-2", aggregatedOutput: long, exitCode: 2 }),
+        mapperThreadId,
+      ),
+    );
+    if (truncated.type !== "item.completed") return assert.fail("expected item.completed");
+    assert.equal(truncated.payload.command?.output, "b".repeat(20_000));
+    assert.equal(truncated.payload.command?.outputTruncated, true);
+    assert.equal(truncated.payload.command?.outputTotalChars, 30_000);
+    assert.equal(truncated.payload.command?.exitCode, 2);
+    assert.equal(JSON.stringify(truncated).includes("a".repeat(100)), false);
+
+    const started = single(
+      map(
+        itemEvent("item/started", { ...base, id: "cmd-3", aggregatedOutput: null, exitCode: null }),
+        mapperThreadId,
+      ),
+    );
+    if (started.type !== "item.started") return assert.fail("expected item.started");
+    assert.equal(started.payload.command?.exitCode, undefined);
+    assert.equal(started.payload.command?.output, undefined);
+  });
+
+  it("keeps the failure on a failed list command so parsed action labels can be ignored", () => {
+    const map = makeCodexRuntimeEventMapper();
+    const failed = single(
+      map(
+        itemEvent("item/completed", {
+          type: "commandExecution",
+          id: "cmd-ls-missing",
+          command: "ls /nonexistent",
+          cwd: "/repo",
+          status: "failed",
+          commandActions: [{ type: "listFiles", command: "ls /nonexistent", path: "/nonexistent" }],
+          aggregatedOutput: "ls: /nonexistent: No such file or directory\n",
+          exitCode: 1,
+          durationMs: 12,
+        }),
+        mapperThreadId,
+      ),
+    );
+    if (failed.type !== "item.completed") return assert.fail("expected item.completed");
+    assert.equal(failed.payload.status, "failed");
+    assert.equal(failed.payload.command?.exitCode, 1);
+    assert.deepEqual(failed.payload.command?.parsedActions, [
+      { type: "list_files", command: "ls /nonexistent", path: "/nonexistent" },
+    ]);
+  });
+
+  it("does not split an emoji at the command output tail cut", () => {
+    const map = makeCodexRuntimeEventMapper();
+    const completed = single(
+      map(
+        itemEvent("item/completed", {
+          type: "commandExecution",
+          id: "cmd-emoji-tail",
+          command: "cat emoji.txt",
+          status: "completed",
+          aggregatedOutput: `\u{1F600}${"x".repeat(TRANSCRIPT_OUTPUT_TAIL_MAX_CHARS - 1)}`,
+          exitCode: 0,
+        }),
+        mapperThreadId,
+      ),
+    );
+    if (completed.type !== "item.completed") return assert.fail("expected item.completed");
+    assert.equal(
+      completed.payload.command?.output,
+      "x".repeat(TRANSCRIPT_OUTPUT_TAIL_MAX_CHARS - 1),
+    );
+    assert.equal(completed.payload.command?.outputTruncated, true);
+  });
+
+  it("maps rmcp transport stderr to one MCP notice per server and generation", () => {
+    const map = makeCodexRuntimeEventMapper();
+    const stderr = (message: string, lifecycleGeneration = "gen-1") =>
+      native("process/stderr", {}, { kind: "error", message, lifecycleGeneration });
+    const line =
+      '2026-08-19T22:47:15.818164Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when AuthRequired(AuthRequiredError { www_authenticate_header: "Bearer resource_metadata=\\"https://mcp.example.com/.well-known/oauth\\"" })';
+    const first = single(map(stderr(line), mapperThreadId));
+    assert.equal(first.type, "transcript.notice");
+    if (first.type !== "transcript.notice") return;
+    const { noticeKind, severity, title, detail, status, dedupeKey } = first.payload;
+    assert.deepEqual(
+      { noticeKind, severity, title, detail, status, dedupeKey },
+      {
+        noticeKind: "mcp-server-status",
+        severity: "warning",
+        title: "MCP server at mcp.example.com transport error",
+        detail: "Authentication required",
+        status: "failed",
+        dedupeKey: "mcp-transport:gen-1:mcp.example.com",
+      },
+    );
+    assert.equal(first.payload.body?.startsWith("worker quit with fatal"), true);
+    assert.equal(JSON.stringify(first.payload).includes("2026-08-19T22:47:15"), false);
+    assert.deepEqual(map(stderr(line), mapperThreadId), []);
+    assert.equal(single(map(stderr(line, "gen-2"), mapperThreadId)).type, "transcript.notice");
+
+    const plain = single(map(stderr("write_stdin failed: stdin is closed"), mapperThreadId));
+    assert.equal(plain.type, "runtime.warning");
+  });
+
+  it("keeps URL userinfo and query secrets out of MCP transport notices", () => {
+    const map = makeCodexRuntimeEventMapper();
+    const line =
+      "2026-08-19T22:47:15Z ERROR rmcp::transport::streamable_http_client: error sending request for url (https://TOKEN@mcp.example.com/path?sig=abc)";
+    const notice = single(
+      map(
+        native(
+          "process/stderr",
+          {},
+          { kind: "error", message: line, lifecycleGeneration: "gen-1" },
+        ),
+        mapperThreadId,
+      ),
+    );
+    if (notice.type !== "transcript.notice") return assert.fail("expected transcript.notice");
+    assert.equal(notice.payload.title, "MCP server at mcp.example.com transport error");
+    assert.equal(
+      notice.payload.body,
+      "error sending request for url (https://mcp.example.com/path?[REDACTED])",
+    );
+    const serialized = JSON.stringify(notice);
+    assert.equal(serialized.includes("TOKEN"), false);
+    assert.equal(serialized.includes("abc"), false);
+  });
+
+  it("never sends Codex session lifecycle methods to the generic provider event row", () => {
+    const map = makeCodexRuntimeEventMapper();
+    const session = (method: string) =>
+      native(method, {}, { kind: "session", message: `${method} message` });
+    const methods = [
+      "session/connecting",
+      "session/threadOpenRequested",
+      "session/threadOpenResolved",
+      "session/threadResumeFallback",
+      "session/threadStartWithoutResume",
+      "session/ready",
+      "session/started",
+      "session/closed",
+      "session/exited",
+    ];
+    for (const method of methods) {
+      const types = map(session(method), mapperThreadId).map((event) => event.type);
+      assert.equal(types.includes("event.unmapped"), false, method);
+    }
+    assert.deepEqual(map(session("session/threadOpenResolved"), mapperThreadId), []);
+    const fallback = single(map(session("session/threadResumeFallback"), mapperThreadId));
+    if (fallback.type !== "transcript.notice") return assert.fail("expected transcript.notice");
+    assert.deepEqual(
+      [fallback.payload.noticeKind, fallback.payload.severity, fallback.payload.title],
+      ["provider-warning", "warning", "Could not resume the Codex thread; started a new thread"],
+    );
+  });
+
+  it("maps terminal input to the command row and redacts it", () => {
+    const map = makeCodexRuntimeEventMapper();
+    const updated = single(
+      map(
+        native(
+          "item/commandExecution/terminalInteraction",
+          { itemId: "cmd-1", processId: "p1", stdin: "password=hunter2\n" },
+          { itemId: asItemId("cmd-1") },
+        ),
+        mapperThreadId,
+      ),
+    );
+    if (updated.type !== "item.updated") return assert.fail("expected item.updated");
+    assert.equal(updated.payload.itemType, "command_execution");
+    assert.equal(updated.payload.command?.lastStdin?.includes("hunter2"), false);
+  });
+
+  it("emits per-file changes with diffs, counts, adds, and moves", () => {
+    const map = makeCodexRuntimeEventMapper();
+    const event = single(
+      map(
+        itemEvent("item/completed", {
+          type: "fileChange",
+          id: "patch-1",
+          status: "completed",
+          changes: [
+            { path: "src/new.ts", kind: { type: "add" }, diff: "one\ntwo\n" },
+            {
+              path: "src/old.ts",
+              kind: { type: "update", move_path: null },
+              diff: "@@ -1,2 +1,2 @@\n-a\n+b\n c\n+d",
+            },
+            { path: "src/from.ts", kind: { type: "update", move_path: "src/to.ts" }, diff: "" },
+          ],
+        }),
+        mapperThreadId,
+      ),
+    );
+    if (event.type !== "item.completed") return assert.fail("expected item.completed");
+    const changes = event.payload.fileChanges?.changes ?? [];
+    assert.equal(event.payload.fileChanges?.totalFiles, 3);
+    assert.deepEqual(changes[0], {
+      path: "src/new.ts",
+      kind: "add",
+      unifiedDiff: "--- /dev/null\n+++ b/src/new.ts\n@@ -0,0 +1,2 @@\n+one\n+two",
+      additions: 2,
+      deletions: 0,
+    });
+    assert.equal(changes[1]?.kind, "update");
+    assert.equal(changes[1]?.additions, 2);
+    assert.equal(changes[1]?.deletions, 1);
+    assert.equal(changes[2]?.kind, "move");
+    assert.equal(changes[2]?.movePath, "src/to.ts");
+    const data = event.payload.data as { item: { changes: Array<Record<string, unknown>> } };
+    assert.deepEqual(data.item.changes[0], { path: "src/new.ts", kind: { type: "add" } });
+
+    const patch = single(
+      map(
+        native(
+          "item/fileChange/patchUpdated",
+          {
+            itemId: "patch-1",
+            changes: [
+              {
+                path: "a.ts",
+                kind: { type: "update", move_path: null },
+                diff: "@@ -1 +1 @@\n-x\n+y",
+              },
+            ],
+          },
+          { itemId: asItemId("patch-1") },
+        ),
+        mapperThreadId,
+      ),
+    );
+    if (patch.type !== "item.updated") return assert.fail("expected item.updated");
+    assert.equal(patch.payload.itemType, "file_change");
+    assert.equal(patch.payload.fileChanges?.changes[0]?.additions, 1);
+  });
+
+  it("emits MCP, dynamic, web search, and function output tool details", () => {
+    const map = makeCodexRuntimeEventMapper();
+    const mcp = single(
+      map(
+        itemEvent("item/completed", {
+          type: "mcpToolCall",
+          id: "mcp-1",
+          server: "github",
+          tool: "get_issue",
+          status: "completed",
+          arguments: { number: 7 },
+          result: {
+            content: [
+              { type: "text", text: "Issue 7" },
+              { type: "image", data: "aGVsbG8=", mimeType: "image/png" },
+            ],
+            structuredContent: { number: 7 },
+            _meta: null,
+          },
+          error: null,
+          durationMs: 40,
+        }),
+        mapperThreadId,
+      ),
+    );
+    if (mcp.type !== "item.completed") return assert.fail("expected item.completed");
+    assert.equal(mcp.payload.toolName, "get_issue");
+    assert.deepEqual(mcp.payload.toolCall, {
+      toolName: "get_issue",
+      server: "github",
+      arguments: { number: 7 },
+      resultText: "Issue 7",
+      images: [
+        {
+          source: "omitted",
+          mediaType: "image/png",
+          byteLength: 6,
+          reason: "Tool result images are not stored in the transcript yet.",
+        },
+      ],
+      structuredContent: { number: 7 },
+      success: true,
+      durationMs: 40,
+    });
+    assert.equal("result" in (mcp.payload.data as { item: object }).item, false);
+
+    const web = single(
+      map(
+        itemEvent("item/completed", {
+          type: "webSearch",
+          id: "web-1",
+          query: "effect schema",
+          action: { type: "findInPage", url: "https://effect.website", pattern: "Struct" },
+          results: null,
+        }),
+        mapperThreadId,
+      ),
+    );
+    if (web.type !== "item.completed") return assert.fail("expected item.completed");
+    assert.deepEqual(web.payload.webSearch, {
+      query: "effect schema",
+      action: { type: "find_in_page", url: "https://effect.website", pattern: "Struct" },
+    });
+
+    const output = map(
+      itemEvent("item/completed", {
+        type: "functionCallOutput",
+        id: "call-9",
+        name: "lookup",
+        namespace: null,
+        output: [{ type: "input_text", text: "done" }],
+      }),
+      mapperThreadId,
+    );
+    const merged = single(output);
+    if (merged.type !== "item.completed") return assert.fail("expected item.completed");
+    assert.equal(merged.itemId, "call-9");
+    assert.equal(merged.payload.itemType, "dynamic_tool_call");
+    assert.equal(merged.payload.toolCall?.resultText, "done");
+    assert.deepEqual(
+      map(
+        itemEvent("item/started", {
+          type: "functionCallOutput",
+          id: "call-9",
+          name: "lookup",
+          output: "",
+        }),
+        mapperThreadId,
+      ),
+      [],
+    );
+  });
+
+  it("dedupes skills and MCP startup notices per lifecycle generation", () => {
+    const map = makeCodexRuntimeEventMapper();
+    const skillsKey = (generation: string, tracker = new CodexTranscriptTracker()) => {
+      const event = single(
+        makeCodexRuntimeEventMapper(tracker)(
+          native("skills/changed", {}, { lifecycleGeneration: generation }),
+          mapperThreadId,
+        ),
+      );
+      return event.type === "transcript.notice" ? event.payload.dedupeKey : undefined;
+    };
+    assert.equal(skillsKey("gen-1"), skillsKey("gen-1"));
+    assert.notEqual(skillsKey("gen-1"), skillsKey("gen-2"));
+    const skills = native("skills/changed", {}, { lifecycleGeneration: "gen-3" });
+    assert.equal(map(skills, mapperThreadId).length, 1);
+    assert.deepEqual(map({ ...skills, id: asEventId("evt-skills-repeat") }, mapperThreadId), []);
+
+    const mcp = (name: string, status: string, error: string | null = null) =>
+      single(
+        map(
+          native(
+            "mcpServer/startupStatus/updated",
+            { threadId: null, name, status, error, failureReason: null },
+            { lifecycleGeneration: "gen-1" },
+          ),
+          mapperThreadId,
+        ),
+      );
+    assert.deepEqual(
+      map(
+        native("mcpServer/startupStatus/updated", { name: "a", status: "starting" }),
+        mapperThreadId,
+      ),
+      [],
+    );
+    mcp("alpha", "ready");
+    const ready = mcp("beta", "ready");
+    if (ready.type !== "transcript.notice") return assert.fail("expected notice");
+    assert.equal(ready.payload.title, "MCP servers ready: alpha, beta");
+    assert.equal(ready.payload.dedupeKey, "mcp:gen-1");
+    const failed = mcp("gamma", "failed", "spawn ENOENT");
+    if (failed.type !== "transcript.notice") return assert.fail("expected notice");
+    assert.equal(failed.payload.severity, "warning");
+    assert.equal(failed.payload.dedupeKey, "mcp:gen-1:gamma");
+    assert.equal(failed.payload.detail, "spawn ENOENT");
+  });
+
+  it("maps auto-approval reviews to one upserted notice", () => {
+    const map = makeCodexRuntimeEventMapper();
+    const action = { type: "command", source: "shell", command: "rm -rf build", cwd: "/repo" };
+    const started = single(
+      map(
+        native("item/autoApprovalReview/started", {
+          reviewId: "rev-1",
+          targetItemId: "cmd-1",
+          startedAtMs: 1,
+          review: { status: "inProgress" },
+          action,
+        }),
+        mapperThreadId,
+      ),
+    );
+    const denied = single(
+      map(
+        native("item/autoApprovalReview/completed", {
+          reviewId: "rev-1",
+          targetItemId: "cmd-1",
+          startedAtMs: 1,
+          completedAtMs: 2,
+          decisionSource: "agent",
+          review: { status: "denied", rationale: "Deletes the build output" },
+          action,
+        }),
+        mapperThreadId,
+      ),
+    );
+    if (started.type !== "transcript.notice" || denied.type !== "transcript.notice") {
+      return assert.fail("expected notices");
+    }
+    assert.equal(started.payload.title, "Reviewing rm -rf build");
+    assert.equal(started.payload.dedupeKey, denied.payload.dedupeKey);
+    assert.equal(denied.payload.severity, "warning");
+    assert.equal(denied.payload.title, "Denied rm -rf build");
+    assert.equal(denied.payload.detail, "Deletes the build output");
+  });
+
+  it("keeps one review-mode notice when the review spans turns", () => {
+    const map = makeCodexRuntimeEventMapper();
+    const entered = map(
+      itemEvent("item/completed", { type: "enteredReviewMode", id: "review-in", review: "main" }),
+      mapperThreadId,
+    ).find((event) => event.type === "transcript.notice");
+    const exited = map(
+      itemEvent(
+        "item/completed",
+        { type: "exitedReviewMode", id: "review-out", review: "Looks good" },
+        { turnId: asTurnId("turn-review-2") },
+      ),
+      mapperThreadId,
+    ).find((event) => event.type === "transcript.notice");
+    if (entered?.type !== "transcript.notice" || exited?.type !== "transcript.notice") {
+      return assert.fail("expected review notices");
+    }
+    assert.equal(entered.payload.title, "Started review: main");
+    assert.equal(exited.payload.status, "completed");
+    assert.equal(entered.payload.dedupeKey, exited.payload.dedupeKey);
+  });
+
+  it("maps warnings to capped, redacted provider-warning notices", () => {
+    const map = makeCodexRuntimeEventMapper();
+    const message = `token=abc123 ${"x".repeat(400)}`;
+    const warning = single(map(native("warning", { threadId: null, message }), mapperThreadId));
+    if (warning.type !== "transcript.notice") return assert.fail("expected notice");
+    assert.equal(warning.payload.noticeKind, "provider-warning");
+    assert.ok(warning.payload.title.length <= 200);
+    assert.equal(JSON.stringify(warning).includes("abc123"), false);
+    assert.deepEqual(warning.raw?.payload, { synaraSanitized: true });
+    assert.deepEqual(
+      map(native("turn/moderationMetadata", { metadata: { model: "x" } }), mapperThreadId),
+      [],
+    );
+  });
+
+  it("parses Codex reconnect progress into retry fields", () => {
+    const map = makeCodexRuntimeEventMapper();
+    const warning = single(
+      map(
+        native("error", {
+          error: { message: "Reconnecting... 2/5", codexErrorInfo: null, additionalDetails: null },
+          willRetry: true,
+        }),
+        mapperThreadId,
+      ),
+    );
+    if (warning.type !== "runtime.warning") return assert.fail("expected runtime.warning");
+    assert.equal(warning.payload.retryAttempt, 2);
+    assert.equal(warning.payload.retryMaxAttempts, 5);
+  });
+
+  it("refuses gated requests and ignored state notifications without events", () => {
+    const map = makeCodexRuntimeEventMapper();
+    for (const method of [
+      "item/tool/call",
+      "account/chatgptAuthTokens/refresh",
+      "attestation/generate",
+    ]) {
+      assert.deepEqual(
+        map(native(method, { callId: "c" }, { kind: "request" }), mapperThreadId),
+        [],
+      );
+    }
+    assert.deepEqual(
+      map(native("thread/goal/updated", { goal: { objective: "x" } }), mapperThreadId),
+      [],
+    );
+    assert.deepEqual(
+      map(native("item/reasoning/summaryPartAdded", { summaryIndex: 1 }), mapperThreadId),
+      [],
+    );
+  });
 });

@@ -15,10 +15,12 @@ import { ProjectionProjectRepositoryLive } from "./ProjectionProjects.ts";
 import { ProjectionThreadRepositoryLive } from "./ProjectionThreads.ts";
 import { ProjectionStateRepositoryLive } from "./ProjectionState.ts";
 import { ProjectionTurnRepositoryLive } from "./ProjectionTurns.ts";
+import { ProjectionThreadProposedPlanRepositoryLive } from "./ProjectionThreadProposedPlans.ts";
 import { ProjectionProjectRepository } from "../Services/ProjectionProjects.ts";
 import { ProjectionThreadRepository } from "../Services/ProjectionThreads.ts";
 import { ProjectionStateRepository } from "../Services/ProjectionState.ts";
 import { ProjectionTurnRepository } from "../Services/ProjectionTurns.ts";
+import { ProjectionThreadProposedPlanRepository } from "../Services/ProjectionThreadProposedPlans.ts";
 
 const projectionRepositoriesLayer = it.layer(
   Layer.mergeAll(
@@ -26,6 +28,7 @@ const projectionRepositoriesLayer = it.layer(
     ProjectionThreadRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
     ProjectionStateRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
     ProjectionTurnRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
+    ProjectionThreadProposedPlanRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
     SqlitePersistenceMemory,
   ),
 );
@@ -469,6 +472,31 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
           state: "running",
         },
       ]);
+    }),
+  );
+
+  it.effect("persists the partial flag of a proposed plan", () =>
+    Effect.gen(function* () {
+      const plans = yield* ProjectionThreadProposedPlanRepository;
+      const threadId = ThreadId.makeUnsafe("thread-partial-plan");
+      const row = {
+        planId: "plan-partial",
+        threadId,
+        turnId: TurnId.makeUnsafe("turn-partial"),
+        planMarkdown: "# Half a plan",
+        implementedAt: null,
+        implementationThreadId: null,
+        partial: 1,
+        createdAt: "2026-10-10T10:00:00.000Z",
+        updatedAt: "2026-10-10T10:00:01.000Z",
+      };
+      yield* plans.upsert(row);
+      assert.deepStrictEqual(yield* plans.listByThreadId({ threadId }), [row]);
+      const summary = yield* plans.getLatestSummaryByThreadId({ threadId, preferredTurnId: null });
+      assert.strictEqual(Option.getOrThrow(summary).partial, 1);
+
+      yield* plans.upsert({ ...row, partial: 0, updatedAt: "2026-10-10T10:00:02.000Z" });
+      assert.strictEqual((yield* plans.listByThreadId({ threadId }))[0]?.partial, 0);
     }),
   );
 });

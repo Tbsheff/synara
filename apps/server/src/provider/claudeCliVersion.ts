@@ -8,3 +8,12 @@ export function isClaudeAutoModeCliVersionSupported(version: string | null): boo
     version !== null && compareSemverVersions(version, MINIMUM_CLAUDE_AUTO_MODE_CLI_VERSION) >= 0
   );
 }
+
+export const MINIMUM_CLAUDE_THINKING_DISPLAY_CLI_VERSION = "2.1.259";
+
+export function isClaudeThinkingDisplayCliVersionSupported(version: string | null): boolean {
+  return (
+    version !== null &&
+    compareSemverVersions(version, MINIMUM_CLAUDE_THINKING_DISPLAY_CLI_VERSION) >= 0
+  );
+}

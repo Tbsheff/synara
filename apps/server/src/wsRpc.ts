@@ -14,7 +14,9 @@ import {
   ThreadId,
   WS_BOOTSTRAP_METHOD,
   WS_BOOTSTRAP_PATH,
+  WS_COMPATIBILITY_QUERY,
   WS_FEATURE_PATH,
+  WS_THREAD_LIVE_ITEMS_MIN_REVISION,
   WS_NEGOTIATE_HTTP_PATH,
   WS_METHODS,
   WsBootstrapRpcGroup,
@@ -42,6 +44,7 @@ import {
   type OrchestrationThreadDetailSnapshot,
   type OrchestrationThreadStreamItem,
   type ServerConfigStreamEvent,
+  type ThreadLiveUpdate,
   type ServerDiagnosticsResult,
   type ServerLifecycleStreamEvent,
   type ServerSettings,
@@ -158,6 +161,11 @@ import {
   OrchestrationCommandPreviouslyRejectedError,
 } from "./orchestration/Errors";
 import { makeDispatchCommandNormalizer } from "./orchestration/dispatchCommandNormalization";
+import {
+  coalescedLiveToolOutputStream,
+  LiveToolOutputHub,
+  type LiveToolOutputHubShape,
+} from "./orchestration/liveToolOutput";
 import { sanitizeOrchestrationEventProviderOptions } from "./orchestration/providerOptionsSecurity";
 import { prepareQuitResume } from "./orchestration/quitResume";
 import { makeImportThreadHandler } from "./orchestration/importThreadRoute";
@@ -268,6 +276,116 @@ class WsRequestAdmissionMiddleware extends RpcMiddleware.Service<WsRequestAdmiss
 // Optional device, computer, and project-agent link groups are served on the
 // same socket: one connection, one admission middleware, one exhaustive
 // handler map.
+export const WS_NEGOTIATED_REVISION_HEADER = "x-synara-negotiated-protocol-revision";
+
+export function negotiatedRevisionFromHeaders(headers: Headers.Headers): number {
+  const revision = Number(Headers.get(headers, WS_NEGOTIATED_REVISION_HEADER) ?? Number.NaN);
+  return Number.isSafeInteger(revision) ? revision : 0;
+}
+
+export type ThreadStreamOutput = OrchestrationThreadStreamItem | { readonly kind: "resumed" };
+
+const isClientThreadStreamItem = (
+  item: ThreadStreamOutput,
+): item is OrchestrationThreadStreamItem => item.kind !== "resumed";
+
+type ThreadOrLiveItem =
+  | { readonly source: "thread"; readonly item: ThreadStreamOutput }
+  | { readonly source: "live"; readonly live: ThreadLiveUpdate };
+
+interface LiveGateState {
+  readonly threadItemSeen: boolean;
+  readonly heldLive: ReadonlyMap<string, ThreadLiveUpdate>;
+}
+
+function gateLiveUntilFirstThreadItem(
+  state: LiveGateState,
+  next: ThreadOrLiveItem,
+): readonly [LiveGateState, ReadonlyArray<OrchestrationThreadStreamItem>] {
+  if (next.source === "thread") {
+    const released = state.threadItemSeen
+      ? []
+      : [...state.heldLive.values()].map(
+          (live): OrchestrationThreadStreamItem => ({ kind: "live", live }),
+        );
+    return [
+      { threadItemSeen: true, heldLive: new Map() },
+      isClientThreadStreamItem(next.item) ? [next.item, ...released] : released,
+    ];
+  }
+  if (state.threadItemSeen) {
+    return [state, [{ kind: "live", live: next.live }]];
+  }
+  const heldLive = new Map(state.heldLive);
+  heldLive.delete(next.live.itemId);
+  heldLive.set(next.live.itemId, next.live);
+  return [{ threadItemSeen: false, heldLive }, []];
+}
+
+export function withoutResumedMarker<E, R>(
+  items: Stream.Stream<ThreadStreamOutput, E, R>,
+): Stream.Stream<OrchestrationThreadStreamItem, E, R> {
+  return items.pipe(Stream.filter(isClientThreadStreamItem));
+}
+
+export function withLiveToolOutputItems<E, R>(
+  items: Stream.Stream<ThreadStreamOutput, E, R>,
+  hub: LiveToolOutputHubShape,
+  threadId: ThreadId,
+): Stream.Stream<OrchestrationThreadStreamItem, E, R> {
+  return Stream.merge(
+    items.pipe(Stream.map((item): ThreadOrLiveItem => ({ source: "thread", item }))),
+    coalescedLiveToolOutputStream(hub, threadId).pipe(
+      Stream.map((live): ThreadOrLiveItem => ({ source: "live", live })),
+    ),
+    { haltStrategy: "left" },
+  ).pipe(
+    Stream.mapAccum(
+      (): LiveGateState => ({ threadItemSeen: false, heldLive: new Map() }),
+      gateLiveUntilFirstThreadItem,
+    ),
+  );
+}
+
+export interface ThreadDetailStreamSnapshot {
+  readonly detail: Option.Option<OrchestrationThreadDetailSnapshot>;
+  readonly snapshotSequence: number;
+}
+
+export function makeThreadDetailStream(
+  threadId: ThreadId,
+  options: Omit<
+    Parameters<typeof makeCursorSafeSnapshotLiveStream<ThreadDetailStreamSnapshot, WsRpcError>>[0],
+    "markResumed"
+  >,
+): Stream.Stream<ThreadStreamOutput, WsRpcError> {
+  return makeCursorSafeSnapshotLiveStream({
+    ...options,
+    markResumed: true,
+  }).pipe(
+    Stream.flatMap((item): Stream.Stream<ThreadStreamOutput, WsRpcError> => {
+      if (item.kind === "event") {
+        return Stream.succeed({ kind: "event", event: item.event });
+      }
+      if (item.kind === "replay") {
+        return Stream.succeed({ kind: "replay", events: item.events });
+      }
+      if (item.kind === "resumed") {
+        return Stream.succeed({ kind: "resumed" });
+      }
+      return Option.isSome(item.snapshot.detail)
+        ? Stream.succeed({ kind: "snapshot", snapshot: item.snapshot.detail.value })
+        : Stream.fail(
+            new WsRpcError({
+              message: `Thread detail snapshot not found for thread ${threadId}.`,
+              code: "THREAD_SNAPSHOT_NOT_FOUND",
+              retryable: false,
+            }),
+          );
+    }),
+  );
+}
+
 const AdmittedWsFeatureRpcGroup = WsFeatureRpcGroup.merge(WsDeviceRpcGroup)
   .merge(WsComputerRpcGroup)
   .merge(WsProjectAgentRpcGroup)
@@ -613,6 +731,15 @@ const makeWsRpcHandlersLayer = () =>
               ),
             ),
       });
+      const liveToolOutputHub = yield* LiveToolOutputHub;
+      const withNegotiatedLiveItems = <E, R>(
+        negotiatedRevision: number,
+        threadId: ThreadId,
+        items: Stream.Stream<ThreadStreamOutput, E, R>,
+      ): Stream.Stream<OrchestrationThreadStreamItem, E, R> =>
+        negotiatedRevision >= WS_THREAD_LIVE_ITEMS_MIN_REVISION
+          ? withLiveToolOutputItems(items, liveToolOutputHub, threadId)
+          : withoutResumedMarker(items);
       const trackSidechatVisibility =
         (threadId: ThreadId) =>
         <A, E, R>(stream: Stream.Stream<A, E, R>): Stream.Stream<A, E, R> =>
@@ -1527,121 +1654,82 @@ const makeWsRpcHandlersLayer = () =>
             ),
           ),
         [ORCHESTRATION_WS_METHODS.unsubscribeShell]: () => Effect.void,
-        [ORCHESTRATION_WS_METHODS.subscribeThread]: (input, { clientId }) =>
+        [ORCHESTRATION_WS_METHODS.subscribeThread]: (input, { clientId, headers }) =>
           streamAdmission.guard(
             clientId,
             {
               key: `orchestration.thread:${input.threadId}`,
               threadId: input.threadId,
             },
-            makeCursorSafeSnapshotLiveStream({
-              // Keyed per subscriber: concurrent clients hitting the same
-              // stale fence are independent first offenses, not one chain.
-              resnapshotEscalation: {
-                streamKey: `${clientId}:orchestration.thread:${input.threadId}`,
-                tracker: resnapshotEscalationTracker,
-              },
-              // Cursor resume: a client holding cached detail replays only the
-              // gap. Out-of-range cursors (negative or overflowing gap) fall
-              // back to the snapshot inside the stream factory.
-              resumeFromSequence: input.afterSequence,
-              // Opted-in clients get the whole gap as one item and apply it in a
-              // single store update, so a stale cached turn does not replay its
-              // intermediate states on screen.
-              batchReplay: input.batchReplay,
-              // A hard-purged thread leaves no rows to replay while the journal
-              // head stays above the cursor, so the gap check alone would
-              // accept the resume and stream nothing. Falling through to the
-              // snapshot path surfaces THREAD_SNAPSHOT_NOT_FOUND instead.
-              // The shell read shares the detail loader's active-thread
-              // predicate but skips hydrating and validating the transcript,
-              // which the resume path would discard for a boolean anyway.
-              resumeSubjectExists: projectionReadModelQuery.getThreadShellById(input.threadId).pipe(
-                Effect.map(Option.isSome),
-                Effect.mapError((cause) =>
-                  toWsRpcError(cause, "Failed to verify thread before cursor resume"),
-                ),
-              ),
-              onResnapshotRequired: (report) =>
-                recordThreadResnapshotRequired(input.threadId, report),
-              subscribeLive: orchestrationEngine.subscribeDomainEvents.pipe(
-                Effect.map((stream) =>
-                  stream.pipe(
-                    Stream.filter((event) => isThreadDetailEventFor(event, input.threadId)),
-                    Stream.map(sanitizeOrchestrationEventProviderOptions),
-                  ),
-                ),
-              ),
-              liveBufferOptions: {
-                label: "orchestration.thread-detail",
-                onDroppedEvents: (report) => recordThreadStreamOverflow(input.threadId, report),
-              },
-              snapshot: loadThreadDetailSnapshotWithBootstrapWait(input.threadId).pipe(
-                Effect.flatMap(
-                  Option.match({
-                    onNone: () =>
-                      projectionReadModelQuery.getSnapshotSequence().pipe(
-                        Effect.map(({ snapshotSequence }) => ({
-                          detail: Option.none<OrchestrationThreadDetailSnapshot>(),
-                          snapshotSequence,
-                        })),
-                      ),
-                    onSome: (detail) =>
-                      Effect.succeed({
-                        detail: Option.some(detail),
-                        snapshotSequence: detail.snapshotSequence,
-                      }),
-                  }),
-                ),
-                Effect.mapError((cause) => toWsRpcError(cause, "Failed to load thread snapshot")),
-              ),
-              snapshotSequence: (snapshot) => snapshot.snapshotSequence,
-              getHighWaterSequence: getOrchestrationHighWaterSequence,
-              replay: (fromSequenceExclusive, throughSequenceInclusive) =>
-                orchestrationEngine
-                  .readThreadEventsThrough(
-                    input.threadId,
-                    fromSequenceExclusive,
-                    throughSequenceInclusive,
-                    THREAD_DETAIL_EVENT_TYPES,
-                  )
+            withNegotiatedLiveItems(
+              negotiatedRevisionFromHeaders(headers),
+              input.threadId,
+              makeThreadDetailStream(input.threadId, {
+                resnapshotEscalation: {
+                  streamKey: `${clientId}:orchestration.thread:${input.threadId}`,
+                  tracker: resnapshotEscalationTracker,
+                },
+                resumeFromSequence: input.afterSequence,
+                batchReplay: input.batchReplay,
+                resumeSubjectExists: projectionReadModelQuery
+                  .getThreadShellById(input.threadId)
                   .pipe(
-                    Stream.filter((event) => isThreadDetailEventFor(event, input.threadId)),
-                    Stream.map(sanitizeOrchestrationEventProviderOptions),
-                    Stream.mapError((cause) =>
-                      toWsRpcError(cause, "Failed to replay thread events"),
+                    Effect.map(Option.isSome),
+                    Effect.mapError((cause) =>
+                      toWsRpcError(cause, "Failed to verify thread before cursor resume"),
                     ),
                   ),
-            }).pipe(
-              Stream.flatMap((item) => {
-                if (item.kind === "event") {
-                  return Stream.succeed<OrchestrationThreadStreamItem>({
-                    kind: "event",
-                    event: item.event,
-                  });
-                }
-                if (item.kind === "replay") {
-                  return Stream.succeed<OrchestrationThreadStreamItem>({
-                    kind: "replay",
-                    events: item.events,
-                  });
-                }
-                // A silently empty snapshot would leave the client waiting forever
-                // for thread history; fail identifiably so it can surface the state.
-                return Option.isSome(item.snapshot.detail)
-                  ? Stream.succeed<OrchestrationThreadStreamItem>({
-                      kind: "snapshot",
-                      snapshot: item.snapshot.detail.value,
-                    })
-                  : Stream.fail(
-                      new WsRpcError({
-                        message: `Thread detail snapshot not found for thread ${input.threadId}.`,
-                        code: "THREAD_SNAPSHOT_NOT_FOUND",
-                        retryable: false,
-                      }),
-                    );
-              }),
-              trackSidechatVisibility(input.threadId),
+                onResnapshotRequired: (report) =>
+                  recordThreadResnapshotRequired(input.threadId, report),
+                subscribeLive: orchestrationEngine.subscribeDomainEvents.pipe(
+                  Effect.map((stream) =>
+                    stream.pipe(
+                      Stream.filter((event) => isThreadDetailEventFor(event, input.threadId)),
+                      Stream.map(sanitizeOrchestrationEventProviderOptions),
+                    ),
+                  ),
+                ),
+                liveBufferOptions: {
+                  label: "orchestration.thread-detail",
+                  onDroppedEvents: (report) => recordThreadStreamOverflow(input.threadId, report),
+                },
+                snapshot: loadThreadDetailSnapshotWithBootstrapWait(input.threadId).pipe(
+                  Effect.flatMap(
+                    Option.match({
+                      onNone: () =>
+                        projectionReadModelQuery.getSnapshotSequence().pipe(
+                          Effect.map(({ snapshotSequence }) => ({
+                            detail: Option.none<OrchestrationThreadDetailSnapshot>(),
+                            snapshotSequence,
+                          })),
+                        ),
+                      onSome: (detail) =>
+                        Effect.succeed({
+                          detail: Option.some(detail),
+                          snapshotSequence: detail.snapshotSequence,
+                        }),
+                    }),
+                  ),
+                  Effect.mapError((cause) => toWsRpcError(cause, "Failed to load thread snapshot")),
+                ),
+                snapshotSequence: (snapshot) => snapshot.snapshotSequence,
+                getHighWaterSequence: getOrchestrationHighWaterSequence,
+                replay: (fromSequenceExclusive, throughSequenceInclusive) =>
+                  orchestrationEngine
+                    .readThreadEventsThrough(
+                      input.threadId,
+                      fromSequenceExclusive,
+                      throughSequenceInclusive,
+                      THREAD_DETAIL_EVENT_TYPES,
+                    )
+                    .pipe(
+                      Stream.filter((event) => isThreadDetailEventFor(event, input.threadId)),
+                      Stream.map(sanitizeOrchestrationEventProviderOptions),
+                      Stream.mapError((cause) =>
+                        toWsRpcError(cause, "Failed to replay thread events"),
+                      ),
+                    ),
+              }).pipe(trackSidechatVisibility(input.threadId)),
             ),
           ),
         [ORCHESTRATION_WS_METHODS.unsubscribeThread]: () => Effect.void,
@@ -3277,6 +3365,7 @@ export function makeWebsocketRpcRouteLayer<R>(
       const runWithConnectionSession = (
         request: HttpServerRequest.HttpServerRequest,
         session: WsConnectionSession,
+        negotiatedRevision: string,
       ) =>
         Effect.gen(function* () {
           const sessionKey = yield* connectionSessions.register(session);
@@ -3284,7 +3373,11 @@ export function makeWebsocketRpcRouteLayer<R>(
             Effect.provideService(
               HttpServerRequest.HttpServerRequest,
               request.modify({
-                headers: Headers.set(request.headers, WS_CONNECTION_SESSION_HEADER, sessionKey),
+                headers: Headers.set(
+                  Headers.set(request.headers, WS_CONNECTION_SESSION_HEADER, sessionKey),
+                  WS_NEGOTIATED_REVISION_HEADER,
+                  negotiatedRevision,
+                ),
               }),
             ),
           );
@@ -3308,6 +3401,8 @@ export function makeWebsocketRpcRouteLayer<R>(
               headers: { "Cache-Control": "no-store" },
             });
           }
+          const negotiatedRevision =
+            url.searchParams.get(WS_COMPATIBILITY_QUERY.protocolRevision) ?? "";
           const legacyToken = url.searchParams.get("token");
           const authenticatedSession = yield* authenticateRpcWebSocketUpgrade({
             config,
@@ -3317,18 +3412,26 @@ export function makeWebsocketRpcRouteLayer<R>(
           });
 
           if (!authenticatedSession) {
-            return yield* runWithConnectionSession(request, {
-              role: "owner",
-              attachmentPrincipal: LOCAL_LOOPBACK_ATTACHMENT_PRINCIPAL,
-            });
+            return yield* runWithConnectionSession(
+              request,
+              {
+                role: "owner",
+                attachmentPrincipal: LOCAL_LOOPBACK_ATTACHMENT_PRINCIPAL,
+              },
+              negotiatedRevision,
+            );
           }
 
           return yield* sessions.runAuthenticatedConnection(
             authenticatedSession.sessionId,
-            runWithConnectionSession(request, {
-              role: authenticatedSession.role,
-              attachmentPrincipal: attachmentPrincipalForSession(authenticatedSession.sessionId),
-            }),
+            runWithConnectionSession(
+              request,
+              {
+                role: authenticatedSession.role,
+                attachmentPrincipal: attachmentPrincipalForSession(authenticatedSession.sessionId),
+              },
+              negotiatedRevision,
+            ),
           );
         }).pipe(
           Effect.catchTags({

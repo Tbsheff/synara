@@ -104,6 +104,10 @@ function toTurnId(value: string | undefined): TurnId | null {
   return value === undefined ? null : TurnId.makeUnsafe(String(value));
 }
 
+function isNativeChildRuntimeEvent(event: ProviderRuntimeEvent): boolean {
+  return (event.providerRefs?.providerParentThreadId?.trim() ?? "").length > 0;
+}
+
 function sameId(left: string | null | undefined, right: string | null | undefined): boolean {
   if (left === null || left === undefined || right === null || right === undefined) {
     return false;
@@ -183,6 +187,30 @@ const make = Effect.gen(function* () {
   // repo mid-turn, so the completion capture finds no turn-start baseline. That
   // is expected for such turns and must not surface as a capture failure.
   const turnsStartedWithoutGitWorkspace = new Map<ThreadId, TurnId>();
+  const turnsWithoutPreDispatchOwner = new Map<ThreadId, TurnId>();
+  const providerOriginTurnsByThread = new Map<ThreadId, Set<TurnId>>();
+  const isProviderOriginTurn = (threadId: ThreadId, turnId: TurnId) =>
+    providerOriginTurnsByThread.get(threadId)?.has(turnId) === true;
+  const forgetProviderOriginTurn = (threadId: ThreadId, turnId: TurnId) =>
+    Effect.sync(() => {
+      const turns = providerOriginTurnsByThread.get(threadId);
+      if (!turns) return;
+      turns.delete(turnId);
+      if (turns.size === 0) providerOriginTurnsByThread.delete(threadId);
+    });
+  const releaseCompletedProviderOriginTurn = (event: ProviderRuntimeEvent) =>
+    Effect.suspend(() => {
+      const turnId = toTurnId(event.turnId);
+      return turnId ? forgetProviderOriginTurn(event.threadId, turnId) : Effect.void;
+    });
+  const forgetDeletedThread = (event: OrchestrationEvent) => {
+    if (event.type !== "thread.deleted") return;
+    const threadId = ThreadId.makeUnsafe(event.aggregateId);
+    providerOriginTurnsByThread.delete(threadId);
+    pendingMessageStartByThread.delete(threadId);
+    turnsStartedWithoutGitWorkspace.delete(threadId);
+    turnsWithoutPreDispatchOwner.delete(threadId);
+  };
 
   // Providers that stream their own unified diff (e.g. Codex) update the live
   // turn diff through ProviderRuntimeIngestion. For providers without that
@@ -578,6 +606,7 @@ const make = Effect.gen(function* () {
     // The workspace only became a git repository while this turn ran, so no
     // turn-start baseline could have been captured.
     readonly workspaceInitializedDuringTurn: boolean;
+    readonly startedWithoutPreDispatchOwner?: boolean;
   }) {
     const fromCheckpointRef = checkpointRefForThreadTurnStart(input.threadId, input.turnId);
     const targetCheckpointRef = checkpointRefForThreadTurn(input.threadId, input.turnCount);
@@ -600,6 +629,15 @@ const make = Effect.gen(function* () {
       if (input.workspaceInitializedDuringTurn) {
         yield* Effect.logDebug(
           "checkpoint capture has no pre-turn baseline: workspace became a git repository during the turn",
+          {
+            threadId: input.threadId,
+            turnId: input.turnId,
+            checkpointRef: fromCheckpointRef,
+          },
+        );
+      } else if (input.startedWithoutPreDispatchOwner) {
+        yield* Effect.logDebug(
+          "checkpoint capture has no pre-turn baseline: provider started the turn without a Synara dispatch",
           {
             threadId: input.threadId,
             turnId: input.turnId,
@@ -654,7 +692,7 @@ const make = Effect.gen(function* () {
               }).pipe(Effect.as([])),
             ),
           )
-      : input.workspaceInitializedDuringTurn
+      : input.workspaceInitializedDuringTurn || input.startedWithoutPreDispatchOwner
         ? []
         : yield* appendCheckpointIssueActivity({
             threadId: input.threadId,
@@ -777,6 +815,7 @@ const make = Effect.gen(function* () {
     ) {
       return true;
     }
+    if (isProviderOriginTurn(input.threadId, input.turnId)) return false;
     const persistedTurn = yield* projectionTurnRepository.getByTurnId({
       threadId: input.threadId,
       turnId: input.turnId,
@@ -884,6 +923,8 @@ const make = Effect.gen(function* () {
     const workspaceInitializedDuringTurn =
       turnsStartedWithoutGitWorkspace.get(thread.id) === turnId;
     turnsStartedWithoutGitWorkspace.delete(thread.id);
+    const startedWithoutPreDispatchOwner = turnsWithoutPreDispatchOwner.get(thread.id) === turnId;
+    turnsWithoutPreDispatchOwner.delete(thread.id);
 
     yield* captureAndDispatchCheckpoint({
       threadId: thread.id,
@@ -895,6 +936,7 @@ const make = Effect.gen(function* () {
       assistantMessageId: undefined,
       createdAt: event.createdAt,
       workspaceInitializedDuringTurn,
+      startedWithoutPreDispatchOwner,
       commandId,
     });
   });
@@ -1080,16 +1122,31 @@ const make = Effect.gen(function* () {
     turnsStartedWithoutGitWorkspace.delete(thread.id);
     const checkpointCwd = workspace.cwd;
 
-    const pendingTurnStart = yield* projectionTurnRepository.getPendingTurnStartByThreadId({
-      threadId: thread.id,
-    });
-    const messageId =
-      pendingMessageStartByThread.get(thread.id) ??
-      Option.match(pendingTurnStart, {
-        onNone: () => undefined,
-        onSome: (pending) => pending.messageId,
-      });
+    const providerOrigin = event.payload.origin === "provider";
+    if (providerOrigin) {
+      const turns = providerOriginTurnsByThread.get(thread.id) ?? new Set<TurnId>();
+      turns.add(turnId);
+      providerOriginTurnsByThread.set(thread.id, turns);
+    }
+    const messageId = providerOrigin
+      ? undefined
+      : (pendingMessageStartByThread.get(thread.id) ??
+        Option.match(
+          yield* projectionTurnRepository.getPendingTurnStartByThreadId({
+            threadId: thread.id,
+          }),
+          {
+            onNone: () => undefined,
+            onSome: (pending) => pending.messageId,
+          },
+        ));
     const turnStartCheckpointRef = checkpointRefForThreadTurnStart(thread.id, turnId);
+    const providerOwnedTurn = providerOrigin || messageId === undefined;
+    if (providerOwnedTurn) {
+      turnsWithoutPreDispatchOwner.set(thread.id, turnId);
+    } else {
+      turnsWithoutPreDispatchOwner.delete(thread.id);
+    }
     const hasTurnStartBaseline = yield* aliasTurnStartBaseline({
       cwd: checkpointCwd,
       threadId: thread.id,
@@ -1097,13 +1154,16 @@ const make = Effect.gen(function* () {
       ...(messageId !== undefined ? { pendingMessageId: messageId } : {}),
     });
     if (!hasTurnStartBaseline) {
-      yield* Effect.logWarning("checkpoint turn start baseline alias missing message baseline", {
-        threadId: thread.id,
-        turnId,
-        messageId,
-      });
+      yield* (providerOwnedTurn ? Effect.logDebug : Effect.logWarning)(
+        "checkpoint turn start baseline alias missing message baseline",
+        {
+          threadId: thread.id,
+          turnId,
+          messageId,
+        },
+      );
     }
-    pendingMessageStartByThread.delete(thread.id);
+    if (!providerOrigin) pendingMessageStartByThread.delete(thread.id);
     // Once turn.started is observable, the provider may already have edited.
     // Missing refs stay missing; only pre-dispatch owners may snapshot a baseline.
     if (!hasTurnStartBaseline) return;
@@ -1733,6 +1793,9 @@ const make = Effect.gen(function* () {
   });
 
   const processRuntimeEvent = Effect.fnUntraced(function* (event: ProviderRuntimeEvent) {
+    if (isNativeChildRuntimeEvent(event)) {
+      return;
+    }
     if (event.type === "turn.started") {
       yield* ensurePreTurnBaselineFromTurnStart(event);
       return;
@@ -1754,6 +1817,7 @@ const make = Effect.gen(function* () {
             createdAt: new Date().toISOString(),
           }).pipe(Effect.catch(() => Effect.void)),
         ),
+        Effect.ensuring(releaseCompletedProviderOriginTurn(event)),
       );
       return;
     }
@@ -1827,9 +1891,10 @@ const make = Effect.gen(function* () {
   const changedWorkspaceThreads = new Set<string>();
   const changedSessionThreads = new Set<string>();
   const runtimeRelevant = (event: ProviderRuntimeEvent) =>
-    event.type === "turn.started" ||
-    event.type === "turn.completed" ||
-    (event.type === "item.completed" && event.payload.itemType === "file_change");
+    !isNativeChildRuntimeEvent(event) &&
+    (event.type === "turn.started" ||
+      event.type === "turn.completed" ||
+      (event.type === "item.completed" && event.payload.itemType === "file_change"));
   const domainRelevant = (event: OrchestrationEvent) =>
     (event.sequence > startupDomainFence && event.type === "thread.turn-start-requested") ||
     event.type === "thread.checkpoint-revert-requested" ||
@@ -2092,7 +2157,7 @@ const make = Effect.gen(function* () {
     if (completed.length !== 1)
       return yield* Effect.die(new Error("Checkpoint revert lost durable delivery ownership"));
   });
-  const processNativeCompletion = Effect.fnUntraced(function* (
+  const captureNativeCompletion = Effect.fnUntraced(function* (
     sequence: number,
     event: Extract<ProviderRuntimeEvent, { type: "turn.completed" }>,
   ) {
@@ -2225,6 +2290,13 @@ const make = Effect.gen(function* () {
         return yield* Effect.die(new Error("Native checkpoint lost durable delivery ownership"));
     }
   });
+  const processNativeCompletion = (
+    sequence: number,
+    event: Extract<ProviderRuntimeEvent, { type: "turn.completed" }>,
+  ) =>
+    captureNativeCompletion(sequence, event).pipe(
+      Effect.ensuring(releaseCompletedProviderOriginTurn(event)),
+    );
   const failSource = (cause: Cause.Cause<unknown>) =>
     Cause.hasInterruptsOnly(cause) && stopping
       ? Effect.void
@@ -2409,7 +2481,13 @@ const make = Effect.gen(function* () {
           ),
         });
       }
-    });
+    }).pipe(
+      Effect.ensuring(
+        source === "runtime" && event.type === "turn.completed"
+          ? releaseCompletedProviderOriginTurn(event)
+          : Effect.void,
+      ),
+    );
   const recoverUnavailableWorkspace = (pending: UnavailableWorkspace) =>
     Effect.gen(function* () {
       // Read-only retries may discover the identity for future inputs. Peers can
@@ -3037,6 +3115,7 @@ const make = Effect.gen(function* () {
       Stream.runForEach(domainEvents, (event) =>
         Effect.sync(() => {
           observeWorkspaceConfiguration(event);
+          forgetDeletedThread(event);
           domainFence = Math.max(domainFence, event.sequence);
           Queue.offerUnsafe(wake, undefined);
         }),
@@ -3080,7 +3159,12 @@ const make = Effect.gen(function* () {
     // Recovery proceeds in workspace lanes. Starting the observer never waits
     // for another workspace's Git operation or its admission reservation.
   });
-  return { start, drain } satisfies CheckpointReactorShape;
+  return {
+    start,
+    drain,
+    providerOriginTurnCount: (threadId) =>
+      Effect.sync(() => providerOriginTurnsByThread.get(threadId)?.size ?? 0),
+  } satisfies CheckpointReactorShape;
 });
 
 export const CheckpointReactorLive = Layer.effect(CheckpointReactor, make).pipe(

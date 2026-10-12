@@ -1,3 +1,8 @@
+import {
+  LiveToolOutputHub,
+  type LiveToolOutputHubShape,
+  makeLiveToolOutputHub,
+} from "../liveToolOutput.ts";
 import { ProjectionPendingInteractionRepositoryLive } from "../../persistence/Layers/ProjectionPendingInteractions.ts";
 import { ProjectionPendingInteractionRepository } from "../../persistence/Services/ProjectionPendingInteractions.ts";
 import fs from "node:fs";
@@ -386,9 +391,11 @@ describe("ProviderRuntimeIngestion", () => {
     readonly startIngestion?: boolean;
     readonly persistedStream?: boolean;
     readonly computerManager?: ComputerManager;
+    readonly liveToolOutputHub?: LiveToolOutputHubShape;
+    readonly gitWorkspace?: boolean;
   }) {
     const workspaceRoot = makeTempDir("synara-provider-project-");
-    fs.mkdirSync(path.join(workspaceRoot, ".git"));
+    if (options?.gitWorkspace !== false) fs.mkdirSync(path.join(workspaceRoot, ".git"));
     const provider = createProviderServiceHarness(
       options?.persistedStream === true ? { persistedStream: true } : undefined,
     );
@@ -402,6 +409,11 @@ describe("ProviderRuntimeIngestion", () => {
       Layer.provideMerge(SqlitePersistenceMemory),
     );
     const layer = ProviderRuntimeIngestionLive.pipe(
+      Layer.provideMerge(
+        options?.liveToolOutputHub
+          ? Layer.succeed(LiveToolOutputHub, options.liveToolOutputHub)
+          : Layer.empty,
+      ),
       Layer.provideMerge(
         options?.computerManager
           ? Layer.succeed(ComputerService, {
@@ -3865,7 +3877,9 @@ describe("ProviderRuntimeIngestion", () => {
     const stableActivityId = "provider-reasoning:thread-1:antigravity-reasoning-1";
     const thread = await waitForThread(harness.engine, (entry) =>
       entry.activities.some(
-        (activity: ProviderRuntimeTestActivity) => activity.id === stableActivityId,
+        (activity: ProviderRuntimeTestActivity) =>
+          activity.id === stableActivityId &&
+          (activity.payload as { status?: unknown } | undefined)?.status === "completed",
       ),
     );
 
@@ -4009,7 +4023,9 @@ describe("ProviderRuntimeIngestion", () => {
         (entry) =>
           (type !== "turn.completed" || publishedActivities.length >= 2) &&
           entry.activities.some(
-            (activity: ProviderRuntimeTestActivity) => activity.id === stableActivityId,
+            (activity: ProviderRuntimeTestActivity) =>
+              activity.id === stableActivityId &&
+              (activity.payload as { status?: string }).status === "failed",
           ),
       );
 
@@ -4029,7 +4045,7 @@ describe("ProviderRuntimeIngestion", () => {
           publishedActivities.filter(
             (id) => id === stableActivityId || id === "evt-aborted-reasoning-terminal",
           ),
-        ).toEqual([stableActivityId, "evt-aborted-reasoning-terminal"]);
+        ).toEqual([stableActivityId, stableActivityId, "evt-aborted-reasoning-terminal"]);
       }
     },
   );
@@ -4744,7 +4760,8 @@ describe("ProviderRuntimeIngestion", () => {
     const thread = await waitForThread(harness.engine, (entry) =>
       entry.proposedPlans.some(
         (proposedPlan: ProviderRuntimeTestProposedPlan) =>
-          proposedPlan.id === "plan:thread-1:turn:turn-plan-buffer",
+          proposedPlan.id === "plan:thread-1:turn:turn-plan-buffer" &&
+          proposedPlan.planMarkdown.endsWith("- second"),
       ),
     );
     const proposedPlan = thread.proposedPlans.find(
@@ -4752,6 +4769,75 @@ describe("ProviderRuntimeIngestion", () => {
         entry.id === "plan:thread-1:turn:turn-plan-buffer",
     );
     expect(proposedPlan?.planMarkdown).toBe("## Buffered plan\n\n- first\n- second");
+    expect(proposedPlan?.partial).toBeUndefined();
+  });
+
+  it("keeps a streamed plan preview partial when its turn is interrupted", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    const turnId = asTurnId("turn-plan-interrupted");
+    const planId = "plan:thread-1:turn:turn-plan-interrupted";
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-turn-started-plan-interrupted"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId,
+    });
+    await waitForThread(
+      harness.engine,
+      (thread) => thread.session?.status === "running" && thread.session?.activeTurnId === turnId,
+    );
+
+    harness.emit({
+      type: "turn.proposed.delta",
+      eventId: asEventId("evt-plan-interrupted-delta"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId,
+      payload: { delta: "## Half a plan\n\n- first" },
+    });
+    const previewThread = await waitForThread(harness.engine, (entry) =>
+      entry.proposedPlans.some((plan: ProviderRuntimeTestProposedPlan) => plan.id === planId),
+    );
+    expect(
+      previewThread.proposedPlans.find(
+        (plan: ProviderRuntimeTestProposedPlan) => plan.id === planId,
+      )?.partial,
+    ).toBe(true);
+
+    harness.emit({
+      type: "turn.proposed.delta",
+      eventId: asEventId("evt-plan-interrupted-delta-2"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId,
+      payload: { delta: "\n- second" },
+    });
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-turn-completed-plan-interrupted"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId,
+      payload: { state: "interrupted" },
+    });
+
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.proposedPlans.some(
+        (plan: ProviderRuntimeTestProposedPlan) =>
+          plan.id === planId && plan.planMarkdown.endsWith("- second"),
+      ),
+    );
+    expect(
+      thread.proposedPlans.find((plan: ProviderRuntimeTestProposedPlan) => plan.id === planId)
+        ?.partial,
+    ).toBe(true);
   });
 
   it("ignores whitespace-only assistant deltas on completion in buffered delivery", async () => {
@@ -6631,6 +6717,892 @@ describe("ProviderRuntimeIngestion", () => {
     expect(String(rawOutput.stdout ?? "").length).toBeLessThan(3_000);
   });
 
+  it("streams command output live without persisting a row per delta and persists the final tail once", async () => {
+    const hub = makeLiveToolOutputHub({ minIntervalMs: 0 });
+    const liveUpdates: string[] = [];
+    hub.subscribe(asThreadId("thread-1"), (update) => {
+      liveUpdates.push(update.kind === "tool-output" ? update.tail : `cleared:${update.itemId}`);
+    });
+    const harness = await createHarness({ liveToolOutputHub: hub });
+    const now = new Date().toISOString();
+    harness.emit({
+      type: "item.started",
+      eventId: asEventId("evt-live-command-started"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-live-output"),
+      itemId: asItemId("item-live-output"),
+      payload: {
+        itemType: "command_execution",
+        status: "inProgress",
+        title: "Ran command",
+        command: { command: "bun run test" },
+      },
+    });
+    await waitForThread(harness.engine, (entry) =>
+      entry.activities.some((activity) => activity.id === "evt-live-command-started"),
+    );
+    const activityCountBefore = (await harness.readProjectedThread())!.activities.length;
+    for (let index = 0; index < 40; index += 1) {
+      harness.emit({
+        type: "content.delta",
+        eventId: asEventId(`evt-live-output-${index}`),
+        provider: "codex",
+        createdAt: now,
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-live-output"),
+        itemId: asItemId("item-live-output"),
+        payload: { streamKind: "command_output", delta: `line ${index}\n` },
+      });
+    }
+    await harness.drain();
+    expect((await harness.readProjectedThread())!.activities.length).toBe(activityCountBefore);
+    expect(liveUpdates.at(-1)).toContain("line 39\n");
+
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-live-command-completed"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-live-output"),
+      itemId: asItemId("item-live-output"),
+      payload: {
+        itemType: "command_execution",
+        status: "completed",
+        title: "Ran command",
+        command: { command: "bun run test", exitCode: 0 },
+      },
+    });
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.activities.some((activity) => activity.id === "evt-live-command-completed"),
+    );
+    expect(thread.activities.length).toBe(activityCountBefore + 1);
+    const completed = thread.activities.find((entry) => entry.id === "evt-live-command-completed");
+    const command = (completed?.payload as { command?: Record<string, unknown> } | undefined)
+      ?.command;
+    expect(command).toMatchObject({ command: "bun run test", exitCode: 0, outputTotalChars: 310 });
+    expect(String(command?.output)).toMatch(/^line 0\n[\s\S]*line 39\n$/u);
+    expect(liveUpdates.at(-1)).toBe("cleared:item-live-output");
+    expect(hub.current(asThreadId("thread-1"))).toEqual([]);
+  });
+
+  it.each(["started-first", "delta-first"] as const)(
+    "keeps the first command output line live (%s)",
+    async (order) => {
+      const hub = makeLiveToolOutputHub();
+      const liveTails: string[] = [];
+      hub.subscribe(asThreadId("thread-1"), (update) => {
+        if (update.kind === "tool-output") liveTails.push(update.tail);
+      });
+      const harness = await createHarness({ liveToolOutputHub: hub });
+      const now = new Date().toISOString();
+      const base = {
+        provider: "codex",
+        createdAt: now,
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-tick"),
+        itemId: asItemId("item-tick"),
+      } as const;
+      const started: ProviderRuntimeEvent = {
+        ...base,
+        type: "item.started",
+        eventId: asEventId(`evt-tick-started-${order}`),
+        payload: {
+          itemType: "command_execution",
+          status: "inProgress",
+          command: { command: "for i in 1 2 3; do echo tick$i; sleep 1; done" },
+        },
+      };
+      const delta = (index: number): ProviderRuntimeEvent => ({
+        ...base,
+        type: "content.delta",
+        eventId: asEventId(`evt-tick-${order}-${index}`),
+        payload: { streamKind: "command_output", delta: `tick${index}\n` },
+      });
+      if (order === "started-first") harness.emit(started);
+      harness.emit(delta(1));
+      if (order === "delta-first") harness.emit(started);
+      harness.emit(delta(2));
+      await harness.drain();
+      await vi.waitFor(() => {
+        expect(liveTails.at(-1)).toBe("tick1\ntick2\n");
+      });
+      expect(liveTails[0]).toBe("tick1\n");
+      expect(hub.current(asThreadId("thread-1")).map((update) => update.tail)).toEqual([
+        "tick1\ntick2\n",
+      ]);
+    },
+  );
+
+  it("files turnless output under the active turn so another turn's end keeps it", async () => {
+    const hub = makeLiveToolOutputHub({ minIntervalMs: 0 });
+    const harness = await createHarness({ liveToolOutputHub: hub });
+    const threadId = asThreadId("thread-1");
+    const turnId = asTurnId("turn-active-live");
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-active-live-turn"),
+      provider: "codex",
+      threadId,
+      turnId,
+      createdAt: new Date().toISOString(),
+    });
+    await waitForThread(harness.engine, (thread) => thread.session?.activeTurnId === turnId);
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-active-live-delta"),
+      provider: "codex",
+      createdAt: new Date().toISOString(),
+      threadId,
+      itemId: asItemId("item-turnless"),
+      payload: { streamKind: "command_output", delta: "running\n" },
+    });
+    await harness.drain();
+    expect(hub.current(threadId).map((update) => update.turnId)).toEqual([turnId]);
+
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-stale-turn-completed"),
+      provider: "codex",
+      createdAt: new Date().toISOString(),
+      threadId,
+      turnId: asTurnId("turn-stale-live"),
+      payload: { state: "completed" },
+    });
+    await harness.drain();
+    expect(hub.current(threadId).map((update) => update.itemId)).toEqual(["item-turnless"]);
+
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-active-turn-completed"),
+      provider: "codex",
+      createdAt: new Date().toISOString(),
+      threadId,
+      turnId,
+      payload: { state: "completed" },
+    });
+    await harness.drain();
+    expect(hub.current(threadId)).toEqual([]);
+  });
+
+  it("keeps a running background command tail across turn end", async () => {
+    const hub = makeLiveToolOutputHub({ minIntervalMs: 0 });
+    const harness = await createHarness({ liveToolOutputHub: hub });
+    const threadId = asThreadId("thread-1");
+    const turnId = asTurnId("turn-background-live");
+    const now = new Date().toISOString();
+    for (const [itemId, background] of [
+      ["item-background", true],
+      ["item-foreground", false],
+    ] as const) {
+      harness.emit({
+        type: "item.started",
+        eventId: asEventId(`evt-${itemId}-started`),
+        provider: "claudeAgent",
+        createdAt: now,
+        threadId,
+        turnId,
+        itemId: asItemId(itemId),
+        payload: {
+          itemType: "command_execution",
+          status: "inProgress",
+          command: { command: "bun run dev", ...(background ? { background: true } : {}) },
+        },
+      });
+      harness.emit({
+        type: "content.delta",
+        eventId: asEventId(`evt-${itemId}-delta`),
+        provider: "claudeAgent",
+        createdAt: now,
+        threadId,
+        turnId,
+        itemId: asItemId(itemId),
+        payload: { streamKind: "command_output", delta: "listening\n" },
+      });
+    }
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-background-turn-completed"),
+      provider: "claudeAgent",
+      createdAt: now,
+      threadId,
+      turnId,
+      payload: { state: "completed" },
+    });
+    await harness.drain();
+    expect(hub.current(threadId).map((update) => update.itemId)).toEqual(["item-background"]);
+
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-item-background-completed"),
+      provider: "claudeAgent",
+      createdAt: now,
+      threadId,
+      turnId,
+      itemId: asItemId("item-background"),
+      payload: {
+        itemType: "command_execution",
+        status: "completed",
+        command: { command: "bun run dev", background: true, exitCode: 0 },
+      },
+    });
+    await harness.drain();
+    expect(hub.current(threadId)).toEqual([]);
+  });
+
+  it.each(["thread.archive", "thread.delete"] as const)(
+    "clears live tails when the thread is removed by %s",
+    async (commandType) => {
+      const hub = makeLiveToolOutputHub({ minIntervalMs: 0 });
+      const cleared: string[] = [];
+      hub.subscribe(asThreadId("thread-1"), (update) => {
+        if (update.kind === "tool-output-cleared") cleared.push(update.itemId);
+      });
+      const harness = await createHarness({ liveToolOutputHub: hub });
+      harness.emit({
+        type: "content.delta",
+        eventId: asEventId(`evt-${commandType}-delta`),
+        provider: "codex",
+        createdAt: new Date().toISOString(),
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-removed"),
+        itemId: asItemId("item-removed"),
+        payload: { streamKind: "command_output", delta: "still running\n" },
+      });
+      await harness.drain();
+      expect(hub.current(asThreadId("thread-1"))).toHaveLength(1);
+
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: commandType,
+          commandId: CommandId.makeUnsafe(`cmd-live-${commandType}`),
+          threadId: asThreadId("thread-1"),
+        }),
+      );
+      await vi.waitFor(() => {
+        expect(hub.current(asThreadId("thread-1"))).toEqual([]);
+      });
+      expect(cleared).toEqual(["item-removed"]);
+    },
+  );
+
+  it("writes the final assistant message id and turn origin on the turn activity", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-final-turn-started"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-final"),
+      payload: { origin: "provider" },
+    });
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-final-commentary"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-final"),
+      itemId: asItemId("msg-commentary"),
+      payload: { streamKind: "assistant_text", delta: "Looking around." },
+    });
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-final-commentary-done"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-final"),
+      itemId: asItemId("msg-commentary"),
+      payload: { itemType: "assistant_message", status: "completed", phase: "commentary" },
+    });
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-final-answer"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-final"),
+      itemId: asItemId("msg-answer"),
+      payload: { streamKind: "assistant_text", delta: "Done." },
+    });
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-final-answer-done"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-final"),
+      itemId: asItemId("msg-answer"),
+      payload: { itemType: "assistant_message", status: "completed", phase: "final_answer" },
+    });
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-final-turn-completed"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-final"),
+      payload: { state: "completed", finalAssistantItemId: asItemId("msg-answer") },
+    });
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.activities.some((activity) => activity.id === "evt-final-turn-completed"),
+    );
+    expect(
+      thread.activities.find((activity) => activity.id === "evt-final-turn-completed")?.payload,
+    ).toMatchObject({
+      state: "completed",
+      finalAssistantMessageId: "assistant:msg-answer",
+      origin: "provider",
+    });
+  });
+
+  it("sets the session turn origin only while the provider-origin turn is active", async () => {
+    const harness = await createHarness();
+    const startedAt = Date.now();
+    const at = (offsetMs: number) => new Date(startedAt + offsetMs).toISOString();
+    const threadId = asThreadId("thread-1");
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-origin-wake-started"),
+      provider: "claudeAgent",
+      createdAt: at(0),
+      threadId,
+      turnId: asTurnId("turn-origin-wake"),
+      payload: { origin: "provider" },
+    });
+    const wakeThread = await waitForThread(
+      harness.engine,
+      (entry) => entry.session?.activeTurnId === "turn-origin-wake",
+    );
+    expect(wakeThread.session?.activeTurnOrigin).toBe("provider");
+
+    harness.emit({
+      type: "session.state.changed",
+      eventId: asEventId("evt-origin-wake-waiting"),
+      provider: "claudeAgent",
+      createdAt: at(1_000),
+      threadId,
+      payload: { state: "waiting" },
+    });
+    const waitingThread = await waitForThread(
+      harness.engine,
+      (entry) =>
+        entry.session?.activeTurnId === "turn-origin-wake" && entry.session.updatedAt === at(1_000),
+    );
+    expect(waitingThread.session?.activeTurnOrigin).toBe("provider");
+
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-origin-wake-completed"),
+      provider: "claudeAgent",
+      createdAt: at(2_000),
+      threadId,
+      turnId: asTurnId("turn-origin-wake"),
+      payload: { state: "completed" },
+    });
+    const settledThread = await waitForThread(
+      harness.engine,
+      (entry) => entry.session?.status === "ready" && entry.session.activeTurnId === null,
+    );
+    expect(settledThread.session?.activeTurnOrigin).toBeUndefined();
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-origin-user-started"),
+      provider: "claudeAgent",
+      createdAt: at(3_000),
+      threadId,
+      turnId: asTurnId("turn-origin-user"),
+    });
+    const userThread = await waitForThread(
+      harness.engine,
+      (entry) => entry.session?.activeTurnId === "turn-origin-user",
+    );
+    expect(userThread.session?.activeTurnOrigin).toBeUndefined();
+  });
+
+  it("publishes a live Codex reasoning preview with a heading", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-codex-preview-delta"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-codex-preview"),
+      itemId: asItemId("reasoning-preview-1"),
+      payload: {
+        streamKind: "reasoning_summary_text",
+        summaryIndex: 0,
+        delta: "**Reading the adapter**\n\nChecking how items map.",
+      },
+    });
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.activities.some(
+        (activity) => activity.id === "provider-reasoning:thread-1:reasoning-preview-1",
+      ),
+    );
+    expect(
+      thread.activities.find(
+        (activity) => activity.id === "provider-reasoning:thread-1:reasoning-preview-1",
+      ),
+    ).toMatchObject({
+      kind: "task.progress",
+      payload: { status: "inProgress", reasoning: { heading: "Reading the adapter" } },
+    });
+  });
+
+  it("upserts a repeated notice in place and keeps its first position", async () => {
+    const harness = await createHarness();
+    const first = "2026-10-10T10:00:00.000Z";
+    const later = "2026-10-10T10:05:00.000Z";
+    const notice = (eventId: string, createdAt: string, status: "running" | "completed") =>
+      harness.emit({
+        type: "transcript.notice",
+        eventId: asEventId(eventId),
+        provider: "codex",
+        createdAt,
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-notice"),
+        payload: {
+          noticeKind: "auth-recovery",
+          severity: "info",
+          status,
+          title: status === "running" ? "Reconnecting to OpenAI" : "Reconnected",
+          dedupeKey: "auth-recovery:openai:turn-notice",
+        },
+      });
+    notice("evt-notice-1", first, "running");
+    const noticeId = "transcript-notice:thread-1:auth-recovery:openai:turn-notice";
+    await waitForThread(harness.engine, (entry) =>
+      entry.activities.some((activity) => activity.id === noticeId),
+    );
+    const before = (await harness.readProjectedThread())!.activities.find(
+      (activity) => activity.id === noticeId,
+    );
+    notice("evt-notice-2", later, "completed");
+    notice("evt-notice-3", later, "running");
+    await harness.drain();
+    const projected = await harness.readProjectedThread();
+    const rows = projected!.activities.filter((activity) => activity.id === noticeId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      summary: "Reconnected",
+      createdAt: first,
+      sequence: before!.sequence,
+      turnId: "turn-notice",
+      payload: { status: "completed" },
+    });
+    const readModelRows = (
+      await waitForThread(harness.engine, (entry) =>
+        entry.activities.some(
+          (activity) =>
+            activity.id === noticeId &&
+            (activity.payload as { status?: string }).status === "completed",
+        ),
+      )
+    ).activities.filter((activity) => activity.id === noticeId);
+    expect(readModelRows).toHaveLength(1);
+    expect(readModelRows[0]?.createdAt).toBe(first);
+  });
+
+  it("groups quiet successful hooks into one row and keeps failed hooks visible", async () => {
+    const harness = await createHarness();
+    const createdAt = "2026-10-10T13:00:00.000Z";
+    for (const hookId of ["steer-1", "steer-2", "steer-3"]) {
+      harness.emit({
+        type: "hook.started",
+        eventId: asEventId(`evt-${hookId}-started`),
+        provider: "claudeAgent",
+        createdAt,
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-hooks"),
+        payload: { hookId, hookName: "synara-steer", hookEvent: "PreToolUse" },
+      });
+      harness.emit({
+        type: "hook.completed",
+        eventId: asEventId(`evt-${hookId}-completed`),
+        provider: "claudeAgent",
+        createdAt,
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-hooks"),
+        payload: { hookId, hookEvent: "PreToolUse", outcome: "success", status: "completed" },
+      });
+    }
+    harness.emit({
+      type: "hook.completed",
+      eventId: asEventId("evt-hook-cancelled-quiet"),
+      provider: "claudeAgent",
+      createdAt,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-hooks"),
+      payload: { hookId: "steer-4", hookEvent: "PreToolUse", outcome: "cancelled" },
+    });
+    harness.emit({
+      type: "hook.completed",
+      eventId: asEventId("evt-hook-failed"),
+      provider: "claudeAgent",
+      createdAt,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-hooks"),
+      payload: {
+        hookId: "lint-1",
+        hookEvent: "PostToolUse",
+        outcome: "error",
+        status: "failed",
+        stderr: "lint failed",
+      },
+    });
+    await harness.drain();
+    const notices = (await harness.readProjectedThread())!.activities.filter(
+      (activity) => activity.kind === "transcript.notice",
+    );
+    expect(notices.map((activity) => activity.summary)).toEqual([
+      "Ran 3 hooks",
+      "PostToolUse hook failed",
+    ]);
+  });
+
+  it("keeps Claude reasoning from a no-tool turn that ends with a text reply", async () => {
+    const harness = await createHarness();
+    const threadId = asThreadId("thread-1");
+    const turnId = asTurnId("turn-claude-no-tool");
+    const startMs = Date.parse("2026-10-10T14:00:00.000Z");
+    const at = (ms: number) => new Date(startMs + ms).toISOString();
+    const base = { provider: "claudeAgent" as const, threadId, turnId };
+    harness.emit({
+      ...base,
+      type: "turn.started",
+      eventId: asEventId("nt-turn"),
+      createdAt: at(0),
+    });
+    await waitForThread(harness.engine, (thread) => thread.session?.activeTurnId === turnId);
+    const thoughtId = asItemId("nt-thought");
+    harness.emit({
+      ...base,
+      type: "item.started",
+      eventId: asEventId("nt-thought-start"),
+      createdAt: at(10),
+      itemId: thoughtId,
+      payload: { itemType: "reasoning", status: "inProgress", title: "Thinking" },
+    });
+    harness.emit({
+      ...base,
+      type: "content.delta",
+      eventId: asEventId("nt-thought-delta"),
+      createdAt: at(20),
+      itemId: thoughtId,
+      payload: { streamKind: "reasoning_text", delta: "**Planning the reply**\nShort answer." },
+    });
+    harness.emit({
+      ...base,
+      type: "item.completed",
+      eventId: asEventId("nt-thought-done"),
+      createdAt: at(30),
+      itemId: thoughtId,
+      payload: {
+        itemType: "reasoning",
+        status: "completed",
+        title: "Thinking",
+        detail: "**Planning the reply**\nShort answer.",
+        reasoning: { summary: "**Planning the reply**\nShort answer." },
+      },
+    });
+    const replyId = asItemId("nt-reply");
+    harness.emit({
+      ...base,
+      type: "content.delta",
+      eventId: asEventId("nt-reply-delta"),
+      createdAt: at(40),
+      itemId: replyId,
+      payload: { streamKind: "assistant_text", delta: "Hello there." },
+    });
+    harness.emit({
+      ...base,
+      type: "item.completed",
+      eventId: asEventId("nt-reply-done"),
+      createdAt: at(50),
+      itemId: replyId,
+      payload: { itemType: "assistant_message", status: "completed" },
+    });
+    harness.emit({
+      ...base,
+      type: "turn.completed",
+      eventId: asEventId("nt-turn-done"),
+      createdAt: at(60),
+      payload: { state: "completed" },
+    });
+    await harness.drain();
+    const thread = await harness.readProjectedThread();
+    const reasoning = thread?.activities.filter(
+      (activity) => activity.id === "provider-reasoning:thread-1:nt-thought",
+    );
+    expect(reasoning).toHaveLength(1);
+    expect(reasoning?.[0]).toMatchObject({
+      turnId,
+      payload: {
+        status: "completed",
+        reasoning: { heading: "Planning the reply" },
+      },
+    });
+  });
+
+  it("keys hook rows by turn so a repeated hook id adds a row per turn", async () => {
+    const harness = await createHarness();
+    const createdAt = "2026-10-10T13:10:00.000Z";
+    const emitFailedHook = (eventId: string, turnId: string, stderr: string) =>
+      harness.emit({
+        type: "hook.completed",
+        eventId: asEventId(eventId),
+        provider: "claudeAgent",
+        createdAt,
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId(turnId),
+        payload: {
+          hookId: "lint-repeat",
+          hookEvent: "PostToolUse",
+          outcome: "error",
+          status: "failed",
+          stderr,
+        },
+      });
+    emitFailedHook("evt-hook-repeat-a1", "turn-hooks-a", "first failure");
+    emitFailedHook("evt-hook-repeat-a2", "turn-hooks-a", "second failure");
+    emitFailedHook("evt-hook-repeat-b1", "turn-hooks-b", "next turn failure");
+    harness.emit({
+      type: "hook.progress",
+      eventId: asEventId("evt-hook-own-progress"),
+      provider: "claudeAgent",
+      createdAt,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-hooks-b"),
+      payload: { hookId: "fmt-own", hookEvent: "PostToolUse", stdout: "formatting" },
+    });
+    harness.emit({
+      type: "hook.completed",
+      eventId: asEventId("evt-hook-own-completed"),
+      provider: "claudeAgent",
+      createdAt,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-hooks-b"),
+      payload: { hookId: "fmt-own", hookEvent: "PostToolUse", outcome: "success" },
+    });
+    await harness.drain();
+    const notices = (await harness.readProjectedThread())!.activities.filter(
+      (activity) => activity.kind === "transcript.notice",
+    );
+    const repeated = notices.filter(
+      (activity) =>
+        (activity.payload as { data?: { hookId?: string } }).data?.hookId === "lint-repeat",
+    );
+    expect(repeated.map((activity) => activity.turnId)).toEqual([
+      asTurnId("turn-hooks-a"),
+      asTurnId("turn-hooks-b"),
+    ]);
+    expect(String((repeated[0]!.payload as { body?: string }).body)).toContain("second failure");
+    expect(notices.map((activity) => activity.summary)).toEqual([
+      "PostToolUse hook failed",
+      "PostToolUse hook failed",
+      "Ran PostToolUse hook",
+    ]);
+  });
+
+  it("still persists a coalesced in-progress file-change burst replayed as one page", async () => {
+    const harness = await createHarness({ startIngestion: false, persistedStream: true });
+    for (let index = 0; index < 6; index += 1) {
+      await Effect.runPromise(
+        harness.runtimeEventRepository.append({
+          type: "item.updated",
+          eventId: asEventId(`evt-burst-patch-${index}`),
+          provider: "codex",
+          createdAt: new Date(Date.parse("2026-10-10T12:30:00.000Z") + index * 300).toISOString(),
+          threadId: asThreadId("thread-1"),
+          turnId: asTurnId("turn-burst"),
+          itemId: asItemId("item-burst"),
+          payload: {
+            itemType: "file_change",
+            status: "inProgress",
+            fileChanges: { changes: [{ path: `src/burst-${index}.ts`, kind: "update" }] },
+          },
+        }),
+      );
+    }
+    await harness.startIngestion();
+    await harness.drain();
+    const persisted = (await harness.readProjectedThread())!.activities.filter(
+      (activity) => activity.kind === "tool.updated",
+    );
+    expect(persisted.map((activity) => activity.id)).toEqual(["evt-burst-patch-5"]);
+  });
+
+  it("keeps one status row per turn for provider state reasons and clears it", async () => {
+    const harness = await createHarness();
+    const emitState = (eventId: string, createdAt: string, reason?: string) =>
+      harness.emit({
+        type: "session.state.changed",
+        eventId: asEventId(eventId),
+        provider: "codex",
+        createdAt,
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-status"),
+        payload: { state: "running", ...(reason ? { reason } : {}) },
+      });
+    emitState("evt-status-1", "2026-10-10T14:00:00.000Z", "Environment disconnected");
+    emitState("evt-status-2", "2026-10-10T14:00:05.000Z", "Safety buffering");
+    await harness.drain();
+    let rows = (await harness.readProjectedThread())!.activities.filter(
+      (activity) => activity.kind === "session.status",
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      id: "session-status:thread-1:turn-status",
+      summary: "Safety buffering",
+      createdAt: "2026-10-10T14:00:00.000Z",
+      payload: { state: "running", reason: "Safety buffering" },
+    });
+    emitState("evt-status-3", "2026-10-10T14:00:09.000Z");
+    await harness.drain();
+    rows = (await harness.readProjectedThread())!.activities.filter(
+      (activity) => activity.kind === "session.status",
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.payload).toMatchObject({ reason: null });
+  });
+
+  it("does not persist machine status reasons such as task:running", async () => {
+    const harness = await createHarness();
+    const emitState = (eventId: string, turnId: string, reason: string) =>
+      harness.emit({
+        type: "session.state.changed",
+        eventId: asEventId(eventId),
+        provider: "claudeAgent",
+        createdAt: "2026-10-10T14:10:00.000Z",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId(turnId),
+        payload: { state: "running", reason },
+      });
+    emitState("evt-machine-1", "turn-machine", "task:running");
+    emitState("evt-machine-2", "turn-machine", "status:active");
+    emitState("evt-human-1", "turn-human", "Environment disconnected");
+    emitState("evt-human-2", "turn-human", "task:running");
+    emitState("evt-kept-1", "turn-kept", "Running safety checks");
+    await harness.drain();
+    const rows = (await harness.readProjectedThread())!.activities.filter(
+      (activity) => activity.kind === "session.status",
+    );
+    expect(rows.map((row) => [row.turnId, row.summary, row.payload])).toEqual([
+      ["turn-human", "Working", { state: "running", reason: null }],
+      ["turn-kept", "Running safety checks", { state: "running", reason: "Running safety checks" }],
+    ]);
+  });
+
+  it("falls back to raw Codex reasoning text when no summary streams", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-raw-reasoning"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-raw-reasoning"),
+      itemId: asItemId("reasoning-raw-1"),
+      payload: { streamKind: "reasoning_text", delta: "Thinking about the parser." },
+    });
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-raw-reasoning-done"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-raw-reasoning"),
+      itemId: asItemId("reasoning-raw-1"),
+      payload: { itemType: "reasoning", status: "completed" },
+    });
+    await harness.drain();
+    const row = (await harness.readProjectedThread())!.activities.find(
+      (activity) => activity.id === "provider-reasoning:thread-1:reasoning-raw-1",
+    );
+    expect(row?.payload).toMatchObject({
+      status: "completed",
+      detail: "Thinking about the parser.",
+    });
+  });
+
+  it("replaces one retry row per turn in place", async () => {
+    const harness = await createHarness();
+    const emitRetry = (attempt: number, createdAt: string) =>
+      harness.emit({
+        type: "runtime.warning",
+        eventId: asEventId(`evt-retry-${attempt}`),
+        provider: "codex",
+        createdAt,
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-retry"),
+        payload: {
+          message: `Reconnecting... ${attempt}/5`,
+          willRetry: true,
+          retryAttempt: attempt,
+          retryMaxAttempts: 5,
+        },
+      });
+    emitRetry(1, "2026-10-10T11:00:00.000Z");
+    emitRetry(2, "2026-10-10T11:00:05.000Z");
+    emitRetry(3, "2026-10-10T11:00:10.000Z");
+    await harness.drain();
+    const rows = (await harness.readProjectedThread())!.activities.filter(
+      (activity) => activity.kind === "runtime.warning",
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      id: "provider-retry:thread-1:turn-retry",
+      summary: "Reconnecting 3/5",
+      createdAt: "2026-10-10T11:00:00.000Z",
+    });
+  });
+
+  it("persists at most one file-change progress update per item per second", async () => {
+    const harness = await createHarness();
+    const updates: string[] = [];
+    await Effect.runPromise(
+      Effect.forkScoped(
+        Stream.runForEach(harness.engine.streamDomainEvents, (event) =>
+          Effect.sync(() => {
+            if (
+              event.type === "thread.activity-appended" &&
+              event.payload.activity.kind === "tool.updated"
+            )
+              updates.push(event.payload.activity.id);
+          }),
+        ),
+      ).pipe(Scope.provide(scope!)),
+    );
+    for (let index = 0; index < 6; index += 1) {
+      harness.emit({
+        type: "item.updated",
+        eventId: asEventId(`evt-patch-${index}`),
+        provider: "codex",
+        createdAt: new Date(Date.parse("2026-10-10T12:00:00.000Z") + index * 300).toISOString(),
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-patch"),
+        itemId: asItemId("item-patch"),
+        payload: {
+          itemType: "file_change",
+          status: "completed",
+          fileChanges: { changes: [{ path: `src/file-${index}.ts`, kind: "update" }] },
+        },
+      });
+    }
+    await harness.drain();
+    expect(updates).toEqual(["evt-patch-0", "evt-patch-4"]);
+  });
+
   it("attaches buffered command output deltas to the completed tool activity", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
@@ -6863,14 +7835,16 @@ describe("ProviderRuntimeIngestion", () => {
         entry.session?.activeTurnId === "turn-warning" &&
         entry.activities.some(
           (activity: ProviderRuntimeTestActivity) =>
-            activity.id === "evt-warning-runtime" && activity.kind === "runtime.warning",
+            activity.id === "provider-retry:thread-1:turn-warning" &&
+            activity.kind === "runtime.warning",
         ),
     );
     expect(thread.session?.status).toBe("running");
     expect(thread.session?.activeTurnId).toBe("turn-warning");
     expect(thread.session?.lastError).toBeNull();
     expect(
-      thread.activities.find((activity) => activity.id === "evt-warning-runtime")?.payload,
+      thread.activities.find((activity) => activity.id === "provider-retry:thread-1:turn-warning")
+        ?.payload,
     ).toMatchObject({ willRetry: true });
     harness.emit({
       type: "turn.completed",
@@ -7089,6 +8063,50 @@ describe("ProviderRuntimeIngestion", () => {
     expect(checkpoint?.files).toEqual([
       { path: "file.txt", kind: "modified", additions: 2, deletions: 1 },
     ]);
+  });
+
+  it("falls back to the provider diff for a non-git workspace and keeps it readable", async () => {
+    const harness = await createHarness({ gitWorkspace: false });
+    const now = new Date().toISOString();
+    harness.emit({
+      type: "turn.diff.updated",
+      eventId: asEventId("evt-non-git-diff"),
+      provider: "claudeAgent",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-non-git"),
+      payload: {
+        unifiedDiff: [
+          "diff --git a/notes.md b/notes.md",
+          "--- a/notes.md",
+          "+++ b/notes.md",
+          "@@ -1 +1,2 @@",
+          " keep",
+          "+added",
+          "",
+        ].join("\n"),
+      },
+    });
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-non-git-completed"),
+      provider: "claudeAgent",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-non-git"),
+      payload: { state: "completed" },
+    });
+    await harness.drain();
+    const detail = await harness.readProjectedThread();
+    expect(detail?.checkpoints).toMatchObject([
+      {
+        turnId: "turn-non-git",
+        status: "missing",
+        checkpointTurnCount: 1,
+        files: [{ path: "notes.md", additions: 1, deletions: 0 }],
+      },
+    ]);
+    expect(detail?.checkpoints[0]?.checkpointRef.startsWith("provider-diff:")).toBe(true);
   });
 
   it("updates live provider diff placeholders for the same turn", async () => {

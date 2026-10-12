@@ -26,6 +26,7 @@ const makeProjectionThreadProposedPlanRepository = Effect.gen(function* () {
         plan_markdown,
         implemented_at,
         implementation_thread_id,
+        partial,
         created_at,
         updated_at
       )
@@ -36,6 +37,7 @@ const makeProjectionThreadProposedPlanRepository = Effect.gen(function* () {
         ${row.planMarkdown},
         ${row.implementedAt},
         ${row.implementationThreadId},
+        ${row.partial},
         ${row.createdAt},
         ${row.updatedAt}
       )
@@ -46,6 +48,7 @@ const makeProjectionThreadProposedPlanRepository = Effect.gen(function* () {
         plan_markdown = excluded.plan_markdown,
         implemented_at = excluded.implemented_at,
         implementation_thread_id = excluded.implementation_thread_id,
+        partial = excluded.partial,
         created_at = excluded.created_at,
         updated_at = excluded.updated_at
     `,
@@ -62,6 +65,7 @@ const makeProjectionThreadProposedPlanRepository = Effect.gen(function* () {
         plan_markdown AS "planMarkdown",
         implemented_at AS "implementedAt",
         implementation_thread_id AS "implementationThreadId",
+        partial,
         created_at AS "createdAt",
         updated_at AS "updatedAt"
       FROM projection_thread_proposed_plans
@@ -78,6 +82,7 @@ const makeProjectionThreadProposedPlanRepository = Effect.gen(function* () {
         plan_id AS "planId",
         turn_id AS "turnId",
         implemented_at AS "implementedAt",
+        partial,
         updated_at AS "updatedAt"
       FROM projection_thread_proposed_plans
       WHERE thread_id = ${threadId}

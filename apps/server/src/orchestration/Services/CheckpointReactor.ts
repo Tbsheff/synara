@@ -6,6 +6,7 @@
  *
  * @module CheckpointReactor
  */
+import type { ThreadId } from "@synara/contracts";
 import { ServiceMap } from "effect";
 import type { Effect, Scope } from "effect";
 
@@ -29,6 +30,8 @@ export interface CheckpointReactorShape {
    * Intended for test use to replace timing-sensitive sleeps.
    */
   readonly drain: Effect.Effect<void>;
+
+  readonly providerOriginTurnCount: (threadId: ThreadId) => Effect.Effect<number>;
 }
 
 /**

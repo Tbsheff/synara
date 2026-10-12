@@ -24,8 +24,31 @@ import {
   type ServerVoiceTranscriptionResult,
   type ThreadTokenUsageSnapshot,
   type ProviderUserInputAnswers,
+  type AssistantMessagePhase,
+  type CommandExecutionDetails,
+  type CommandParsedAction,
+  type FileChangeDetails,
+  type FileChangeEntry,
+  type FileChangeKind,
+  type ItemLifecyclePayload,
+  type ReasoningDetails,
+  type ToolCallDetails,
+  type TranscriptImageRef,
+  type TranscriptNotice,
+  type TranscriptResultBlockRef,
+  type TurnOrigin,
+  type WebSearchAction,
+  type WebSearchDetails,
+  type WebSearchResult,
   EventId,
   RuntimeItemId,
+  TRANSCRIPT_FILE_CHANGES_MAX_ENTRIES,
+  TRANSCRIPT_FILE_DIFF_MAX_CHARS,
+  TRANSCRIPT_NOTICE_BODY_MAX_CHARS,
+  TRANSCRIPT_OUTPUT_TAIL_MAX_CHARS,
+  TRANSCRIPT_REASONING_MAX_CHARS,
+  TRANSCRIPT_TOOL_ARGUMENTS_MAX_CHARS,
+  TRANSCRIPT_TOOL_RESULT_MAX_CHARS,
   RuntimeRequestId,
   RuntimeTaskId,
   ProviderApprovalDecision,
@@ -34,6 +57,7 @@ import {
   TurnId,
 } from "@synara/contracts";
 import { Cause, Effect, Layer, Option, Queue, Schema, ServiceMap, Stream } from "effect";
+import { splitsSurrogatePair, unicodeSafeEndOffset } from "@synara/shared/text";
 
 import {
   ProviderAdapterProcessError,
@@ -51,6 +75,8 @@ import {
 import {
   CodexAppServerManager,
   CodexSessionAuthInvalidatedError,
+  CODEX_TURN_ORIGIN_PAYLOAD_KEY,
+  classifyCodexMcpTransportLine,
   parseCodexUserInputQuestions,
   type CodexAppServerSendTurnInput,
   type CodexAppServerStartSessionInput,
@@ -104,6 +130,14 @@ import {
   sanitizeUnmappedProviderNativeType,
 } from "../unmappedProviderEvents.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
+import {
+  type CodexItemType,
+  codexItemTypeDisposition,
+  codexNotificationDisposition,
+  codexRequestDisposition,
+  isIgnoredCodexDisposition,
+  resolveCodexItemType,
+} from "../codexMethodDispositions.ts";
 
 const PROVIDER = "codex" as const;
 
@@ -298,7 +332,6 @@ function providerErrorMapsToWarning(event: ProviderEvent): boolean {
   return (
     event.kind === "error" &&
     (event.method === "process/stderr" ||
-      event.method === "mcpServer/elicitation/request/unrenderable" ||
       (event.method === "error" &&
         typeof event.message === "string" &&
         isNonFatalCodexErrorMessage(event.message)))
@@ -383,37 +416,9 @@ function toTurnStatus(value: unknown): "completed" | "failed" | "cancelled" | "i
   }
 }
 
-function normalizeItemType(raw: unknown): string {
-  const type = asString(raw);
-  if (!type) return "item";
-  return type
-    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
-    .replace(/[._/-]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .toLowerCase();
-}
-
 function toCanonicalItemType(raw: unknown): CanonicalItemType {
-  const type = normalizeItemType(raw);
   if (isCodexGeneratedImageItemType(raw)) return "image_generation";
-  if (type.includes("user")) return "user_message";
-  if (type.includes("agent message") || type.includes("assistant")) return "assistant_message";
-  if (type.includes("reasoning") || type.includes("thought")) return "reasoning";
-  if (type.includes("plan") || type.includes("todo")) return "plan";
-  if (type.includes("command")) return "command_execution";
-  if (type.includes("file change") || type.includes("patch") || type.includes("edit"))
-    return "file_change";
-  if (type.includes("mcp")) return "mcp_tool_call";
-  if (type.includes("dynamic tool")) return "dynamic_tool_call";
-  if (type.includes("collab")) return "collab_agent_tool_call";
-  if (type.includes("web search")) return "web_search";
-  if (type.includes("image")) return "image_view";
-  if (type.includes("review entered") || type.includes("entered review")) return "review_entered";
-  if (type.includes("review exited") || type.includes("exited review")) return "review_exited";
-  if (type.includes("compact")) return "context_compaction";
-  if (type.includes("error")) return "error";
-  return "unknown";
+  return codexItemTypeDisposition(raw)?.itemType ?? "unknown";
 }
 
 function toolItemTitle(item: Record<string, unknown> | undefined): string | undefined {
@@ -928,10 +933,670 @@ function withMinimalRawPayload(
   };
 }
 
+const NOTICE_TITLE_MAX_CHARS = 200;
+const COMMAND_STDIN_MAX_CHARS = 1_000;
+const COMMAND_PARSED_ACTIONS_MAX_ENTRIES = 20;
+const WEB_SEARCH_RESULTS_MAX_ENTRIES = 50;
+const CODEX_TOOL_IMAGE_OMITTED_REASON = "Tool result images are not stored in the transcript yet.";
+
+type ItemLifecycle = "item.started" | "item.updated" | "item.completed";
+type TypedItemFields = Pick<
+  ItemLifecyclePayload,
+  "phase" | "toolName" | "command" | "fileChanges" | "toolCall" | "webSearch" | "reasoning"
+>;
+
+function capHead(value: string, maxChars: number): { text: string; truncated: boolean } {
+  return value.length > maxChars
+    ? { text: value.slice(0, unicodeSafeEndOffset(value, maxChars)), truncated: true }
+    : { text: value, truncated: false };
+}
+
+function capTail(value: string, maxChars: number): { text: string; truncated: boolean } {
+  if (value.length <= maxChars) return { text: value, truncated: false };
+  const start = value.length - maxChars;
+  return {
+    text: value.slice(splitsSurrogatePair(value, start) ? start + 1 : start),
+    truncated: true,
+  };
+}
+
+function asNonNegativeFinite(value: unknown): number | undefined {
+  const number = asNumber(value);
+  return number !== undefined && number >= 0 ? number : undefined;
+}
+
+function redactProviderText(
+  value: string,
+  maxChars: number,
+): { readonly text: string; readonly truncated: boolean } {
+  const capped = capHead(value, maxChars);
+  const redacted = sanitizeUnmappedProviderData(capped.text);
+  if (typeof redacted === "string") {
+    return { text: redacted, truncated: capped.truncated };
+  }
+  return { text: sanitizeUnmappedProviderDetail(capped.text) ?? "", truncated: true };
+}
+
+function noticeTitle(value: string | undefined, fallback: string): string {
+  const collapsed = value === undefined ? "" : value.replace(/\s+/g, " ").trim();
+  if (collapsed.length === 0) return fallback;
+  const redacted = redactProviderText(collapsed, NOTICE_TITLE_MAX_CHARS * 2).text.trim();
+  if (redacted.length === 0) return fallback;
+  if (redacted.length <= NOTICE_TITLE_MAX_CHARS) return redacted;
+  const capped = redacted.slice(0, NOTICE_TITLE_MAX_CHARS - 1).trimEnd();
+  return capped.length > 0 ? `${capped}…` : fallback;
+}
+
+function noticeBody(
+  value: string | undefined,
+): Pick<TranscriptNotice, "body" | "bodyTruncated"> | undefined {
+  if (value === undefined || value.trim().length === 0) return undefined;
+  const redacted = redactProviderText(value, TRANSCRIPT_NOTICE_BODY_MAX_CHARS);
+  return redacted.truncated
+    ? { body: redacted.text, bodyTruncated: true }
+    : { body: redacted.text };
+}
+
+function noticeDetail(value: string | undefined): Pick<TranscriptNotice, "detail"> | undefined {
+  if (value === undefined || value.trim().length === 0) return undefined;
+  return { detail: redactProviderText(value.trim(), TRANSCRIPT_NOTICE_BODY_MAX_CHARS).text };
+}
+
+function stableTextKey(value: string): string {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+function lifecycleGenerationKey(event: ProviderEvent): string {
+  return event.lifecycleGeneration ?? "session";
+}
+
+function withSanitizedRaw(
+  event: ProviderEvent,
+  canonicalThreadId: ThreadId,
+): Omit<ProviderRuntimeEvent, "type" | "payload"> {
+  return {
+    ...runtimeEventBase(event, canonicalThreadId),
+    raw: {
+      source: eventRawSource(event),
+      method: event.method,
+      payload: { synaraSanitized: true },
+    },
+  };
+}
+
+function transcriptNoticeEvent(
+  event: ProviderEvent,
+  canonicalThreadId: ThreadId,
+  notice: TranscriptNotice,
+): ProviderRuntimeEvent {
+  return {
+    ...withSanitizedRaw(event, canonicalThreadId),
+    type: "transcript.notice",
+    payload: { ...notice, nativeType: notice.nativeType ?? event.method },
+  };
+}
+
+function codexParsedActions(value: unknown): CommandParsedAction[] | undefined {
+  const actions = asArray(value);
+  if (!actions) return undefined;
+  const parsed = actions
+    .slice(0, COMMAND_PARSED_ACTIONS_MAX_ENTRIES)
+    .flatMap((entry): CommandParsedAction[] => {
+      const action = asObject(entry);
+      if (!action) return [];
+      const command = asString(action.command);
+      const path = asString(action.path);
+      const base = command !== undefined ? { command } : {};
+      switch (action.type) {
+        case "read": {
+          const name = asString(action.name);
+          return [
+            {
+              type: "read" as const,
+              ...base,
+              ...(name !== undefined ? { name } : {}),
+              ...(path !== undefined ? { path } : {}),
+            },
+          ];
+        }
+        case "listFiles":
+        case "list_files":
+          return [
+            { type: "list_files" as const, ...base, ...(path !== undefined ? { path } : {}) },
+          ];
+        case "search": {
+          const query = asString(action.query);
+          return [
+            {
+              type: "search" as const,
+              ...base,
+              ...(query !== undefined ? { query } : {}),
+              ...(path !== undefined ? { path } : {}),
+            },
+          ];
+        }
+        default:
+          return [{ type: "unknown" as const, ...base }];
+      }
+    });
+  return parsed.length > 0 ? parsed : undefined;
+}
+
+function codexCommandDetails(
+  item: Record<string, unknown>,
+  lifecycle: ItemLifecycle,
+): CommandExecutionDetails | undefined {
+  const command = asString(item.command);
+  const cwd = asString(item.cwd);
+  const parsedActions = codexParsedActions(item.commandActions);
+  const settled = lifecycle === "item.completed";
+  const exitCode =
+    item.exitCode === null
+      ? null
+      : typeof item.exitCode === "number" && Number.isInteger(item.exitCode)
+        ? item.exitCode
+        : undefined;
+  const durationMs = asNonNegativeFinite(item.durationMs);
+  const output = asString(item.aggregatedOutput);
+  const cappedOutput =
+    output !== undefined ? capTail(output, TRANSCRIPT_OUTPUT_TAIL_MAX_CHARS) : undefined;
+  const details: CommandExecutionDetails = {
+    ...(command !== undefined ? { command } : {}),
+    ...(cwd !== undefined ? { cwd } : {}),
+    ...(settled && exitCode !== undefined ? { exitCode } : {}),
+    ...(settled && durationMs !== undefined ? { durationMs } : {}),
+    ...(cappedOutput !== undefined && output !== undefined
+      ? {
+          output: cappedOutput.text,
+          outputTotalChars: output.length,
+          ...(cappedOutput.truncated ? { outputTruncated: true } : {}),
+        }
+      : {}),
+    ...(parsedActions ? { parsedActions } : {}),
+  };
+  return Object.keys(details).length > 0 ? details : undefined;
+}
+
+function looksLikeUnifiedDiff(value: string): boolean {
+  return value.startsWith("@@") || value.startsWith("--- ") || value.startsWith("diff --git ");
+}
+
+function contentLines(content: string): string[] {
+  if (content.length === 0) return [];
+  const lines = content.split("\n");
+  if (lines.at(-1) === "") lines.pop();
+  return lines;
+}
+
+function synthesizeWholeFileDiff(kind: "add" | "delete", path: string, content: string): string {
+  const lines = contentLines(content);
+  if (kind === "add") {
+    return [
+      "--- /dev/null",
+      `+++ b/${path}`,
+      `@@ -0,0 +1,${lines.length} @@`,
+      ...lines.map((line) => `+${line}`),
+    ].join("\n");
+  }
+  return [
+    `--- a/${path}`,
+    "+++ /dev/null",
+    `@@ -1,${lines.length} +0,0 @@`,
+    ...lines.map((line) => `-${line}`),
+  ].join("\n");
+}
+
+function countUnifiedDiffLines(diff: string): { additions: number; deletions: number } {
+  let additions = 0;
+  let deletions = 0;
+  let inHunk = false;
+  for (const line of diff.split("\n")) {
+    if (line.startsWith("@@")) {
+      inHunk = true;
+      continue;
+    }
+    if (line.startsWith("diff --git ")) {
+      inHunk = false;
+      continue;
+    }
+    if (!inHunk) continue;
+    if (line.startsWith("+")) additions += 1;
+    else if (line.startsWith("-")) deletions += 1;
+  }
+  return { additions, deletions };
+}
+
+function codexFileChangeKind(record: Record<string, unknown>):
+  | {
+      kind: FileChangeKind;
+      movePath?: string;
+    }
+  | undefined {
+  const kindRecord = asObject(record.kind);
+  const kindType = asString(kindRecord?.type) ?? asString(record.kind);
+  const movePath =
+    asTrimmedString(kindRecord?.move_path) ??
+    asTrimmedString(kindRecord?.movePath) ??
+    asTrimmedString(record.move_path) ??
+    asTrimmedString(record.movePath);
+  switch (kindType) {
+    case "add":
+    case "delete":
+      return { kind: kindType };
+    case "update":
+      return movePath ? { kind: "move", movePath } : { kind: "update" };
+    case "move":
+      return movePath ? { kind: "move", movePath } : { kind: "update" };
+    default:
+      return undefined;
+  }
+}
+
+function codexFileChangeEntry(value: unknown): FileChangeEntry | undefined {
+  const record = asObject(value);
+  const path = asString(record?.path);
+  if (!record || !path || path.trim().length === 0) return undefined;
+  const kind = codexFileChangeKind(record);
+  if (!kind) return undefined;
+  const rawDiff = asString(record.diff);
+  const unifiedDiff =
+    rawDiff === undefined
+      ? undefined
+      : (kind.kind === "add" || kind.kind === "delete") && !looksLikeUnifiedDiff(rawDiff)
+        ? synthesizeWholeFileDiff(kind.kind, path, rawDiff)
+        : rawDiff;
+  const counts = unifiedDiff !== undefined ? countUnifiedDiffLines(unifiedDiff) : undefined;
+  const cappedDiff =
+    unifiedDiff !== undefined ? capHead(unifiedDiff, TRANSCRIPT_FILE_DIFF_MAX_CHARS) : undefined;
+  return {
+    path,
+    kind: kind.kind,
+    ...(kind.movePath !== undefined ? { movePath: kind.movePath } : {}),
+    ...(cappedDiff !== undefined
+      ? {
+          unifiedDiff: cappedDiff.text,
+          ...(cappedDiff.truncated ? { diffTruncated: true } : {}),
+        }
+      : {}),
+    ...(counts ? { additions: counts.additions, deletions: counts.deletions } : {}),
+  };
+}
+
+function codexFileChangeDetails(value: unknown): FileChangeDetails | undefined {
+  const entries = asArray(value);
+  if (!entries) return undefined;
+  const changes = entries.flatMap((entry) => {
+    const change = codexFileChangeEntry(entry);
+    return change ? [change] : [];
+  });
+  if (changes.length === 0) return undefined;
+  return {
+    changes: changes.slice(0, TRANSCRIPT_FILE_CHANGES_MAX_ENTRIES),
+    totalFiles: changes.length,
+    ...(changes.length > TRANSCRIPT_FILE_CHANGES_MAX_ENTRIES ? { changesTruncated: true } : {}),
+  };
+}
+
+function cappedToolArguments(
+  value: unknown,
+): Pick<ToolCallDetails, "arguments" | "argumentsTruncated"> | undefined {
+  if (value === undefined || value === null) return undefined;
+  let serialized: string | undefined;
+  try {
+    serialized = JSON.stringify(value);
+  } catch {
+    serialized = undefined;
+  }
+  if (serialized === undefined) return undefined;
+  if (serialized.length <= TRANSCRIPT_TOOL_ARGUMENTS_MAX_CHARS) return { arguments: value };
+  return {
+    arguments: serialized.slice(0, TRANSCRIPT_TOOL_ARGUMENTS_MAX_CHARS),
+    argumentsTruncated: true,
+  };
+}
+
+function cappedStructuredContent(
+  value: unknown,
+): Pick<ToolCallDetails, "structuredContent" | "resultTruncated"> | undefined {
+  if (value === undefined || value === null) return undefined;
+  let serialized: string | undefined;
+  try {
+    serialized = JSON.stringify(value);
+  } catch {
+    serialized = undefined;
+  }
+  if (serialized === undefined) return undefined;
+  return serialized.length <= TRANSCRIPT_TOOL_RESULT_MAX_CHARS
+    ? { structuredContent: value }
+    : { resultTruncated: true };
+}
+
+function dataUrlMediaType(value: string | undefined): string | undefined {
+  const match = value === undefined ? null : /^data:([^;,]+)[;,]/.exec(value);
+  return match?.[1];
+}
+
+function base64ByteLength(value: string | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  const base64 = value.startsWith("data:") ? value.slice(value.indexOf(",") + 1) : value;
+  return Math.floor((base64.length * 3) / 4);
+}
+
+function omittedImage(
+  mediaType: string | undefined,
+  byteLength: number | undefined,
+): TranscriptImageRef {
+  return {
+    source: "omitted",
+    ...(mediaType !== undefined ? { mediaType } : {}),
+    ...(byteLength !== undefined ? { byteLength } : {}),
+    reason: CODEX_TOOL_IMAGE_OMITTED_REASON,
+  };
+}
+
+interface ToolResultParts {
+  readonly texts: string[];
+  readonly images: TranscriptImageRef[];
+  readonly otherBlocks: TranscriptResultBlockRef[];
+}
+
+function emptyToolResultParts(): ToolResultParts {
+  return { texts: [], images: [], otherBlocks: [] };
+}
+
+function collectMcpContentBlock(parts: ToolResultParts, value: unknown): void {
+  const block = asObject(value);
+  if (!block) return;
+  const type = asString(block.type);
+  if (type === "text") {
+    const text = asString(block.text);
+    if (text !== undefined) parts.texts.push(text);
+    return;
+  }
+  if (type === "image") {
+    const mediaType = asString(block.mimeType) ?? asString(block.mime_type);
+    parts.images.push(omittedImage(mediaType, base64ByteLength(asString(block.data))));
+    return;
+  }
+  const resource = asObject(block.resource);
+  const uri = asString(resource?.uri) ?? asString(block.uri);
+  const title = asString(block.title) ?? asString(block.name) ?? asString(resource?.name);
+  const mediaType =
+    asString(resource?.mimeType) ?? asString(block.mimeType) ?? asString(block.mime_type);
+  parts.otherBlocks.push({
+    blockType: type ?? "unknown",
+    ...(title !== undefined ? { title } : {}),
+    ...(uri !== undefined ? { uri } : {}),
+    ...(mediaType !== undefined ? { mediaType } : {}),
+  });
+}
+
+function collectInputContentItem(parts: ToolResultParts, value: unknown): void {
+  const entry = asObject(value);
+  if (!entry) return;
+  switch (entry.type) {
+    case "inputText":
+    case "input_text": {
+      const text = asString(entry.text);
+      if (text !== undefined) parts.texts.push(text);
+      return;
+    }
+    case "inputImage":
+    case "input_image": {
+      const imageUrl = asString(entry.imageUrl) ?? asString(entry.image_url);
+      const isDataUrl = imageUrl?.startsWith("data:") === true;
+      parts.images.push(
+        omittedImage(
+          dataUrlMediaType(imageUrl),
+          isDataUrl ? base64ByteLength(imageUrl) : undefined,
+        ),
+      );
+      return;
+    }
+    case "inputAudio":
+    case "input_audio":
+      parts.otherBlocks.push({ blockType: "audio" });
+      return;
+    default:
+      return;
+  }
+}
+
+function toolResultFields(parts: ToolResultParts): Partial<ToolCallDetails> {
+  const resultText = parts.texts.length > 0 ? parts.texts.join("\n\n") : undefined;
+  const cappedText =
+    resultText !== undefined ? capHead(resultText, TRANSCRIPT_TOOL_RESULT_MAX_CHARS) : undefined;
+  return {
+    ...(cappedText !== undefined
+      ? { resultText: cappedText.text, ...(cappedText.truncated ? { resultTruncated: true } : {}) }
+      : {}),
+    ...(parts.images.length > 0 ? { images: parts.images } : {}),
+    ...(parts.otherBlocks.length > 0 ? { otherBlocks: parts.otherBlocks } : {}),
+  };
+}
+
+function codexMcpToolCallDetails(
+  item: Record<string, unknown>,
+  lifecycle: ItemLifecycle,
+): ToolCallDetails {
+  const toolName = asTrimmedString(item.tool);
+  const server = asTrimmedString(item.server);
+  const result = asObject(item.result);
+  const parts = emptyToolResultParts();
+  for (const block of asArray(result?.content) ?? []) collectMcpContentBlock(parts, block);
+  const error = asTrimmedString(asObject(item.error)?.message) ?? asTrimmedString(item.error);
+  const durationMs = asNonNegativeFinite(item.durationMs);
+  const resultFields = toolResultFields(parts);
+  const structured = cappedStructuredContent(result?.structuredContent);
+  return {
+    ...(toolName !== undefined ? { toolName } : {}),
+    ...(server !== undefined ? { server } : {}),
+    ...cappedToolArguments(item.arguments),
+    ...resultFields,
+    ...(structured?.structuredContent !== undefined
+      ? { structuredContent: structured.structuredContent }
+      : {}),
+    ...(structured?.resultTruncated || resultFields.resultTruncated
+      ? { resultTruncated: true }
+      : {}),
+    ...(error !== undefined ? { error } : {}),
+    ...(lifecycle === "item.completed"
+      ? { success: error === undefined && item.status !== "failed" }
+      : {}),
+    ...(durationMs !== undefined ? { durationMs } : {}),
+  };
+}
+
+function codexDynamicToolCallDetails(item: Record<string, unknown>): ToolCallDetails {
+  const toolName = asTrimmedString(item.tool);
+  const namespace = asTrimmedString(item.namespace);
+  const parts = emptyToolResultParts();
+  for (const entry of asArray(item.contentItems) ?? []) collectInputContentItem(parts, entry);
+  const durationMs = asNonNegativeFinite(item.durationMs);
+  return {
+    ...(toolName !== undefined ? { toolName } : {}),
+    ...(namespace !== undefined ? { server: namespace } : {}),
+    ...cappedToolArguments(item.arguments),
+    ...toolResultFields(parts),
+    ...(typeof item.success === "boolean" ? { success: item.success } : {}),
+    ...(durationMs !== undefined ? { durationMs } : {}),
+  };
+}
+
+function codexFunctionCallOutputDetails(item: Record<string, unknown>): ToolCallDetails {
+  const toolName = asTrimmedString(item.name);
+  const namespace = asTrimmedString(item.namespace);
+  const parts = emptyToolResultParts();
+  const output = item.output;
+  if (typeof output === "string") {
+    parts.texts.push(output);
+  } else {
+    for (const entry of asArray(output) ?? []) collectInputContentItem(parts, entry);
+  }
+  return {
+    ...(toolName !== undefined ? { toolName } : {}),
+    ...(namespace !== undefined ? { server: namespace } : {}),
+    ...toolResultFields(parts),
+  };
+}
+
+function codexWebSearchAction(value: unknown): WebSearchAction | undefined {
+  const action = asObject(value);
+  if (!action) return undefined;
+  const query = asTrimmedString(action.query);
+  const url = asTrimmedString(action.url);
+  const pattern = asTrimmedString(action.pattern);
+  switch (action.type) {
+    case "search":
+      return { type: "search", ...(query !== undefined ? { query } : {}) };
+    case "openPage":
+    case "open_page":
+      return { type: "open_page", ...(url !== undefined ? { url } : {}) };
+    case "findInPage":
+    case "find_in_page":
+      return {
+        type: "find_in_page",
+        ...(url !== undefined ? { url } : {}),
+        ...(pattern !== undefined ? { pattern } : {}),
+      };
+    case "other":
+      return { type: "other" };
+    default:
+      return undefined;
+  }
+}
+
+function codexWebSearchDetails(item: Record<string, unknown>): WebSearchDetails | undefined {
+  const query = asTrimmedString(item.query);
+  const actionRecord = asObject(item.action);
+  const action = codexWebSearchAction(actionRecord);
+  const queries = (asArray(actionRecord?.queries) ?? []).flatMap((entry) => {
+    const value = asTrimmedString(entry);
+    return value !== undefined ? [value] : [];
+  });
+  const results: WebSearchResult[] = (asArray(item.results) ?? []).flatMap((entry) => {
+    const result = asObject(entry);
+    const url = asTrimmedString(result?.url);
+    if (!url) return [];
+    const title = asTrimmedString(result?.title);
+    return [{ url, ...(title !== undefined ? { title } : {}) }];
+  });
+  const details: WebSearchDetails = {
+    ...(query !== undefined ? { query } : {}),
+    ...(queries.length > 0 ? { queries } : {}),
+    ...(action !== undefined ? { action } : {}),
+    ...(results.length > 0 ? { results: results.slice(0, WEB_SEARCH_RESULTS_MAX_ENTRIES) } : {}),
+    ...(results.length > WEB_SEARCH_RESULTS_MAX_ENTRIES ? { resultsTruncated: true } : {}),
+  };
+  return Object.keys(details).length > 0 ? details : undefined;
+}
+
+function codexReasoningDetails(item: Record<string, unknown>): ReasoningDetails | undefined {
+  const summary = reasoningSummaryDetail(item);
+  if (summary === undefined) return undefined;
+  const capped = capHead(summary, TRANSCRIPT_REASONING_MAX_CHARS);
+  return { summary: capped.text, ...(capped.truncated ? { summaryTruncated: true } : {}) };
+}
+
+function codexMessagePhase(value: unknown): AssistantMessagePhase | undefined {
+  return value === "commentary" || value === "partial_answer" || value === "final_answer"
+    ? value
+    : undefined;
+}
+
+function codexItemTypedFields(
+  nativeType: CodexItemType | undefined,
+  item: Record<string, unknown>,
+  lifecycle: ItemLifecycle,
+): TypedItemFields {
+  switch (nativeType) {
+    case "agentMessage": {
+      const phase = codexMessagePhase(item.phase);
+      return phase ? { phase } : {};
+    }
+    case "commandExecution": {
+      const command = codexCommandDetails(item, lifecycle);
+      return command ? { command } : {};
+    }
+    case "fileChange": {
+      const fileChanges = codexFileChangeDetails(item.changes);
+      return fileChanges ? { fileChanges } : {};
+    }
+    case "mcpToolCall": {
+      const toolCall = codexMcpToolCallDetails(item, lifecycle);
+      return { ...(toolCall.toolName ? { toolName: toolCall.toolName } : {}), toolCall };
+    }
+    case "dynamicToolCall": {
+      const toolCall = codexDynamicToolCallDetails(item);
+      return { ...(toolCall.toolName ? { toolName: toolCall.toolName } : {}), toolCall };
+    }
+    case "webSearch": {
+      const webSearch = codexWebSearchDetails(item);
+      return webSearch ? { webSearch } : {};
+    }
+    case "imageView": {
+      const path = asTrimmedString(item.path);
+      return path ? { toolCall: { images: [{ source: "file", path }] } } : {};
+    }
+    case "reasoning": {
+      if (lifecycle !== "item.completed") return {};
+      const reasoning = codexReasoningDetails(item);
+      return reasoning ? { reasoning } : {};
+    }
+    default:
+      return {};
+  }
+}
+
+function withoutKeys(
+  record: Record<string, unknown>,
+  keys: ReadonlyArray<string>,
+): Record<string, unknown> {
+  const next = { ...record };
+  for (const key of keys) delete next[key];
+  return next;
+}
+
+function stripPromotedItemFields(
+  nativeType: CodexItemType | undefined,
+  item: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  switch (nativeType) {
+    case "commandExecution":
+      return withoutKeys(item, ["aggregatedOutput"]);
+    case "fileChange":
+      return {
+        ...item,
+        changes: (asArray(item.changes) ?? []).map((entry) => {
+          const change = asObject(entry);
+          return change ? withoutKeys(change, ["diff"]) : entry;
+        }),
+      };
+    case "mcpToolCall":
+      return withoutKeys(item, ["result"]);
+    case "dynamicToolCall":
+      return withoutKeys(item, ["contentItems"]);
+    default:
+      return undefined;
+  }
+}
+
+function itemLifecycleData(event: ProviderEvent, nativeType: CodexItemType | undefined): unknown {
+  const payload = asObject(event.payload);
+  const item = asObject(payload?.item);
+  const strippedItem = item ? stripPromotedItemFields(nativeType, item) : undefined;
+  return strippedItem && payload ? { ...payload, item: strippedItem } : event.payload;
+}
+
 function mapItemLifecycle(
   event: ProviderEvent,
   canonicalThreadId: ThreadId,
-  lifecycle: "item.started" | "item.updated" | "item.completed",
+  lifecycle: ItemLifecycle,
   codexHome?: CodexGeneratedImageHomeContext,
 ): ProviderRuntimeEvent | undefined {
   const payload = asObject(event.payload);
@@ -941,10 +1606,12 @@ function mapItemLifecycle(
     return undefined;
   }
 
-  const itemType = toCanonicalItemType(source.type ?? source.kind);
-  if (itemType === "unknown" && lifecycle !== "item.updated") {
+  const rawItemType = source.type ?? source.kind;
+  const itemType = toCanonicalItemType(rawItemType);
+  if (itemType === "unknown") {
     return undefined;
   }
+  const nativeType = resolveCodexItemType(rawItemType);
   const generatedImageReference =
     itemType === "image_generation"
       ? extractCodexGeneratedImageReference({
@@ -964,8 +1631,6 @@ function mapItemLifecycle(
   const canonicalItemType =
     lifecycle === "item.completed" && itemType === "review_exited" ? "assistant_message" : itemType;
 
-  // Only the provider-authored summary is user-visible reasoning. Raw content
-  // may contain model trace data and must not leak into transcript activities.
   const detail =
     itemType === "reasoning" ? reasoningSummaryDetail(source) : itemDetail(source, payload ?? {});
   const status = itemStatus(lifecycle, source.status);
@@ -983,16 +1648,24 @@ function mapItemLifecycle(
           }),
         )
       : Option.none();
+  const typedFields = item ? codexItemTypedFields(nativeType, item, lifecycle) : {};
+  const data = generatedImageReference
+    ? codexGeneratedImageArtifact(generatedImageReference)
+    : itemLifecycleData(event, nativeType);
+  const base = generatedImageReference
+    ? withSanitizedGeneratedImageRaw(
+        runtimeEventBase(event, canonicalThreadId),
+        event,
+        canonicalThreadId,
+        codexHome,
+      )
+    : runtimeEventBase(event, canonicalThreadId);
 
   return {
-    ...(generatedImageReference
-      ? withSanitizedGeneratedImageRaw(
-          runtimeEventBase(event, canonicalThreadId),
-          event,
-          canonicalThreadId,
-          codexHome,
-        )
-      : runtimeEventBase(event, canonicalThreadId)),
+    ...base,
+    ...(data !== event.payload && !generatedImageReference && base.raw
+      ? { raw: { ...base.raw, payload: data } }
+      : {}),
     type: lifecycle,
     payload: {
       itemType: canonicalItemType,
@@ -1004,11 +1677,8 @@ function mapItemLifecycle(
         : detail
           ? { detail }
           : {}),
-      ...(generatedImageReference
-        ? { data: codexGeneratedImageArtifact(generatedImageReference) }
-        : event.payload !== undefined
-          ? { data: event.payload }
-          : {}),
+      ...typedFields,
+      ...(data !== undefined ? { data } : {}),
     },
   };
 }
@@ -1043,20 +1713,6 @@ function hookRunOutput(run: Record<string, unknown>): string | undefined {
   return output ? sanitizeUnmappedProviderDetail(output) : undefined;
 }
 
-function withSanitizedHookRaw(
-  event: ProviderEvent,
-  canonicalThreadId: ThreadId,
-): Omit<ProviderRuntimeEvent, "type" | "payload"> {
-  return {
-    ...runtimeEventBase(event, canonicalThreadId),
-    raw: {
-      source: eventRawSource(event),
-      method: event.method,
-      payload: { synaraSanitized: true },
-    },
-  };
-}
-
 function mapCodexHookEvent(
   event: ProviderEvent,
   canonicalThreadId: ThreadId,
@@ -1073,7 +1729,7 @@ function mapCodexHookEvent(
   const hookName = asTrimmedString(run.sourcePath) ?? asTrimmedString(run.handlerType) ?? hookEvent;
   const statusMessage = sanitizeUnmappedProviderDetail(asTrimmedString(run.statusMessage));
   const data = sanitizeUnmappedProviderData(run);
-  const base = withSanitizedHookRaw(event, canonicalThreadId);
+  const base = withSanitizedRaw(event, canonicalThreadId);
 
   if (event.method === "hook/started") {
     return {
@@ -1113,12 +1769,69 @@ function mapCodexHookEvent(
   };
 }
 
-// Configuration/lifecycle bookkeeping belongs in native diagnostics, not the transcript.
 const DIAGNOSTIC_ONLY_CODEX_METHODS = new Set([
-  "remoteControl/status/changed",
-  "skills/changed",
   "session/threadOpenRequested",
+  "session/threadOpenResolved",
 ]);
+
+function mapCodexMcpTransportStderr(
+  event: ProviderEvent,
+  canonicalThreadId: ThreadId,
+  tracker: CodexTranscriptTracker,
+): ProviderRuntimeEvent[] | undefined {
+  if (event.method !== "process/stderr" || !event.message) return undefined;
+  const transport = classifyCodexMcpTransportLine(event.message);
+  if (!transport) return undefined;
+  const target = transport.serverName ?? transport.host ?? "unknown";
+  const generation = lifecycleGenerationKey(event);
+  if (!tracker.firstInGeneration(canonicalThreadId, generation, `mcp-transport:${target}`)) {
+    return [];
+  }
+  const title = transport.serverName
+    ? `MCP server "${transport.serverName}" transport error`
+    : transport.host
+      ? `MCP server at ${transport.host} transport error`
+      : "MCP server transport error";
+  return [
+    transcriptNoticeEvent(event, canonicalThreadId, {
+      noticeKind: "mcp-server-status",
+      severity: "warning",
+      title: noticeTitle(title, "MCP server transport error"),
+      detail: transport.reason,
+      body: sanitizeUnmappedProviderDetail(transport.message) ?? transport.reason,
+      status: "failed",
+      dedupeKey: `mcp-transport:${generation}:${target}`,
+      data: {
+        ...(transport.serverName ? { server: transport.serverName } : {}),
+        ...(transport.host ? { host: transport.host } : {}),
+      },
+    }),
+  ];
+}
+
+function mapCodexSessionWarning(
+  event: ProviderEvent,
+  canonicalThreadId: ThreadId,
+): ProviderRuntimeEvent[] | undefined {
+  const title =
+    event.method === "session/threadResumeFallback"
+      ? "Could not resume the Codex thread; started a new thread"
+      : event.method === "session/threadStartWithoutResume"
+        ? "Started a new Codex thread without earlier context"
+        : undefined;
+  if (title === undefined) return undefined;
+  const detail = sanitizeUnmappedProviderDetail(asTrimmedString(event.message));
+  return [
+    transcriptNoticeEvent(event, canonicalThreadId, {
+      noticeKind: "provider-warning",
+      severity: "warning",
+      title,
+      ...(detail ? { detail } : {}),
+      status: "completed",
+      dedupeKey: `${event.method}:${lifecycleGenerationKey(event)}`,
+    }),
+  ];
+}
 
 function mapUnmappedCodexEvent(
   event: ProviderEvent,
@@ -1152,25 +1865,733 @@ function mapUnmappedCodexEvent(
   };
 }
 
+const CODEX_TRANSCRIPT_TRACKER_MAX_ENTRIES = 512;
+
+function rememberBounded<K, V>(map: Map<K, V>, key: K, value: V): void {
+  map.delete(key);
+  map.set(key, value);
+  if (map.size > CODEX_TRANSCRIPT_TRACKER_MAX_ENTRIES) {
+    const oldest = map.keys().next();
+    if (!oldest.done) map.delete(oldest.value);
+  }
+}
+
+function threadTurnKey(threadId: string, turnId: string): string {
+  return `${threadId}\u0000${turnId}`;
+}
+
+export class CodexTranscriptTracker {
+  private readonly finalAnswerItemByTurn = new Map<string, string>();
+  private readonly originByTurn = new Map<string, TurnOrigin>();
+  private readonly activeTurnByThread = new Map<string, string>();
+  private readonly readyMcpServersByGeneration = new Map<string, ReadonlyArray<string>>();
+  private readonly emittedOncePerGeneration = new Map<string, true>();
+  private readonly openReviewKeyByThread = new Map<string, string>();
+
+  turnStarted(threadId: string, turnId: string, origin: TurnOrigin | undefined): void {
+    rememberBounded(this.activeTurnByThread, threadId, turnId);
+    if (origin) rememberBounded(this.originByTurn, threadTurnKey(threadId, turnId), origin);
+  }
+
+  turnEnded(threadId: string, turnId: string | undefined): string | undefined {
+    if (turnId === undefined || this.activeTurnByThread.get(threadId) === turnId) {
+      this.activeTurnByThread.delete(threadId);
+    }
+    if (turnId === undefined) return undefined;
+    const key = threadTurnKey(threadId, turnId);
+    const finalAnswerItemId = this.finalAnswerItemByTurn.get(key);
+    this.finalAnswerItemByTurn.delete(key);
+    this.originByTurn.delete(key);
+    return finalAnswerItemId;
+  }
+
+  hasActiveTurn(threadId: string): boolean {
+    return this.activeTurnByThread.has(threadId);
+  }
+
+  turnOrigin(threadId: string, turnId: string): TurnOrigin | undefined {
+    return this.originByTurn.get(threadTurnKey(threadId, turnId));
+  }
+
+  recordFinalAnswer(threadId: string, turnId: string, itemId: string): void {
+    rememberBounded(this.finalAnswerItemByTurn, threadTurnKey(threadId, turnId), itemId);
+  }
+
+  markMcpServerReady(
+    threadId: string,
+    generation: string,
+    serverName: string,
+  ): ReadonlyArray<string> {
+    const key = threadTurnKey(threadId, generation);
+    const ready = this.readyMcpServersByGeneration.get(key) ?? [];
+    const next = ready.includes(serverName) ? ready : [...ready, serverName];
+    rememberBounded(this.readyMcpServersByGeneration, key, next);
+    return next;
+  }
+
+  markMcpServerUnavailable(threadId: string, generation: string, serverName: string): void {
+    const key = threadTurnKey(threadId, generation);
+    const ready = this.readyMcpServersByGeneration.get(key);
+    if (ready?.includes(serverName)) {
+      rememberBounded(
+        this.readyMcpServersByGeneration,
+        key,
+        ready.filter((name) => name !== serverName),
+      );
+    }
+  }
+
+  openReview(threadId: string, dedupeKey: string): void {
+    rememberBounded(this.openReviewKeyByThread, threadId, dedupeKey);
+  }
+
+  closeReview(threadId: string): string | undefined {
+    const dedupeKey = this.openReviewKeyByThread.get(threadId);
+    this.openReviewKeyByThread.delete(threadId);
+    return dedupeKey;
+  }
+
+  firstInGeneration(threadId: string, generation: string, key: string): boolean {
+    const entryKey = threadTurnKey(threadId, `${generation}\u0000${key}`);
+    if (this.emittedOncePerGeneration.has(entryKey)) return false;
+    rememberBounded(this.emittedOncePerGeneration, entryKey, true);
+    return true;
+  }
+
+  forgetThread(threadId: string): void {
+    const prefix = `${threadId}\u0000`;
+    this.activeTurnByThread.delete(threadId);
+    this.openReviewKeyByThread.delete(threadId);
+    for (const map of [
+      this.finalAnswerItemByTurn,
+      this.originByTurn,
+      this.readyMcpServersByGeneration,
+      this.emittedOncePerGeneration,
+    ] as ReadonlyArray<Map<string, unknown>>) {
+      for (const key of map.keys()) {
+        if (key.startsWith(prefix)) map.delete(key);
+      }
+    }
+  }
+}
+
+function isChildConversationEvent(event: ProviderEvent): boolean {
+  return event.providerParentThreadId !== undefined;
+}
+
+function codexTurnOrigin(payload: Record<string, unknown> | undefined): TurnOrigin | undefined {
+  const origin = payload?.[CODEX_TURN_ORIGIN_PAYLOAD_KEY];
+  return origin === "user" || origin === "provider" ? origin : undefined;
+}
+
+function formatWaitDuration(durationMs: number | undefined): string | undefined {
+  if (durationMs === undefined) return undefined;
+  const totalSeconds = Math.max(0, Math.round(durationMs / 1000));
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return seconds === 0 ? `${minutes}m` : `${minutes}m ${seconds}s`;
+}
+
+function userMessageText(item: Record<string, unknown>): string | undefined {
+  const texts = (asArray(item.content) ?? []).flatMap((entry) => {
+    const input = asObject(entry);
+    const text = input?.type === "text" ? asString(input.text) : undefined;
+    return text !== undefined && text.trim().length > 0 ? [text] : [];
+  });
+  return texts.length > 0 ? texts.join("\n\n") : undefined;
+}
+
+function subAgentLabel(agentPath: string | undefined): string {
+  const segment = agentPath
+    ?.split("/")
+    .map((part) => part.trim())
+    .findLast((part) => part.length > 0);
+  return segment ?? "Subagent";
+}
+
+function subAgentActivityNotice(item: Record<string, unknown>, turnKey: string): TranscriptNotice {
+  const agentPath = asTrimmedString(item.agentPath);
+  const agent = subAgentLabel(agentPath);
+  const kind = asString(item.kind);
+  const presentation =
+    kind === "started"
+      ? { title: `${agent} started working`, status: "running" as const }
+      : kind === "interacted"
+        ? { title: `${agent} received a message`, status: "running" as const }
+        : kind === "interrupted"
+          ? { title: `${agent} was interrupted`, status: "cancelled" as const }
+          : { title: `${agent} finished`, status: "completed" as const };
+  const model = asTrimmedString(item.model);
+  return {
+    noticeKind: "subagent-activity",
+    severity: "info",
+    title: noticeTitle(presentation.title, "Subagent activity"),
+    status: presentation.status,
+    ...noticeDetail(model),
+    dedupeKey: `subagent:${turnKey}:${agentPath ?? asTrimmedString(item.id) ?? "unknown"}`,
+  };
+}
+
+function mapCodexItemNotices(
+  event: ProviderEvent,
+  canonicalThreadId: ThreadId,
+  lifecycle: "item.started" | "item.completed",
+  nativeType: CodexItemType | undefined,
+  item: Record<string, unknown>,
+  tracker: CodexTranscriptTracker,
+): ProviderRuntimeEvent[] {
+  const itemId = asTrimmedString(item.id) ?? event.itemId ?? event.id;
+  const turnKey = event.turnId ?? lifecycleGenerationKey(event);
+  const notice = (value: TranscriptNotice) => [
+    transcriptNoticeEvent(event, canonicalThreadId, value),
+  ];
+  switch (nativeType) {
+    case "hookPrompt": {
+      if (lifecycle !== "item.completed") return [];
+      const fragments = (asArray(item.fragments) ?? []).flatMap((entry) => {
+        const text = asString(asObject(entry)?.text);
+        return text !== undefined && text.trim().length > 0 ? [text] : [];
+      });
+      return notice({
+        noticeKind: "hook-prompt",
+        severity: "info",
+        title: "Hook feedback",
+        status: "completed",
+        ...noticeBody(fragments.join("\n\n")),
+        dedupeKey: `hook-prompt:${itemId}`,
+      });
+    }
+    case "sleep": {
+      const duration = formatWaitDuration(asNonNegativeFinite(item.durationMs));
+      const settled = lifecycle === "item.completed";
+      return notice({
+        noticeKind: "sleep",
+        severity: "info",
+        title: duration
+          ? `${settled ? "Waited" : "Waiting"} ${duration}`
+          : settled
+            ? "Finished waiting"
+            : "Waiting",
+        status: settled ? "completed" : "running",
+        dedupeKey: `sleep:${itemId}`,
+      });
+    }
+    case "subAgentActivity":
+      return lifecycle === "item.completed" ? notice(subAgentActivityNotice(item, turnKey)) : [];
+    case "enteredReviewMode": {
+      if (lifecycle !== "item.completed") return [];
+      const target = asTrimmedString(item.review);
+      const dedupeKey = `review:${itemId}`;
+      tracker.openReview(canonicalThreadId, dedupeKey);
+      return notice({
+        noticeKind: "review-mode",
+        severity: "info",
+        title: noticeTitle(target ? `Started review: ${target}` : undefined, "Started review"),
+        status: "running",
+        dedupeKey,
+      });
+    }
+    case "exitedReviewMode":
+      return lifecycle === "item.completed"
+        ? notice({
+            noticeKind: "review-mode",
+            severity: "info",
+            title: "Review finished",
+            status: "completed",
+            dedupeKey: tracker.closeReview(canonicalThreadId) ?? `review:${itemId}`,
+          })
+        : [];
+    case "userMessage": {
+      if (
+        lifecycle !== "item.completed" ||
+        isChildConversationEvent(event) ||
+        event.turnId === undefined ||
+        tracker.turnOrigin(canonicalThreadId, event.turnId) !== "provider"
+      ) {
+        return [];
+      }
+      return notice({
+        noticeKind: "user-message-injected",
+        severity: "info",
+        title: "Message added outside Synara",
+        ...noticeBody(userMessageText(item)),
+        dedupeKey: `user-message:${itemId}`,
+      });
+    }
+    default:
+      return [];
+  }
+}
+
+function mapFunctionCallOutputItem(
+  event: ProviderEvent,
+  canonicalThreadId: ThreadId,
+  item: Record<string, unknown>,
+): ProviderRuntimeEvent {
+  const toolCall = codexFunctionCallOutputDetails(item);
+  const itemId = asTrimmedString(item.id);
+  return {
+    ...withSanitizedRaw(event, canonicalThreadId),
+    ...(itemId ? { itemId: RuntimeItemId.makeUnsafe(itemId) } : {}),
+    type: "item.completed",
+    payload: {
+      itemType: "dynamic_tool_call",
+      status: "completed",
+      ...(toolCall.toolName ? { title: toolCall.toolName, toolName: toolCall.toolName } : {}),
+      toolCall,
+    },
+  };
+}
+
+function autoApprovalReviewTarget(action: Record<string, unknown> | undefined): string | undefined {
+  switch (action?.type) {
+    case "command":
+      return asTrimmedString(action.command);
+    case "execve":
+      return asTrimmedString(action.program);
+    case "writeStdin":
+      return "input to a running command";
+    case "applyPatch": {
+      const files = asArray(action.files)?.length ?? 0;
+      return files === 1 ? "a change to 1 file" : `changes to ${files} files`;
+    }
+    case "networkAccess":
+      return asTrimmedString(action.host) ?? asTrimmedString(action.target);
+    case "mcpToolCall":
+      return asTrimmedString(action.toolTitle) ?? asTrimmedString(action.toolName);
+    case "requestPermissions":
+      return "a permission request";
+    default:
+      return undefined;
+  }
+}
+
+function autoApprovalReviewNotice(
+  event: ProviderEvent,
+  payload: Record<string, unknown> | undefined,
+): TranscriptNotice {
+  const review = asObject(payload?.review);
+  const target = autoApprovalReviewTarget(asObject(payload?.action));
+  const reviewKey =
+    asTrimmedString(payload?.reviewId) ??
+    asTrimmedString(payload?.targetItemId) ??
+    event.itemId ??
+    event.id;
+  const dedupeKey = `auto-approval-review:${reviewKey}`;
+  const rationale = asTrimmedString(review?.rationale);
+  if (event.method === "item/autoApprovalReview/started") {
+    return {
+      noticeKind: "auto-approval-review",
+      severity: "info",
+      title: noticeTitle(target ? `Reviewing ${target}` : undefined, "Reviewing an action"),
+      status: "running",
+      dedupeKey,
+    };
+  }
+  const status = asString(review?.status);
+  const outcome =
+    status === "approved"
+      ? { label: "Approved", severity: "info" as const, status: "completed" as const }
+      : status === "denied"
+        ? { label: "Denied", severity: "warning" as const, status: "blocked" as const }
+        : status === "timedOut"
+          ? {
+              label: "Review timed out for",
+              severity: "warning" as const,
+              status: "failed" as const,
+            }
+          : status === "aborted"
+            ? {
+                label: "Review stopped for",
+                severity: "warning" as const,
+                status: "cancelled" as const,
+              }
+            : { label: "Reviewed", severity: "info" as const, status: "completed" as const };
+  return {
+    noticeKind: "auto-approval-review",
+    severity: outcome.severity,
+    title: noticeTitle(
+      target ? `${outcome.label} ${target}` : undefined,
+      `Automatic review: ${status ?? "completed"}`,
+    ),
+    status: outcome.status,
+    ...noticeDetail(rationale),
+    dedupeKey,
+  };
+}
+
+function humanizeIdentifier(value: string): string {
+  return value
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/[_-]+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function moderationMetadataIsFlagged(metadata: unknown): boolean {
+  const record = asObject(metadata);
+  return record?.flagged === true || record?.blocked === true;
+}
+
+function mcpStartupStatusEvents(
+  event: ProviderEvent,
+  canonicalThreadId: ThreadId,
+  payload: Record<string, unknown> | undefined,
+  tracker: CodexTranscriptTracker,
+): ProviderRuntimeEvent[] {
+  const name = asTrimmedString(payload?.name);
+  const status = asString(payload?.status);
+  if (!name) return [];
+  const generation = lifecycleGenerationKey(event);
+  if (status === "ready") {
+    const ready = tracker.markMcpServerReady(canonicalThreadId, generation, name);
+    const list = ready.join(", ");
+    return [
+      transcriptNoticeEvent(event, canonicalThreadId, {
+        noticeKind: "mcp-server-status",
+        severity: "info",
+        title: noticeTitle(`MCP servers ready: ${list}`, "MCP servers ready"),
+        status: "completed",
+        ...(list.length > NOTICE_TITLE_MAX_CHARS ? noticeDetail(list) : {}),
+        dedupeKey: `mcp:${generation}`,
+      }),
+    ];
+  }
+  if (status === "failed") {
+    tracker.markMcpServerUnavailable(canonicalThreadId, generation, name);
+    const reason = asTrimmedString(payload?.error) ?? asTrimmedString(payload?.failureReason);
+    return [
+      transcriptNoticeEvent(event, canonicalThreadId, {
+        noticeKind: "mcp-server-status",
+        severity: "warning",
+        title: noticeTitle(`MCP server ${name} failed to start`, "MCP server failed to start"),
+        status: "failed",
+        ...noticeDetail(reason),
+        dedupeKey: `mcp:${generation}:${name}`,
+      }),
+    ];
+  }
+  return [];
+}
+
+function codexRetryProgress(
+  message: string,
+): { retryAttempt: number; retryMaxAttempts: number } | undefined {
+  const match = /(?:re-?connecting|retrying)\D*?(\d+)\s*\/\s*(\d+)/i.exec(message);
+  if (!match) return undefined;
+  const retryAttempt = Number(match[1]);
+  const retryMaxAttempts = Number(match[2]);
+  return Number.isSafeInteger(retryAttempt) && Number.isSafeInteger(retryMaxAttempts)
+    ? { retryAttempt, retryMaxAttempts }
+    : undefined;
+}
+
+function activeTurnSessionStateEvent(
+  event: ProviderEvent,
+  canonicalThreadId: ThreadId,
+  tracker: CodexTranscriptTracker,
+  reason: string | undefined,
+): ProviderRuntimeEvent[] {
+  if (!tracker.hasActiveTurn(canonicalThreadId)) return [];
+  return [
+    {
+      ...withSanitizedRaw(event, canonicalThreadId),
+      type: "session.state.changed",
+      payload: {
+        state: "running",
+        ...(reason ? { reason } : {}),
+      },
+    },
+  ];
+}
+
+function mapCodexNoticeNotification(
+  event: ProviderEvent,
+  canonicalThreadId: ThreadId,
+  payload: Record<string, unknown> | undefined,
+  tracker: CodexTranscriptTracker,
+): ProviderRuntimeEvent[] | undefined {
+  const turnKey = event.turnId ?? lifecycleGenerationKey(event);
+  const notice = (value: TranscriptNotice) => [
+    transcriptNoticeEvent(event, canonicalThreadId, value),
+  ];
+  switch (event.method) {
+    case "thread/reverted":
+      return notice({
+        noticeKind: "thread-reverted",
+        severity: "info",
+        title: "Reverted to an earlier turn",
+        status: "completed",
+      });
+    case "skills/changed":
+      if (!tracker.firstInGeneration(canonicalThreadId, lifecycleGenerationKey(event), "skills")) {
+        return [];
+      }
+      return notice({
+        noticeKind: "skills-changed",
+        severity: "info",
+        title: "Skills updated",
+        status: "completed",
+        dedupeKey: `skills-changed:${lifecycleGenerationKey(event)}`,
+      });
+    case "item/autoApprovalReview/started":
+    case "item/autoApprovalReview/completed":
+      return notice(autoApprovalReviewNotice(event, payload));
+    case "autoApprovalReview/strictReviewRequired":
+      return notice({
+        noticeKind: "auto-approval-review",
+        severity: "warning",
+        title: "This request requires additional safety checks",
+        dedupeKey: `auto-approval-review-strict:${turnKey}:${asNumber(payload?.startedAtMs) ?? event.id}`,
+      });
+    case "mcpServer/startupStatus/updated":
+      return mcpStartupStatusEvents(event, canonicalThreadId, payload, tracker);
+    case "mcpServer/elicitation/request/unrenderable": {
+      const server = asTrimmedString(payload?.serverName);
+      return notice({
+        noticeKind: "mcp-elicitation",
+        severity: "warning",
+        title: noticeTitle(
+          server ? `${server} requested information (not supported)` : undefined,
+          "An MCP server requested information (not supported)",
+        ),
+        status: "cancelled",
+        ...noticeDetail(asString(payload?.message)),
+      });
+    }
+    case "model/verification": {
+      const verifications = (asArray(payload?.verifications) ?? []).flatMap((entry) => {
+        const value = asTrimmedString(entry);
+        return value ? [humanizeIdentifier(value)] : [];
+      });
+      return notice({
+        noticeKind: "model-verification",
+        severity: "info",
+        title: noticeTitle(
+          verifications.length > 0 ? `Model verification: ${verifications.join(", ")}` : undefined,
+          "Model verification",
+        ),
+        dedupeKey: `model-verification:${turnKey}`,
+      });
+    }
+    case "modelProvider/authRecoveryStarted":
+    case "modelProvider/authRecoveryCompleted": {
+      const provider = asTrimmedString(payload?.provider);
+      const started = event.method === "modelProvider/authRecoveryStarted";
+      return notice({
+        noticeKind: "auth-recovery",
+        severity: "info",
+        title: noticeTitle(
+          provider
+            ? started
+              ? `Reconnecting to ${provider}`
+              : `Finished reconnecting to ${provider}`
+            : undefined,
+          started ? "Reconnecting to the model provider" : "Finished reconnecting",
+        ),
+        status: started ? "running" : "completed",
+        ...noticeDetail(asString(payload?.message)),
+        dedupeKey: `auth-recovery:${turnKey}:${provider ?? "provider"}`,
+      });
+    }
+    case "turn/moderationMetadata":
+      return moderationMetadataIsFlagged(payload?.metadata)
+        ? notice({
+            noticeKind: "moderation",
+            severity: "warning",
+            title: "Response flagged by moderation",
+            dedupeKey: `moderation:${turnKey}`,
+          })
+        : [];
+    case "warning":
+    case "guardianWarning": {
+      const message = asTrimmedString(payload?.message) ?? event.message;
+      const guardian = event.method === "guardianWarning";
+      return notice({
+        noticeKind: guardian ? "guardian-warning" : "provider-warning",
+        severity: "warning",
+        title: noticeTitle(message, guardian ? "Guardian warning" : "Codex warning"),
+        ...(message !== undefined && message.length > NOTICE_TITLE_MAX_CHARS
+          ? noticeBody(message)
+          : {}),
+        dedupeKey: `${guardian ? "guardian-warning" : "warning"}:${turnKey}:${stableTextKey(message ?? "")}`,
+      });
+    }
+    case "thread/environment/connected":
+      return activeTurnSessionStateEvent(event, canonicalThreadId, tracker, undefined);
+    case "thread/environment/disconnected":
+      return activeTurnSessionStateEvent(
+        event,
+        canonicalThreadId,
+        tracker,
+        "Environment disconnected",
+      );
+    case "model/safetyBuffering/updated":
+      return activeTurnSessionStateEvent(
+        event,
+        canonicalThreadId,
+        tracker,
+        payload?.showBufferingUi === true ? "Running safety checks" : undefined,
+      );
+    case "item/commandExecution/terminalInteraction": {
+      const stdin = asString(payload?.stdin);
+      return [
+        {
+          ...withSanitizedRaw(event, canonicalThreadId),
+          type: "item.updated",
+          payload: {
+            itemType: "command_execution",
+            ...(stdin !== undefined
+              ? { command: { lastStdin: redactProviderText(stdin, COMMAND_STDIN_MAX_CHARS).text } }
+              : {}),
+          },
+        },
+      ];
+    }
+    case "item/fileChange/patchUpdated": {
+      const fileChanges = codexFileChangeDetails(payload?.changes);
+      return [
+        {
+          ...withMinimalRawPayload(runtimeEventBase(event, canonicalThreadId), event),
+          type: "item.updated",
+          payload: {
+            itemType: "file_change",
+            status: "inProgress",
+            ...(fileChanges ? { fileChanges } : {}),
+          },
+        },
+      ];
+    }
+    default:
+      return undefined;
+  }
+}
+
+export type CodexRuntimeEventMapper = (
+  event: ProviderEvent,
+  canonicalThreadId: ThreadId,
+  codexHome?: CodexGeneratedImageHomeContext,
+) => ReadonlyArray<ProviderRuntimeEvent>;
+
+export function makeCodexRuntimeEventMapper(
+  tracker: CodexTranscriptTracker = new CodexTranscriptTracker(),
+): CodexRuntimeEventMapper {
+  return (event, canonicalThreadId, codexHome) =>
+    mapToRuntimeEvents(event, canonicalThreadId, tracker, codexHome);
+}
+
+function isKnownCodexMethod(event: ProviderEvent): boolean {
+  if (event.kind === "notification") {
+    return (
+      codexNotificationDisposition(event.method) !== undefined ||
+      event.method === "item/started" ||
+      event.method === "item/completed"
+    );
+  }
+  return event.kind === "request" && codexRequestDisposition(event.method) !== undefined;
+}
+
+function isIgnoredCodexEvent(event: ProviderEvent): boolean {
+  if (event.kind === "notification") {
+    return isIgnoredCodexDisposition(codexNotificationDisposition(event.method));
+  }
+  if (event.kind === "request") {
+    return isIgnoredCodexDisposition(codexRequestDisposition(event.method));
+  }
+  return false;
+}
+
+function mapCodexItemEvent(
+  event: ProviderEvent,
+  canonicalThreadId: ThreadId,
+  lifecycle: "item.started" | "item.completed",
+  tracker: CodexTranscriptTracker,
+  codexHome?: CodexGeneratedImageHomeContext,
+): ProviderRuntimeEvent[] {
+  const payload = asObject(event.payload);
+  const item = asObject(payload?.item);
+  const source = item ?? payload;
+  if (!source) {
+    return [];
+  }
+  const nativeType = resolveCodexItemType(source.type ?? source.kind);
+  if (
+    nativeType === "agentMessage" &&
+    codexMessagePhase(source.phase) === "final_answer" &&
+    event.turnId !== undefined &&
+    !isChildConversationEvent(event)
+  ) {
+    const itemId = event.itemId ?? asTrimmedString(source.id);
+    if (itemId) tracker.recordFinalAnswer(canonicalThreadId, event.turnId, itemId);
+  }
+  if (nativeType === "functionCallOutput") {
+    return lifecycle === "item.completed"
+      ? [mapFunctionCallOutputItem(event, canonicalThreadId, source)]
+      : [];
+  }
+  const notices = mapCodexItemNotices(
+    event,
+    canonicalThreadId,
+    lifecycle,
+    nativeType,
+    source,
+    tracker,
+  );
+  if (
+    lifecycle === "item.completed" &&
+    toCanonicalItemType(source.type ?? source.kind) === "plan"
+  ) {
+    const detail = itemDetail(source, payload ?? {});
+    return detail
+      ? [
+          {
+            ...runtimeEventBase(event, canonicalThreadId),
+            type: "turn.proposed.completed",
+            payload: {
+              planMarkdown: detail,
+            },
+          },
+        ]
+      : [];
+  }
+  const lifecycleEvent = mapItemLifecycle(event, canonicalThreadId, lifecycle, codexHome);
+  return lifecycleEvent ? [lifecycleEvent, ...notices] : notices;
+}
+
 function mapToRuntimeEvents(
   event: ProviderEvent,
   canonicalThreadId: ThreadId,
+  tracker: CodexTranscriptTracker,
   codexHome?: CodexGeneratedImageHomeContext,
 ): ReadonlyArray<ProviderRuntimeEvent> {
   const payload = asObject(event.payload);
   const turn = asObject(payload?.turn);
+  if (isIgnoredCodexEvent(event)) {
+    return [];
+  }
+  if (event.kind === "notification") {
+    const noticeEvents = mapCodexNoticeNotification(event, canonicalThreadId, payload, tracker);
+    if (noticeEvents) {
+      return noticeEvents;
+    }
+  }
   const generatedImageEndEvent = mapGeneratedImageEndEvent(event, canonicalThreadId, codexHome);
   if (generatedImageEndEvent) {
     return [generatedImageEndEvent];
   }
-  const hookEvent = mapCodexHookEvent(event, canonicalThreadId);
-  if (hookEvent) {
-    return [hookEvent];
+  if (event.method === "hook/started" || event.method === "hook/completed") {
+    const hookEvent = mapCodexHookEvent(event, canonicalThreadId);
+    return hookEvent ? [hookEvent] : [];
   }
 
   if (event.kind === "error") {
     if (!event.message) {
       return [];
+    }
+    const mcpTransportEvents = mapCodexMcpTransportStderr(event, canonicalThreadId, tracker);
+    if (mcpTransportEvents) {
+      return mcpTransportEvents;
     }
     const treatAsWarning = providerErrorMapsToWarning(event);
     return [
@@ -1242,26 +2663,13 @@ function mapToRuntimeEvents(
     ];
   }
 
-  if (event.method === "item/autoApprovalReview/completed") {
-    const review = asObject(payload?.review) ?? payload;
-    const status = asString(review?.status);
-    if (status !== "denied" && status !== "aborted") {
-      return [];
-    }
-    const rationale =
-      asString(review?.rationale) ??
-      asString(review?.reason) ??
-      `Automatic approval review ${status} this action.`;
-    return [
-      {
-        ...runtimeEventBase(event, canonicalThreadId),
-        type: "runtime.warning",
-        payload: {
-          message: rationale,
-          ...(event.payload !== undefined ? { detail: event.payload } : {}),
-        },
-      },
-    ];
+  if (DIAGNOSTIC_ONLY_CODEX_METHODS.has(event.method)) {
+    return [];
+  }
+
+  const sessionWarningEvents = mapCodexSessionWarning(event, canonicalThreadId);
+  if (sessionWarningEvents) {
+    return sessionWarningEvents;
   }
 
   if (event.method === "session/connecting") {
@@ -1304,6 +2712,7 @@ function mapToRuntimeEvents(
   }
 
   if (event.method === "session/exited" || event.method === "session/closed") {
+    tracker.forgetThread(canonicalThreadId);
     return [
       {
         ...runtimeEventBase(event, canonicalThreadId),
@@ -1410,6 +2819,10 @@ function mapToRuntimeEvents(
     if (!turnId) {
       return [];
     }
+    const origin = codexTurnOrigin(payload);
+    if (!isChildConversationEvent(event)) {
+      tracker.turnStarted(canonicalThreadId, turnId, origin);
+    }
     return [
       {
         ...runtimeEventBase(event, canonicalThreadId),
@@ -1418,6 +2831,7 @@ function mapToRuntimeEvents(
         payload: {
           ...(asString(turn?.model) ? { model: asString(turn?.model) } : {}),
           ...(asString(turn?.effort) ? { effort: asString(turn?.effort) } : {}),
+          ...(origin ? { origin } : {}),
         },
       },
     ];
@@ -1426,6 +2840,9 @@ function mapToRuntimeEvents(
   if (event.method === "turn/completed") {
     const errorMessage = asString(asObject(turn?.error)?.message);
     const errorCode = codexErrorCode(turn?.error);
+    const finalAssistantItemId = isChildConversationEvent(event)
+      ? undefined
+      : tracker.turnEnded(canonicalThreadId, event.turnId);
     return [
       {
         ...runtimeEventBase(event, canonicalThreadId),
@@ -1440,12 +2857,18 @@ function mapToRuntimeEvents(
             : {}),
           ...(errorMessage ? { errorMessage } : {}),
           ...(errorCode ? { errorCode } : {}),
+          ...(finalAssistantItemId
+            ? { finalAssistantItemId: RuntimeItemId.makeUnsafe(finalAssistantItemId) }
+            : {}),
         },
       },
     ];
   }
 
   if (event.method === "turn/aborted") {
+    if (!isChildConversationEvent(event)) {
+      tracker.turnEnded(canonicalThreadId, event.turnId);
+    }
     return [
       {
         ...runtimeEventBase(event, canonicalThreadId),
@@ -1499,44 +2922,14 @@ function mapToRuntimeEvents(
     ];
   }
 
-  if (event.method === "item/started") {
-    const started = mapItemLifecycle(event, canonicalThreadId, "item.started", codexHome);
-    return started ? [started] : [];
-  }
-
-  if (event.method === "item/completed") {
-    const payload = asObject(event.payload);
-    const item = asObject(payload?.item);
-    const source = item ?? payload;
-    if (!source) {
-      return [];
-    }
-    const itemType = source ? toCanonicalItemType(source.type ?? source.kind) : "unknown";
-    if (itemType === "plan") {
-      const detail = itemDetail(source, payload ?? {});
-      if (!detail) {
-        return [];
-      }
-      return [
-        {
-          ...runtimeEventBase(event, canonicalThreadId),
-          type: "turn.proposed.completed",
-          payload: {
-            planMarkdown: detail,
-          },
-        },
-      ];
-    }
-    const completed = mapItemLifecycle(event, canonicalThreadId, "item.completed", codexHome);
-    return completed ? [completed] : [];
-  }
-
-  if (
-    event.method === "item/reasoning/summaryPartAdded" ||
-    event.method === "item/commandExecution/terminalInteraction"
-  ) {
-    const updated = mapItemLifecycle(event, canonicalThreadId, "item.updated", codexHome);
-    return updated ? [updated] : [];
+  if (event.method === "item/started" || event.method === "item/completed") {
+    return mapCodexItemEvent(
+      event,
+      canonicalThreadId,
+      event.method === "item/started" ? "item.started" : "item.completed",
+      tracker,
+      codexHome,
+    );
   }
 
   if (event.method === "item/plan/delta") {
@@ -1833,74 +3226,13 @@ function mapToRuntimeEvents(
     ];
   }
 
-  if (event.method === "thread/realtime/started") {
-    const realtimeSessionId = asString(payload?.realtimeSessionId);
-    return [
-      {
-        type: "thread.realtime.started",
-        ...runtimeEventBase(event, canonicalThreadId),
-        payload: {
-          realtimeSessionId,
-        },
-      },
-    ];
-  }
-
-  if (event.method === "thread/realtime/itemAdded") {
-    return [
-      {
-        type: "thread.realtime.item-added",
-        ...runtimeEventBase(event, canonicalThreadId),
-        payload: {
-          item: event.payload ?? {},
-        },
-      },
-    ];
-  }
-
-  if (event.method === "thread/realtime/outputAudio/delta") {
-    return [
-      {
-        type: "thread.realtime.audio.delta",
-        ...runtimeDeltaEventBase(event, canonicalThreadId),
-        payload: {
-          audio: event.payload ?? {},
-        },
-      },
-    ];
-  }
-
-  if (event.method === "thread/realtime/error") {
-    const message = asString(payload?.message) ?? event.message ?? "Realtime error";
-    return [
-      {
-        type: "thread.realtime.error",
-        ...runtimeEventBase(event, canonicalThreadId),
-        payload: {
-          message,
-        },
-      },
-    ];
-  }
-
-  if (event.method === "thread/realtime/closed") {
-    return [
-      {
-        type: "thread.realtime.closed",
-        ...runtimeEventBase(event, canonicalThreadId),
-        payload: {
-          reason: event.message,
-        },
-      },
-    ];
-  }
-
   if (event.method === "error") {
     const message =
       asString(asObject(payload?.error)?.message) ?? event.message ?? "Provider runtime error";
     const willRetry = payload?.willRetry === true;
     const errorCode = codexErrorCode(payload?.error);
     const treatAsWarning = willRetry || isNonFatalCodexErrorMessage(message);
+    const retryProgress = willRetry ? codexRetryProgress(message) : undefined;
     return [
       {
         type: treatAsWarning ? "runtime.warning" : "runtime.error",
@@ -1910,6 +3242,7 @@ function mapToRuntimeEvents(
           ...(!treatAsWarning ? { class: "provider_error" as const } : {}),
           ...(!treatAsWarning && errorCode ? { errorCode } : {}),
           ...(willRetry ? { willRetry: true } : {}),
+          ...retryProgress,
           ...(event.payload !== undefined ? { detail: event.payload } : {}),
         },
       },
@@ -1960,10 +3293,9 @@ function mapToRuntimeEvents(
     ];
   }
 
-  // No explicit mapping matched: keep the event visible instead of dropping
-  // it. The raw native method becomes the row title and the raw payload the
-  // preview, so a provider protocol addition degrades to a readable row rather
-  // than silence.
+  if (isKnownCodexMethod(event)) {
+    return [];
+  }
   return [mapUnmappedCodexEvent(event, canonicalThreadId)];
 }
 
@@ -2020,6 +3352,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
       PROVIDER_ADAPTER_RUNTIME_EVENT_BUFFER_CAPACITY,
     );
     const shouldSurfaceUnmappedEvent = makeUnmappedProviderEventGate();
+    const mapCodexRuntimeEvents = makeCodexRuntimeEventMapper();
 
     // Idle-progress backstop for codex turns. Same semantics as
     // AcpTurnIdleWatchdog (any inbound activity resets it, a pending human
@@ -2668,7 +4001,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
           const origin = manager.getSessionEventOrigin(event.threadId, event.lifecycleGeneration);
           const stampedEvent = stampEvent(event, origin.providerInstanceId);
           const mappedRuntimeEvents = assignDerivedProviderRuntimeEventIds(
-            mapToRuntimeEvents(stampedEvent, stampedEvent.threadId, origin.codexOptions),
+            mapCodexRuntimeEvents(stampedEvent, stampedEvent.threadId, origin.codexOptions),
           );
           const hasUnmappedEvent = mappedRuntimeEvents.some(
             (runtimeEvent) => runtimeEvent.type === "event.unmapped",

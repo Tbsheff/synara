@@ -277,17 +277,18 @@ function compareThreadActivities(
   left: OrchestrationThread["activities"][number],
   right: OrchestrationThread["activities"][number],
 ): number {
-  if (left.sequence !== undefined && right.sequence !== undefined) {
-    if (left.sequence !== right.sequence) {
-      return left.sequence - right.sequence;
-    }
-  } else if (left.sequence !== undefined) {
-    return 1;
-  } else if (right.sequence !== undefined) {
-    return -1;
+  const createdAtComparison = left.createdAt.localeCompare(right.createdAt);
+  if (createdAtComparison !== 0) {
+    return createdAtComparison;
   }
-
-  return left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id);
+  if (left.sequence === undefined || right.sequence === undefined) {
+    if (left.sequence !== right.sequence) {
+      return left.sequence === undefined ? -1 : 1;
+    }
+  } else if (left.sequence !== right.sequence) {
+    return left.sequence - right.sequence;
+  }
+  return left.id.localeCompare(right.id);
 }
 
 function upsertThreadActivity(

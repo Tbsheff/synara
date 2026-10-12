@@ -25,6 +25,7 @@ import { ProviderMentionReference, ProviderSkillReference } from "./providerDisc
 import { AsyncUserInput, AsyncUserInputQuestions, AsyncUserInputResponse } from "./asyncUserInput";
 import { ProjectKind } from "./project";
 import { ClaudeCacheObservation } from "./claudeCache";
+import { ThreadLiveUpdate, TurnOrigin } from "./transcriptDetails";
 import {
   ApprovalRequestId,
   CheckpointRef,
@@ -824,6 +825,7 @@ export const OrchestrationProposedPlan = Schema.Struct({
   planMarkdown: TrimmedNonEmptyString,
   implementedAt: Schema.NullOr(IsoDateTime).pipe(Schema.withDecodingDefault(() => null)),
   implementationThreadId: Schema.NullOr(ThreadId).pipe(Schema.withDecodingDefault(() => null)),
+  partial: Schema.optional(Schema.Boolean),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
@@ -852,6 +854,7 @@ export const OrchestrationSession = Schema.Struct({
   providerInstanceId: Schema.optional(ProviderInstanceId),
   runtimeMode: RuntimeMode.pipe(Schema.withDecodingDefault(() => DEFAULT_RUNTIME_MODE)),
   activeTurnId: Schema.NullOr(TurnId),
+  activeTurnOrigin: Schema.optional(TurnOrigin),
   lastError: Schema.NullOr(TrimmedNonEmptyString),
   /** Last provider-runtime activity of any kind observed on the thread
    * (streamed output, tool lifecycle, messages, requests). Maintained by
@@ -2815,6 +2818,10 @@ export const OrchestrationThreadStreamItem = Schema.Union([
     event: OrchestrationEvent,
   }),
   OrchestrationThreadReplayItem,
+  Schema.Struct({
+    kind: Schema.Literal("live"),
+    live: ThreadLiveUpdate,
+  }),
 ]);
 export type OrchestrationThreadStreamItem = typeof OrchestrationThreadStreamItem.Type;
 

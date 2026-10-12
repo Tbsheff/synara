@@ -4158,6 +4158,48 @@ it.layer(
         },
       });
 
+      const keepToolImageId = "thread-revert-files-00000000-0000-4000-8000-000000000005";
+      const removeToolImageId = "thread-revert-files-00000000-0000-4000-8000-000000000006";
+      const keepToolImagePath = path.join(attachmentsDir, `${keepToolImageId}.png`);
+      const removeToolImagePath = path.join(attachmentsDir, `${removeToolImageId}.png`);
+      for (const [index, turn, imagePath] of [
+        [7, "turn-keep", keepToolImagePath],
+        [8, "turn-remove", removeToolImagePath],
+      ] as const) {
+        yield* appendAndProject({
+          type: "thread.activity-appended",
+          eventId: EventId.makeUnsafe(`evt-revert-files-tool-image-${index}`),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: now,
+          commandId: CommandId.makeUnsafe(`cmd-revert-files-tool-image-${index}`),
+          causationEventId: null,
+          correlationId: CorrelationId.makeUnsafe(`cmd-revert-files-tool-image-${index}`),
+          metadata: {},
+          payload: {
+            threadId,
+            activity: {
+              id: EventId.makeUnsafe(`activity-tool-image-${index}`),
+              tone: "tool",
+              kind: "tool.completed",
+              summary: "Read screenshot",
+              payload: {
+                itemType: "dynamic_tool_call",
+                toolCall: {
+                  toolName: "Read",
+                  images: [{ source: "file", path: imagePath, mediaType: "image/png" }],
+                },
+              },
+              turnId: TurnId.makeUnsafe(turn),
+              createdAt: now,
+            },
+          },
+        });
+      }
+      yield* fileSystem.makeDirectory(attachmentsDir, { recursive: true });
+      yield* fileSystem.writeFileString(keepToolImagePath, "keep-tool");
+      yield* fileSystem.writeFileString(removeToolImagePath, "drop-tool");
+
       const keepPath = path.join(attachmentsDir, `${keepAttachmentId}.png`);
       const removePath = path.join(attachmentsDir, `${removeAttachmentId}.png`);
       const removeFilePath = path.join(attachmentsDir, `${removeFileAttachmentId}.txt`);
@@ -4203,6 +4245,8 @@ it.layer(
       assert.isTrue(yield* exists(keepPath));
       assert.isFalse(yield* exists(removePath));
       assert.isFalse(yield* exists(removeFilePath));
+      assert.isTrue(yield* exists(keepToolImagePath));
+      assert.isFalse(yield* exists(removeToolImagePath));
       assert.isTrue(yield* exists(otherThreadPath));
       assert.isTrue(yield* exists(keepManagedPath));
       assert.isTrue(yield* exists(removeManagedPath));
@@ -5027,6 +5071,126 @@ it.effect("restores pending turn-start metadata across projection pipeline resta
       Layer.provideMerge(
         ServerConfig.layerTest(process.cwd(), {
           prefix: "synara-projection-pipeline-restart-",
+        }),
+        NodeServices.layer,
+      ),
+    ),
+  ),
+);
+
+it.effect("keeps a pending user message for the user turn after a provider-origin turn", () =>
+  Effect.gen(function* () {
+    const { dbPath } = yield* ServerConfig;
+    const projectionLayer = OrchestrationProjectionPipelineLive.pipe(
+      Layer.provideMerge(OrchestrationEventStoreLive),
+      Layer.provideMerge(makeSqlitePersistenceLive(dbPath)),
+    );
+    const threadId = ThreadId.makeUnsafe("thread-provider-origin");
+    const messageId = MessageId.makeUnsafe("message-after-provider-turn");
+    const wakeTurnId = TurnId.makeUnsafe("turn-provider-wake");
+    const userTurnId = TurnId.makeUnsafe("turn-user");
+
+    yield* Effect.gen(function* () {
+      const eventStore = yield* OrchestrationEventStore;
+      const projectionPipeline = yield* OrchestrationProjectionPipeline;
+      const sql = yield* SqlClient.SqlClient;
+      let sequence = 0;
+      const appendSessionSet = (
+        occurredAt: string,
+        session: {
+          readonly status: "running" | "ready";
+          readonly activeTurnId: TurnId | null;
+          readonly activeTurnOrigin?: "provider" | "user";
+        },
+      ) => {
+        sequence += 1;
+        return eventStore.append({
+          type: "thread.session-set",
+          eventId: EventId.makeUnsafe(`evt-provider-origin-${sequence}`),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt,
+          commandId: CommandId.makeUnsafe(`cmd-provider-origin-${sequence}`),
+          causationEventId: null,
+          correlationId: CorrelationId.makeUnsafe(`cmd-provider-origin-${sequence}`),
+          metadata: {},
+          payload: {
+            threadId,
+            session: {
+              threadId,
+              providerName: "claudeAgent",
+              runtimeMode: "approval-required",
+              lastError: null,
+              updatedAt: occurredAt,
+              ...session,
+            },
+          },
+        });
+      };
+      const readTurn = (turnId: TurnId) =>
+        sql<{ readonly pendingMessageId: string | null }>`
+          SELECT pending_message_id AS "pendingMessageId"
+          FROM projection_turns
+          WHERE thread_id = ${threadId} AND turn_id = ${turnId}
+        `;
+      const readPending = () =>
+        sql<{ readonly pendingMessageId: string | null }>`
+          SELECT pending_message_id AS "pendingMessageId"
+          FROM projection_turns
+          WHERE thread_id = ${threadId} AND turn_id IS NULL AND state = 'pending'
+        `;
+
+      yield* eventStore.append({
+        type: "thread.turn-start-requested",
+        eventId: EventId.makeUnsafe("evt-provider-origin-request"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: "2026-02-26T15:00:00.000Z",
+        commandId: CommandId.makeUnsafe("cmd-provider-origin-request"),
+        causationEventId: null,
+        correlationId: CorrelationId.makeUnsafe("cmd-provider-origin-request"),
+        metadata: {},
+        payload: {
+          threadId,
+          messageId,
+          runtimeMode: "approval-required",
+          createdAt: "2026-02-26T15:00:00.000Z",
+        },
+      });
+      yield* appendSessionSet("2026-02-26T15:00:01.000Z", {
+        status: "running",
+        activeTurnId: wakeTurnId,
+        activeTurnOrigin: "provider",
+      });
+      yield* appendSessionSet("2026-02-26T15:00:02.000Z", {
+        status: "running",
+        activeTurnId: wakeTurnId,
+        activeTurnOrigin: "provider",
+      });
+      yield* projectionPipeline.bootstrap;
+
+      assert.deepEqual(yield* readTurn(wakeTurnId), [{ pendingMessageId: null }]);
+      assert.deepEqual(yield* readPending(), [{ pendingMessageId: messageId }]);
+
+      yield* appendSessionSet("2026-02-26T15:00:03.000Z", {
+        status: "ready",
+        activeTurnId: null,
+      });
+      yield* appendSessionSet("2026-02-26T15:00:04.000Z", {
+        status: "running",
+        activeTurnId: userTurnId,
+      });
+      yield* projectionPipeline.bootstrap;
+
+      assert.deepEqual(yield* readTurn(wakeTurnId), [{ pendingMessageId: null }]);
+      assert.deepEqual(yield* readTurn(userTurnId), [{ pendingMessageId: messageId }]);
+      assert.deepEqual(yield* readPending(), []);
+    }).pipe(Effect.provide(projectionLayer));
+  }).pipe(
+    Effect.provide(
+      Layer.provideMerge(
+        ServerConfig.layerTest(process.cwd(), {
+          prefix: "synara-projection-pipeline-provider-origin-",
         }),
         NodeServices.layer,
       ),

@@ -1531,6 +1531,77 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
     }),
   );
 
+  it.effect("orders and windows activities by createdAt across mixed sequence counters", () =>
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+      const threadId = asThreadId("thread-mixed-activity-order");
+
+      yield* sql`DELETE FROM projection_pending_interactions`;
+      yield* sql`DELETE FROM projection_thread_activities`;
+      yield* sql`DELETE FROM projection_threads`;
+      yield* sql`DELETE FROM projection_projects`;
+      yield* sql`
+        INSERT INTO projection_projects (
+          project_id, title, workspace_root, default_model_selection_json,
+          scripts_json, created_at, updated_at, deleted_at
+        ) VALUES (
+          'project-mixed-activity-order', 'Mixed activity order',
+          '/tmp/project-mixed-activity-order',
+          '{"provider":"codex","model":"gpt-5-codex"}', '[]',
+          '2026-10-10T09:00:00.000Z', '2026-10-10T09:00:00.000Z', NULL
+        )
+      `;
+      yield* sql`
+        INSERT INTO projection_threads (
+          thread_id, project_id, title, model_selection_json, branch, worktree_path,
+          latest_turn_id, created_at, updated_at, deleted_at
+        ) VALUES (
+          'thread-mixed-activity-order', 'project-mixed-activity-order',
+          'Mixed activity order', '{"provider":"codex","model":"gpt-5-codex"}',
+          NULL, NULL, NULL,
+          '2026-10-10T09:00:00.000Z', '2026-10-10T10:00:00.000Z', NULL
+        )
+      `;
+      yield* sql`
+        WITH RECURSIVE counter(n) AS (
+          SELECT 0 UNION ALL SELECT n + 1 FROM counter WHERE n < 599
+        )
+        INSERT INTO projection_thread_activities (
+          activity_id, thread_id, turn_id, tone, kind, summary, payload_json,
+          sequence, created_at
+        )
+        SELECT
+          printf('runtime-%04d', n), 'thread-mixed-activity-order', 'turn-old', 'tool',
+          'tool.completed', 'Ran command', '{}', 872000 + n,
+          strftime('%Y-%m-%dT%H:%M:%fZ', '2026-10-10T09:00:00.000Z', printf('+%d seconds', n))
+        FROM counter
+      `;
+      yield* sql`
+        INSERT INTO projection_thread_activities (
+          activity_id, thread_id, turn_id, tone, kind, summary, payload_json,
+          sequence, created_at
+        ) VALUES (
+          'orchestration-newest', 'thread-mixed-activity-order', 'turn-new', 'info',
+          'checkpoint.captured', 'Checkpoint captured', '{}', 664000,
+          '2026-10-10T09:59:00.000Z'
+        )
+      `;
+
+      const detail = Option.getOrThrow(yield* snapshotQuery.getThreadDetailById(threadId));
+      assert.equal(detail.activities.at(-1)?.id, "orchestration-newest");
+      assert.equal(detail.activities.at(-2)?.id, "runtime-0599");
+      const snapshotThread = (yield* snapshotQuery.getSnapshot()).threads.find(
+        (thread) => thread.id === threadId,
+      );
+      assert.equal(snapshotThread?.activities.at(-1)?.id, "orchestration-newest");
+      assert.equal(snapshotThread?.activities.at(-2)?.id, "runtime-0599");
+      assert.isFalse(
+        snapshotThread?.activities.some((activity) => activity.id === "runtime-0000") ?? true,
+      );
+    }),
+  );
+
   it.effect("normalizes imported Synara model-selection shapes from projection reads", () =>
     Effect.gen(function* () {
       const snapshotQuery = yield* ProjectionSnapshotQuery;

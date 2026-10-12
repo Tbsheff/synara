@@ -20,6 +20,7 @@ export * from "./providerDiscovery";
 export * from "./plugins";
 export * from "./providerInstance";
 export * from "./providerRuntime";
+export * from "./transcriptDetails";
 export * from "./model";
 export * from "./agentMentions";
 export * from "./agentGateway";

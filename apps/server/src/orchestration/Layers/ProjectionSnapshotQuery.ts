@@ -463,6 +463,7 @@ function toProjectedProposedPlan(
     planMarkdown: row.planMarkdown,
     implementedAt: row.implementedAt,
     implementationThreadId: row.implementationThreadId,
+    ...(row.partial > 0 ? { partial: true } : {}),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -1374,6 +1375,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           plan_markdown AS "planMarkdown",
           implemented_at AS "implementedAt",
           implementation_thread_id AS "implementationThreadId",
+          partial,
           created_at AS "createdAt",
           updated_at AS "updatedAt"
         FROM projection_thread_proposed_plans
@@ -1447,9 +1449,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             ROW_NUMBER() OVER (
               PARTITION BY thread_id
               ORDER BY
+                created_at DESC,
                 CASE WHEN sequence IS NULL THEN 0 ELSE 1 END DESC,
                 sequence DESC,
-                created_at DESC,
                 activity_id DESC
             ) AS activity_rank
           FROM projection_thread_activities
@@ -1494,34 +1496,33 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   )
                 )
                 AND (
-                  CASE WHEN later.sequence IS NULL THEN 0 ELSE 1 END >
-                    CASE WHEN ranked.sequence IS NULL THEN 0 ELSE 1 END
+                  later.created_at > ranked.created_at
                   OR (
-                    CASE WHEN later.sequence IS NULL THEN 0 ELSE 1 END =
-                      CASE WHEN ranked.sequence IS NULL THEN 0 ELSE 1 END
-                    AND COALESCE(later.sequence, -1) > COALESCE(ranked.sequence, -1)
-                  )
-                  OR (
-                    CASE WHEN later.sequence IS NULL THEN 0 ELSE 1 END =
-                      CASE WHEN ranked.sequence IS NULL THEN 0 ELSE 1 END
-                    AND COALESCE(later.sequence, -1) = COALESCE(ranked.sequence, -1)
-                    AND later.created_at > ranked.created_at
-                  )
-                  OR (
-                    CASE WHEN later.sequence IS NULL THEN 0 ELSE 1 END =
-                      CASE WHEN ranked.sequence IS NULL THEN 0 ELSE 1 END
-                    AND COALESCE(later.sequence, -1) = COALESCE(ranked.sequence, -1)
-                    AND later.created_at = ranked.created_at
-                    AND later.activity_id > ranked.activity_id
+                    later.created_at = ranked.created_at
+                    AND (
+                      CASE WHEN later.sequence IS NULL THEN 0 ELSE 1 END >
+                        CASE WHEN ranked.sequence IS NULL THEN 0 ELSE 1 END
+                      OR (
+                        CASE WHEN later.sequence IS NULL THEN 0 ELSE 1 END =
+                          CASE WHEN ranked.sequence IS NULL THEN 0 ELSE 1 END
+                        AND COALESCE(later.sequence, -1) > COALESCE(ranked.sequence, -1)
+                      )
+                      OR (
+                        CASE WHEN later.sequence IS NULL THEN 0 ELSE 1 END =
+                          CASE WHEN ranked.sequence IS NULL THEN 0 ELSE 1 END
+                        AND COALESCE(later.sequence, -1) = COALESCE(ranked.sequence, -1)
+                        AND later.activity_id > ranked.activity_id
+                      )
+                    )
                   )
                 )
             )
           )
         ORDER BY
           thread_id ASC,
+          created_at ASC,
           CASE WHEN sequence IS NULL THEN 0 ELSE 1 END ASC,
           sequence ASC,
-          created_at ASC,
           activity_id ASC
       `,
   });
@@ -1548,9 +1549,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             ROW_NUMBER() OVER (
               PARTITION BY thread_id
               ORDER BY
+                created_at DESC,
                 CASE WHEN sequence IS NULL THEN 0 ELSE 1 END DESC,
                 sequence DESC,
-                created_at DESC,
                 activity_id DESC
             ) AS activity_rank
           FROM projection_thread_activities
@@ -2042,6 +2043,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           plan_markdown AS "planMarkdown",
           implemented_at AS "implementedAt",
           implementation_thread_id AS "implementationThreadId",
+          partial,
           created_at AS "createdAt",
           updated_at AS "updatedAt"
         FROM projection_thread_proposed_plans
@@ -2070,9 +2072,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             ROW_NUMBER() OVER (
               PARTITION BY thread_id
               ORDER BY
+                created_at DESC,
                 CASE WHEN sequence IS NULL THEN 0 ELSE 1 END DESC,
                 sequence DESC,
-                created_at DESC,
                 activity_id DESC
             ) AS activity_rank
           FROM projection_thread_activities
@@ -2188,34 +2190,33 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                     )
                   )
                   AND (
-                    CASE WHEN later.sequence IS NULL THEN 0 ELSE 1 END >
-                      CASE WHEN activity.sequence IS NULL THEN 0 ELSE 1 END
+                    later.created_at > activity.created_at
                     OR (
-                      CASE WHEN later.sequence IS NULL THEN 0 ELSE 1 END =
-                        CASE WHEN activity.sequence IS NULL THEN 0 ELSE 1 END
-                      AND COALESCE(later.sequence, -1) > COALESCE(activity.sequence, -1)
-                    )
-                    OR (
-                      CASE WHEN later.sequence IS NULL THEN 0 ELSE 1 END =
-                        CASE WHEN activity.sequence IS NULL THEN 0 ELSE 1 END
-                      AND COALESCE(later.sequence, -1) = COALESCE(activity.sequence, -1)
-                      AND later.created_at > activity.created_at
-                    )
-                    OR (
-                      CASE WHEN later.sequence IS NULL THEN 0 ELSE 1 END =
-                        CASE WHEN activity.sequence IS NULL THEN 0 ELSE 1 END
-                      AND COALESCE(later.sequence, -1) = COALESCE(activity.sequence, -1)
-                      AND later.created_at = activity.created_at
-                      AND later.activity_id > ranked.activity_id
+                      later.created_at = activity.created_at
+                      AND (
+                        CASE WHEN later.sequence IS NULL THEN 0 ELSE 1 END >
+                          CASE WHEN activity.sequence IS NULL THEN 0 ELSE 1 END
+                        OR (
+                          CASE WHEN later.sequence IS NULL THEN 0 ELSE 1 END =
+                            CASE WHEN activity.sequence IS NULL THEN 0 ELSE 1 END
+                          AND COALESCE(later.sequence, -1) > COALESCE(activity.sequence, -1)
+                        )
+                        OR (
+                          CASE WHEN later.sequence IS NULL THEN 0 ELSE 1 END =
+                            CASE WHEN activity.sequence IS NULL THEN 0 ELSE 1 END
+                          AND COALESCE(later.sequence, -1) = COALESCE(activity.sequence, -1)
+                          AND later.activity_id > ranked.activity_id
+                        )
+                      )
                     )
                   )
               )
             )
           )
         ORDER BY
+          created_at ASC,
           CASE WHEN sequence IS NULL THEN 0 ELSE 1 END ASC,
           sequence ASC,
-          created_at ASC,
           activity_id ASC
       `,
   });

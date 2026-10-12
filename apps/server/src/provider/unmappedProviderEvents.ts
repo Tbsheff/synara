@@ -19,7 +19,8 @@ const parseJsonWithSource = JSON.parse as (
 ) => unknown;
 const BURST_METHOD_SUFFIX = /(?:delta|progress|partial|chunk|update|updated)$/iu;
 const COOKIE_HEADER_PATTERN = /\b((?:set[-_ ]?cookie|cookie)\s*:\s*)[^\r\n]+/giu;
-const URL_CREDENTIAL_PATTERN = /\b([a-z][a-z0-9+.-]*:\/\/)[^/\s:@]*:[^/\s@]+@/giu;
+const URL_USERINFO_PATTERN = /\b([a-z][a-z0-9+.-]*:\/\/)(?:[^\s/?#@"'\\()<>]*@)+/giu;
+const URL_QUERY_PATTERN = /\b([a-z][a-z0-9+.-]*:\/\/[^\s?#"'\\()<>]*)\?[^\s#"'\\()<>]*/giu;
 const CREDENTIAL_ASSIGNMENT_PATTERN =
   /\b((?:(?:proxy[-_ ]?)?authorization|api[-_ ]?key|private[-_ ]?key|(?:set[-_ ]?)?cookie|(?:access|refresh|session)[-_ ]?token|token|password|passwd|passphrase|client[-_ ]?secret|(?:aws[-_ ]?)?secret(?:[-_ ]?(?:access[-_ ]?)?key)?|credentials?)\s*(?::|=)\s*)(?:bearer\s+)?(?!\[REDACTED\])(?:\$'(?:\\[\s\S]|[^'\\])*(?:'|$)|"(?:\\[\s\S]|[^"\\])*(?:"|$)|'(?:\\[\s\S]|[^'\\])*(?:'|$)|(?:\\[\s\S]|[^\s,;\\])+)/giu;
 const ENV_CREDENTIAL_ASSIGNMENT_PREFIX_PATTERN =
@@ -68,7 +69,8 @@ const SENSITIVE_ENV_NAME_SUFFIXES = [
 function redactText(value: string): string {
   const preRedacted = value
     .replace(COOKIE_HEADER_PATTERN, `$1${REDACTED_VALUE}`)
-    .replace(URL_CREDENTIAL_PATTERN, `$1${REDACTED_VALUE}@`);
+    .replace(URL_USERINFO_PATTERN, "$1")
+    .replace(URL_QUERY_PATTERN, `$1?${REDACTED_VALUE}`);
   const structured = redactInspectedNamedValueObjects(redactSerializedJsonContainers(preRedacted));
   return redactEnvironmentAssignments(redactEnvironmentTuples(structured))
     .replace(CREDENTIAL_ASSIGNMENT_PATTERN, `$1${REDACTED_VALUE}`)

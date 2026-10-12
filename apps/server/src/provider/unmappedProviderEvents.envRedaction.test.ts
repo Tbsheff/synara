@@ -140,9 +140,9 @@ describe("unmapped provider environment credential redaction", () => {
 
     expect(database).not.toContain("user");
     expect(database).not.toContain("secret");
-    expect(database).toContain("postgres://[REDACTED]@host/db");
+    expect(database).toContain("postgres://host/db");
     expect(redis).not.toContain("redis-secret");
-    expect(redis).toContain("redis://[REDACTED]@host/0");
+    expect(redis).toContain("redis://host/0");
   });
 
   it("consumes escaped separators in unquoted shell values", () => {

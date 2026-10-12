@@ -76,6 +76,7 @@ describe("OrchestrationReactor", () => {
               () => Effect.sync(() => stopped.push("checkpoint-reactor")),
             ),
             drain: Effect.void,
+            providerOriginTurnCount: () => Effect.succeed(0),
           }),
         ),
         Layer.provideMerge(

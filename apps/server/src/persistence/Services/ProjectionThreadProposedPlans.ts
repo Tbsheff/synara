@@ -17,6 +17,7 @@ export const ProjectionThreadProposedPlan = Schema.Struct({
   planMarkdown: TrimmedNonEmptyString,
   implementedAt: Schema.NullOr(IsoDateTime),
   implementationThreadId: Schema.NullOr(ThreadId),
+  partial: Schema.Number,
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
@@ -26,6 +27,7 @@ export const ProjectionThreadProposedPlanSummary = Schema.Struct({
   planId: OrchestrationProposedPlanId,
   turnId: Schema.NullOr(TurnId),
   implementedAt: Schema.NullOr(IsoDateTime),
+  partial: Schema.Number,
   updatedAt: IsoDateTime,
 });
 export type ProjectionThreadProposedPlanSummary = typeof ProjectionThreadProposedPlanSummary.Type;

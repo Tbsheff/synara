@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -45,7 +45,7 @@ import {
   type AgentGatewayCredentialsShape,
 } from "../../agentGateway/Services/AgentGatewayCredentials.ts";
 import { ServerConfig } from "../../config.ts";
-import { MINIMUM_CLAUDE_AUTO_MODE_CLI_VERSION } from "../claudeCliVersion.ts";
+import { MINIMUM_CLAUDE_THINKING_DISPLAY_CLI_VERSION } from "../claudeCliVersion.ts";
 import { claudeCacheForModel } from "../claudeCacheObservation.ts";
 import { ProviderAdapterRequestError, ProviderAdapterValidationError } from "../Errors.ts";
 import {
@@ -56,6 +56,7 @@ import { ClaudeAdapter, type ClaudeAdapterShape } from "../Services/ClaudeAdapte
 import {
   buildEmbeddedClaudeSystemPromptAppend,
   claudeHomeEnvironment,
+  claudeHookMatcher,
   makeClaudeAdapterLive as makeClaudeAdapterLiveBase,
   type ClaudeAdapterLiveOptions,
   type ClaudeOwnedProcess,
@@ -69,7 +70,7 @@ vi.mock("effect", async (importOriginal) => {
 
 function makeClaudeAdapterLive(options?: ClaudeAdapterLiveOptions) {
   return makeClaudeAdapterLiveBase({
-    readClaudeCliVersion: async () => MINIMUM_CLAUDE_AUTO_MODE_CLI_VERSION,
+    readClaudeCliVersion: async () => MINIMUM_CLAUDE_THINKING_DISPLAY_CLI_VERSION,
     ...options,
   });
 }
@@ -440,6 +441,7 @@ function makeHarness(config?: {
   readonly baseDir?: string;
   readonly workflowRuntimePollIntervalMs?: number;
   readonly onCreate?: (options: ClaudeQueryOptions) => void;
+  readonly readClaudeCliVersion?: ClaudeAdapterLiveOptions["readClaudeCliVersion"];
 }) {
   const query = new FakeClaudeQuery();
   let createInput:
@@ -470,6 +472,7 @@ function makeHarness(config?: {
           workflowRuntimePollIntervalMs: config.workflowRuntimePollIntervalMs,
         }
       : {}),
+    ...(config?.readClaudeCliVersion ? { readClaudeCliVersion: config.readClaudeCliVersion } : {}),
   };
 
   return {
@@ -1226,7 +1229,7 @@ describe("ClaudeAdapterLive", () => {
       releaseProbe = resolve;
     });
     const versionRequested = vi.fn(async () => {
-      await probe;
+      if (versionRequested.mock.calls.length > 1) await probe;
       return "2.1.274";
     });
     const layer = makeClaudeAdapterLiveBase({
@@ -1244,7 +1247,7 @@ describe("ClaudeAdapterLive", () => {
         runtimeMode: "auto",
       }).pipe(Effect.result, Effect.forkChild);
       yield* Effect.yieldNow;
-      assert.equal(versionRequested.mock.calls.length, 1);
+      assert.equal(versionRequested.mock.calls.length, 2);
       const noticed = yield* adapter.streamEvents.pipe(
         Stream.filter((event) => event.type === "runtime.warning"),
         Stream.take(1),
@@ -1275,7 +1278,7 @@ describe("ClaudeAdapterLive", () => {
     const layer = makeClaudeAdapterLiveBase({
       readClaudeCliVersion: async () => {
         probes += 1;
-        if (probes > 1) throw new Error("must not probe after retirement");
+        if (probes > 2) throw new Error("must not probe after retirement");
         return "2.1.274";
       },
       createQuery: () => {
@@ -1295,7 +1298,7 @@ describe("ClaudeAdapterLive", () => {
       assert.ok(prepared);
       assert.equal(queries[0]?.closeCalls, 1);
       yield* prepared.startSession(input);
-      assert.equal(probes, 1);
+      assert.equal(probes, 2);
       assert.equal(queries.length, 2);
       assert.isTrue(yield* adapter.hasSession(THREAD_ID));
     }).pipe(
@@ -3438,12 +3441,12 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
-  it.effect("surfaces Claude Auto permission denials as a specific warning", () => {
+  it.effect("surfaces Claude Auto permission denials as a notice linked to the tool", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
-      const warningFiber = yield* adapter.streamEvents.pipe(
-        Stream.filter((event) => event.type === "runtime.warning"),
+      const noticeFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.type === "transcript.notice"),
         Stream.runHead,
         Effect.forkChild,
       );
@@ -3465,17 +3468,19 @@ describe("ClaudeAdapterLive", () => {
         uuid: "denial-1",
       } as unknown as SDKMessage);
 
-      const warning = yield* Fiber.join(warningFiber);
-      assert.equal(warning._tag, "Some");
-      if (warning._tag !== "Some" || warning.value.type !== "runtime.warning") return;
-      assert.equal(
-        warning.value.payload.message,
-        "Bash was denied: The command could modify system settings.",
-      );
-      assert.equal(
-        (warning.value.payload.detail as Record<string, unknown>).tool_use_id,
-        "tool-denied-1",
-      );
+      const notice = yield* Fiber.join(noticeFiber);
+      assert.equal(notice._tag, "Some");
+      if (notice._tag !== "Some" || notice.value.type !== "transcript.notice") return;
+      assert.deepEqual(notice.value.payload, {
+        noticeKind: "permission-denied",
+        severity: "warning",
+        title: "Bash was denied",
+        detail: "The command could modify system settings.",
+        status: "blocked",
+        dedupeKey: "permission-denied:tool-denied-1",
+        toolUseId: "tool-denied-1",
+        nativeType: "system:permission_denied",
+      });
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
@@ -8299,6 +8304,15 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
 
       const bashOpened = yield* requestTypeFor("Bash", { command: "ls" });
       assert.equal(bashOpened?.payload.requestType, "command_execution_approval");
+
+      for (const [toolName, input] of [
+        ["PowerShell", { command: "Get-ChildItem" }],
+        ["BashOutput", { bash_id: "bash_1" }],
+        ["KillShell", { shell_id: "bash_1" }],
+      ] as const) {
+        const shellOpened = yield* requestTypeFor(toolName, input);
+        assert.equal(shellOpened?.payload.requestType, "command_execution_approval", toolName);
+      }
 
       const editOpened = yield* requestTypeFor("Edit", { file_path: "/tmp/a.ts" });
       assert.equal(editOpened?.payload.requestType, "file_change_approval");
@@ -13783,6 +13797,1576 @@ describe("Claude cache preflight", () => {
         ),
       );
       assert.isUndefined(yield* adapter.getClaudeCacheObservation!(THREAD_ID));
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+});
+
+describe("ClaudeAdapterLive transcript parity", () => {
+  const SESSION = "sdk-session-parity";
+  const sdk = (message: Record<string, unknown>) =>
+    ({ session_id: SESSION, parent_tool_use_id: null, ...message }) as unknown as SDKMessage;
+  const streamEvent = (uuid: string, event: Record<string, unknown>) =>
+    sdk({ type: "stream_event", uuid, event });
+  const toolStart = (index: number, id: string, name: string, input: Record<string, unknown>) =>
+    streamEvent(`start-${id}`, {
+      type: "content_block_start",
+      index,
+      content_block: { type: "tool_use", id, name, input },
+    });
+  const toolResultMessage = (
+    uuid: string,
+    toolUseId: string,
+    content: unknown,
+    toolUseResult?: unknown,
+    isError = false,
+  ) =>
+    sdk({
+      type: "user",
+      uuid,
+      message: {
+        role: "user",
+        content: [{ type: "tool_result", tool_use_id: toolUseId, content, is_error: isError }],
+      },
+      ...(toolUseResult !== undefined ? { tool_use_result: toolUseResult } : {}),
+    });
+  const successResult = (uuid: string) =>
+    sdk({
+      type: "result",
+      subtype: "success",
+      uuid,
+      is_error: false,
+      errors: [],
+      duration_ms: 1,
+      duration_api_ms: 1,
+      num_turns: 1,
+      result: "done",
+      stop_reason: "end_turn",
+      total_cost_usd: 0,
+      usage: { input_tokens: 1, output_tokens: 1 },
+      modelUsage: {},
+      permission_denials: [],
+    });
+
+  const assertEncodes = (events: ReadonlyArray<ProviderRuntimeEvent>) =>
+    Effect.gen(function* () {
+      for (const event of events) {
+        const encoded = yield* Schema.encodeEffect(ProviderRuntimeEvent)(event).pipe(Effect.exit);
+        assert.equal(Exit.isSuccess(encoded), true, `${event.type} must encode`);
+      }
+    });
+
+  const itemEvents = (
+    events: ReadonlyArray<ProviderRuntimeEvent>,
+    type: "item.started" | "item.updated" | "item.completed",
+    itemId: string,
+  ) =>
+    events.filter(
+      (event): event is Extract<ProviderRuntimeEvent, { type: typeof type }> =>
+        event.type === type && event.itemId === itemId,
+    );
+
+  it.effect("types tools by exact name and attaches typed tool results", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const config = yield* ServerConfig;
+      const eventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil((event) => event.type === "turn.completed"),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({ threadId: session.threadId, input: "go", attachments: [] });
+
+      harness.query.emit(streamEvent("m1", { type: "message_start", message: { id: "m1" } }));
+      harness.query.emit(toolStart(0, "toolu_bash", "Bash", {}));
+      harness.query.emit(
+        streamEvent("bash-input", {
+          type: "content_block_delta",
+          index: 0,
+          delta: {
+            type: "input_json_delta",
+            partial_json: '{"command":"ls","description":"List"}',
+          },
+        }),
+      );
+      harness.query.emit(
+        sdk({
+          type: "tool_progress",
+          uuid: "bash-progress",
+          tool_use_id: "toolu_bash",
+          tool_name: "Bash",
+          elapsed_time_seconds: 3,
+        }),
+      );
+      harness.query.emit(toolStart(1, "toolu_mcp", "mcp__github__create_issue", { title: "x" }));
+      harness.query.emit(toolStart(2, "toolu_list", "ListAgents", {}));
+      harness.query.emit(
+        toolStart(3, "toolu_edit", "Edit", {
+          file_path: "/repo/a.ts",
+          old_string: "a",
+          new_string: "b",
+        }),
+      );
+      harness.query.emit(
+        toolResultMessage("r-bash", "toolu_bash", "a.txt\nb.txt", {
+          stdout: "a.txt\nb.txt",
+          stderr: "",
+          interrupted: false,
+        }),
+      );
+      harness.query.emit(
+        toolResultMessage("r-edit", "toolu_edit", "The file /repo/a.ts has been updated.", {
+          filePath: "/repo/a.ts",
+          originalFile: "a\n",
+          structuredPatch: [
+            { oldStart: 1, oldLines: 1, newStart: 1, newLines: 1, lines: ["-a", "+b"] },
+          ],
+        }),
+      );
+      harness.query.emit(
+        toolResultMessage("r-mcp", "toolu_mcp", [
+          { type: "text", text: "created #1" },
+          {
+            type: "image",
+            source: { type: "base64", media_type: "image/png", data: "iVBORw0KGgo=" },
+          },
+        ]),
+      );
+      harness.query.emit(toolResultMessage("r-list", "toolu_list", "no agents"));
+      harness.query.emit(
+        streamEvent("text-start", {
+          type: "content_block_start",
+          index: 4,
+          content_block: { type: "text", text: "" },
+        }),
+      );
+      harness.query.emit(
+        streamEvent("text-delta", {
+          type: "content_block_delta",
+          index: 4,
+          delta: { type: "text_delta", text: "Done." },
+        }),
+      );
+      harness.query.emit(streamEvent("text-stop", { type: "content_block_stop", index: 4 }));
+      harness.query.emit(toolStart(5, "toolu_read", "Read", { file_path: "/repo/a.ts" }));
+      harness.query.emit(successResult("result-1"));
+
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+      yield* assertEncodes(events);
+
+      const turnStarted = events.find((event) => event.type === "turn.started");
+      assert.equal(turnStarted?.type === "turn.started" && turnStarted.payload.origin, "user");
+
+      const startedType = (itemId: string) => {
+        const started = itemEvents(events, "item.started", itemId)[0];
+        return started?.type === "item.started" ? started.payload.itemType : undefined;
+      };
+      assert.equal(startedType("toolu_bash"), "command_execution");
+      assert.equal(startedType("toolu_mcp"), "mcp_tool_call");
+      assert.equal(startedType("toolu_list"), "dynamic_tool_call");
+      assert.equal(startedType("toolu_edit"), "file_change");
+
+      const mcpStarted = itemEvents(events, "item.started", "toolu_mcp")[0];
+      assert.equal(
+        mcpStarted?.type === "item.started" ? mcpStarted.payload.toolCall?.server : undefined,
+        "github",
+      );
+
+      const progress = events.find((event) => event.type === "tool.progress");
+      assert.equal(
+        progress?.type === "tool.progress" ? progress.payload.itemType : undefined,
+        "command_execution",
+      );
+
+      const bashCompleted = itemEvents(events, "item.completed", "toolu_bash")[0];
+      const { durationMs: bashDurationMs, ...bashCommand } =
+        bashCompleted?.type === "item.completed" ? (bashCompleted.payload.command ?? {}) : {};
+      assert.deepEqual(bashCommand, {
+        command: "ls",
+        description: "List",
+        stdout: "a.txt\nb.txt",
+        outputTotalChars: 11,
+        interrupted: false,
+      });
+      assert.equal(typeof bashDurationMs, "number");
+
+      const editCompleted = itemEvents(events, "item.completed", "toolu_edit")[0];
+      assert.deepEqual(
+        editCompleted?.type === "item.completed" ? editCompleted.payload.fileChanges : undefined,
+        {
+          changes: [
+            {
+              path: "/repo/a.ts",
+              kind: "update",
+              unifiedDiff: "--- /repo/a.ts\n+++ /repo/a.ts\n@@ -1,1 +1,1 @@\n-a\n+b",
+              additions: 1,
+              deletions: 1,
+            },
+          ],
+          totalFiles: 1,
+        },
+      );
+
+      const mcpCompleted = itemEvents(events, "item.completed", "toolu_mcp")[0];
+      assert.equal(mcpCompleted?.type, "item.completed");
+      if (mcpCompleted?.type === "item.completed") {
+        assert.equal(mcpCompleted.payload.toolCall?.resultText, "created #1");
+        const image = mcpCompleted.payload.toolCall?.images?.[0];
+        assert.equal(image?.source, "file");
+        if (image?.source === "file") {
+          assert.match(image.path, /\.png$/);
+          const filePath = path.join(config.attachmentsDir, image.path);
+          assert.equal(yield* Effect.sync(() => readFileSync(filePath).byteLength), 8);
+          rmSync(filePath, { force: true });
+        }
+        assert.equal(JSON.stringify(mcpCompleted).includes("iVBORw0KGgo="), false);
+      }
+
+      const listCompleted = itemEvents(events, "item.completed", "toolu_list")[0];
+      assert.equal(
+        listCompleted?.type === "item.completed"
+          ? listCompleted.payload.toolCall?.resultText
+          : undefined,
+        "no agents",
+      );
+
+      const textCompleted = events.find(
+        (event) =>
+          event.type === "item.completed" && event.payload.itemType === "assistant_message",
+      );
+      assert.notEqual(textCompleted, undefined);
+      const turnCompleted = events.find((event) => event.type === "turn.completed");
+      assert.equal(turnCompleted?.type, "turn.completed");
+      if (turnCompleted?.type === "turn.completed") {
+        assert.equal(turnCompleted.payload.finalAssistantItemId, undefined);
+      }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  const textBlock = (index: number, id: string, text: string) => [
+    streamEvent(`${id}-start`, {
+      type: "content_block_start",
+      index,
+      content_block: { type: "text", text: "" },
+    }),
+    streamEvent(`${id}-delta`, {
+      type: "content_block_delta",
+      index,
+      delta: { type: "text_delta", text },
+    }),
+    streamEvent(`${id}-stop`, { type: "content_block_stop", index }),
+  ];
+
+  const assistantItemIdForText = (events: ReadonlyArray<ProviderRuntimeEvent>, text: string) =>
+    events.find(
+      (event) =>
+        event.type === "content.delta" &&
+        event.payload.streamKind === "assistant_text" &&
+        event.payload.delta === text &&
+        event.providerRefs?.providerThreadId === undefined,
+    )?.itemId;
+
+  const finalAssistantItemIdOf = (events: ReadonlyArray<ProviderRuntimeEvent>) => {
+    const turnCompleted = events.find(
+      (event) =>
+        event.type === "turn.completed" && event.providerRefs?.providerThreadId === undefined,
+    );
+    assert.equal(turnCompleted?.type, "turn.completed");
+    return turnCompleted?.type === "turn.completed"
+      ? turnCompleted.payload.finalAssistantItemId
+      : undefined;
+  };
+
+  const runParentTurn = (harness: ReturnType<typeof makeHarness>, messages: Array<SDKMessage>) =>
+    Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const eventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil(
+          (event) =>
+            event.type === "turn.completed" && event.providerRefs?.providerThreadId === undefined,
+        ),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({ threadId: session.threadId, input: "go", attachments: [] });
+      for (const message of messages) harness.query.emit(message);
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+      yield* assertEncodes(events);
+      return events;
+    });
+
+  it.effect("sends only text after the last tool as the final assistant item", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const events = yield* runParentTurn(harness, [
+        streamEvent("m1", { type: "message_start", message: { id: "m1" } }),
+        ...textBlock(0, "before", "Looking."),
+        toolStart(1, "toolu_ls", "Bash", { command: "ls" }),
+        toolResultMessage("r-ls", "toolu_ls", "a.txt"),
+        streamEvent("m2", { type: "message_start", message: { id: "m2" } }),
+        ...textBlock(0, "after", "Done."),
+        successResult("result-final-text"),
+      ]);
+      const finalId = finalAssistantItemIdOf(events);
+      assert.notEqual(finalId, undefined);
+      assert.equal(finalId, assistantItemIdForText(events, "Done."));
+      assert.notEqual(finalId, assistantItemIdForText(events, "Looking."));
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("does not send pre-tool text that only completes at the result", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const events = yield* runParentTurn(harness, [
+        streamEvent("m1", { type: "message_start", message: { id: "m1" } }),
+        ...textBlock(0, "open", "Checking.").slice(0, 2),
+        toolStart(1, "toolu_ls", "Bash", { command: "ls" }),
+        toolResultMessage("r-ls", "toolu_ls", "a.txt"),
+        successResult("result-open-text"),
+      ]);
+      assert.notEqual(assistantItemIdForText(events, "Checking."), undefined);
+      assert.equal(finalAssistantItemIdOf(events), undefined);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("never sends subagent sidechain text as the parent final assistant item", () => {
+    const harness = makeHarness();
+    const sidechainAssistant = (uuid: string, parentToolUseId: string, text: string) =>
+      sdk({
+        type: "assistant",
+        uuid,
+        parent_tool_use_id: parentToolUseId,
+        message: { id: `${uuid}-msg`, role: "assistant", content: [{ type: "text", text }] },
+      });
+    return Effect.gen(function* () {
+      const events = yield* runParentTurn(harness, [
+        streamEvent("m1", { type: "message_start", message: { id: "m1" } }),
+        toolStart(0, "toolu_task", "Task", {
+          description: "Explore",
+          prompt: "Find it",
+          subagent_type: "explore",
+        }),
+        sidechainAssistant("sub-1", "toolu_task", "Subagent answer."),
+        toolResultMessage("r-task", "toolu_task", "Subagent answer."),
+        streamEvent("m2", { type: "message_start", message: { id: "m2" } }),
+        ...textBlock(0, "summary", "Summary."),
+        ...textBlock(1, "stray", "Stray sidechain.").map(
+          (message) =>
+            ({ ...message, parent_tool_use_id: "toolu_unknown" }) as unknown as SDKMessage,
+        ),
+        successResult("result-subagent"),
+      ]);
+      const summaryId = assistantItemIdForText(events, "Summary.");
+      assert.notEqual(summaryId, undefined);
+      assert.equal(finalAssistantItemIdOf(events), summaryId);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect.each([
+    { scenario: "after parent text completes", finalText: "Done." },
+    { scenario: "while parent text is still open", finalText: "Late." },
+  ])(
+    "keeps the parent final assistant item when an unrouted sidechain tool opens $scenario",
+    ({ finalText }) => {
+      const harness = makeHarness();
+      const unrouted = (message: SDKMessage) =>
+        ({ ...message, parent_tool_use_id: "toolu_unknown" }) as unknown as SDKMessage;
+      const [lateStart, lateDelta, lateStop] = textBlock(1, "late", "Late.");
+      const messages =
+        finalText === "Done."
+          ? [...textBlock(0, "done", "Done."), unrouted(toolStart(1, "toolu_stray", "Bash", {}))]
+          : [lateStart!, lateDelta!, unrouted(toolStart(2, "toolu_stray", "Bash", {})), lateStop!];
+      return Effect.gen(function* () {
+        const events = yield* runParentTurn(harness, [
+          streamEvent("m1", { type: "message_start", message: { id: "m1" } }),
+          ...messages,
+          successResult("result-unrouted-tool"),
+        ]);
+        const finalId = assistantItemIdForText(events, finalText);
+        assert.notEqual(finalId, undefined);
+        assert.equal(finalAssistantItemIdOf(events), finalId);
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    },
+  );
+
+  it.effect("sets the Bash durationMs from tool start to tool result", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({ threadId: session.threadId, input: "go", attachments: [] });
+      harness.query.emit(streamEvent("m1", { type: "message_start", message: { id: "m1" } }));
+      harness.query.emit(toolStart(0, "toolu_slow", "Bash", { command: "sleep 1" }));
+      yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.type === "item.started" && event.itemId === "toolu_slow"),
+        Stream.runHead,
+      );
+      yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 40)));
+      harness.query.emit(
+        toolResultMessage("r-slow", "toolu_slow", "done", { stdout: "done", stderr: "" }),
+      );
+      const completed = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.type === "item.completed" && event.itemId === "toolu_slow"),
+        Stream.runHead,
+      );
+      assert.equal(completed._tag, "Some");
+      if (completed._tag === "Some" && completed.value.type === "item.completed") {
+        const durationMs = completed.value.payload.command?.durationMs ?? -1;
+        assert.isAtLeast(durationMs, 30);
+        assert.isBelow(durationMs, 60_000);
+        assert.equal(completed.value.payload.command?.output, undefined);
+        assert.equal(completed.value.payload.command?.stdout, "done");
+      }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  const errorResult = (subtype: string) =>
+    sdk({
+      type: "result",
+      subtype,
+      uuid: `result-${subtype}`,
+      is_error: true,
+      errors: [],
+      duration_ms: 1,
+      duration_api_ms: 1,
+      num_turns: 3,
+      stop_reason: null,
+      total_cost_usd: 0,
+      usage: { input_tokens: 1, output_tokens: 1 },
+      modelUsage: {},
+      permission_denials: [],
+    });
+
+  const failedTurnTexts = (events: ReadonlyArray<ProviderRuntimeEvent>) => {
+    const runtimeError = events.find((event) => event.type === "runtime.error");
+    const turnCompleted = events.find((event) => event.type === "turn.completed");
+    assert.equal(turnCompleted?.type === "turn.completed" && turnCompleted.payload.state, "failed");
+    return {
+      runtimeError: runtimeError?.type === "runtime.error" ? runtimeError.payload.message : null,
+      turnError:
+        turnCompleted?.type === "turn.completed" ? turnCompleted.payload.errorMessage : null,
+    };
+  };
+
+  it.effect("sends the same max-turns stop text as the runtime error and turn error", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const events = yield* runParentTurn(harness, [errorResult("error_max_turns")]);
+      const expected = "Claude stopped after reaching the maximum number of turns.";
+      assert.deepEqual(failedTurnTexts(events), { runtimeError: expected, turnError: expected });
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("sends the same fallback text when a failed result has no error text", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const events = yield* runParentTurn(harness, [errorResult("error_during_execution")]);
+      const expected = "Claude turn failed.";
+      assert.deepEqual(failedTurnTexts(events), { runtimeError: expected, turnError: expected });
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("keeps the subagent type on Agent tool progress", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const progressFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.type === "tool.progress"),
+        Stream.runHead,
+        Effect.forkChild,
+      );
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({ threadId: session.threadId, input: "go", attachments: [] });
+      harness.query.emit(
+        toolStart(0, "toolu_agent", "Agent", { description: "Explore", prompt: "look" }),
+      );
+      harness.query.emit(
+        sdk({
+          type: "tool_progress",
+          uuid: "agent-progress",
+          tool_use_id: "toolu_agent",
+          tool_name: "Agent",
+          elapsed_time_seconds: 5,
+        }),
+      );
+      const progress = yield* Fiber.join(progressFiber);
+      assert.equal(
+        progress._tag === "Some" && progress.value.type === "tool.progress"
+          ? progress.value.payload.itemType
+          : undefined,
+        "collab_agent_tool_call",
+      );
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("completes server tools from their result blocks and marks redacted reasoning", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const eventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil((event) => event.type === "turn.completed"),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({ threadId: session.threadId, input: "go", attachments: [] });
+      harness.query.emit(streamEvent("m1", { type: "message_start", message: { id: "m1" } }));
+      harness.query.emit(
+        streamEvent("redacted", {
+          type: "content_block_start",
+          index: 0,
+          content_block: { type: "redacted_thinking", data: "opaque" },
+        }),
+      );
+      harness.query.emit(
+        streamEvent("advisor-start", {
+          type: "content_block_start",
+          index: 1,
+          content_block: {
+            type: "server_tool_use",
+            id: "srvtoolu_adv",
+            name: "advisor",
+            input: {},
+          },
+        }),
+      );
+      harness.query.emit(
+        streamEvent("advisor-result", {
+          type: "content_block_start",
+          index: 2,
+          content_block: {
+            type: "advisor_tool_result",
+            tool_use_id: "srvtoolu_adv",
+            content: { type: "advisor_result", text: "Looks right.", stop_reason: "end_turn" },
+          },
+        }),
+      );
+      harness.query.emit(
+        streamEvent("mcp-start", {
+          type: "content_block_start",
+          index: 3,
+          content_block: {
+            type: "mcp_tool_use",
+            id: "mcptoolu_1",
+            name: "create_file",
+            server_name: "drive",
+            input: {},
+          },
+        }),
+      );
+      const mcpResult = {
+        type: "mcp_tool_result",
+        tool_use_id: "mcptoolu_1",
+        is_error: false,
+        content: [{ type: "text", text: "saved" }],
+      };
+      harness.query.emit(
+        streamEvent("mcp-result", {
+          type: "content_block_start",
+          index: 4,
+          content_block: mcpResult,
+        }),
+      );
+      harness.query.emit(
+        sdk({
+          type: "assistant",
+          uuid: "snapshot",
+          message: { id: "m1", role: "assistant", content: [mcpResult] },
+        }),
+      );
+      harness.query.emit(successResult("result-server"));
+
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+      yield* assertEncodes(events);
+
+      const advisorCompleted = itemEvents(events, "item.completed", "srvtoolu_adv");
+      assert.equal(advisorCompleted.length, 1);
+      const advisor = advisorCompleted[0];
+      if (advisor?.type === "item.completed") {
+        assert.equal(advisor.payload.status, "completed");
+        assert.equal(advisor.payload.toolCall?.serverToolKind, "advisor");
+        assert.equal(advisor.payload.toolCall?.resultText, "Looks right.");
+        assert.equal(advisor.raw?.method, "claude/stream_event/content_block_start");
+      }
+
+      const mcpStarted = itemEvents(events, "item.started", "mcptoolu_1")[0];
+      assert.equal(
+        mcpStarted?.type === "item.started" ? mcpStarted.payload.itemType : undefined,
+        "mcp_tool_call",
+      );
+      const mcpCompleted = itemEvents(events, "item.completed", "mcptoolu_1");
+      assert.equal(mcpCompleted.length, 1);
+      assert.equal(
+        mcpCompleted[0]?.type === "item.completed"
+          ? mcpCompleted[0].payload.toolCall?.server
+          : undefined,
+        "drive",
+      );
+
+      const redacted = events.filter(
+        (event) =>
+          event.type === "item.completed" &&
+          event.payload.itemType === "reasoning" &&
+          event.payload.reasoning?.redacted === true,
+      );
+      assert.equal(redacted.length, 1);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("maps informational system subtypes to notices and ignores plumbing", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const eventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter(
+          (event) =>
+            event.type === "transcript.notice" ||
+            event.type === "runtime.warning" ||
+            event.type === "event.unmapped",
+        ),
+        Stream.takeUntil((event) => event.type === "runtime.warning"),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+      const system = (uuid: string, subtype: string, fields: Record<string, unknown> = {}) =>
+        sdk({ type: "system", subtype, uuid, ...fields });
+
+      harness.query.emit(
+        system("init", "init", {
+          tools: [],
+          mcp_servers: [
+            { name: "github", status: "connected" },
+            { name: "docs", status: "failed" },
+            { name: "slow", status: "pending" },
+          ],
+        }),
+      );
+      harness.query.emit(
+        system("init-2", "init", {
+          tools: [],
+          mcp_servers: [{ name: "github", status: "connected" }],
+        }),
+      );
+      harness.query.emit(system("lco", "local_command_output", { content: "Total cost: $0.10" }));
+      harness.query.emit(
+        system("refusal", "model_refusal_no_fallback", {
+          original_model: "claude-x",
+          request_id: null,
+          api_refusal_explanation: "Unsafe request.",
+          content: "I can't help with that.",
+        }),
+      );
+      harness.query.emit(
+        system("notify", "notification", { key: "k1", text: "Update available", priority: "high" }),
+      );
+      harness.query.emit(
+        system("memory", "memory_recall", {
+          mode: "select",
+          memories: [{ path: "~/.claude/memory/a.md", scope: "personal" }],
+        }),
+      );
+      harness.query.emit(
+        system("elicit", "elicitation_complete", { mcp_server_name: "docs", elicitation_id: "e1" }),
+      );
+      harness.query.emit(
+        system("info", "informational", {
+          content: "Stop hook prevented continuation",
+          level: "warning",
+          prevent_continuation: true,
+        }),
+      );
+      harness.query.emit(system("plugin", "plugin_install", { status: "installed", name: "lint" }));
+      harness.query.emit(system("commands", "commands_changed", { commands: [{ name: "a" }] }));
+      harness.query.emit(
+        system("compact", "status", {
+          status: null,
+          compact_result: "failed",
+          compact_error: "Context too large",
+        }),
+      );
+      for (const subtype of [
+        "control_request_progress",
+        "session_state_changed",
+        "worker_shutting_down",
+        "mirror_error",
+      ]) {
+        harness.query.emit(system(`ignored-${subtype}`, subtype));
+      }
+      harness.query.emit(sdk({ type: "prompt_suggestion", uuid: "suggest", suggestion: "x" }));
+      harness.query.emit(system("sentinel", "totally_unknown_subtype"));
+
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+      yield* assertEncodes(events);
+      const notices = events.flatMap((event) =>
+        event.type === "transcript.notice" ? [event.payload] : [],
+      );
+      assert.deepEqual(
+        notices.map((notice) => [notice.noticeKind, notice.severity, notice.title]),
+        [
+          ["mcp-server-status", "warning", "MCP server docs failed to start"],
+          ["mcp-server-status", "info", "MCP servers ready: github"],
+          ["local-command-output", "info", "Command output"],
+          ["refusal", "error", "Claude declined to continue"],
+          ["notification", "warning", "Update available"],
+          ["memory-recall", "info", "Recalled from memory: ~/.claude/memory/a.md"],
+          ["mcp-elicitation", "info", "docs request completed"],
+          ["hook-blocked", "warning", "Stop hook prevented continuation"],
+          ["plugin-install", "info", "Installed lint"],
+          ["skills-changed", "info", "Commands and skills updated"],
+          ["compaction-failed", "error", "Context compaction failed"],
+        ],
+      );
+      assert.equal(notices[2]?.body, "Total cost: $0.10");
+      assert.equal(notices[3]?.detail, "Unsafe request.");
+      assert.equal(notices[10]?.body, "Context too large");
+      for (const notice of notices) {
+        assert.equal(typeof notice.dedupeKey, "string");
+      }
+      const warnings = events.filter((event) => event.type === "runtime.warning");
+      assert.deepEqual(
+        warnings.map((event) => (event.type === "runtime.warning" ? event.payload.message : "")),
+        ["Unhandled Claude system message subtype 'totally_unknown_subtype'."],
+      );
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("opens a provider-origin turn for a background task wake", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const eventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil((event) => event.type === "turn.completed"),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+      harness.query.emit(
+        sdk({
+          type: "user",
+          uuid: "wake",
+          origin: { kind: "task-notification" },
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "<task-notification>bg done</task-notification>" }],
+          },
+        }),
+      );
+      harness.query.emit(
+        sdk({
+          type: "assistant",
+          uuid: "wake-reply",
+          message: {
+            id: "wake-msg",
+            role: "assistant",
+            content: [{ type: "text", text: "Done." }],
+          },
+        }),
+      );
+      harness.query.emit(successResult("wake-result"));
+
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+      yield* assertEncodes(events);
+      const turnStarted = events.find((event) => event.type === "turn.started");
+      assert.equal(turnStarted?.type === "turn.started" && turnStarted.payload.origin, "provider");
+      const notice = events.find((event) => event.type === "transcript.notice");
+      assert.equal(notice?.type, "transcript.notice");
+      if (notice?.type === "transcript.notice") {
+        assert.equal(notice.payload.noticeKind, "user-message-injected");
+        assert.equal(notice.payload.title, "Background task finished");
+        assert.equal(notice.turnId, turnStarted?.turnId);
+      }
+      const reply = events.find(
+        (event) =>
+          event.type === "item.completed" && event.payload.itemType === "assistant_message",
+      );
+      const turnCompleted = events.find((event) => event.type === "turn.completed");
+      assert.equal(
+        turnCompleted?.type === "turn.completed"
+          ? turnCompleted.payload.finalAssistantItemId
+          : undefined,
+        reply?.itemId,
+      );
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("keys task progress to its tool use and avoids repeating the description", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const progressFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.type === "task.progress"),
+        Stream.take(3),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+      const progress = (uuid: string, fields: Record<string, unknown>) =>
+        sdk({
+          type: "system",
+          subtype: "task_progress",
+          uuid,
+          task_id: "task-explore",
+          tool_use_id: "toolu_agent_explore",
+          description: "Explore the repo",
+          usage: { total_tokens: 1, tool_uses: 1, duration_ms: 1 },
+          ...fields,
+        });
+      harness.query.emit(progress("p1", { summary: "Explore the repo", last_tool_name: "Grep" }));
+      harness.query.emit(
+        progress("p2", { summary: "Reading the adapter", last_tool_name: "Read" }),
+      );
+      harness.query.emit(progress("p3", {}));
+      const events = Array.from(yield* Fiber.join(progressFiber));
+      yield* assertEncodes(events);
+      assert.deepEqual(
+        events.map((event) =>
+          event.type === "task.progress"
+            ? [event.payload.toolUseId, event.payload.summary, event.payload.description]
+            : [],
+        ),
+        [
+          ["toolu_agent_explore", "Using Grep", "Explore the repo"],
+          ["toolu_agent_explore", "Reading the adapter", "Explore the repo"],
+          ["toolu_agent_explore", undefined, "Explore the repo"],
+        ],
+      );
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("keeps a no-query task notification out of any turn", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const eventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter(
+          (event) =>
+            event.type === "turn.started" ||
+            event.type === "transcript.notice" ||
+            event.type === "runtime.warning",
+        ),
+        Stream.takeUntil((event) => event.type === "runtime.warning"),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+      harness.query.emit(
+        sdk({
+          type: "user",
+          uuid: "quiet-wake",
+          origin: { kind: "peer", from: "session-b", name: "Reviewer" },
+          shouldQuery: false,
+          message: { role: "user", content: [{ type: "text", text: "FYI: merged" }] },
+        }),
+      );
+      harness.query.emit(sdk({ type: "system", subtype: "totally_unknown_subtype", uuid: "end" }));
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+      assert.deepEqual(
+        events.map((event) => event.type),
+        ["transcript.notice", "runtime.warning"],
+      );
+      const notice = events[0];
+      if (notice?.type === "transcript.notice") {
+        assert.equal(notice.payload.title, "Message from Reviewer");
+        assert.equal(notice.payload.body, "FYI: merged");
+        assert.equal(notice.turnId, undefined);
+      }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("forwards refusal reroute fields, retry counters, and result error codes", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const eventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil((event) => event.type === "turn.completed"),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({ threadId: session.threadId, input: "go", attachments: [] });
+      harness.query.emit(
+        sdk({
+          type: "assistant",
+          uuid: "assistant-retracted",
+          message: { id: "m-r", role: "assistant", content: [{ type: "text", text: "Partial" }] },
+        }),
+      );
+      harness.query.emit(
+        sdk({
+          type: "system",
+          subtype: "model_refusal_fallback",
+          uuid: "fallback",
+          trigger: "refusal",
+          direction: "retry",
+          original_model: "claude-fable-5",
+          fallback_model: "claude-opus-4-8",
+          request_id: null,
+          api_refusal_category: "cyber",
+          api_refusal_explanation: "Flagged by safeguards.",
+          retracted_message_uuids: ["assistant-retracted", "unknown-uuid"],
+          content: "Rerouted.",
+        }),
+      );
+      harness.query.emit(
+        sdk({
+          type: "system",
+          subtype: "api_retry",
+          uuid: "retry",
+          attempt: 2,
+          max_retries: 10,
+          retry_delay_ms: 1500,
+          error_status: 529,
+          error: "server_error",
+        }),
+      );
+      harness.query.emit(
+        sdk({
+          type: "result",
+          subtype: "error_max_turns",
+          uuid: "result-error",
+          is_error: true,
+          errors: ["Reached max turns", "Second detail"],
+          duration_ms: 1,
+          duration_api_ms: 1,
+          num_turns: 9,
+          stop_reason: null,
+          total_cost_usd: 0,
+          usage: { input_tokens: 1, output_tokens: 1 },
+          modelUsage: {},
+          permission_denials: [{ tool_name: "Bash", tool_use_id: "t", tool_input: {} }],
+        }),
+      );
+
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+      yield* assertEncodes(events);
+      const partial = events.find(
+        (event) =>
+          event.type === "item.completed" && event.payload.itemType === "assistant_message",
+      );
+      const rerouted = events.find((event) => event.type === "model.rerouted");
+      assert.equal(rerouted?.type, "model.rerouted");
+      if (rerouted?.type === "model.rerouted") {
+        assert.equal(rerouted.payload.refusalCategory, "cyber");
+        assert.equal(rerouted.payload.refusalExplanation, "Flagged by safeguards.");
+        assert.deepEqual(rerouted.payload.retractedItemIds?.map(String), [String(partial?.itemId)]);
+      }
+      const retry = events.find(
+        (event) => event.type === "runtime.warning" && event.payload.willRetry === true,
+      );
+      assert.equal(retry?.type, "runtime.warning");
+      if (retry?.type === "runtime.warning") {
+        assert.equal(retry.payload.retryAttempt, 2);
+        assert.equal(retry.payload.retryMaxAttempts, 10);
+      }
+      const error = events.find((event) => event.type === "runtime.error");
+      assert.equal(error?.type, "runtime.error");
+      if (error?.type === "runtime.error") {
+        assert.equal(error.payload.errorCode, "error_max_turns");
+        assert.deepEqual(error.payload.detail, {
+          errors: ["Reached max turns", "Second detail"],
+          permissionDenials: 1,
+        });
+      }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("announces only background tasks the parent thread owns", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const warningsFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.type === "runtime.warning" && event.threadId === THREAD_ID),
+        Stream.take(2),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({ threadId: session.threadId, input: "go", attachments: [] });
+      harness.query.emit(
+        toolStart(0, "toolu_agent", "Agent", { description: "Explore", prompt: "x" }),
+      );
+      harness.query.emit(
+        sdk({
+          type: "assistant",
+          uuid: "sub-assistant",
+          parent_tool_use_id: "toolu_agent",
+          message: {
+            id: "sub-m",
+            role: "assistant",
+            content: [
+              {
+                type: "tool_use",
+                id: "toolu_sub_bash",
+                name: "Bash",
+                input: { command: "sleep 60", run_in_background: true },
+              },
+            ],
+          },
+        }),
+      );
+      harness.query.emit(
+        sdk({
+          type: "system",
+          subtype: "task_started",
+          uuid: "sub-task",
+          task_id: "bg-sub",
+          tool_use_id: "toolu_sub_bash",
+          description: "sleep 60",
+          task_type: "local_bash",
+        }),
+      );
+      harness.query.emit(
+        sdk({
+          type: "system",
+          subtype: "background_tasks_changed",
+          uuid: "bg",
+          tasks: [
+            { task_id: "bg-sub", task_type: "local_bash", description: "sleep 60" },
+            { task_id: "bg-own", task_type: "local_bash", description: "npm run dev" },
+          ],
+        }),
+      );
+      harness.query.emit(sdk({ type: "system", subtype: "totally_unknown_subtype", uuid: "end" }));
+      const warnings = Array.from(yield* Fiber.join(warningsFiber));
+      assert.deepEqual(
+        warnings.map((event) => (event.type === "runtime.warning" ? event.payload.message : "")),
+        ["npm run dev", "Unhandled Claude system message subtype 'totally_unknown_subtype'."],
+      );
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect(
+    "gives repeated AskUserQuestion headers unique ids and forwards option previews",
+    () => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        const requestedFiber = yield* adapter.streamEvents.pipe(
+          Stream.filter((event) => event.type === "user-input.requested"),
+          Stream.runHead,
+          Effect.forkChild,
+        );
+        yield* adapter.startSession({
+          threadId: THREAD_ID,
+          provider: "claudeAgent",
+          runtimeMode: "approval-required",
+        });
+        const canUseTool = harness.getLastCreateQueryInput()?.options.canUseTool;
+        assert.equal(typeof canUseTool, "function");
+        if (!canUseTool) return;
+        void canUseTool(
+          "AskUserQuestion",
+          {
+            questions: [
+              {
+                question: "Which layout?",
+                header: "Choice",
+                options: [{ label: "Grid", description: "Cards", preview: "[ ][ ]" }],
+                multiSelect: false,
+              },
+              {
+                question: "Which color?",
+                header: "Choice",
+                options: [{ label: "Blue", description: "Calm" }],
+                multiSelect: false,
+              },
+            ],
+          },
+          { signal: new AbortController().signal, toolUseID: "tool-ask", requestId: "req-ask" },
+        );
+        const requested = yield* Fiber.join(requestedFiber);
+        assert.equal(requested._tag, "Some");
+        if (requested._tag !== "Some" || requested.value.type !== "user-input.requested") return;
+        const questions = requested.value.payload.questions;
+        assert.deepEqual(
+          questions.map((question) => question.id),
+          ["Choice", "Choice-2"],
+        );
+        assert.equal(questions[0]?.options[0]?.preview, "[ ][ ]");
+        assert.equal(questions[1]?.options[0]?.preview, undefined);
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    },
+  );
+
+  it.effect("emits per-tool hook lifecycles, including silent successes", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const eventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter(
+          (event) => event.type.startsWith("hook.") || event.type === "runtime.warning",
+        ),
+        Stream.takeUntil((event) => event.type === "runtime.warning"),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+      const hook = (uuid: string, subtype: string, hookId: string, fields = {}) =>
+        sdk({
+          type: "system",
+          subtype,
+          uuid,
+          hook_id: hookId,
+          hook_name: "PreToolUse:Bash",
+          hook_event: "PreToolUse",
+          ...fields,
+        });
+      const silent = { outcome: "success", output: "", stdout: "", stderr: "", exit_code: 0 };
+      harness.query.emit(hook("h1s", "hook_started", "h1"));
+      harness.query.emit(hook("h1r", "hook_response", "h1", silent));
+      harness.query.emit(hook("h2s", "hook_started", "h2"));
+      harness.query.emit(hook("h2r", "hook_response", "h2", { ...silent, stdout: "lint ok" }));
+      harness.query.emit(sdk({ type: "system", subtype: "totally_unknown_subtype", uuid: "end" }));
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+      assert.deepEqual(
+        events.map((event) =>
+          event.type === "hook.started" || event.type === "hook.completed"
+            ? `${event.type}:${event.payload.hookId}`
+            : event.type,
+        ),
+        [
+          "hook.started:h1",
+          "hook.completed:h1",
+          "hook.started:h2",
+          "hook.completed:h2",
+          "runtime.warning",
+        ],
+      );
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("passes hook identity on every hook event and keeps the hook_started turn", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const eventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter(
+          (event) =>
+            event.type.startsWith("hook.") ||
+            event.type === "turn.completed" ||
+            event.type === "runtime.warning",
+        ),
+        Stream.takeUntil((event) => event.type === "runtime.warning"),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+      const hook = (uuid: string, subtype: string, fields = {}) =>
+        sdk({
+          type: "system",
+          subtype,
+          uuid,
+          hook_id: "session-hook",
+          hook_name: "PostToolUse:Edit",
+          hook_event: "PostToolUse",
+          ...fields,
+        });
+      yield* adapter.sendTurn({ threadId: session.threadId, input: "hi", attachments: [] });
+      harness.query.emit(hook("s-started", "hook_started"));
+      emitSuccessResult(harness.query, "hook-session", "hook-turn-result", {
+        input_tokens: 1,
+        output_tokens: 1,
+      });
+      harness.query.emit(
+        hook("s-progress", "hook_progress", { output: "loading", stdout: "loading", stderr: "" }),
+      );
+      harness.query.emit(
+        hook("s-response", "hook_response", {
+          outcome: "error",
+          output: "denied",
+          stdout: "",
+          stderr: "denied",
+          exit_code: 2,
+        }),
+      );
+      harness.query.emit(sdk({ type: "system", subtype: "totally_unknown_subtype", uuid: "end" }));
+      const collected = Array.from(yield* Fiber.join(eventsFiber));
+      assert.deepEqual(
+        collected.map((event) => event.type),
+        ["hook.started", "turn.completed", "hook.progress", "hook.completed", "runtime.warning"],
+      );
+      const events = collected.filter((event) => event.type.startsWith("hook."));
+      const startedTurnId = events[0]?.turnId;
+      assert.isDefined(startedTurnId);
+      assert.deepEqual(
+        events.map((event) => [event.type, event.turnId]),
+        [
+          ["hook.started", startedTurnId],
+          ["hook.progress", startedTurnId],
+          ["hook.completed", startedTurnId],
+        ],
+      );
+      for (const event of events) {
+        assert.include(event.payload, {
+          hookName: "PostToolUse:Edit",
+          hookEvent: "PostToolUse",
+          matcher: "Edit",
+        });
+      }
+      const completed = events[2];
+      assert.equal(completed?.type, "hook.completed");
+      if (completed?.type !== "hook.completed") return;
+      assert.include(completed.payload, { outcome: "error", exitCode: 2, stderr: "denied" });
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it("parses the matcher from a Claude hook name only when it starts with the hook event", () => {
+    assert.equal(claudeHookMatcher("PreToolUse:Bash", "PreToolUse"), "Bash");
+    assert.equal(claudeHookMatcher("PreToolUse", "PreToolUse"), undefined);
+    assert.equal(claudeHookMatcher("custom-hook", "PreToolUse"), undefined);
+    assert.equal(claudeHookMatcher("PreToolUse: ", "PreToolUse"), undefined);
+  });
+
+  it("enables hook events for the SDK session", () =>
+    Effect.gen(function* () {
+      const harness = makeHarness();
+      yield* Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        yield* adapter.startSession({
+          threadId: THREAD_ID,
+          provider: "claudeAgent",
+          runtimeMode: "full-access",
+        });
+        assert.equal(harness.getLastCreateQueryInput()?.options.includeHookEvents, true);
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    }).pipe(Effect.runPromise));
+
+  it("asks Claude for summarized thinking so reasoning text is not omitted", () =>
+    Effect.gen(function* () {
+      const harness = makeHarness();
+      yield* Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        yield* adapter.startSession({
+          threadId: THREAD_ID,
+          provider: "claudeAgent",
+          runtimeMode: "full-access",
+        });
+        assert.deepEqual(harness.getLastCreateQueryInput()?.options.extraArgs, {
+          "thinking-display": "summarized",
+        });
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    }).pipe(Effect.runPromise));
+
+  const thinkingDisplayArgsFor = (
+    runtimeMode: "full-access" | "auto",
+    readClaudeCliVersion: NonNullable<ClaudeAdapterLiveOptions["readClaudeCliVersion"]>,
+  ) =>
+    Effect.gen(function* () {
+      const harness = makeHarness({ readClaudeCliVersion });
+      return yield* Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        yield* adapter.startSession({
+          threadId: THREAD_ID,
+          provider: "claudeAgent",
+          runtimeMode,
+        });
+        assert.isTrue(yield* adapter.hasSession(THREAD_ID));
+        return harness.getLastCreateQueryInput()?.options.extraArgs;
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    });
+
+  it("passes the thinking display flag only to a Claude CLI that supports it", () =>
+    Effect.gen(function* () {
+      const summarized = { "thinking-display": "summarized" };
+      assert.deepEqual(
+        yield* thinkingDisplayArgsFor("full-access", async () => "2.1.296"),
+        summarized,
+      );
+      assert.deepEqual(yield* thinkingDisplayArgsFor("auto", async () => "2.1.296"), summarized);
+      assert.isUndefined(yield* thinkingDisplayArgsFor("full-access", async () => "2.1.258"));
+      assert.isUndefined(yield* thinkingDisplayArgsFor("full-access", async () => null));
+    }).pipe(Effect.runPromise));
+
+  it("starts a non-Auto session without the flag when the version probe fails", () =>
+    Effect.gen(function* () {
+      const extraArgs = yield* thinkingDisplayArgsFor("full-access", async () => {
+        throw new Error("ENOENT");
+      });
+      assert.isUndefined(extraArgs);
+    }).pipe(Effect.runPromise));
+
+  it("probes the Claude CLI version once per binary for repeated non-Auto starts", () =>
+    Effect.gen(function* () {
+      let probes = 0;
+      const harness = makeHarness({
+        readClaudeCliVersion: async () => {
+          probes += 1;
+          return "2.1.296";
+        },
+      });
+      yield* Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        yield* adapter.startSession({ threadId: THREAD_ID, runtimeMode: "full-access" });
+        yield* adapter.stopSession(THREAD_ID);
+        yield* adapter.startSession({ threadId: THREAD_ID, runtimeMode: "full-access" });
+        assert.deepEqual(harness.getLastCreateQueryInput()?.options.extraArgs, {
+          "thinking-display": "summarized",
+        });
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+      assert.equal(probes, 1);
+    }).pipe(Effect.runPromise));
+
+  it.effect.each([
+    { probed: null, probesAfter31s: 2 },
+    { probed: "2.1.296", probesAfter31s: 1 },
+  ])("caches a $probed Claude CLI version probe for its own TTL", ({ probed, probesAfter31s }) => {
+    let probes = 0;
+    const harness = makeHarness({
+      readClaudeCliVersion: async () => {
+        probes += 1;
+        return probed;
+      },
+    });
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const restart = Effect.gen(function* () {
+        yield* adapter.stopSession(THREAD_ID);
+        yield* adapter.startSession({ threadId: THREAD_ID, runtimeMode: "full-access" });
+      });
+      yield* adapter.startSession({ threadId: THREAD_ID, runtimeMode: "full-access" });
+      yield* TestClock.adjust("29 seconds");
+      yield* restart;
+      assert.equal(probes, 1);
+      yield* TestClock.adjust("2 seconds");
+      yield* restart;
+      assert.equal(probes, probesAfter31s);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect.each([
+    { binaryPath: "bin/claude", probes: 2 },
+    { binaryPath: "../x/claude", probes: 2 },
+    { binaryPath: "./claude", probes: 2 },
+    { binaryPath: ".\\claude.exe", probes: 2 },
+    { binaryPath: "claude", probes: 1 },
+    { binaryPath: "/usr/local/bin/claude", probes: 1 },
+  ])("probes $binaryPath once per distinct cwd only when the path is cwd-relative", (testCase) => {
+    let probes = 0;
+    const harness = makeHarness({
+      readClaudeCliVersion: async () => {
+        probes += 1;
+        return "2.1.296";
+      },
+    });
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      for (const cwd of ["/tmp/claude-work-a", "/tmp/claude-work-b"]) {
+        yield* adapter.startSession({
+          threadId: THREAD_ID,
+          runtimeMode: "full-access",
+          cwd,
+          providerOptions: { claudeAgent: { binaryPath: testCase.binaryPath } },
+        });
+        yield* adapter.stopSession(THREAD_ID);
+      }
+      assert.equal(probes, testCase.probes);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("emits a completed reasoning item in a no-tool turn that ends with text", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const eventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil((event) => event.type === "turn.completed"),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({ threadId: session.threadId, input: "hi", attachments: [] });
+      const stream = (uuid: string, event: Record<string, unknown>) =>
+        sdk({ type: "stream_event", uuid, parent_tool_use_id: null, event });
+      harness.query.emit(stream("nt-start", { type: "message_start", message: { id: "nt-msg" } }));
+      harness.query.emit(
+        stream("nt-think-start", {
+          type: "content_block_start",
+          index: 0,
+          content_block: { type: "thinking", thinking: "", signature: "" },
+        }),
+      );
+      harness.query.emit(
+        stream("nt-think-delta", {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "thinking_delta", thinking: "**Planning the reply**" },
+        }),
+      );
+      harness.query.emit(stream("nt-think-stop", { type: "content_block_stop", index: 0 }));
+      harness.query.emit(
+        sdk({
+          type: "assistant",
+          uuid: "nt-think-snapshot",
+          parent_tool_use_id: null,
+          message: {
+            id: "nt-msg",
+            role: "assistant",
+            content: [{ type: "thinking", thinking: "**Planning the reply**", signature: "sig" }],
+          },
+        }),
+      );
+      harness.query.emit(
+        sdk({
+          type: "assistant",
+          uuid: "nt-text-snapshot",
+          parent_tool_use_id: null,
+          message: { id: "nt-msg", role: "assistant", content: [{ type: "text", text: "Hello." }] },
+        }),
+      );
+      emitSuccessResult(harness.query, "nt-session", "nt-result", {
+        input_tokens: 1,
+        output_tokens: 1,
+      });
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+      const reasoningDone = events.find(
+        (event) => event.type === "item.completed" && event.payload.itemType === "reasoning",
+      );
+      assert.equal(reasoningDone?.type, "item.completed");
+      if (reasoningDone?.type !== "item.completed") return;
+      assert.equal(reasoningDone.payload.reasoning?.summary, "**Planning the reply**");
+      assert.equal(
+        events.some(
+          (event) =>
+            event.type === "content.delta" && event.payload.streamKind === "reasoning_text",
+        ),
+        true,
+      );
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),

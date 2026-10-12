@@ -40,7 +40,11 @@ import {
 import { ServerConfig } from "./config";
 import { makeBoundedNodeHttpServer, MAX_WEBSOCKET_MESSAGE_BYTES } from "./nodeHttpServer";
 import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite";
-import { makeWebsocketNegotiationRouteLayer, makeWebsocketRpcRouteLayer } from "./wsRpc";
+import {
+  makeWebsocketNegotiationRouteLayer,
+  makeWebsocketRpcRouteLayer,
+  WS_NEGOTIATED_REVISION_HEADER,
+} from "./wsRpc";
 import {
   makeWsConnectionSessions,
   WS_CONNECTION_SESSION_HEADER,
@@ -81,6 +85,7 @@ interface RunningTestServer {
   readonly observedSlowRpc: { started: number; completed: number; finalized: number };
   readonly connectionSessions: WsConnectionSessionsShape;
   readonly observedConnectionSessionKeys: string[];
+  readonly observedNegotiatedRevisions: string[];
   readonly close: () => Promise<void>;
 }
 
@@ -93,10 +98,16 @@ afterEach(() => {
 
 function connect(
   url: string,
-  options?: { readonly perMessageDeflate?: boolean },
+  options?: {
+    readonly perMessageDeflate?: boolean;
+    readonly headers?: Readonly<Record<string, string>>;
+  },
 ): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
-    const socket = new WebSocket(url, { perMessageDeflate: options?.perMessageDeflate ?? false });
+    const socket = new WebSocket(url, {
+      perMessageDeflate: options?.perMessageDeflate ?? false,
+      ...(options?.headers ? { headers: { ...options.headers } } : {}),
+    });
     openSockets.add(socket);
     socket.once("open", () => resolve(socket));
     socket.once("error", reject);
@@ -362,7 +373,9 @@ async function startTestServer(): Promise<RunningTestServer> {
                 ? item.snapshot
                 : item.kind === "event"
                   ? item.event.sequence
-                  : item.events.length,
+                  : item.kind === "replay"
+                    ? item.events.length
+                    : 0,
             ),
           );
         },
@@ -389,6 +402,7 @@ async function startTestServer(): Promise<RunningTestServer> {
   );
   const connectionSessions = await Effect.runPromise(makeWsConnectionSessions);
   const observedConnectionSessionKeys: string[] = [];
+  const observedNegotiatedRevisions: string[] = [];
   const rpcHttpEffectSource = Effect.gen(function* () {
     const handlers = yield* Layer.buildWithScope(
       handlerLayer.pipe(Layer.provideMerge(serializationLayer)),
@@ -401,6 +415,10 @@ async function startTestServer(): Promise<RunningTestServer> {
         const request = yield* HttpServerRequest.HttpServerRequest;
         const sessionKey = request.headers[WS_CONNECTION_SESSION_HEADER];
         if (typeof sessionKey === "string") observedConnectionSessionKeys.push(sessionKey);
+        const negotiatedRevision = request.headers[WS_NEGOTIATED_REVISION_HEADER];
+        if (typeof negotiatedRevision === "string") {
+          observedNegotiatedRevisions.push(negotiatedRevision);
+        }
         return yield* httpEffect;
       }).pipe(
         Effect.ensuring(
@@ -462,6 +480,7 @@ async function startTestServer(): Promise<RunningTestServer> {
       Effect.runPromise(Deferred.succeed(gitRelease, undefined).pipe(Effect.asVoid)),
     connectionSessions,
     observedConnectionSessionKeys,
+    observedNegotiatedRevisions,
     close: () => Effect.runPromise(Scope.close(scope, Exit.void)),
   };
 }
@@ -968,6 +987,30 @@ describe("websocketRpcRouteLayer connection lifecycle", () => {
       await waitForClose(socket);
       await waitForObserved(() => server.connectionSessions.lookup(sessionKey) === undefined);
       expect(interests.accepts(sessionKey, event)).toBe(false);
+    } finally {
+      await server.close();
+    }
+  }, 4_000);
+
+  it("passes the validated negotiated revision to handlers and overrides a spoofed header", async () => {
+    const server = await startTestServer();
+    try {
+      const issued = await Effect.runPromise(server.sessions.issue({ role: "owner" }));
+      const current = await Effect.runPromise(
+        server.sessions.issueWebSocketToken(issued.sessionId),
+      );
+      const currentSocket = await connect(featureSocketUrl(server, current.token), {
+        headers: { [WS_NEGOTIATED_REVISION_HEADER]: "999" },
+      });
+      const older = await Effect.runPromise(server.sessions.issueWebSocketToken(issued.sessionId));
+      const olderUrl = new URL(featureSocketUrl(server, older.token));
+      olderUrl.searchParams.set(WS_COMPATIBILITY_QUERY.protocolRevision, "3");
+      const olderSocket = await connect(olderUrl.toString());
+      expect(server.observedNegotiatedRevisions).toEqual([String(WS_PROTOCOL_MAX_REVISION), "3"]);
+      currentSocket.close();
+      olderSocket.close();
+      await waitForClose(currentSocket);
+      await waitForClose(olderSocket);
     } finally {
       await server.close();
     }
