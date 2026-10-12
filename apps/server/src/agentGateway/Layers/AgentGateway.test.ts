@@ -1858,6 +1858,38 @@ describe("AgentGateway", () => {
     }).pipe(Effect.provide(gatewayLayer));
   });
 
+  it.effect("stores rendered HTML as an activity in the caller thread", () => {
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const response = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_html_render",
+        args: {
+          title: "Chart",
+          html: "<!doctype html><p>Chart</p>",
+          height: 600,
+          threadId: "thread-child",
+        },
+      });
+      assert.equal(response.status, 200);
+      assert.notPropertyVal(response.result, "isError", true);
+      const command = harness.dispatched.find(
+        (entry) =>
+          entry.type === "thread.activity.append" && entry.activity.kind === "synara.html.rendered",
+      );
+      assert.isDefined(command);
+      if (command?.type !== "thread.activity.append") throw new Error("Missing HTML activity");
+      assert.equal(command.threadId, "thread-parent");
+      assert.equal(command.activity.turnId, "turn-parent-active");
+      assert.deepEqual(command.activity.payload, {
+        title: "Chart",
+        html: "<!doctype html><p>Chart</p>",
+        height: 600,
+      });
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
   it.effect("rejects malformed JSON-RPC ids before invoking a tool", () => {
     const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
     return Effect.gen(function* () {

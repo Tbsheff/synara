@@ -33,7 +33,12 @@ export const AUDIO_TRAIL_BETA_FEATURE = "audio-trail";
 /** Auto-fix CI (Stable and Beta): the PR menu checkbox, RPCs, and check watcher. */
 export const PULL_REQUEST_AUTO_FIX_BETA_FEATURE = "pull-request-auto-fix";
 
-export const BETA_ONLY_FEATURES: readonly BetaOnlyFeature[] = [GROUPS_BETA_FEATURE];
+export const INLINE_HTML_RENDER_BETA_FEATURE = "inline-html-render";
+
+export const BETA_ONLY_FEATURES: readonly BetaOnlyFeature[] = [
+  GROUPS_BETA_FEATURE,
+  INLINE_HTML_RENDER_BETA_FEATURE,
+];
 
 /**
  * Whether a Beta-only feature is on for this host. Only the Stable

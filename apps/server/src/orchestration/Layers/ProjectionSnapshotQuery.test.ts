@@ -35,6 +35,36 @@ const projectionSnapshotLayer = it.layer(
 );
 
 projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
+  it.effect("reloads stored HTML from both the snapshot and thread detail", () =>
+    Effect.gen(function* () {
+      const query = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+      const now = "2026-10-12T10:00:00.000Z";
+      const payload = { title: "Chart", html: "<!doctype html><p>Chart</p>", height: 600 };
+      yield* sql`INSERT INTO projection_projects
+        (project_id, title, workspace_root, scripts_json, created_at, updated_at)
+        VALUES ('html-project', 'HTML', '/tmp/html-test', '[]', ${now}, ${now})`;
+      yield* sql`INSERT INTO projection_threads
+        (thread_id, project_id, title, model_selection_json, created_at, updated_at)
+        VALUES ('html-thread', 'html-project', 'HTML', '{"provider":"codex","model":"gpt-5"}', ${now}, ${now})`;
+      yield* sql`INSERT INTO projection_thread_activities
+        (thread_id, activity_id, turn_id, tone, kind, summary, payload_json, sequence, created_at)
+        VALUES ('html-thread', 'html-page', 'html-turn', 'info', 'synara.html.rendered', 'Chart', ${JSON.stringify(payload)}, 1, ${now})`;
+      const detail = Option.getOrThrow(yield* query.getThreadDetailById(asThreadId("html-thread")));
+      const snapshot = yield* query.getSnapshot();
+      assert.deepEqual(
+        detail.activities.find((activity) => activity.id === "html-page")?.payload,
+        payload,
+      );
+      assert.deepEqual(
+        snapshot.threads
+          .find((thread) => thread.id === "html-thread")
+          ?.activities.find((activity) => activity.id === "html-page")?.payload,
+        payload,
+      );
+    }),
+  );
+
   it.effect("returns a multi-folder project's extra folders from every project read", () =>
     Effect.gen(function* () {
       const query = yield* ProjectionSnapshotQuery;

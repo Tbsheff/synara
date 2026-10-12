@@ -20,6 +20,7 @@ import { randomUUID } from "node:crypto";
 import {
   COMPUTER_SETUP_REQUIRED_ACTIVITY_KIND,
   COMPUTER_CONTROL_DENIED_ACTIVITY_KIND,
+  HTML_RENDER_ACTIVITY_KIND,
   CommandId,
   EventId,
   SYNARA_GATEWAY_MAX_THREADS_PER_OPERATION,
@@ -102,6 +103,7 @@ import { makeAgentGatewayAutomationTools } from "../automationTools.ts";
 import { makeAgentGatewayBrowserTools } from "../browserTools.ts";
 import { makeAgentGatewayComputerBrowserTools } from "../computerBrowserTools.ts";
 import { computerApprovalDisplayArgs } from "../computerApprovalDisplay.ts";
+import { makeAgentGatewayHtmlTools } from "../htmlTools.ts";
 import { makeAgentGatewayDeviceTools } from "../deviceTools.ts";
 import { DeviceService } from "../../device/Services/DeviceService.ts";
 import {
@@ -1551,6 +1553,29 @@ export const makeAgentGateway = Effect.gen(function* () {
     setThreadPullRequest,
     setThreadArchived,
     setThreadGoal,
+    ...makeAgentGatewayHtmlTools({
+      append: (document, context) => {
+        const createdAt = isoNow();
+        return orchestrationEngine
+          .dispatch({
+            type: "thread.activity.append",
+            commandId: CommandId.makeUnsafe(`agent:${randomUUID()}:html-render`),
+            threadId: ThreadId.makeUnsafe(context.callerThreadId),
+            activity: {
+              id: EventId.makeUnsafe(randomUUID()),
+              tone: "info",
+              kind: HTML_RENDER_ACTIVITY_KIND,
+              summary: document.title,
+              payload: { ...document },
+              turnId:
+                context.callerTurnId === null ? null : TurnId.makeUnsafe(context.callerTurnId),
+              createdAt,
+            },
+            createdAt,
+          })
+          .pipe(Effect.asVoid);
+      },
+    }),
     ...automationTools,
     ...browserTools,
     ...kanbanTools,
