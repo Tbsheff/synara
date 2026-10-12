@@ -29,7 +29,22 @@ const makeEntityId = <Brand extends string>(brand: Brand) =>
 
 export const ThreadId = makeEntityId("ThreadId");
 export type ThreadId = typeof ThreadId.Type;
-export const ProjectId = makeEntityId("ProjectId");
+const hasPathSeparatorOrControlChar = (value: string): boolean => {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code === 0x2f || code === 0x5c || code < 0x20 || code === 0x7f) return true;
+  }
+  return false;
+};
+
+const isSafeAsProjectContextDirectoryName = (value: string): boolean =>
+  !value.endsWith(".") && !hasPathSeparatorOrControlChar(value);
+
+export const ProjectId = TrimmedNonEmptyString.check(
+  Schema.makeFilter(isSafeAsProjectContextDirectoryName, {
+    expected: "a project id without path separators, control characters, or a trailing dot",
+  }),
+).pipe(Schema.brand("ProjectId"));
 export type ProjectId = typeof ProjectId.Type;
 export const SpaceId = makeEntityId("SpaceId");
 export type SpaceId = typeof SpaceId.Type;
