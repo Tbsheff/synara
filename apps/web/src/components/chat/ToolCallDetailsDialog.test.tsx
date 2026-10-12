@@ -1,4 +1,5 @@
 import { renderToStaticMarkup } from "react-dom/server";
+import { isValidElement, type ReactNode } from "react";
 import { describe, expect, it } from "vitest";
 
 import { buildTypedCommandView, buildTypedWebSearchView } from "../../lib/toolCallDetails";
@@ -14,7 +15,45 @@ function count(haystack: string, needle: string): number {
   return haystack.split(needle).length - 1;
 }
 
+function textBlockPath(node: ReactNode, text: string, path: number[] = []): number[] | null {
+  if (Array.isArray(node)) {
+    for (const [index, child] of node.entries()) {
+      const found = textBlockPath(child, text, [...path, index]);
+      if (found) return found;
+    }
+  } else if (isValidElement<{ children?: ReactNode }>(node)) {
+    if (typeof node.type === "function" && node.props.children === text) return path;
+    return textBlockPath(node.props.children, text, path);
+  }
+  return null;
+}
+
 describe("TypedCommandDetails", () => {
+  it.each(["stdout", "stderr", "output"] as const)(
+    "keeps the live text block at the same React path when final %s arrives",
+    (stream) => {
+      const output = "line 1\nline 60";
+      const live = TypedCommandDetails({
+        running: true,
+        view: buildTypedCommandView({
+          command: { command: "run" },
+          status: "running",
+          liveOutput: { tail: output, truncated: false, totalChars: output.length },
+        }),
+      });
+      const completed = TypedCommandDetails({
+        running: false,
+        view: buildTypedCommandView({
+          command: { command: "run", [stream]: output, exitCode: 0 },
+          status: "completed",
+        }),
+      });
+      const livePath = textBlockPath(live, output);
+      expect(livePath).not.toBeNull();
+      expect(textBlockPath(completed, output)).toEqual(livePath);
+    },
+  );
+
   it("shows Claude output once and the exit code only in the footer", () => {
     const ticks = "tick1\ntick2\ntick3\n";
     const split = renderToStaticMarkup(
