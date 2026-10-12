@@ -10,6 +10,7 @@ import {
   type ThreadId,
 } from "@synara/contracts";
 import { automationContinuationThreadId } from "@synara/shared/automationMode";
+import { collectSubagentDescendants } from "@synara/shared/threadHierarchy";
 import { Effect } from "effect";
 import { randomUUID } from "node:crypto";
 
@@ -223,6 +224,25 @@ export function getRetentionArchiveRootIds(
     .map((thread) => thread.id);
 }
 
+const isStillRetentionArchiveRoot = Effect.fn("isStillRetentionArchiveRoot")(function* (
+  orchestrationEngine: OrchestrationEngineShape,
+  projectionSnapshotQuery: ProjectionSnapshotQueryShape,
+  automationRepository: AutomationRepositoryShape,
+  threadId: ThreadId,
+) {
+  const readModel = yield* orchestrationEngine.getReadModel();
+  const subtreeThreadIds = [
+    threadId,
+    ...collectSubagentDescendants(readModel.threads, threadId)
+      .filter((thread) => !isThreadDeleted(thread) && !isThreadArchived(thread))
+      .map((thread) => thread.id),
+  ];
+  const threads = yield* projectionSnapshotQuery.getThreadShellsByIds(subtreeThreadIds);
+  if (threads.length !== subtreeThreadIds.length) return false;
+  const protectedThreadIds = yield* listRetentionProtectedThreadIds(automationRepository);
+  return getRetentionArchiveRootIds({ threads }, Date.now(), protectedThreadIds).includes(threadId);
+});
+
 export const runThreadRetentionSweep = Effect.fn("runThreadRetentionSweep")(function* (
   orchestrationEngine: OrchestrationEngineShape,
   projectionSnapshotQuery: ProjectionSnapshotQueryShape,
@@ -251,29 +271,42 @@ export const runThreadRetentionSweep = Effect.fn("runThreadRetentionSweep")(func
       Effect.forEach(
         threadBatch,
         (threadId) =>
-          orchestrationEngine
-            .dispatch({
-              type: "thread.archive",
-              commandId: CommandId.makeUnsafe(
-                `${THREAD_RETENTION_COMMAND_ID_PREFIX}${randomUUID()}`,
-              ),
-              threadId,
-            })
-            .pipe(
-              Effect.tap(() =>
-                Effect.sync(() => {
-                  archivedCount += 1;
+          isStillRetentionArchiveRoot(
+            orchestrationEngine,
+            projectionSnapshotQuery,
+            automationRepository,
+            threadId,
+          ).pipe(
+            Effect.flatMap((stillEligible) =>
+              stillEligible
+                ? orchestrationEngine
+                    .dispatch({
+                      type: "thread.archive",
+                      commandId: CommandId.makeUnsafe(
+                        `${THREAD_RETENTION_COMMAND_ID_PREFIX}${randomUUID()}`,
+                      ),
+                      threadId,
+                    })
+                    .pipe(
+                      Effect.tap(() =>
+                        Effect.sync(() => {
+                          archivedCount += 1;
+                        }),
+                      ),
+                    )
+                : Effect.logDebug("thread changed after retention selection; not archiving").pipe(
+                    Effect.annotateLogs({ threadId }),
+                  ),
+            ),
+            Effect.catch((error) =>
+              Effect.logWarning("failed to archive inactive thread during retention sweep").pipe(
+                Effect.annotateLogs({
+                  threadId,
+                  error: String(error),
                 }),
               ),
-              Effect.catch((error) =>
-                Effect.logWarning("failed to archive inactive thread during retention sweep").pipe(
-                  Effect.annotateLogs({
-                    threadId,
-                    error: String(error),
-                  }),
-                ),
-              ),
             ),
+          ),
         { concurrency: 1 },
       ).pipe(
         Effect.tap(() =>

@@ -2,10 +2,19 @@ import { Effect, Option } from "effect";
 import { OrchestrationEngineService } from "./Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
 import { ProjectionPendingInteractionRepository } from "../persistence/Services/ProjectionPendingInteractions.ts";
-import { ApprovalRequestId, EventId, ThreadId, TurnId } from "@synara/contracts";
+import {
+  ApprovalRequestId,
+  EventId,
+  ThreadId,
+  TurnId,
+  type OrchestrationCommand,
+  type OrchestrationReadModel,
+} from "@synara/contracts";
 import { describe, expect, it, vi } from "vitest";
 
+import { decideOrchestrationCommand } from "./decider.ts";
 import {
+  makeRestartStuckTurnReconciliation,
   planRestartTurnReconciliation,
   reconcileRestartStuckTurns,
   type ReconcilablePendingInteraction,
@@ -62,6 +71,7 @@ const makePendingInteraction = (
   interactionKind,
   requestId: ApprovalRequestId.makeUnsafe(requestId),
   status,
+  createdAt: NOW,
 });
 
 const expectSessionCommands = (commands: ReturnType<typeof planRestartTurnReconciliation>) =>
@@ -370,6 +380,8 @@ describe("planRestartTurnReconciliation", () => {
       type: "thread.session.set",
       commandId: `restart-reconcile-active-turn:errored-with-requests:${NOW}`,
       threadId: "errored-with-requests",
+      expectedSessionStatus: "error",
+      expectedSessionUpdatedAt: "2026-06-13T09:00:00.000Z",
       createdAt: NOW,
       session: {
         threadId: "errored-with-requests",
@@ -401,6 +413,8 @@ describe("planRestartTurnReconciliation", () => {
       type: "thread.session.set",
       commandId: `restart-reconcile:stuck:${NOW}`,
       threadId: "stuck",
+      expectedSessionStatus: "running",
+      expectedSessionUpdatedAt: "2026-06-13T09:00:00.000Z",
       createdAt: NOW,
       session: {
         threadId: "stuck",
@@ -668,4 +682,136 @@ describe("reconcileRestartStuckTurns selection", () => {
       );
     },
   );
+});
+
+describe("reconcileRestartStuckTurns fencing", () => {
+  const OBSERVED_AT = "2026-06-13T09:00:00.000Z";
+
+  const makeEngineThread = (id: string, session: NonNullable<ReconcilableThread["session"]>) => ({
+    ...makeThread(id, { session, latestTurn: { state: "running" } }),
+    activities: [],
+    deletedAt: null,
+    hasPendingApprovals: false,
+    hasPendingUserInput: false,
+  });
+
+  const runAgainstDecider = async (input: {
+    readonly thread: ReturnType<typeof makeEngineThread>;
+    readonly startTurnBeforeCommit?: NonNullable<ReconcilableThread["session"]>;
+  }) => {
+    let current = { threads: [input.thread] } as unknown as OrchestrationReadModel;
+    const accepted: OrchestrationCommand[] = [];
+    const rejected: OrchestrationCommand[] = [];
+    const dispatch = (command: OrchestrationCommand) =>
+      decideOrchestrationCommand({ command, readModel: current }).pipe(
+        Effect.tap(() => Effect.sync(() => accepted.push(command))),
+        Effect.tapError(() => Effect.sync(() => rejected.push(command))),
+        Effect.as({ sequence: 1 }),
+      );
+    const getThreadDetailById = () =>
+      Effect.sync(() => {
+        if (input.startTurnBeforeCommit !== undefined) {
+          current = {
+            threads: [{ ...input.thread, session: input.startTurnBeforeCommit }],
+          } as unknown as OrchestrationReadModel;
+        }
+        return Option.some({ ...current.threads[0]!, pendingInteractions: [] });
+      });
+    await Effect.runPromise(
+      reconcileRestartStuckTurns.pipe(
+        Effect.provideService(OrchestrationEngineService, {
+          getReadModel: () => Effect.succeed(current),
+          dispatch,
+        } as never),
+        Effect.provideService(ProjectionSnapshotQuery, { getThreadDetailById } as never),
+        Effect.provideService(ProjectionPendingInteractionRepository, {
+          listUnsettled: () => Effect.succeed([]),
+        } as never),
+      ),
+    );
+    return { accepted, rejected };
+  };
+
+  it("interrupts a restart-orphaned turn the decider still sees", async () => {
+    const thread = makeEngineThread(
+      "orphaned",
+      makeSession("orphaned", { status: "running", updatedAt: OBSERVED_AT }),
+    );
+    const { accepted, rejected } = await runAgainstDecider({ thread });
+    expect(rejected).toEqual([]);
+    expect(accepted).toMatchObject([
+      { type: "thread.session.set", threadId: "orphaned", session: { status: "interrupted" } },
+    ]);
+  });
+
+  it("does not interrupt a turn that started after cleanup read the model", async () => {
+    const thread = makeEngineThread(
+      "raced",
+      makeSession("raced", { status: "running", updatedAt: OBSERVED_AT }),
+    );
+    const { accepted, rejected } = await runAgainstDecider({
+      thread,
+      startTurnBeforeCommit: makeSession("raced", {
+        status: "running",
+        activeTurnId: TurnId.makeUnsafe("raced-new-turn"),
+        updatedAt: new Date().toISOString(),
+      }),
+    });
+    expect(accepted).toEqual([]);
+    expect(rejected).toMatchObject([{ type: "thread.session.set", threadId: "raced" }]);
+  });
+
+  it("leaves a turn and requests that started in this process alone", async () => {
+    const liveSince = "2026-06-14T00:00:00.000Z";
+    const startedAt = "2026-06-14T00:00:05.000Z";
+    const thread = {
+      ...makeEngineThread(
+        "recovered",
+        makeSession("recovered", {
+          status: "running",
+          activeTurnId: TurnId.makeUnsafe("recovered-new-turn"),
+          updatedAt: startedAt,
+        }),
+      ),
+      hasPendingApprovals: true,
+    };
+    const staleRow = {
+      threadId: thread.id,
+      interactionKind: "approval" as const,
+      requestId: ApprovalRequestId.makeUnsafe("dead-approval"),
+      lifecycleGeneration: "lost-runtime",
+      status: "pending" as const,
+      createdAt: OBSERVED_AT,
+    };
+    const liveRow = {
+      ...staleRow,
+      requestId: ApprovalRequestId.makeUnsafe("live-approval"),
+      lifecycleGeneration: "live-runtime",
+      createdAt: startedAt,
+    };
+    const dispatch = vi.fn((_command: OrchestrationCommand) => Effect.succeed({ sequence: 1 }));
+    await Effect.runPromise(
+      makeRestartStuckTurnReconciliation({ liveSince }).pipe(
+        Effect.provideService(OrchestrationEngineService, {
+          getReadModel: () => Effect.succeed({ threads: [thread] }),
+          dispatch,
+        } as never),
+        Effect.provideService(ProjectionSnapshotQuery, {
+          getThreadDetailById: () =>
+            Effect.succeed(Option.some({ ...thread, pendingInteractions: [staleRow, liveRow] })),
+        } as never),
+        Effect.provideService(ProjectionPendingInteractionRepository, {
+          listUnsettled: () => Effect.succeed([staleRow, liveRow]),
+        } as never),
+      ),
+    );
+    expect(dispatch).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        type: "thread.activity.append",
+        activity: expect.objectContaining({
+          payload: expect.objectContaining({ requestId: "dead-approval" }),
+        }),
+      }),
+    );
+  });
 });

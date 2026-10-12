@@ -73,7 +73,7 @@ type RestartReconciliationCommand = ThreadSessionSetCommand | ThreadActivityAppe
 /** The durable interaction fields the planner needs; a full row is fine. */
 export type ReconcilablePendingInteraction = Pick<
   ProjectionPendingInteraction,
-  "threadId" | "interactionKind" | "requestId" | "status"
+  "threadId" | "interactionKind" | "requestId" | "status" | "createdAt"
 >;
 
 /** Minimal persisted thread shape the planner inspects (a superset is fine). */
@@ -114,6 +114,18 @@ function hasDanglingActiveTurn(thread: ReconcilableThread): boolean {
   return thread.session?.activeTurnId != null && !threadHasInFlightTurn(thread);
 }
 
+function isWrittenSince(at: string, liveSince: string | undefined): boolean {
+  return liveSince !== undefined && Date.parse(at) >= Date.parse(liveSince);
+}
+
+function observedSessionFence(
+  session: OrchestrationSession | null,
+): Pick<ThreadSessionSetCommand, "expectedSessionStatus" | "expectedSessionUpdatedAt"> {
+  return session === null
+    ? {}
+    : { expectedSessionStatus: session.status, expectedSessionUpdatedAt: session.updatedAt };
+}
+
 /**
  * Plans one settlement per unanswerable human request on a thread.
  *
@@ -139,6 +151,7 @@ function planStalePendingRequestCommands(input: {
   readonly thread: ReconcilableThread;
   readonly pendingInteractions: ReadonlyArray<ReconcilablePendingInteraction>;
   readonly now: string;
+  readonly liveSince: string | undefined;
 }): ReadonlyArray<ThreadActivityAppendCommand> {
   const commands: ThreadActivityAppendCommand[] = [];
   if (input.thread.pendingInteractions !== undefined) {
@@ -147,7 +160,10 @@ function planStalePendingRequestCommands(input: {
       // responding, and previously retryable rows are therefore no longer
       // answerable. Legacy uncertain rows also need durable terminal settlement,
       // even if a stale failure already removed them from the activity summary.
-      if (!isUnsettledPendingInteraction(interaction)) {
+      if (
+        !isUnsettledPendingInteraction(interaction) ||
+        isWrittenSince(interaction.createdAt, input.liveSince)
+      ) {
         continue;
       }
       commands.push(
@@ -166,7 +182,7 @@ function planStalePendingRequestCommands(input: {
   }
 
   const pendingRequestIds = derivePendingThreadRequestIds({
-    activities: input.thread.activities ?? [],
+    activities: activitiesBefore(input.thread, input.liveSince),
   });
   const plannedRequests = new Set<string>();
   const planRequest = (requestKind: PendingThreadRequestKind, requestId: string) => {
@@ -194,7 +210,11 @@ function planStalePendingRequestCommands(input: {
   }
 
   for (const row of input.pendingInteractions) {
-    if (row.threadId !== input.thread.id || !isUnsettledPendingInteraction(row)) {
+    if (
+      row.threadId !== input.thread.id ||
+      !isUnsettledPendingInteraction(row) ||
+      isWrittenSince(row.createdAt, input.liveSince)
+    ) {
       continue;
     }
     planRequest(pendingInteractionRequestKind(row.interactionKind), row.requestId);
@@ -203,11 +223,25 @@ function planStalePendingRequestCommands(input: {
   return commands;
 }
 
+function activitiesBefore(
+  thread: ReconcilableThread,
+  liveSince: string | undefined,
+): NonNullable<ReconcilableThread["activities"]> {
+  return (thread.activities ?? []).filter(
+    (activity) => !isWrittenSince(activity.createdAt, liveSince),
+  );
+}
+
 function planStaleCheckpointRevertCommand(input: {
   readonly thread: ReconcilableThread;
   readonly now: string;
+  readonly liveSince: string | undefined;
 }): ThreadActivityAppendCommand | null {
-  if (!threadHasCheckpointRevertInProgress({ activities: input.thread.activities ?? [] })) {
+  if (
+    !threadHasCheckpointRevertInProgress({
+      activities: activitiesBefore(input.thread, input.liveSince),
+    })
+  ) {
     return null;
   }
   const commandKey = `restart-reconcile-checkpoint-revert:${input.thread.id}:${input.now}`;
@@ -263,11 +297,18 @@ function buildStalePendingRequestCommand(input: {
  * `now` is threaded in (rather than read from a clock) so the same inputs always
  * produce the same commands — including a deterministic, per-startup `commandId`
  * that lets the engine's receipt dedup treat a re-run as a no-op.
+ *
+ * `liveSince` is when this process started. Sessions, requests, and activities
+ * written at or after it came from a runtime this process started, so they are
+ * not restart-orphaned. Every `thread.session.set` also carries the observed
+ * session status and `updatedAt`, so the decider rejects it when a newer turn
+ * moves the session before the command commits.
  */
 export function planRestartTurnReconciliation(input: {
   readonly threads: ReadonlyArray<ReconcilableThread>;
   readonly pendingInteractions?: ReadonlyArray<ReconcilablePendingInteraction>;
   readonly now: string;
+  readonly liveSince?: string;
 }): ReadonlyArray<RestartReconciliationCommand> {
   const pendingInteractions = input.pendingInteractions ?? [];
   const pendingByThread = new Map<string, ReconcilablePendingInteraction[]>();
@@ -284,14 +325,19 @@ export function planRestartTurnReconciliation(input: {
         thread,
         pendingInteractions: pendingByThread.get(thread.id) ?? [],
         now: input.now,
+        liveSince: input.liveSince,
       }),
     );
     const staleCheckpointRevertCommand = planStaleCheckpointRevertCommand({
       thread,
       now: input.now,
+      liveSince: input.liveSince,
     });
     if (staleCheckpointRevertCommand !== null) {
       commands.push(staleCheckpointRevertCommand);
+    }
+    if (thread.session !== null && isWrittenSince(thread.session.updatedAt, input.liveSince)) {
+      continue;
     }
     if (!hasInFlightTurn) {
       if (!hasDanglingActiveTurn(thread)) {
@@ -312,6 +358,7 @@ export function planRestartTurnReconciliation(input: {
           lastError: thread.session?.lastError ?? null,
           updatedAt: input.now,
         },
+        ...observedSessionFence(thread.session),
         createdAt: input.now,
       });
       continue;
@@ -332,6 +379,7 @@ export function planRestartTurnReconciliation(input: {
         lastError: null,
         updatedAt: input.now,
       },
+      ...observedSessionFence(thread.session),
       createdAt: input.now,
     });
   }
@@ -352,89 +400,115 @@ export function planRestartTurnReconciliation(input: {
  * orchestration reactor has already started — so re-reading it would be both
  * slower and staler than the model the engine is already maintaining.
  *
- * The durable pending-interaction rows are read once, up front. Rows created
- * after that read belong to a runtime started in *this* process and stay
- * untouched, which is what keeps this safe to run while reactors are already
- * live: nothing in the snapshot can become answerable again, and nothing
- * answerable can enter the snapshot.
+ * Reactors are already live when this runs, so startup recovery can start a turn
+ * or open a request before this reads anything. State written at or after
+ * `liveSince` belongs to such a runtime and is left alone; the session fence in
+ * `planRestartTurnReconciliation` covers turns that start after the read.
  */
-export const reconcileRestartStuckTurns: Effect.Effect<
+export const makeRestartStuckTurnReconciliation = (options: {
+  readonly liveSince: string;
+}): Effect.Effect<
   void,
   never,
   OrchestrationEngineService | ProjectionSnapshotQuery | ProjectionPendingInteractionRepository
-> = Effect.gen(function* () {
-  const engine = yield* OrchestrationEngineService;
-  const snapshotQuery = yield* ProjectionSnapshotQuery;
-  const readModel = yield* engine.getReadModel();
+> =>
+  Effect.gen(function* () {
+    const engine = yield* OrchestrationEngineService;
+    const snapshotQuery = yield* ProjectionSnapshotQuery;
+    const readModel = yield* engine.getReadModel();
 
-  const pendingInteractions = yield* ProjectionPendingInteractionRepository;
-  const unsettled = yield* pendingInteractions
-    .listUnsettled({})
-    .pipe(
-      Effect.catchCause((cause) =>
-        Effect.logWarning("failed to read restart-orphaned callbacks", { cause }).pipe(
-          Effect.as([]),
-        ),
-      ),
-    );
-  const unsettledByThread = new Map(Object.entries(Arr.groupBy(unsettled, (row) => row.threadId)));
-  const now = new Date().toISOString();
-  const threadsNeedingRestartCleanup = readModel.threads.filter(
-    (thread) =>
-      needsRestartReconciliation(thread) ||
-      threadHasCheckpointRevertInProgress(thread) ||
-      thread.hasPendingApprovals ||
-      thread.hasPendingUserInput ||
-      unsettledByThread.has(thread.id),
-  );
-  if (threadsNeedingRestartCleanup.length === 0) {
-    return;
-  }
-
-  const reconcilableThreads = yield* Effect.forEach(
-    threadsNeedingRestartCleanup,
-    (thread) => {
-      const pendingInteractions = unsettledByThread.get(thread.id);
-      const fallback = pendingInteractions ? { ...thread, pendingInteractions } : thread;
-      return snapshotQuery.getThreadDetailById(thread.id).pipe(
-        Effect.map((detail) => Option.getOrElse(detail, () => fallback)),
+    const pendingInteractions = yield* ProjectionPendingInteractionRepository;
+    const unsettled = yield* pendingInteractions
+      .listUnsettled({})
+      .pipe(
         Effect.catchCause((cause) =>
-          Effect.logWarning("restart turn reconciliation continuing without thread activities", {
-            threadId: thread.id,
-            cause,
-          }).pipe(Effect.as(fallback)),
+          Effect.logWarning("failed to read restart-orphaned callbacks", { cause }).pipe(
+            Effect.as([]),
+          ),
         ),
       );
-    },
-    { concurrency: 4 },
-  );
+    const unsettledByThread = new Map(
+      Object.entries(Arr.groupBy(unsettled, (row) => row.threadId)),
+    );
+    const now = new Date().toISOString();
+    const { liveSince } = options;
+    const threadsNeedingRestartCleanup = readModel.threads.filter(
+      (thread) =>
+        needsRestartReconciliation(thread) ||
+        threadHasCheckpointRevertInProgress(thread) ||
+        thread.hasPendingApprovals ||
+        thread.hasPendingUserInput ||
+        unsettledByThread.has(thread.id),
+    );
+    if (threadsNeedingRestartCleanup.length === 0) {
+      return;
+    }
 
-  const commands = planRestartTurnReconciliation({
-    threads: reconcilableThreads,
-    pendingInteractions: unsettled,
-    now,
-  });
-  if (commands.length === 0) {
-    return;
-  }
+    const reconcilableThreads = yield* Effect.forEach(
+      threadsNeedingRestartCleanup,
+      (thread) => {
+        const pendingInteractions = unsettledByThread.get(thread.id);
+        const fallback = pendingInteractions ? { ...thread, pendingInteractions } : thread;
+        return snapshotQuery.getThreadDetailById(thread.id).pipe(
+          Effect.map(
+            Option.match({
+              onNone: () => fallback,
+              onSome: (detail) => ({
+                ...detail,
+                session: thread.session,
+                latestTurn: thread.latestTurn,
+              }),
+            }),
+          ),
+          Effect.catchCause((cause) =>
+            Effect.logWarning("restart turn reconciliation continuing without thread activities", {
+              threadId: thread.id,
+              cause,
+            }).pipe(Effect.as(fallback)),
+          ),
+        );
+      },
+      { concurrency: 4 },
+    );
 
-  yield* Effect.logInfo("reconciling restart-stuck turns", {
-    commandCount: commands.length,
-    threadCount: threadsNeedingRestartCleanup.length,
-    threadIds: threadsNeedingRestartCleanup.map((thread) => thread.id),
-  });
+    const commands = planRestartTurnReconciliation({
+      threads: reconcilableThreads,
+      pendingInteractions: unsettled,
+      now,
+      liveSince,
+    });
+    if (commands.length === 0) {
+      return;
+    }
 
-  yield* Effect.forEach(
-    commands,
-    (command) =>
-      engine.dispatch(command).pipe(
-        Effect.catchCause((cause) =>
-          Effect.logWarning("failed to reconcile restart-stuck turn", {
-            threadId: command.threadId,
-            cause,
-          }),
+    yield* Effect.logInfo("reconciling restart-stuck turns", {
+      commandCount: commands.length,
+      threadCount: threadsNeedingRestartCleanup.length,
+      threadIds: threadsNeedingRestartCleanup.map((thread) => thread.id),
+    });
+
+    yield* Effect.forEach(
+      commands,
+      (command) =>
+        engine.dispatch(command).pipe(
+          Effect.catchTag("OrchestrationCommandInvariantError", (error) =>
+            Effect.logInfo("restart turn reconciliation skipped a thread that changed", {
+              threadId: command.threadId,
+              commandType: command.type,
+              detail: error.detail,
+            }),
+          ),
+          Effect.catchCause((cause) =>
+            Effect.logWarning("failed to reconcile restart-stuck turn", {
+              threadId: command.threadId,
+              cause,
+            }),
+          ),
         ),
-      ),
-    { discard: true },
-  );
+      { discard: true },
+    );
+  });
+
+export const reconcileRestartStuckTurns = makeRestartStuckTurnReconciliation({
+  liveSince: new Date(performance.timeOrigin).toISOString(),
 });
