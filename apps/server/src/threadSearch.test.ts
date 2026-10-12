@@ -317,6 +317,10 @@ describe("ThreadSearchQuery bounded scan", () => {
         });
         const sql = yield* SqlClient.SqlClient;
         yield* sql`
+          UPDATE projection_thread_messages SET created_at = '2026-03-01T00:00:00.000Z'
+          WHERE thread_id = 'giant-0'
+        `;
+        yield* sql`
           UPDATE projection_thread_messages
           SET role = 'user', text = 'oldest user note about the refund webhook'
           WHERE message_id = 'giant-m-0'

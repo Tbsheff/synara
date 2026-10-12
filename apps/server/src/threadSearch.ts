@@ -15,6 +15,7 @@ import {
 } from "@synara/contracts";
 import { Effect, Layer, ServiceMap } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
+import type { Fragment } from "effect/unstable/sql/Statement";
 
 import {
   PersistenceDecodeError,
@@ -49,7 +50,7 @@ interface ThreadHitRow {
 
 interface MessageKeyRow {
   readonly createdAt: string;
-  readonly rowId: number;
+  readonly messageId: string;
 }
 
 interface ThreadCursor {
@@ -224,9 +225,11 @@ export const makeThreadSearchQuery = Effect.gen(function* () {
             threads.updated_at AS "updatedAt",
             threads.archived_at IS NOT NULL AS "archived",
             (
-              SELECT COUNT(*)
-              FROM projection_thread_messages AS counted
-              WHERE counted.thread_id = threads.thread_id
+              SELECT COUNT(*) FROM (
+                SELECT 1 FROM projection_thread_messages AS counted
+                WHERE counted.thread_id = threads.thread_id
+                LIMIT ${THREAD_SEARCH_MESSAGE_BUDGET + 1}
+              )
             ) AS "messageCount"
           FROM projection_threads AS threads
           INNER JOIN projection_projects AS projects
@@ -286,22 +289,22 @@ export const makeThreadSearchQuery = Effect.gen(function* () {
           let upper: MessageKeyRow | null = null;
           while (true) {
             const upperBound: MessageKeyRow | null = upper;
-            const keyRange =
+            const keyRange: Fragment =
               upperBound === null
                 ? sql``
-                : sql`AND (messages.created_at, messages.rowid) < (${upperBound.createdAt}, ${upperBound.rowId})`;
+                : sql`AND (messages.created_at, messages.message_id) < (${upperBound.createdAt}, ${upperBound.messageId})`;
             const [lower] = yield* sql<MessageKeyRow>`
-              SELECT messages.created_at AS "createdAt", messages.rowid AS "rowId"
+              SELECT messages.created_at AS "createdAt", messages.message_id AS "messageId"
               FROM projection_thread_messages AS messages
               WHERE messages.thread_id = ${threadId}
                 ${keyRange}
-              ORDER BY messages.created_at DESC, messages.rowid DESC
+              ORDER BY messages.created_at DESC, messages.message_id DESC
               LIMIT 1 OFFSET ${THREAD_SEARCH_MESSAGE_BUDGET - 1}
             `.pipe(mapSqlError);
             const lowerRange =
               lower === undefined
                 ? sql``
-                : sql`AND (messages.created_at, messages.rowid) >= (${lower.createdAt}, ${lower.rowId})`;
+                : sql`AND (messages.created_at, messages.message_id) >= (${lower.createdAt}, ${lower.messageId})`;
             const [hit] = yield* sql<ThreadHitRow>`
               SELECT
                 messages.thread_id AS "threadId",
