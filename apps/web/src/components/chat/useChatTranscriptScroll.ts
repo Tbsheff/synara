@@ -22,6 +22,7 @@ import { isEditableEventTarget } from "../../lib/editableEventTarget";
 import type { TimelineEntry } from "../../session-logic";
 import { buildTranscriptAutoFollowSignal, buildTranscriptTailKey } from "../ChatView.logic";
 import {
+  canResumeTranscriptFollow,
   FOLLOW_ZONE_PX,
   isTranscriptListRevealing,
   isUpwardMoveFromUserInput,
@@ -353,7 +354,13 @@ export function useChatTranscriptScroll({
       if (atEnd && isUserScrollDetachedRef.current && readerStillAtDisclosureDetach) return;
       if (atEnd === isAtEndRef.current && (!atEnd || !isUserScrollDetachedRef.current)) return;
       // A gesture can detach without changing the previous edge notification.
-      if (atEnd) {
+      if (
+        canResumeTranscriptFollow({
+          detached: isUserScrollDetachedRef.current,
+          atEnd,
+          userGesture: false,
+        })
+      ) {
         setTranscriptScrollDetached(false);
         showScrollDebouncer.current.cancel();
         setShowScrollToBottom(false);
@@ -492,8 +499,20 @@ export function useChatTranscriptScroll({
   );
   const releaseTranscriptScrollGesture = useCallback(() => {
     const state = legendListRef.current?.getState();
+    const container = legendListRef.current?.getScrollableNode();
+    if (
+      canResumeTranscriptFollow({
+        detached: isUserScrollDetachedRef.current,
+        atEnd:
+          state?.isAtEnd === true &&
+          container instanceof HTMLElement &&
+          isScrollContainerNearBottom(container, 1),
+        userGesture: true,
+      })
+    )
+      setTranscriptScrollDetached(false);
     if (state) onIsAtEndChange(state.isAtEnd);
-  }, [legendListRef, onIsAtEndChange]);
+  }, [legendListRef, onIsAtEndChange, setTranscriptScrollDetached]);
   const onMessagesPointerCancelBase = releaseTranscriptScrollGesture;
   const onMessagesPointerUpBase = useCallback(() => {
     const container = legendListRef.current?.getScrollableNode();
@@ -524,7 +543,13 @@ export function useChatTranscriptScroll({
     (upward: boolean) => {
       const container = legendListRef.current?.getScrollableNode();
       if (!(container instanceof HTMLElement)) return;
-      if (!upward && isAtEndRef.current && isScrollContainerNearBottom(container, 1)) return;
+      if (
+        !upward &&
+        !isUserScrollDetachedRef.current &&
+        isAtEndRef.current &&
+        isScrollContainerNearBottom(container, 1)
+      )
+        return;
       const pending = pendingScrollGestureRef.current;
       const origin =
         pending?.container === container
