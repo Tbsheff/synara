@@ -74,12 +74,7 @@ export function useChatProviderModels({
     : null;
   const threadProvider =
     activeThread?.modelSelection.provider ?? activeProject?.defaultModelSelection?.provider ?? null;
-  const hasThreadStarted = Boolean(
-    activeThread &&
-    (activeThread.latestTurn !== null ||
-      activeThread.messages.length > 0 ||
-      activeThread.session !== null),
-  );
+  const hasThreadStarted = Boolean(activeThread && threadHasProviderLockingActivity(activeThread));
   // Side chats import source history as fork-import rows. Those imports must not lock the
   // provider picker before the Side produces its first native turn (#810).
   const hasProviderLockingActivity = Boolean(
@@ -136,7 +131,7 @@ export function useChatProviderModels({
     ],
   );
   const sessionInstanceId =
-    activeThread?.session?.provider === selectedProvider
+    hasProviderLockingActivity && activeThread?.session?.provider === selectedProvider
       ? activeThread.session.providerInstanceId
       : undefined;
   let candidateInstanceId: ProviderInstanceId | undefined =

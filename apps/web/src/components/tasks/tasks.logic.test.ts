@@ -275,7 +275,7 @@ describe("due dates", () => {
 });
 
 describe("a fresh link to a chat this window doesn't know yet", () => {
-  it("reads as Starting for a minute, then as missing", () => {
+  it("reads as working for a minute, then as missing", () => {
     const linked = todo({ id: "linked", threadId, linkedAt: "2026-09-27T10:00:00.000Z" });
     const at = (iso: string) =>
       deriveTaskStatus({ todo: linked, thread: null, hasDraftThread: false, now: new Date(iso) });

@@ -905,6 +905,25 @@ describe("voice helpers", () => {
     ]);
   });
 
+  it("does not lock an empty pre-warmed thread to its first account", () => {
+    expect(
+      threadHasProviderLockingActivity({
+        messages: [],
+        sidechatSourceThreadId: null,
+        latestTurn: null,
+        session: { status: "ready", activeTurnId: null } as never,
+      }),
+    ).toBe(false);
+    expect(
+      threadHasProviderLockingActivity({
+        messages: [],
+        sidechatSourceThreadId: null,
+        latestTurn: null,
+        session: { status: "running", activeTurnId: "turn" } as never,
+      }),
+    ).toBe(true);
+  });
+
   it("does not lock Side chat providers on fork-import history alone", () => {
     const importedOnly = {
       sidechatSourceThreadId: ThreadId.makeUnsafe("source-thread"),
@@ -2375,13 +2394,13 @@ describe("hasLiveTurnTakenOver", () => {
 });
 
 describe("resolveWorkingLabel", () => {
-  it("shows Loading only while an unacknowledged send is still local", () => {
-    expect(resolveWorkingLabel({ isSendBusy: true, turnTakenOver: false })).toBe("Loading");
+  it("uses the working line while a send is still local", () => {
+    expect(resolveWorkingLabel({ isSendBusy: true, turnTakenOver: false })).toBe("Working");
     expect(resolveWorkingLabel({ isSendBusy: true, turnTakenOver: true })).toBe("Thinking");
     expect(resolveWorkingLabel({ isSendBusy: false, turnTakenOver: false })).toBe("Thinking");
   });
 
-  it("shows Starting provider… during the connecting phase", () => {
+  it("uses the working line during the connecting phase", () => {
     expect(
       resolveWorkingLabel({
         isSendBusy: false,
@@ -2389,7 +2408,7 @@ describe("resolveWorkingLabel", () => {
         isConnecting: true,
         providerName: "Pi",
       }),
-    ).toBe("Starting Pi…");
+    ).toBe("Working");
 
     expect(
       resolveWorkingLabel({
@@ -2398,7 +2417,7 @@ describe("resolveWorkingLabel", () => {
         isConnecting: true,
         providerName: "Pi",
       }),
-    ).toBe("Loading");
+    ).toBe("Working");
 
     expect(
       resolveWorkingLabel({
@@ -2407,11 +2426,11 @@ describe("resolveWorkingLabel", () => {
         isConnecting: true,
         providerName: "Pi",
       }),
-    ).toBe("Starting Pi…");
+    ).toBe("Working");
 
     expect(
       resolveWorkingLabel({ isSendBusy: false, turnTakenOver: false, isConnecting: true }),
-    ).toBe("Thinking");
+    ).toBe("Working");
   });
 });
 
@@ -3452,7 +3471,7 @@ describe("paceWorkingLabel", () => {
   });
 
   it("leaves progress steps after the normal hold", () => {
-    const pacing = { shown: "Loading", shownAtMs: 0 };
+    const pacing = { shown: "Working", shownAtMs: 0 };
     expect(paceWorkingLabel(pacing, "Thinking", WORKING_LABEL_MIN_HOLD_MS).pacing.shown).toBe(
       "Thinking",
     );

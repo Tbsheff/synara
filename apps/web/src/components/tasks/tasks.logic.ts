@@ -81,13 +81,13 @@ export function deriveTaskStatus(input: {
     return TODO_STATUS;
   }
   if (thread === null) {
-    if (input.hasDraftThread) return { ...TODO_STATUS, kind: "starting", label: "Starting" };
+    if (input.hasDraftThread) return { ...TODO_STATUS, kind: "starting", label: "Working" };
     if (input.threadsHydrated === false) {
       return { ...TODO_STATUS, kind: "starting", label: "Loading", detail: "Loading the chat…" };
     }
     // Another window (or this one after a reload) may still be creating the chat.
     if (input.now && isTaskLinkSettling(todo, input.now)) {
-      return { ...TODO_STATUS, kind: "starting", label: "Starting" };
+      return { ...TODO_STATUS, kind: "starting", label: "Working" };
     }
     return { ...TODO_STATUS, chatMissing: true };
   }
@@ -97,7 +97,7 @@ export function deriveTaskStatus(input: {
     todo.delegationBaseTurnId !== null &&
     (thread.latestTurn?.turnId ?? null) === todo.delegationBaseTurnId
   ) {
-    return { ...TODO_STATUS, kind: "starting", label: "Starting" };
+    return { ...TODO_STATUS, kind: "starting", label: "Working" };
   }
 
   const session = thread.session;
@@ -128,7 +128,7 @@ export function deriveTaskStatus(input: {
     latestTurn === null ||
     (latestTurn.state === "running" && latestTurn.startedAt === null)
   ) {
-    return { ...TODO_STATUS, kind: "starting", label: "Starting" };
+    return { ...TODO_STATUS, kind: "starting", label: "Working" };
   }
   if (session?.status === "error" || latestTurn.state === "error") {
     return {
@@ -161,7 +161,7 @@ export function formatAgentActivity(
     const ago = formatRelativeTime(thread.latestTurn.completedAt);
     return `${status.detail ?? "Finished"} ${ago === "now" ? "just now" : `${ago} ago`}`;
   }
-  if (status.kind === "starting") return "Starting…";
+  if (status.kind === "starting") return "Working…";
   return status.detail;
 }
 
@@ -182,7 +182,7 @@ export function describeTaskMeta(
 ): TaskMeta | null {
   switch (status.kind) {
     case "starting":
-      return { text: "Starting…", tone: "muted", live: true };
+      return { text: "Working…", tone: "muted", live: true };
     case "running":
       return { text: "Working…", tone: "muted", live: true };
     case "needs":

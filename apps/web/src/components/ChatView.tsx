@@ -265,6 +265,7 @@ import {
   resolveThreadDetailHydration,
   resolveTranscriptLiveTurn,
   resolveWorkingLabel,
+  threadHasProviderLockingActivity,
   deriveTurnWorkingStatus,
   resolveWorkingStatusText,
   collectVisibleReasoningHeadings,
@@ -290,6 +291,7 @@ import { ChatComposerFooter } from "./chat/ChatComposerFooter";
 import { ChatHeader } from "./chat/ChatHeader";
 import { OpenThreadTabStrip } from "./chat/OpenThreadTabStrip";
 import { ChatSurfaceHeader } from "./chat/ChatSurfaceHeader";
+import { useWarmProviderSession } from "./chat/useWarmProviderSession";
 import { useAsyncUserInputResponse } from "./chat/useAsyncUserInputResponse";
 import { ChatTranscriptPane } from "./chat/ChatTranscriptPane";
 import { ComposerActiveTaskListCard } from "./chat/ComposerActiveTaskListCard";
@@ -1477,7 +1479,7 @@ export default function ChatView({
   const showDebugTaskBanner = import.meta.env.DEV && featureFlags["show-debug-task-banner"];
 
   const phase = derivePhase(activeThread?.session ?? null);
-  const isConnecting = phase === "connecting";
+  const isConnecting = phase === "connecting" && activeLatestTurn?.state === "running";
   const providerDisplayName =
     PROVIDER_DISPLAY_NAMES[activeThread?.session?.provider ?? selectedProvider];
   const { workLogEntries, composerSubagentStripItems, stripSourceThreadId, workflowRunState } =
@@ -3275,6 +3277,14 @@ export default function ChatView({
     activeProviderStatus,
     scheduleComposerFocus,
   });
+  const requestWarmSession = useWarmProviderSession({
+    thread: serverThread,
+    enabled: isServerThread && isFocusedPane && !isCoordinatorConversation,
+    modelSelection: selectedModelSelection,
+    runtimeMode,
+    interactionMode,
+    persistSettings: persistThreadSettingsForNextTurn,
+  });
   const togglePlanSidebar = useCallback(() => {
     setPlanSidebarOpen((open) => {
       if (open) {
@@ -3848,10 +3858,22 @@ export default function ChatView({
         scheduleComposerFocus();
         return;
       }
+      if (isServerThread && !threadHasProviderLockingActivity(activeThread)) {
+        await persistThreadSettingsForNextTurn({
+          threadId: activeThread.id,
+          createdAt: new Date().toISOString(),
+          modelSelection: nextModelSelection,
+          runtimeMode: nextRuntimeMode,
+          interactionMode,
+        });
+      }
       scheduleComposerFocus();
     },
     [
       activeThread,
+      isServerThread,
+      interactionMode,
+      persistThreadSettingsForNextTurn,
       boundProvider,
       customModelsByProvider,
       lockedProvider,
@@ -6277,55 +6299,57 @@ export default function ChatView({
                     />
                   )}
                 {/* Keep chrome mounted; reset only the editor's undo history per chat. */}
-                <ComposerPromptEditor
-                  key={threadId}
-                  ref={composerEditorRef}
-                  value={
-                    isComposerApprovalState || pluginOwnsPendingUserInput
-                      ? ""
-                      : composerPendingProgress
-                        ? composerPendingProgress.customAnswer
-                        : prompt
-                  }
-                  cursor={composerCursor}
-                  terminalContexts={
-                    !isComposerApprovalState && pendingUserInputs.length === 0
-                      ? composerTerminalContexts
-                      : []
-                  }
-                  mentionReferences={selectedComposerMentions}
-                  onRemoveTerminalContext={removeComposerTerminalContextFromDraft}
-                  onChange={handlePromptChange}
-                  onCommandKeyDown={handleComposerCommandKey}
-                  onPaste={handleComposerPaste}
-                  {...(canCollapsePastedTextToDraft
-                    ? { onCollapsePastedText: handleCollapsePastedText }
-                    : {})}
-                  placeholder={
-                    isComposerApprovalState
-                      ? "Resolve this approval request to continue"
-                      : pluginOwnsPendingUserInput
-                        ? "Answer the question above to continue"
+                <div onFocusCapture={requestWarmSession}>
+                  <ComposerPromptEditor
+                    key={threadId}
+                    ref={composerEditorRef}
+                    value={
+                      isComposerApprovalState || pluginOwnsPendingUserInput
+                        ? ""
                         : composerPendingProgress
-                          ? !allowsPendingUserInputCustomAnswer(
-                              composerPendingProgress.activeQuestion,
-                            )
-                            ? "Choose a listed option above"
-                            : composerPendingProgress.activeQuestion?.options.length === 0
-                              ? "Type your answer to continue"
-                              : "Type your own answer, or leave this blank to use the selected option"
-                          : showPlanFollowUpPrompt && activeProposedPlan
-                            ? "Add feedback to refine the plan, or leave this blank to implement it"
-                            : activeThread?.parentThreadId
-                              ? "Message this subagent while it works"
-                              : hasLiveTurn
-                                ? "Ask for follow-up changes"
-                                : standaloneSidechatContext
-                                  ? `Ask about this ${standaloneSidechatItemNoun}`
-                                  : "Ask anything, @tag files/folders, or use / to show available commands"
-                  }
-                  disabled={isComposerEditorDisabled}
-                />
+                          ? composerPendingProgress.customAnswer
+                          : prompt
+                    }
+                    cursor={composerCursor}
+                    terminalContexts={
+                      !isComposerApprovalState && pendingUserInputs.length === 0
+                        ? composerTerminalContexts
+                        : []
+                    }
+                    mentionReferences={selectedComposerMentions}
+                    onRemoveTerminalContext={removeComposerTerminalContextFromDraft}
+                    onChange={handlePromptChange}
+                    onCommandKeyDown={handleComposerCommandKey}
+                    onPaste={handleComposerPaste}
+                    {...(canCollapsePastedTextToDraft
+                      ? { onCollapsePastedText: handleCollapsePastedText }
+                      : {})}
+                    placeholder={
+                      isComposerApprovalState
+                        ? "Resolve this approval request to continue"
+                        : pluginOwnsPendingUserInput
+                          ? "Answer the question above to continue"
+                          : composerPendingProgress
+                            ? !allowsPendingUserInputCustomAnswer(
+                                composerPendingProgress.activeQuestion,
+                              )
+                              ? "Choose a listed option above"
+                              : composerPendingProgress.activeQuestion?.options.length === 0
+                                ? "Type your answer to continue"
+                                : "Type your own answer, or leave this blank to use the selected option"
+                            : showPlanFollowUpPrompt && activeProposedPlan
+                              ? "Add feedback to refine the plan, or leave this blank to implement it"
+                              : activeThread?.parentThreadId
+                                ? "Message this subagent while it works"
+                                : hasLiveTurn
+                                  ? "Ask for follow-up changes"
+                                  : standaloneSidechatContext
+                                    ? `Ask about this ${standaloneSidechatItemNoun}`
+                                    : "Ask anything, @tag files/folders, or use / to show available commands"
+                    }
+                    disabled={isComposerEditorDisabled}
+                  />
+                </div>
               </div>
               {/* Bottom toolbar — hidden while an approval takes over the composer,
                     since the approve/decline actions live in the detached approval card

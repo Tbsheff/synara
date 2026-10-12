@@ -376,6 +376,7 @@ function WorktreeSetupCard({
   // The send pipeline only honors a resolution at checkpoints before the turn
   // dispatch, so hide the actions once "Starting session" is underway (or the
   // setup already failed) rather than offering a cancel that can no longer win.
+  const visibleSteps = steps.filter((step) => step.id !== "start-session");
   const canResolve =
     onResolve !== undefined &&
     steps.every((step) => step.status !== "error") &&
@@ -392,8 +393,8 @@ function WorktreeSetupCard({
         </span>
       </div>
       <ol className="mt-2 flex flex-col">
-        {steps.map((step, index) => {
-          const isLast = index === steps.length - 1;
+        {visibleSteps.map((step, index) => {
+          const isLast = index === visibleSteps.length - 1;
           return (
             <li key={step.id} className="relative flex items-center gap-2.5 py-[3px]">
               {isLast ? null : (
@@ -672,7 +673,13 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   // entire component (silently, since `panicThreshold` is unset), which would drop
   // memoization for the whole transcript. See MessagesTimeline.compiler.test.ts.
   const workingLabel = workingLabelProp ?? "Thinking";
-  const worktreeSetup = worktreeSetupProp ?? null;
+  const worktreeSetup = useMemo(() => {
+    if (!worktreeSetupProp) return null;
+    const steps = worktreeSetupProp.steps.filter((step) => step.id !== "start-session");
+    return steps.length > 0 && steps.some((step) => step.status !== "done")
+      ? worktreeSetupProp
+      : null;
+  }, [worktreeSetupProp]);
   const worktreeSetupPendingAction = worktreeSetupPendingActionProp ?? null;
   const followLiveOutput = followLiveOutputProp ?? false;
   const enteringUserMessageIds = enteringUserMessageIdsProp ?? EMPTY_MESSAGE_ID_SET;
@@ -1013,6 +1020,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       freshLiveTurnFold,
       submittingEditedUserMessageId,
       toolGroupSummaryOverrides,
+      workingLabel,
     }),
     [
       hubWorkItemsByMessageId,
@@ -1035,6 +1043,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       freshLiveTurnFold,
       submittingEditedUserMessageId,
       toolGroupSummaryOverrides,
+      workingLabel,
     ],
   );
   // Latest rows kept in a ref so the imperative scroll controller can look up a message's

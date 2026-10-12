@@ -303,15 +303,15 @@ describe("MessagesTimeline worktree setup card", () => {
     }
   });
 
-  it("hides the actions once the session is starting", async () => {
+  it("uses the working line once workspace preparation is done", async () => {
     const screen = await render(
       <ResolvableSetupTimeline snapshot={startingSessionSnapshot()} onResolve={() => {}} />,
     );
 
     try {
-      await expect.poll(() => setupRow() !== null).toBe(true);
-      expect(setupRow()?.textContent).not.toContain("Work locally");
-      expect(setupRow()?.textContent).not.toContain("Cancel");
+      await expect.poll(() => setupRow()).toBeNull();
+      await expect.poll(() => workingRow() !== null).toBe(true);
+      expect(document.body.textContent).not.toContain("Starting session");
     } finally {
       await screen.unmount();
     }
@@ -339,7 +339,7 @@ describe("MessagesTimeline worktree setup card", () => {
 
     try {
       await expect.poll(() => setupRow()?.textContent).toContain("Running setup action: Setup");
-      expect(setupRow()?.textContent).toContain("Starting session");
+      expect(setupRow()?.textContent).not.toContain("Starting session");
       expect(workingRow()).toBeNull();
     } finally {
       await screen.unmount();
