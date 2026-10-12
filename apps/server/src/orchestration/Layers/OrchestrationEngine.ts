@@ -121,6 +121,7 @@ type CommittedCommandResult = {
   readonly committedEvents: OrchestrationEvent[];
   readonly lastSequence: number;
   readonly nextCommandReadModel: OrchestrationReadModel;
+  readonly committedAttachmentCleanups: ReadonlyArray<Effect.Effect<void>>;
 };
 
 function commandToAggregateRef(command: OrchestrationCommand): {
@@ -681,39 +682,54 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       case "thread.message.assistant.complete":
         // Read the exact message, including a resumed message older than the
         // transcript window. This avoids loading a whole thread to finalize it.
-        return messageRepository
-          .getByThreadAndMessageId({ threadId: command.threadId, messageId: command.messageId })
-          .pipe(
-            Effect.mapError(
-              (error) =>
-                new OrchestrationCommandInternalError({
-                  commandId: command.commandId,
-                  commandType: command.type,
-                  detail: `Failed to load the complete assistant message: ${error.message}`,
-                }),
-            ),
-            Effect.flatMap((message) => {
-              const model = commandReadModel.threads.some((entry) => entry.id === command.threadId)
-                ? Effect.succeed(commandReadModel)
-                : loadThreadDetailForDecider(command, commandReadModel, command.threadId);
-              return model.pipe(
-                Effect.map((readModel) => {
-                  const thread = readModel.threads.find((entry) => entry.id === command.threadId);
-                  // A missing projection row must not discard text still in cache.
-                  // SQL failures stay errors; a present row remains authoritative.
-                  if (!thread || Option.isNone(message)) return readModel;
-                  return overlayThread(readModel, {
-                    ...thread,
-                    messages: [orchestrationMessageFromStoredMessage(message.value)],
-                  });
-                }),
-              );
-            }),
-          );
+        return loadStoredMessageForDecider(command, "the complete assistant message");
+      case "thread.message.user.bind-turn":
+      case "thread.message.user.set-turn-boundary":
+        return loadStoredMessageForDecider(command, "the user message");
       default:
         return Effect.succeed(commandReadModel);
     }
   };
+
+  const loadStoredMessageForDecider = (
+    command: Extract<
+      OrchestrationCommand,
+      {
+        readonly type:
+          | "thread.message.assistant.complete"
+          | "thread.message.user.bind-turn"
+          | "thread.message.user.set-turn-boundary";
+      }
+    >,
+    messageLabel: string,
+  ): Effect.Effect<OrchestrationReadModel, OrchestrationDispatchError> =>
+    messageRepository
+      .getByThreadAndMessageId({ threadId: command.threadId, messageId: command.messageId })
+      .pipe(
+        Effect.mapError(
+          (error) =>
+            new OrchestrationCommandInternalError({
+              commandId: command.commandId,
+              commandType: command.type,
+              detail: `Failed to load ${messageLabel}: ${error.message}`,
+            }),
+        ),
+        Effect.flatMap((message) => {
+          const model = commandReadModel.threads.some((entry) => entry.id === command.threadId)
+            ? Effect.succeed(commandReadModel)
+            : loadThreadDetailForDecider(command, commandReadModel, command.threadId);
+          return model.pipe(
+            Effect.map((readModel) => {
+              const thread = readModel.threads.find((entry) => entry.id === command.threadId);
+              if (!thread || Option.isNone(message)) return readModel;
+              return overlayThread(readModel, {
+                ...thread,
+                messages: [orchestrationMessageFromStoredMessage(message.value)],
+              });
+            }),
+          );
+        }),
+      );
 
   // Rebuild only the project/space projection rows and snapshot cursors.
   // Existing thread/chat projection rows stay in place so older installs do not
@@ -724,38 +740,11 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       yield* sql`DELETE FROM projection_projects`;
       yield* sql`
         DELETE FROM projection_state
-        WHERE projector IN ${sql.in(PROJECT_METADATA_SNAPSHOT_PROJECTORS)}
+        WHERE projector IN ${sql.in([
+          ...PROJECT_METADATA_SNAPSHOT_PROJECTORS,
+          ORCHESTRATION_PROJECTOR_NAMES.threadShellSummaries,
+        ])}
       `;
-    }),
-  );
-
-  const backupDerivedProjectionState = sql.withTransaction(
-    Effect.gen(function* () {
-      yield* sql`DROP TABLE IF EXISTS temp_repair_projection_spaces`;
-      yield* sql`DROP TABLE IF EXISTS temp_repair_projection_projects`;
-      yield* sql`DROP TABLE IF EXISTS temp_repair_projection_state`;
-      yield* sql`CREATE TEMP TABLE temp_repair_projection_spaces AS SELECT * FROM projection_spaces`;
-      yield* sql`CREATE TEMP TABLE temp_repair_projection_projects AS SELECT * FROM projection_projects`;
-      yield* sql`CREATE TEMP TABLE temp_repair_projection_state AS SELECT * FROM projection_state`;
-    }),
-  );
-
-  const restoreDerivedProjectionState = sql.withTransaction(
-    Effect.gen(function* () {
-      yield* sql`DELETE FROM projection_spaces`;
-      yield* sql`INSERT INTO projection_spaces SELECT * FROM temp_repair_projection_spaces`;
-      yield* sql`DELETE FROM projection_projects`;
-      yield* sql`INSERT INTO projection_projects SELECT * FROM temp_repair_projection_projects`;
-      yield* sql`DELETE FROM projection_state`;
-      yield* sql`INSERT INTO projection_state SELECT * FROM temp_repair_projection_state`;
-    }),
-  );
-
-  const dropProjectionRepairBackup = sql.withTransaction(
-    Effect.gen(function* () {
-      yield* sql`DROP TABLE IF EXISTS temp_repair_projection_spaces`;
-      yield* sql`DROP TABLE IF EXISTS temp_repair_projection_projects`;
-      yield* sql`DROP TABLE IF EXISTS temp_repair_projection_state`;
     }),
   );
 
@@ -1194,6 +1183,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
               }
             }
             const committedEvents: OrchestrationEvent[] = [];
+            const committedAttachmentCleanups: Array<Effect.Effect<void>> = [];
             let nextCommandReadModel = commandReadModel;
 
             if (command.type === "thread.turn.start") {
@@ -1244,7 +1234,9 @@ const makeOrchestrationEngine = Effect.gen(function* () {
               if (isShellMetadataEvent(savedEvent)) {
                 yield* projectionPipeline.projectMetadataEvent(savedEvent);
               } else {
-                yield* projectionPipeline.projectHotEventInCurrentTransaction(savedEvent);
+                committedAttachmentCleanups.push(
+                  yield* projectionPipeline.projectHotEventInCurrentTransaction(savedEvent),
+                );
               }
               committedEvents.push(savedEvent);
             }
@@ -1279,6 +1271,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
               committedEvents,
               lastSequence: lastSavedEvent.sequence,
               nextCommandReadModel,
+              committedAttachmentCleanups,
             } as const;
           }).pipe(
             Effect.catchCause((cause): Effect.Effect<never, OrchestrationDispatchError, never> => {
@@ -1333,6 +1326,9 @@ const makeOrchestrationEngine = Effect.gen(function* () {
             for (const event of committed.committedEvents) {
               yield* publishCommittedEvent(event);
             }
+            yield* Effect.forEach(committed.committedAttachmentCleanups, (cleanup) => cleanup, {
+              discard: true,
+            });
             return committed;
           }).pipe(Effect.uninterruptible);
         }).pipe(
@@ -1848,84 +1844,32 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           ),
         );
 
-        yield* backupDerivedProjectionState.pipe(
-          Effect.catchTag("SqlError", (sqlError) =>
-            Effect.logError("failed to back up derived orchestration projection state").pipe(
-              Effect.annotateLogs({
-                cause: Cause.pretty(Cause.fail(sqlError)),
-              }),
-              Effect.flatMap(() =>
-                Effect.fail(
-                  new OrchestrationCommandInternalError({
-                    commandId: "repair-local-state",
-                    commandType: ORCHESTRATION_WS_METHODS.repairState,
-                    detail: "Failed to stage the current local state before rebuilding it.",
+        const rebuildResult = yield* Effect.exit(
+          sql.withTransaction(
+            resetDerivedProjectionState.pipe(
+              Effect.catchTag("SqlError", (sqlError) =>
+                Effect.logError("failed to reset derived orchestration projection state").pipe(
+                  Effect.annotateLogs({
+                    cause: Cause.pretty(Cause.fail(sqlError)),
                   }),
-                ),
-              ),
-            ),
-          ),
-        );
-
-        yield* resetDerivedProjectionState.pipe(
-          Effect.catchTag("SqlError", (sqlError) =>
-            Effect.logError("failed to reset derived orchestration projection state").pipe(
-              Effect.annotateLogs({
-                cause: Cause.pretty(Cause.fail(sqlError)),
-              }),
-              Effect.tap(() =>
-                restoreDerivedProjectionState.pipe(
-                  Effect.catchCause(() =>
-                    Effect.logWarning(
-                      "failed to restore orchestration projection backup after reset failure",
+                  Effect.flatMap(() =>
+                    Effect.fail(
+                      new OrchestrationCommandInternalError({
+                        commandId: "repair-local-state",
+                        commandType: ORCHESTRATION_WS_METHODS.repairState,
+                        detail: "Failed to clear the local projection cache before rebuilding it.",
+                      }),
                     ),
                   ),
                 ),
               ),
-              Effect.flatMap(() =>
-                Effect.fail(
-                  new OrchestrationCommandInternalError({
-                    commandId: "repair-local-state",
-                    commandType: ORCHESTRATION_WS_METHODS.repairState,
-                    detail: "Failed to clear the local projection cache before rebuilding it.",
-                  }),
-                ),
-              ),
+              Effect.andThen(projectionPipeline.bootstrapInCurrentTransaction),
+              Effect.tap(() => verifyProjectionRepairFence(repairFence)),
             ),
           ),
         );
-
-        const rebuildResult = yield* Effect.exit(
-          projectionPipeline.bootstrap.pipe(
-            Effect.flatMap(() => verifyProjectionRepairFence(repairFence)),
-          ),
-        );
         if (rebuildResult._tag === "Failure") {
-          const restoreResult = yield* Effect.exit(restoreDerivedProjectionState);
-          if (restoreResult._tag === "Failure") {
-            commandReadModel = previousCommandReadModel;
-            return yield* Effect.logError(
-              "failed to restore orchestration projection backup after rebuild failure",
-            ).pipe(
-              Effect.annotateLogs({
-                rebuildCause: Cause.pretty(rebuildResult.cause),
-                restoreCause: Cause.pretty(restoreResult.cause),
-              }),
-              Effect.flatMap(() =>
-                Effect.fail(
-                  new OrchestrationCommandInternalError({
-                    commandId: "repair-local-state",
-                    commandType: ORCHESTRATION_WS_METHODS.repairState,
-                    detail:
-                      "Projection repair failed and its staged backup could not be restored. Restart Synara before retrying repair.",
-                  }),
-                ),
-              ),
-            );
-          }
-
           commandReadModel = previousCommandReadModel;
-          yield* dropProjectionRepairBackup.pipe(Effect.catchCause(() => Effect.void));
           const typedFailure = Cause.findErrorOption(rebuildResult.cause);
           const repairError = Option.filter(
             typedFailure,
@@ -1954,9 +1898,8 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           );
         }
 
-        const snapshot = yield* refreshCommandReadModelFromProjectionState;
-        yield* dropProjectionRepairBackup.pipe(Effect.catchCause(() => Effect.void));
-        return snapshot;
+        yield* rebuildResult.value;
+        return yield* refreshCommandReadModelFromProjectionState;
       }),
     );
 

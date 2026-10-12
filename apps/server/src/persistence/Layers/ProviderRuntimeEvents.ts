@@ -37,7 +37,7 @@ import {
  * scan per tail-length of accepted events falling out of the diagnostic tail.
  */
 const PROVIDER_RUNTIME_EVENT_RETENTION_SCAN_INTERVAL = PROVIDER_RUNTIME_EVENT_RETAIN_ACCEPTED;
-const CHECKPOINT_RUNTIME_RETENTION_DELETE_LIMIT = 1024;
+const RUNTIME_RETENTION_DELETE_LIMIT = 1024;
 
 const ProviderRuntimeEventJson = Schema.fromJsonString(ProviderRuntimeEvent);
 const encodeEvent = Schema.encodeEffect(ProviderRuntimeEventJson);
@@ -455,25 +455,30 @@ const make = Effect.gen(function* () {
 
   // Open-turn bookkeeping for one accepted row. Runs inside the caller's
   // transaction, in journal order.
-  const recordAckedOpenTurn = (event: AckedEventRow, updatedAt: string) =>
+  const recordAckedOpenTurn = (
+    event: AckedEventRow,
+    updatedAt: string,
+    opened: Set<string> = new Set(),
+  ) =>
     Effect.gen(function* () {
       const isTerminalTurnEvent = isTerminalTurnEventType(event.eventType);
       const isThreadTerminalEvent = isThreadTerminalEventType(event.eventType);
       if (event.turnId !== null && !isTerminalTurnEvent && !isThreadTerminalEvent) {
+        const openTurnKey = JSON.stringify([event.threadId, event.turnId]);
+        if (opened.has(openTurnKey)) return false;
         yield* sql`
           INSERT INTO provider_runtime_open_turns (
             thread_id, turn_id, first_sequence, updated_at
           ) VALUES (
             ${event.threadId}, ${event.turnId}, ${event.sequence}, ${updatedAt}
           )
-          ON CONFLICT (thread_id, turn_id) DO UPDATE SET
-            first_sequence = MIN(
-              provider_runtime_open_turns.first_sequence,
-              excluded.first_sequence
-            ),
-            updated_at = excluded.updated_at
+          ON CONFLICT (thread_id, turn_id) DO NOTHING
         `;
-      } else if (event.turnId !== null) {
+        opened.add(openTurnKey);
+        return false;
+      }
+      if (isTerminalTurnEvent || isThreadTerminalEvent) opened.clear();
+      if (event.turnId !== null) {
         yield* sql`
           DELETE FROM provider_runtime_open_turns
           WHERE thread_id = ${event.threadId} AND turn_id = ${event.turnId}
@@ -501,8 +506,12 @@ const make = Effect.gen(function* () {
   // history is bounded to a diagnostic tail. The checkpoint consumer skips a
   // file notification superseded by a newer one before turn completion, so
   // only the newest of such a burst stays protected by its cursor.
-  const sweepAcceptedHistoryThrough = (throughSequence: number) => sql`
-    DELETE FROM provider_runtime_events AS event
+  const deleteAcceptedHistoryBatch = (throughSequence: number) =>
+    sql<{
+      readonly sequence: number;
+    }>`
+    DELETE FROM provider_runtime_events WHERE sequence IN (
+    SELECT event.sequence FROM provider_runtime_events AS event
     WHERE event.sequence <= ${throughSequence}
       AND NOT EXISTS (
         SELECT 1 FROM provider_runtime_event_consumers AS checkpoint
@@ -535,7 +544,20 @@ const make = Effect.gen(function* () {
         ORDER BY sequence DESC
         LIMIT ${PROVIDER_RUNTIME_EVENT_RETAIN_ACCEPTED}
       )
-  `;
+    ORDER BY event.sequence ASC
+    LIMIT ${RUNTIME_RETENTION_DELETE_LIMIT}
+    )
+    RETURNING sequence
+  `.pipe(Effect.map((rows) => rows.length));
+
+  const sweepAcceptedHistoryThrough = (throughSequence: number) =>
+    Effect.gen(function* () {
+      while (
+        (yield* deleteAcceptedHistoryBatch(throughSequence)) >= RUNTIME_RETENTION_DELETE_LIMIT
+      ) {
+        yield* Effect.yieldNow;
+      }
+    });
 
   // Highest cursor position whose retention scan has already run. Process-local
   // on purpose: it is a "do not rescan yet" hint, never a durability record. A
@@ -543,14 +565,25 @@ const make = Effect.gen(function* () {
   // direction, since the only effect of losing it is pruning sooner.
   let lastRetentionScanSequence = 0;
 
-  const rememberRetentionScan = (retentionScanSequence: number | null) =>
-    // Only a committed scan may move the hint forward; a rolled back
-    // transaction leaves it where it was so the next advance rescans.
-    Effect.sync(() => {
-      if (retentionScanSequence !== null) {
-        lastRetentionScanSequence = Math.max(lastRetentionScanSequence, retentionScanSequence);
-      }
-    });
+  const runRetentionScan = (retentionScanSequence: number | null) =>
+    retentionScanSequence === null
+      ? Effect.void
+      : sweepAcceptedHistoryThrough(retentionScanSequence).pipe(
+          Effect.andThen(
+            Effect.sync(() => {
+              lastRetentionScanSequence = Math.max(
+                lastRetentionScanSequence,
+                retentionScanSequence,
+              );
+            }),
+          ),
+          Effect.catch((error) =>
+            Effect.logWarning("provider runtime journal retention sweep failed", {
+              throughSequence: retentionScanSequence,
+              error: String(error),
+            }),
+          ),
+        );
 
   // Same process-local hint for checkpoint ACK pruning: each pass is bounded,
   // and the ingestion sweep still honors the live checkpoint cursor, so an
@@ -611,7 +644,7 @@ const make = Effect.gen(function* () {
           WHERE open_turn.thread_id = event.thread_id AND open_turn.turn_id = event.turn_id AND event.sequence >= open_turn.first_sequence)
         AND event.sequence NOT IN (SELECT sequence FROM provider_runtime_events WHERE sequence <= ${ingestionCursor}
           ORDER BY sequence DESC LIMIT ${PROVIDER_RUNTIME_EVENT_RETAIN_ACCEPTED})
-      ORDER BY event.sequence ASC LIMIT ${CHECKPOINT_RUNTIME_RETENTION_DELETE_LIMIT}
+      ORDER BY event.sequence ASC LIMIT ${RUNTIME_RETENTION_DELETE_LIMIT}
     )`;
     }),
   );
@@ -677,12 +710,11 @@ const make = Effect.gen(function* () {
             return true;
           }
           retentionScanSequence = input.eventSequence;
-          yield* sweepAcceptedHistoryThrough(input.eventSequence);
           return true;
         }),
       )
       .pipe(
-        Effect.tap(() => rememberRetentionScan(retentionScanSequence)),
+        Effect.tap(() => runRetentionScan(retentionScanSequence)),
         Effect.tap(() => rememberCheckpointPrune(checkpointPruneSequence)),
         Effect.mapError(toPersistenceSqlError("ProviderRuntimeEvent.advanceConsumerCursor")),
       );
@@ -753,8 +785,11 @@ const make = Effect.gen(function* () {
 
             if (input.consumerName !== PROVIDER_RUNTIME_INGESTION_CONSUMER) return true;
             let settlesOpenTurns = false;
+            const opened = new Set<string>();
             for (const event of events) {
-              if (yield* recordAckedOpenTurn(event, input.updatedAt)) settlesOpenTurns = true;
+              if (yield* recordAckedOpenTurn(event, input.updatedAt, opened)) {
+                settlesOpenTurns = true;
+              }
             }
 
             if (
@@ -765,12 +800,11 @@ const make = Effect.gen(function* () {
               return true;
             }
             retentionScanSequence = input.throughSequence;
-            yield* sweepAcceptedHistoryThrough(input.throughSequence);
             return true;
           }),
         )
         .pipe(
-          Effect.tap(() => rememberRetentionScan(retentionScanSequence)),
+          Effect.tap(() => runRetentionScan(retentionScanSequence)),
           Effect.tap(() => rememberCheckpointPrune(checkpointPruneSequence)),
           Effect.mapError(
             toPersistenceSqlError("ProviderRuntimeEvent.advanceConsumerCursorThrough"),

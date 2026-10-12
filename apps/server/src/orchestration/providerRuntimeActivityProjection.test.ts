@@ -605,6 +605,44 @@ describe("projected activities satisfy the orchestration command schema", () => 
       }),
     );
   });
+
+  it("drops a non-finite or out-of-range rate-limit reset instead of throwing", () => {
+    for (const [index, resetsAt] of [
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      Number.NEGATIVE_INFINITY,
+      1e20,
+    ].entries()) {
+      const invalidResetEvent = runtimeEvent({
+        type: "account.rate-limits.updated",
+        eventId: `rate-limits-invalid-reset-${index}`,
+        payload: {
+          rateLimits: {
+            status: "allowed",
+            utilization: 0.4,
+            resetsAt,
+            limits: [
+              { window: "5h", utilization: 0.2, resetsAt },
+              { window: "7d", resetsAt: 1_785_000_000 },
+            ],
+          },
+        },
+      });
+      expectSchemaValidActivities(invalidResetEvent);
+      const [activity] = projectProviderRuntimeActivities(invalidResetEvent);
+      const payload = activity?.payload as Record<string, unknown>;
+      expect(payload).not.toHaveProperty("resetsAt");
+      expect(payload).toMatchObject({
+        status: "allowed",
+        utilization: 0.4,
+        limits: [
+          { window: "5h", utilization: 0.2 },
+          { window: "7d", resetsAt: new Date(1_785_000_000 * 1000).toISOString() },
+        ],
+      });
+      expect((payload.limits as Array<Record<string, unknown>>)[0]).not.toHaveProperty("resetsAt");
+    }
+  });
 });
 
 describe("provider runtime activity projection", () => {
@@ -688,7 +726,7 @@ describe("provider runtime activity projection", () => {
         summary: "Reasoning trace",
         payload: {
           status: "completed",
-          detail: "Read the protocol mapping",
+          reasoning: { summary: "Read the protocol mapping" },
           data: { toolCallId: `reasoning-${provider}` },
         },
       });
@@ -1635,7 +1673,7 @@ describe("typed transcript payloads", () => {
     expect(preview).toMatchObject({
       id: `provider-reasoning:${THREAD_ID}:reasoning-1`,
       kind: "task.progress",
-      payload: { detail: summary, reasoning: { heading: "Inspecting the store", summary } },
+      payload: { reasoning: { heading: "Inspecting the store", summary } },
     });
     const [redacted] = projectProviderRuntimeActivities(
       runtimeEvent({
@@ -2355,6 +2393,20 @@ describe("bounded text edges", () => {
       }
       expect(jsonChars(activity)).toBeLessThanOrEqual(64_000);
     }
+  });
+
+  it("stores reasoning text once, in reasoning.summary", () => {
+    const [activity] = projectProviderRuntimeActivities(
+      runtimeEvent({
+        type: "item.completed",
+        eventId: "reasoning-single-copy",
+        turnId: TURN_ID,
+        itemId: RuntimeItemId.makeUnsafe("reasoning-single-copy"),
+        payload: { itemType: "reasoning", status: "completed", detail: "Checked the cursor" },
+      }),
+    );
+    expect(payloadOf(activity)).not.toHaveProperty("detail");
+    expect(payloadOf(activity).reasoning).toMatchObject({ summary: "Checked the cursor" });
   });
 
   it("lets the provider reasoning heading win over the derived heading", () => {

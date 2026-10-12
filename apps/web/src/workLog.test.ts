@@ -598,6 +598,40 @@ describe("deriveWorkLogEntries", () => {
     expect(entries.map((entry) => entry.id)).toEqual(["task-progress"]);
   });
 
+  it("reads reasoning text from reasoning.summary when the payload has no detail", () => {
+    const [current, legacy] = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "provider-reasoning:thread-1:reasoning-current",
+          createdAt: "2026-02-23T00:00:01.000Z",
+          kind: "task.progress",
+          summary: "Reasoning trace",
+          tone: "tool",
+          payload: {
+            status: "completed",
+            reasoning: { summary: "**Checking the cursor**\n\nRead the journal." },
+            data: { toolCallId: "reasoning-current" },
+          },
+        }),
+        makeActivity({
+          id: "provider-reasoning:thread-1:reasoning-legacy",
+          createdAt: "2026-02-23T00:00:02.000Z",
+          kind: "task.progress",
+          summary: "Reasoning trace",
+          tone: "tool",
+          payload: {
+            status: "completed",
+            detail: "Legacy reasoning text",
+            data: { toolCallId: "reasoning-legacy" },
+          },
+        }),
+      ],
+      undefined,
+    );
+    expect(current?.detail).toBe("**Checking the cursor**\n\nRead the journal.");
+    expect(legacy?.detail).toBe("Legacy reasoning text");
+  });
+
   it("adds a visible row when a task moved to the background finishes", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({

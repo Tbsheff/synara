@@ -1125,3 +1125,197 @@ it.effect("releases superseded file notifications behind a stalled checkpoint cu
     ),
   ),
 );
+
+const freshRepository = ProviderRuntimeEventRepositoryLive.pipe(
+  Layer.provideMerge(SqlitePersistenceMemory),
+);
+
+const turnEvent = (turn: string, index: number): ProviderRuntimeEvent => ({
+  type: "content.delta",
+  eventId: EventId.makeUnsafe(`bounded-${turn}-${index}`),
+  provider: "codex",
+  createdAt: "2026-10-11T00:00:00.000Z",
+  threadId: ThreadId.makeUnsafe("thread-bounded-retention"),
+  turnId: TurnId.makeUnsafe(`turn-bounded-${turn}`),
+  payload: { streamKind: "assistant_text", delta: `chunk-${index}` },
+});
+
+const captureStatements = (statements: string[]) =>
+  Effect.provideService(Statement.CurrentTransformer, (statement) =>
+    Effect.sync(() => {
+      statements.push(statement.compile()[0]);
+      return statement;
+    }),
+  );
+
+it.effect("releases a long completed turn in bounded delete batches", () =>
+  Effect.gen(function* () {
+    const repository = yield* ProviderRuntimeEventRepository;
+    const sql = yield* SqlClient.SqlClient;
+    const journalSize = Effect.map(
+      sql<{ readonly count: number }>`SELECT COUNT(*) AS count FROM provider_runtime_events`,
+      (rows) => rows[0]?.count ?? 0,
+    );
+    const openTurnEvents = PROVIDER_RUNTIME_EVENT_RETAIN_ACCEPTED + 2_600;
+    let throughSequence = 0;
+    for (let index = 0; index < openTurnEvents; index += 1) {
+      throughSequence = (yield* repository.append(turnEvent("long", index))).sequence;
+    }
+    assert.isTrue(
+      yield* repository.advanceConsumerCursorThrough({
+        consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+        throughSequence,
+        updatedAt: "2026-10-11T00:00:01.000Z",
+      }),
+    );
+    assert.strictEqual(yield* journalSize, openTurnEvents);
+
+    const terminal = yield* repository.append({
+      ...turnEvent("long", openTurnEvents),
+      eventId: EventId.makeUnsafe("bounded-long-terminal"),
+      type: "turn.completed",
+      payload: { state: "completed" },
+    });
+    const statements: string[] = [];
+    assert.isTrue(
+      yield* repository
+        .advanceConsumerCursorThrough({
+          consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+          throughSequence: terminal.sequence,
+          updatedAt: "2026-10-11T00:00:02.000Z",
+        })
+        .pipe(captureStatements(statements)),
+    );
+    const deletes = statements.filter((query) =>
+      query.includes("DELETE FROM provider_runtime_events"),
+    );
+    assert.isAtLeast(deletes.length, 3);
+    assert.isTrue(deletes.every((query) => /LIMIT \?\s*\)/u.test(query)));
+    assert.strictEqual(
+      yield* repository.getConsumerCursor(PROVIDER_RUNTIME_INGESTION_CONSUMER),
+      terminal.sequence,
+    );
+    assert.strictEqual(yield* journalSize, PROVIDER_RUNTIME_EVENT_RETAIN_ACCEPTED);
+  }).pipe(Effect.provide(Layer.fresh(freshRepository))),
+);
+
+it.effect("keeps the first open-turn row on continuation acknowledgements", () =>
+  Effect.gen(function* () {
+    const repository = yield* ProviderRuntimeEventRepository;
+    const sql = yield* SqlClient.SqlClient;
+    const openTurnRow = Effect.map(
+      sql<{ readonly firstSequence: number; readonly updatedAt: string }>`
+        SELECT first_sequence AS "firstSequence", updated_at AS "updatedAt"
+        FROM provider_runtime_open_turns
+        WHERE turn_id = 'turn-bounded-continuation'
+      `,
+      (rows) => rows,
+    );
+    const first = yield* repository.append(turnEvent("continuation", 0));
+    assert.isTrue(
+      yield* repository.advanceConsumerCursor({
+        consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+        eventSequence: first.sequence,
+        updatedAt: "2026-10-11T00:00:01.000Z",
+      }),
+    );
+    const expected = [{ firstSequence: first.sequence, updatedAt: "2026-10-11T00:00:01.000Z" }];
+    assert.deepStrictEqual(yield* openTurnRow, expected);
+
+    const second = yield* repository.append(turnEvent("continuation", 1));
+    assert.isTrue(
+      yield* repository.advanceConsumerCursor({
+        consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+        eventSequence: second.sequence,
+        updatedAt: "2026-10-11T00:00:02.000Z",
+      }),
+    );
+    assert.deepStrictEqual(yield* openTurnRow, expected);
+
+    let throughSequence = second.sequence;
+    for (let index = 2; index < 40; index += 1) {
+      throughSequence = (yield* repository.append(turnEvent("continuation", index))).sequence;
+    }
+    const statements: string[] = [];
+    assert.isTrue(
+      yield* repository
+        .advanceConsumerCursorThrough({
+          consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+          throughSequence,
+          updatedAt: "2026-10-11T00:00:03.000Z",
+        })
+        .pipe(captureStatements(statements)),
+    );
+    assert.deepStrictEqual(yield* openTurnRow, expected);
+    const openTurnWrites = statements.filter((query) =>
+      query.includes("INSERT INTO provider_runtime_open_turns"),
+    );
+    assert.isAtMost(openTurnWrites.length, 1);
+    assert.isFalse(openTurnWrites.some((query) => query.includes("DO UPDATE")));
+  }).pipe(Effect.provide(Layer.fresh(freshRepository))),
+);
+
+it.effect("commits the ACK and open-turn removal even when journal retention fails", () =>
+  Effect.gen(function* () {
+    const repository = yield* ProviderRuntimeEventRepository;
+    const sql = yield* SqlClient.SqlClient;
+    const journalSize = Effect.map(
+      sql<{ readonly count: number }>`SELECT COUNT(*) AS count FROM provider_runtime_events`,
+      (rows) => rows[0]?.count ?? 0,
+    );
+    const openTurnCount = Effect.map(
+      sql<{ readonly count: number }>`SELECT COUNT(*) AS count FROM provider_runtime_open_turns`,
+      (rows) => rows[0]?.count ?? 0,
+    );
+    const terminalEvent = (turn: string, index: number): ProviderRuntimeEvent => ({
+      ...turnEvent(turn, index),
+      eventId: EventId.makeUnsafe(`bounded-${turn}-terminal`),
+      type: "turn.completed",
+      payload: { state: "completed" },
+    });
+    let last = 0;
+    for (let index = 0; index < PROVIDER_RUNTIME_EVENT_RETAIN_ACCEPTED + 40; index += 1) {
+      last = (yield* repository.append(turnEvent("blocked", index))).sequence;
+    }
+    assert.isTrue(
+      yield* repository.advanceConsumerCursorThrough({
+        consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+        throughSequence: last,
+        updatedAt: "2026-10-11T00:00:02.000Z",
+      }),
+    );
+    assert.strictEqual(yield* openTurnCount, 1);
+    const terminal = yield* repository.append(
+      terminalEvent("blocked", PROVIDER_RUNTIME_EVENT_RETAIN_ACCEPTED + 40),
+    );
+    const sizeBeforeTerminal = yield* journalSize;
+
+    yield* sql`CREATE TRIGGER fail_retention_delete BEFORE DELETE ON provider_runtime_events
+      BEGIN SELECT RAISE(ABORT, 'injected retention failure'); END`;
+    assert.isTrue(
+      yield* repository.advanceConsumerCursor({
+        consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+        eventSequence: terminal.sequence,
+        updatedAt: "2026-10-11T00:00:03.000Z",
+      }),
+    );
+    assert.strictEqual(
+      yield* repository.getConsumerCursor(PROVIDER_RUNTIME_INGESTION_CONSUMER),
+      terminal.sequence,
+    );
+    assert.strictEqual(yield* openTurnCount, 0);
+    assert.strictEqual(yield* journalSize, sizeBeforeTerminal);
+    yield* sql`DROP TRIGGER fail_retention_delete`;
+
+    yield* repository.append(turnEvent("after", 0));
+    const nextTerminal = yield* repository.append(terminalEvent("after", 1));
+    assert.isTrue(
+      yield* repository.advanceConsumerCursorThrough({
+        consumerName: PROVIDER_RUNTIME_INGESTION_CONSUMER,
+        throughSequence: nextTerminal.sequence,
+        updatedAt: "2026-10-11T00:00:04.000Z",
+      }),
+    );
+    assert.strictEqual(yield* journalSize, PROVIDER_RUNTIME_EVENT_RETAIN_ACCEPTED);
+  }).pipe(Effect.provide(Layer.fresh(freshRepository))),
+);

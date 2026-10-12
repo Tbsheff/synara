@@ -2661,6 +2661,7 @@ describe("OrchestrationEngine", () => {
     let shouldFailRequestedProjection = true;
     const flakyProjectionPipeline: OrchestrationProjectionPipelineShape = {
       bootstrap: Effect.void,
+      bootstrapInCurrentTransaction: Effect.succeed(Effect.void),
       projectMetadataEvent: () => Effect.void,
       projectEvent: () => Effect.void,
       projectHotEventInCurrentTransaction: (event) => {
@@ -2677,7 +2678,7 @@ describe("OrchestrationEngine", () => {
             }),
           );
         }
-        return Effect.void;
+        return Effect.succeed(Effect.void);
       },
     };
 
@@ -2812,6 +2813,7 @@ describe("OrchestrationEngine", () => {
     let shouldDieProjection = true;
     const defectiveProjectionPipeline: OrchestrationProjectionPipelineShape = {
       bootstrap: Effect.void,
+      bootstrapInCurrentTransaction: Effect.succeed(Effect.void),
       projectMetadataEvent: (event) => {
         if (
           shouldDieProjection &&
@@ -2823,7 +2825,7 @@ describe("OrchestrationEngine", () => {
         return Effect.void;
       },
       projectEvent: () => Effect.void,
-      projectHotEventInCurrentTransaction: () => Effect.void,
+      projectHotEventInCurrentTransaction: () => Effect.succeed(Effect.void),
     };
 
     const runtime = ManagedRuntime.make(
@@ -2925,6 +2927,7 @@ describe("OrchestrationEngine", () => {
     let shouldFailProjection = true;
     const flakyProjectionPipeline: OrchestrationProjectionPipelineShape = {
       bootstrap: Effect.void,
+      bootstrapInCurrentTransaction: Effect.succeed(Effect.void),
       projectMetadataEvent: () => Effect.void,
       projectEvent: () => Effect.void,
       projectHotEventInCurrentTransaction: (event) => {
@@ -2940,7 +2943,7 @@ describe("OrchestrationEngine", () => {
             }),
           );
         }
-        return Effect.void;
+        return Effect.succeed(Effect.void);
       },
     };
 
@@ -3208,12 +3211,13 @@ describe("OrchestrationEngine", () => {
     },
   );
 
-  it("restores the repair backup when rebuilt projectors do not reach the captured fence", async () => {
+  it("rolls back the repair when rebuilt projectors do not reach the captured fence", async () => {
     const nonAdvancingProjectionPipeline: OrchestrationProjectionPipelineShape = {
       bootstrap: Effect.void,
+      bootstrapInCurrentTransaction: Effect.succeed(Effect.void),
       projectMetadataEvent: () => Effect.void,
       projectEvent: () => Effect.void,
-      projectHotEventInCurrentTransaction: () => Effect.void,
+      projectHotEventInCurrentTransaction: () => Effect.succeed(Effect.void),
     };
     const runtime = ManagedRuntime.make(
       OrchestrationEngineLive.pipe(
@@ -3253,7 +3257,6 @@ describe("OrchestrationEngine", () => {
   });
 
   it("coalesces concurrent projection repairs and skips an immediate repeat", async () => {
-    let bootstrapCalls = 0;
     let repairBootstrapCalls = 0;
     let resolveBootstrapStarted: (() => void) | undefined;
     let releaseBootstrap: (() => void) | undefined;
@@ -3264,19 +3267,14 @@ describe("OrchestrationEngine", () => {
       releaseBootstrap = resolve;
     });
     const blockingProjectionPipeline: OrchestrationProjectionPipelineShape = {
-      bootstrap: Effect.sync(() => (bootstrapCalls += 1)).pipe(
-        Effect.flatMap((call) => {
-          if (call === 1) {
-            return Effect.void;
-          }
-          repairBootstrapCalls += 1;
-          resolveBootstrapStarted?.();
-          return Effect.promise(() => bootstrapGate);
-        }),
-      ),
+      bootstrap: Effect.void,
+      bootstrapInCurrentTransaction: Effect.sync(() => {
+        repairBootstrapCalls += 1;
+        resolveBootstrapStarted?.();
+      }).pipe(Effect.andThen(Effect.promise(() => bootstrapGate)), Effect.as(Effect.void)),
       projectMetadataEvent: () => Effect.void,
       projectEvent: () => Effect.void,
-      projectHotEventInCurrentTransaction: () => Effect.void,
+      projectHotEventInCurrentTransaction: () => Effect.succeed(Effect.void),
     };
     const runtime = ManagedRuntime.make(
       OrchestrationEngineLive.pipe(
