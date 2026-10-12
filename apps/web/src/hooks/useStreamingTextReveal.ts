@@ -167,6 +167,7 @@ function lastIndexAtOrBefore(sortedStarts: readonly number[], offset: number): n
 }
 
 export class StreamingTextRevealController {
+  private enabled = false;
   private text: string | null = null;
   private nodes: Text[] = [];
   private nodeStarts: number[] = [];
@@ -177,11 +178,15 @@ export class StreamingTextRevealController {
   private colors = new WeakMap<Element, string>();
 
   observe(root: HTMLElement, enabled: boolean): void {
+    this.enabled = enabled;
     this.root = root;
     this.colors = new WeakMap();
     if (!enabled) {
       this.text = null;
-      return;
+      if (this.schedule.fragments.length === 0) {
+        this.releaseIndex();
+        return;
+      }
     }
     this.nodes = visibleTextNodes(root);
     let offset = 0;
@@ -190,19 +195,32 @@ export class StreamingTextRevealController {
       offset += node.data.length;
       return start;
     });
-    const nextText = this.nodes.map((node) => node.data).join("");
-    if (this.text !== null) {
-      this.schedule = nextRevealSchedule(this.schedule, this.text, nextText, performance.now());
+    if (enabled) {
+      const nextText = this.nodes.map((node) => node.data).join("");
+      if (this.text !== null) {
+        this.schedule = nextRevealSchedule(this.schedule, this.text, nextText, performance.now());
+      }
+      this.text = nextText;
     }
-    this.text = nextText;
     this.paint(performance.now());
   }
 
   dispose(): void {
     if (this.frame) cancelAnimationFrame(this.frame);
     this.frame = 0;
+    this.enabled = false;
     this.schedule = emptyRevealSchedule();
     this.clearPainted();
+    this.releaseIndex();
+  }
+
+  private releaseIndex(): void {
+    this.text = null;
+    this.nodes = [];
+    this.nodeStarts = [];
+    this.root = null;
+    this.colors = new WeakMap();
+    this.schedule = emptyRevealSchedule();
   }
 
   private readonly tick = (now: number) => {
@@ -233,6 +251,7 @@ export class StreamingTextRevealController {
     const root = this.root;
     if (fragments.length === 0 || !root) {
       this.clearPainted();
+      if (!this.enabled) this.releaseIndex();
       return;
     }
     const nextPainted = new Map<Text, Map<number, PaintedRange>>();
@@ -298,10 +317,15 @@ export function useStreamingTextReveal(
 
   useLayoutEffect(() => {
     const root = rootRef.current;
+    if (reduceMotion) {
+      controllerRef.current?.dispose();
+      controllerRef.current = null;
+      return;
+    }
     if (!root || (!enabled && controllerRef.current === null)) return;
     controllerRef.current ??= new StreamingTextRevealController();
     controllerRef.current.observe(root, enabled);
-  }, [enabled, revision, rootRef]);
+  }, [enabled, reduceMotion, revision, rootRef]);
 
   useEffect(
     () => () => {
