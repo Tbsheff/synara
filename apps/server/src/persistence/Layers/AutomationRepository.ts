@@ -161,6 +161,8 @@ const decodeRun = Schema.decodeUnknownEffect(AutomationRun);
 /** Upper bound on how many run rows the list query returns to a client snapshot. */
 const MAX_RUN_LIST_ROWS = 500;
 
+const MAX_RETAINED_RUNS_PER_AUTOMATION = MAX_RUN_LIST_ROWS;
+
 class AutomationRunClaimRejected extends Error {}
 
 const ClaimAutomationIterationInput = Schema.Struct({
@@ -627,6 +629,45 @@ const makeAutomationRepository = Effect.gen(function* () {
                ${run.excludeProjectManaged ? sql`AND automation_id NOT IN (${projectManagedAutomationIds})` : sql``}
            )
       `,
+  });
+
+  const retiredRunIds = (automationId: string) => sql`
+    SELECT run_id FROM automation_runs
+        WHERE automation_id = ${automationId}
+          AND status IN ('succeeded', 'failed', 'cancelled', 'interrupted', 'skipped')
+          AND run_id NOT IN (
+            SELECT run_id
+            FROM automation_runs
+            WHERE automation_id = ${automationId}
+            ORDER BY scheduled_for DESC, run_id DESC
+            LIMIT ${MAX_RETAINED_RUNS_PER_AUTOMATION}
+          )
+          AND run_id NOT IN (
+            SELECT run_id
+            FROM automation_runs
+            WHERE automation_id = ${automationId}
+              AND finished_at IS NOT NULL
+            ORDER BY finished_at DESC, run_id DESC
+            LIMIT 1
+          )
+          AND run_id NOT IN (
+            SELECT run_id
+            FROM automation_pending_completion_evaluations
+            WHERE automation_id = ${automationId}
+          )
+  `;
+
+  const pruneRunHistoryRow = SqlSchema.void({
+    Request: Schema.Struct({ automationId: AutomationRun.fields.automationId }),
+    execute: ({ automationId }) =>
+      Effect.gen(function* () {
+        yield* sql`DELETE FROM automation_runs
+        WHERE trigger_type = 'manual' AND run_id IN (${retiredRunIds(automationId)})`;
+        yield* sql`UPDATE automation_runs SET result_json = NULL, error = NULL,
+        thread_create_command_id = NULL, turn_start_command_id = NULL, message_id = NULL
+        WHERE trigger_type = 'scheduled'
+          AND run_id IN (${retiredRunIds(automationId)})`;
+      }),
   });
 
   const getRunRowById = SqlSchema.findOneOption({
@@ -1759,30 +1800,36 @@ const makeAutomationRepository = Effect.gen(function* () {
       turnId: null,
       triggerType: run.trigger.type,
     }).pipe(Effect.mapError(toPersistenceSqlError("AutomationRepository.createRun:insert")));
+    const pruneHistory = pruneRunHistoryRow({ automationId: input.automationId }).pipe(
+      Effect.mapError(toPersistenceSqlError("AutomationRepository.createRun:pruneHistory")),
+    );
     // Scheduled runs dedupe on (automationId, scheduledFor) via INSERT OR IGNORE +
     // the partial unique index, so a re-run of the same occurrence returns the existing
     // row. Manual runs are never deduped and are read back by their own run id.
-    if (run.trigger.type === "scheduled") {
-      return inserted.pipe(
-        Effect.flatMap(() =>
-          getRunRowByOccurrence({
+    const readBack =
+      run.trigger.type === "scheduled"
+        ? getRunRowByOccurrence({
             automationId: input.automationId,
             scheduledFor: input.scheduledFor,
-          }).pipe(
-            Effect.mapError(toPersistenceSqlError("AutomationRepository.createRun:select")),
-            Effect.flatMap(decodeInsertedOrActiveThread),
+          })
+        : getRunRowById({ id: input.id });
+    return sql
+      .withTransaction(
+        inserted.pipe(
+          Effect.flatMap(() =>
+            readBack.pipe(
+              Effect.mapError(toPersistenceSqlError("AutomationRepository.createRun:select")),
+              Effect.flatMap(decodeInsertedOrActiveThread),
+            ),
           ),
+          Effect.tap(() => pruneHistory),
+        ),
+      )
+      .pipe(
+        Effect.catchTag("SqlError", (error) =>
+          Effect.fail(toPersistenceSqlError("AutomationRepository.createRun:transaction")(error)),
         ),
       );
-    }
-    return inserted.pipe(
-      Effect.flatMap(() =>
-        getRunRowById({ id: input.id }).pipe(
-          Effect.mapError(toPersistenceSqlError("AutomationRepository.createRun:select")),
-          Effect.flatMap(decodeInsertedOrActiveThread),
-        ),
-      ),
-    );
   };
 
   const createRunAndIncrementDefinition: AutomationRepositoryShape["createRunAndIncrementDefinition"] =
