@@ -535,6 +535,7 @@ interface ClaudeSessionContext {
 
 interface ClaudeStopSessionOptions {
   readonly emitExitEvent?: boolean;
+  readonly failureReason?: string;
   // A terminal SDK message is handled on the stream fiber itself. In that
   // path, closing the query lets the stream finish naturally; interrupting the
   // current fiber would abort teardown before the session is removed.
@@ -6576,10 +6577,10 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             provider: PROVIDER,
             createdAt: stamp.createdAt,
             threadId: context.session.threadId,
-            payload: {
-              reason: "Session stopped",
-              exitKind: "graceful",
-            },
+            payload:
+              options?.failureReason === undefined
+                ? { reason: "Session stopped", exitKind: "graceful" }
+                : { reason: options.failureReason, exitKind: "error" },
             providerRefs: {},
           });
         }
@@ -6625,7 +6626,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
     ) =>
       requestClaudeControl(threadId, method, request, {
         timeout: CLAUDE_DISPATCH_CONTROL_TIMEOUT,
-        retireUnresponsiveRuntime: stopSessionInternal(context),
+        retireUnresponsiveRuntime: stopSessionInternal(context, {
+          failureReason: `The Claude CLI did not answer ${method}.`,
+        }),
       });
 
     const requireSession = (

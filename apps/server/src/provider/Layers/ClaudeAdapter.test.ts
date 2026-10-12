@@ -13224,7 +13224,12 @@ describe("Claude explicit native compaction", () => {
         assert.include(result.failure.message, "turn/setPermissionMode");
       }
       assert.isAtLeast(stuckQuery.closeCalls, 1);
-      assert.lengthOf(Array.from(yield* Fiber.join(exitedFiber)), 1);
+      const exited = Array.from(yield* Fiber.join(exitedFiber))[0];
+      assert.equal(exited?.type, "session.exited");
+      if (exited?.type === "session.exited") {
+        assert.equal(exited.payload.exitKind, "error");
+        assert.include(exited.payload.reason, "turn/setPermissionMode");
+      }
 
       yield* adapter.startSession({
         threadId: THREAD_ID,
