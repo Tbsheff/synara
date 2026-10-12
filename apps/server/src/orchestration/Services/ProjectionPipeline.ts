@@ -29,6 +29,11 @@ export interface OrchestrationProjectionPipelineShape {
    */
   readonly bootstrap: Effect.Effect<void, ProjectionRepositoryError>;
 
+  readonly bootstrapInCurrentTransaction: Effect.Effect<
+    Effect.Effect<void>,
+    ProjectionRepositoryError
+  >;
+
   /**
    * Project a single orchestration event into projection repositories.
    *
@@ -50,7 +55,7 @@ export interface OrchestrationProjectionPipelineShape {
    */
   readonly projectHotEventInCurrentTransaction: (
     event: OrchestrationEvent,
-  ) => Effect.Effect<void, ProjectionRepositoryError>;
+  ) => Effect.Effect<Effect.Effect<void>, ProjectionRepositoryError>;
 
   /**
    * Project a single project metadata event while the caller already owns the
