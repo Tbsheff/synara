@@ -239,6 +239,7 @@ import {
   shouldRejectUntrustedRequestOrigin,
 } from "./trustedOrigins";
 import { bufferLiveUiStream, type LiveUiStreamDropReport } from "./wsStreamBackpressure";
+import { boundedSnapshotEventStream, boundedTerminalEventStream } from "./wsBoundedEventStreams";
 import {
   makeCursorSafeSnapshotLiveStream,
   makeResnapshotEscalationTracker,
@@ -2335,14 +2336,7 @@ const makeWsRpcHandlersLayer = () =>
           streamAdmission.guard(
             clientId,
             { key: "terminal.events" },
-            Stream.callback((queue) =>
-              Effect.gen(function* () {
-                const unsubscribe = yield* terminalManager.subscribe((event) => {
-                  Effect.runFork(Queue.offer(queue, event).pipe(Effect.asVoid));
-                });
-                yield* Effect.addFinalizer(() => Effect.sync(unsubscribe));
-              }),
-            ),
+            boundedTerminalEventStream(terminalManager.subscribe),
           ),
 
         [WS_METHODS.serverGetRuntimeStatus]: () =>
@@ -3148,20 +3142,23 @@ const makeWsRpcHandlersLayer = () =>
           streamAdmission.guard(
             clientId,
             { key: "automation.events" },
-            Stream.merge(
-              Stream.fromEffect(
-                automationService.list({}).pipe(
-                  Effect.map(({ definitions, runs, memories }) => ({
-                    type: "snapshot" as const,
-                    definitions,
-                    runs,
-                    memories,
-                  })),
+            boundedSnapshotEventStream(
+              Stream.merge(
+                Stream.fromEffect(
+                  automationService.list({}).pipe(
+                    Effect.map(({ definitions, runs, memories }) => ({
+                      type: "snapshot" as const,
+                      definitions,
+                      runs,
+                      memories,
+                    })),
+                  ),
                 ),
+                automationService.streamEvents,
+              ).pipe(
+                Stream.mapError((cause) => toWsRpcError(cause, "Automation event stream failed")),
               ),
-              automationService.streamEvents,
-            ).pipe(
-              Stream.mapError((cause) => toWsRpcError(cause, "Automation event stream failed")),
+              { label: "automation.events" },
             ),
           ),
         // Keep refusal handling for hosts that do not offer Tasks.
@@ -3178,8 +3175,11 @@ const makeWsRpcHandlersLayer = () =>
             ? streamAdmission.guard(
                 clientId,
                 { key: "todo.events" },
-                todoService.streamChanges.pipe(
-                  Stream.mapError((cause) => toWsRpcError(cause, "Task event stream failed")),
+                boundedSnapshotEventStream(
+                  todoService.streamChanges.pipe(
+                    Stream.mapError((cause) => toWsRpcError(cause, "Task event stream failed")),
+                  ),
+                  { label: "todo.events" },
                 ),
               )
             : Stream.fail(tasksUnavailableError()),
