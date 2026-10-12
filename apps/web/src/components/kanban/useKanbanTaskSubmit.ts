@@ -87,6 +87,7 @@ export function useKanbanTaskSubmit(input: UseKanbanTaskSubmitInput) {
   // Synchronous re-entry guard: repeated Cmd+Enter can fire before React flushes
   // the loading state, and two passes here would create two tasks.
   const isCreatingRef = useRef(false);
+  const pendingTaskRef = useRef<Parameters<typeof createAndSendKanbanTask>[0] | null>(null);
 
   const canCreate =
     selectedProjectId !== null &&
@@ -167,13 +168,20 @@ export function useKanbanTaskSubmit(input: UseKanbanTaskSubmitInput) {
     }
 
     setIsCreating(true);
-    void createAndSendKanbanTask({
+    const pendingTask = pendingTaskRef.current ?? {
       ...taskInput,
       defaultProvider,
       assistantDeliveryMode,
       providerOptions: providerOptionsForDispatch,
       ...(sendAsGoal ? { sendAsGoal: true as const } : {}),
       providerInstances,
+    };
+    pendingTaskRef.current = pendingTask;
+    void createAndSendKanbanTask({
+      ...pendingTask,
+      onThreadCreated: (threadId) => {
+        pendingTaskRef.current = { ...pendingTask, existingThreadId: threadId };
+      },
     })
       .then(({ threadId, result }) => {
         if (result.kind === "dispatched") {

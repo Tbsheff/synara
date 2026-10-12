@@ -5,7 +5,7 @@
 // Exports: drain gates, bounded retry state, exclusive per-thread send lock,
 //          locked-dispatch helper, steer-gate sharing, ChatView claim/release, watcher start
 
-import type { AssistantDeliveryMode, MessageId, ThreadId } from "@synara/contracts";
+import type { AssistantDeliveryMode, CommandId, MessageId, ThreadId } from "@synara/contracts";
 
 import {
   createLocalDispatchSnapshot,
@@ -20,8 +20,13 @@ import { derivePendingApprovals, derivePendingUserInputs, derivePhase } from "..
 import { useStore, type AppState } from "../store";
 import { getThreadFromState } from "../threadDerivation";
 import type { SessionPhase } from "../types";
-import { dispatchQueuedComposerTurnHeadless } from "./queuedComposerDispatch";
-import { newMessageId } from "./utils";
+import {
+  dispatchQueuedComposerTurnHeadless,
+  hasUnrestoredQueuedComposerAttachments,
+  releaseQueuedComposerDispatchAttempt,
+  restoreQueuedComposerChatTurnAttachments,
+} from "./queuedComposerDispatch";
+import { newCommandId, newMessageId } from "./utils";
 
 export interface QueuedComposerAutoDispatchGates {
   hasQueueableLiveTurn: boolean;
@@ -60,7 +65,11 @@ type QueuedComposerDispatchFn = (input: {
   queuedTurn: QueuedComposerTurn;
   dispatchMode: "queue" | "steer";
   assistantDeliveryMode: AssistantDeliveryMode;
+  computerControlEnabled?: boolean;
   messageId?: MessageId;
+  commandId?: CommandId;
+  createdAt?: string;
+  onOutcomeUnknown?: () => void;
 }) => Promise<boolean>;
 
 const claimedThreadIds = new Set<ThreadId>();
@@ -80,11 +89,47 @@ interface QueuedComposerRetryState {
 const QUEUED_COMPOSER_RETRY_DELAYS_MS = [1_000, 5_000, 15_000] as const;
 const retryStateByThreadId = new Map<ThreadId, QueuedComposerRetryState>();
 
+interface QueuedComposerDispatchAttempt {
+  readonly queuedTurnId: string;
+  readonly messageId: MessageId;
+  readonly commandId: CommandId;
+  readonly createdAt: string;
+}
+
+const uncertainAttemptByThreadId = new Map<ThreadId, QueuedComposerDispatchAttempt>();
+
+function dropUncertainAttempt(threadId: ThreadId): void {
+  const attempt = uncertainAttemptByThreadId.get(threadId);
+  if (!attempt) {
+    return;
+  }
+  uncertainAttemptByThreadId.delete(threadId);
+  releaseQueuedComposerDispatchAttempt(attempt.commandId);
+}
+
+function resolveDispatchAttempt(
+  threadId: ThreadId,
+  queuedTurnId: string,
+): QueuedComposerDispatchAttempt {
+  const uncertainAttempt = uncertainAttemptByThreadId.get(threadId);
+  if (uncertainAttempt?.queuedTurnId === queuedTurnId) {
+    return uncertainAttempt;
+  }
+  dropUncertainAttempt(threadId);
+  return {
+    queuedTurnId,
+    messageId: newMessageId(),
+    commandId: newCommandId(),
+    createdAt: new Date(nowMs()).toISOString(),
+  };
+}
+
 let drainStartCount = 0;
 let stopDrainSubscriptions: (() => void) | null = null;
 let tickScheduled = false;
 let drainWakeTimer: ReturnType<typeof setTimeout> | null = null;
 let assistantDeliveryMode: AssistantDeliveryMode = "streaming";
+let computerControlEnabled = false;
 let dispatchQueuedTurn: QueuedComposerDispatchFn = dispatchQueuedComposerTurnHeadless;
 let nowMs: () => number = () => Date.now();
 
@@ -151,6 +196,55 @@ export function setQueuedComposerDrainAssistantDeliveryMode(nextMode: AssistantD
   assistantDeliveryMode = nextMode;
 }
 
+const restoringQueuedTurnIds = new Set<string>();
+
+function restorePersistedQueuedComposerAttachments(
+  draftsByThreadId: ReturnType<typeof useComposerDraftStore.getState>["draftsByThreadId"],
+): void {
+  for (const [threadId, draft] of Object.entries(draftsByThreadId)) {
+    for (const queuedTurn of draft.queuedTurns) {
+      if (
+        queuedTurn.kind !== "chat" ||
+        restoringQueuedTurnIds.has(queuedTurn.id) ||
+        !hasUnrestoredQueuedComposerAttachments(queuedTurn)
+      ) {
+        continue;
+      }
+      restoringQueuedTurnIds.add(queuedTurn.id);
+      void restoreQueuedComposerChatTurnAttachments(queuedTurn)
+        .then(({ turn: restoredTurn }) => {
+          if (restoredTurn === queuedTurn) {
+            return;
+          }
+          useComposerDraftStore.setState((state) => {
+            const current = state.draftsByThreadId[threadId as ThreadId];
+            if (!current?.queuedTurns.includes(queuedTurn)) {
+              return state;
+            }
+            return {
+              draftsByThreadId: {
+                ...state.draftsByThreadId,
+                [threadId]: {
+                  ...current,
+                  queuedTurns: current.queuedTurns.map((entry) =>
+                    entry === queuedTurn ? restoredTurn : entry,
+                  ),
+                },
+              },
+            };
+          });
+        })
+        .catch((error: unknown) => {
+          console.warn("[composer-queue] Could not restore queued attachments", error);
+        });
+    }
+  }
+}
+
+export function setQueuedComposerDrainComputerControlEnabled(enabled: boolean): void {
+  computerControlEnabled = enabled;
+}
+
 export function startQueuedComposerDrainWatcher(options?: {
   dispatch?: QueuedComposerDispatchFn;
   now?: () => number;
@@ -171,6 +265,7 @@ export function startQueuedComposerDrainWatcher(options?: {
       if (!haveQueuedTurnsChanged(current.draftsByThreadId, previous.draftsByThreadId)) {
         return;
       }
+      restorePersistedQueuedComposerAttachments(current.draftsByThreadId);
       resetRetriesForChangedQueueHeads(current.draftsByThreadId);
       requestQueuedComposerDrainPass();
     });
@@ -185,6 +280,7 @@ export function startQueuedComposerDrainWatcher(options?: {
       unsubscribeDrafts();
       unsubscribeStore();
     };
+    restorePersistedQueuedComposerAttachments(useComposerDraftStore.getState().draftsByThreadId);
     requestQueuedComposerDrainPass();
   }
   return () => {
@@ -221,6 +317,10 @@ export function resetQueuedComposerDrainForTests(): void {
   steerGatesByThreadId.clear();
   awaitingTurnStartsByThreadId.clear();
   retryStateByThreadId.clear();
+  restoringQueuedTurnIds.clear();
+  for (const threadId of uncertainAttemptByThreadId.keys()) {
+    dropUncertainAttempt(threadId);
+  }
   drainStartCount = 0;
   stopDrainSubscriptions?.();
   stopDrainSubscriptions = null;
@@ -230,6 +330,7 @@ export function resetQueuedComposerDrainForTests(): void {
   }
   tickScheduled = false;
   assistantDeliveryMode = "streaming";
+  computerControlEnabled = false;
   dispatchQueuedTurn = dispatchQueuedComposerTurnHeadless;
   nowMs = () => Date.now();
 }
@@ -276,6 +377,11 @@ function resetRetriesForChangedQueueHeads(
     const queuedTurnId = draftsByThreadId[threadId]?.queuedTurns[0]?.id;
     if (queuedTurnId !== retryState.queuedTurnId) {
       retryStateByThreadId.delete(threadId);
+    }
+  }
+  for (const [threadId, attempt] of uncertainAttemptByThreadId) {
+    if (draftsByThreadId[threadId]?.queuedTurns[0]?.id !== attempt.queuedTurnId) {
+      dropUncertainAttempt(threadId);
     }
   }
 }
@@ -556,7 +662,8 @@ function runQueuedComposerDrainPass(): void {
       continue;
     }
     const thread = getThreadFromState(useStore.getState(), threadId);
-    const messageId = newMessageId();
+    const attempt = resolveDispatchAttempt(threadId, nextQueuedTurn.id);
+    const messageId = attempt.messageId;
     const localDispatch = {
       ...createLocalDispatchSnapshot(thread, { expectedUserMessageId: messageId }),
       startedAt: new Date(nowMs()).toISOString(),
@@ -564,14 +671,26 @@ function runQueuedComposerDrainPass(): void {
     void runLockedQueuedComposerAutoDispatch({
       threadId,
       run: async () => {
+        let outcomeUnknown = false;
         const succeeded = await dispatchQueuedTurn({
           threadId,
           queuedTurn: nextQueuedTurn,
           dispatchMode: "queue",
           assistantDeliveryMode,
+          computerControlEnabled,
           messageId,
+          commandId: attempt.commandId,
+          createdAt: attempt.createdAt,
+          onOutcomeUnknown: () => {
+            outcomeUnknown = true;
+          },
         });
         const acceptedReview = getThreadFromState(useStore.getState(), threadId)?.claudeCacheReview;
+        if (succeeded || acceptedReview?.messageId === messageId || !outcomeUnknown) {
+          dropUncertainAttempt(threadId);
+        } else {
+          uncertainAttemptByThreadId.set(threadId, attempt);
+        }
         if (succeeded || acceptedReview?.messageId === messageId) {
           retryStateByThreadId.delete(threadId);
           awaitingTurnStartsByThreadId.set(threadId, localDispatch);

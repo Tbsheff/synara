@@ -8,12 +8,14 @@ import { useEffect } from "react";
 import { resolveAssistantDeliveryMode, useAppSettings } from "../appSettings";
 import {
   setQueuedComposerDrainAssistantDeliveryMode,
+  setQueuedComposerDrainComputerControlEnabled,
   startQueuedComposerDrainWatcher,
 } from "../lib/queuedComposerDrain";
 
 export function QueuedComposerDrainCoordinator() {
   const { settings } = useAppSettings();
   const assistantDeliveryMode = resolveAssistantDeliveryMode(settings);
+  const computerControlEnabled = settings.computerControlEnabled;
 
   useEffect(() => {
     return startQueuedComposerDrainWatcher();
@@ -22,6 +24,10 @@ export function QueuedComposerDrainCoordinator() {
   useEffect(() => {
     setQueuedComposerDrainAssistantDeliveryMode(assistantDeliveryMode);
   }, [assistantDeliveryMode]);
+
+  useEffect(() => {
+    setQueuedComposerDrainComputerControlEnabled(computerControlEnabled);
+  }, [computerControlEnabled]);
 
   return null;
 }

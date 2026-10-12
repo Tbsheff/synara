@@ -78,6 +78,8 @@ vi.mock("./composerSend", async () => {
       }) => {
         nativeApiMocks.stagedUploads.push(input);
         return {
+          attachments: [],
+          commit: vi.fn(),
           runWithDispatch: nativeApiMocks.runWithDispatch,
           cleanup: nativeApiMocks.cleanup,
         };
@@ -507,4 +509,34 @@ describe("kanbanDispatch oversized prompts and pasted text", () => {
     expect(turnStart?.message.text).toBe("short prompt");
     expect(lastStagedFile()).toBeUndefined();
   });
+});
+
+it("reuses the exact Kanban turn and uploaded files after an unknown outcome", async () => {
+  resetComposerDraftStore();
+  const threadId = ThreadId.makeUnsafe("kanban-unknown-retry");
+  const projectId = ProjectId.makeUnsafe("kanban-retry-project");
+  useComposerDraftStore.getState().setPrompt(threadId, "Task with retry");
+  nativeApiMocks.dispatchCommand.mockReset();
+  nativeApiMocks.stagedUploads.length = 0;
+  nativeApiMocks.cleanup.mockClear();
+  const interrupted = { _tag: "WsTransportRequestInterruptedError", code: "WS_REQUEST_TIMEOUT" };
+  nativeApiMocks.dispatchCommand.mockRejectedValueOnce(interrupted).mockResolvedValue(undefined);
+  const input = {
+    threadId,
+    projectId,
+    thread: { id: threadId, projectId } as unknown as SidebarThreadSummary,
+    defaultProvider: "codex" as const,
+    assistantDeliveryMode: "buffered" as const,
+  };
+  expect((await dispatchKanbanDraftThread(input)).kind).toBe("error");
+  expect(nativeApiMocks.cleanup).not.toHaveBeenCalled();
+  useComposerDraftStore.getState().setPrompt(threadId, "New text typed after send");
+  expect((await dispatchKanbanDraftThread(input)).kind).toBe("dispatched");
+  expect(nativeApiMocks.dispatchCommand.mock.calls[1]?.[0]).toEqual(
+    nativeApiMocks.dispatchCommand.mock.calls[0]?.[0],
+  );
+  expect(nativeApiMocks.stagedUploads).toHaveLength(1);
+  expect(useComposerDraftStore.getState().draftsByThreadId[threadId]?.prompt).toBe(
+    "New text typed after send",
+  );
 });

@@ -84,3 +84,14 @@ describe("createAndSendKanbanTask send-as-goal routing", () => {
     );
   });
 });
+
+it("reuses an existing task and reports its identity before dispatch throws", async () => {
+  const first = await createAndSendKanbanTask(BASE_INPUT);
+  const onThreadCreated = vi.fn();
+  harness.dispatch.mockRejectedValueOnce(new Error("send failed"));
+  await expect(
+    createAndSendKanbanTask({ ...BASE_INPUT, existingThreadId: first.threadId, onThreadCreated }),
+  ).rejects.toThrow("send failed");
+  expect(onThreadCreated).toHaveBeenCalledWith(first.threadId);
+  expect(harness.dispatch.mock.calls.at(-1)?.[0].threadId).toBe(first.threadId);
+});
