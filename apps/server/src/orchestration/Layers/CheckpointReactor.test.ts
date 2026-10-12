@@ -578,9 +578,7 @@ describe("CheckpointReactor", () => {
     const baseline = checkpointRefForThreadTurn(threadId, 0);
     const rescue = checkpointRefForThreadRevertRescue(threadId, "retention-rescue");
     for (const checkpointRef of [oldRef, startRef, messageRef, baseline, rescue]) {
-      await Effect.runPromise(
-        harness.checkpointStore.captureCheckpoint({ cwd: harness.cwd, checkpointRef }),
-      );
+      runGit(harness.cwd, ["update-ref", checkpointRef, "HEAD"]);
     }
     await runtime!.runPromise(
       Effect.gen(function* () {
