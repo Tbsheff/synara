@@ -1036,7 +1036,7 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
       providerHandoff ||
       hasTypedDetails ||
       workEntry.toolDetails ||
-      workEntry.liveActivity,
+      (workEntry.liveActivity && !canOpenReadFile),
     );
   const openReadFile = readFilePath
     ? () => openWorkspaceFileReference(opener, readFilePath)

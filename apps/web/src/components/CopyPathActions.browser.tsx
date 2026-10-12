@@ -72,6 +72,7 @@ function restoreProperty(
 function fileDiff(path: string): FileDiffMetadata {
   return {
     cacheKey: `diff:${path}`,
+    type: "change",
     name: `b/${path}`,
     prevName: `a/${path}`,
   } as FileDiffMetadata;

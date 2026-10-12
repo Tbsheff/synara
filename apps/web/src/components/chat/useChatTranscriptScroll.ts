@@ -147,6 +147,7 @@ export function useChatTranscriptScroll({
   const pendingScrollGestureFrameRef = useRef<number | null>(null);
   const pointerPressHoldsDetachRef = useRef(false);
   const disclosureDetachScrollTopRef = useRef<number | null>(null);
+  const detachedScrollPositionRef = useRef<{ scrollTop: number; endPx: number } | null>(null);
   const cancelPendingScrollGesture = useCallback(() => {
     const frameId = pendingScrollGestureFrameRef.current;
     if (frameId !== null) window.cancelAnimationFrame(frameId);
@@ -225,6 +226,13 @@ export function useChatTranscriptScroll({
       // A user scroll gesture takes over from any in-flight tail-anchor slide.
       tailAnchorScrollInFlightRef.current = false;
       const container = legendListRef.current?.getScrollableNode();
+      detachedScrollPositionRef.current =
+        container instanceof HTMLElement
+          ? {
+              scrollTop: container.scrollTop,
+              endPx: container.scrollHeight - container.clientHeight,
+            }
+          : null;
       const detached =
         container instanceof HTMLElement && container.scrollHeight > container.clientHeight + 1;
       if (detached !== isUserScrollDetachedRef.current) {
@@ -503,10 +511,7 @@ export function useChatTranscriptScroll({
     if (
       canResumeTranscriptFollow({
         detached: isUserScrollDetachedRef.current,
-        atEnd:
-          state?.isAtEnd === true &&
-          container instanceof HTMLElement &&
-          isScrollContainerNearBottom(container, 1),
+        atEnd: container instanceof HTMLElement && isScrollContainerNearBottom(container, 1),
         userGesture: true,
       })
     )
@@ -519,7 +524,33 @@ export function useChatTranscriptScroll({
     if (container instanceof HTMLElement && hasSelectionInside(container)) return;
     releaseTranscriptScrollGesture();
   }, [legendListRef, releaseTranscriptScrollGesture]);
-  const onMessagesScrollBase = useCallback(() => {}, []);
+  const onMessagesScrollBase = useCallback(() => {
+    const container = legendListRef.current?.getScrollableNode();
+    if (!(container instanceof HTMLElement) || !isUserScrollDetachedRef.current) return;
+    const previous = detachedScrollPositionRef.current;
+    const current = {
+      scrollTop: container.scrollTop,
+      endPx: container.scrollHeight - container.clientHeight,
+    };
+    detachedScrollPositionRef.current = current;
+    const movedTowardEnd =
+      previous !== null &&
+      current.scrollTop - previous.scrollTop >
+        Math.max(0, current.endPx - previous.endPx) + FOLLOW_ZONE_PX;
+    if (
+      !movedTowardEnd ||
+      pointerPressHoldsDetachRef.current ||
+      hasSelectionInside(container) ||
+      !canResumeTranscriptFollow({
+        detached: true,
+        atEnd: isScrollContainerNearBottom(container, 1),
+        userGesture: true,
+      })
+    )
+      return;
+    setTranscriptScrollDetached(false);
+    onIsAtEndChange(true);
+  }, [legendListRef, onIsAtEndChange, setTranscriptScrollDetached]);
   const onMessagesTouchEndBase = useCallback(() => {
     followEvidenceRef.current.touchActive = false;
     followEvidenceRef.current.lastTouchEndAt = performance.now();
