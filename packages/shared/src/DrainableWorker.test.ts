@@ -174,6 +174,29 @@ describe("makeDrainableWorker", () => {
     }),
   );
 
+  it.live("contains an item interruption without losing its only consumer", () =>
+    Effect.gen(function* () {
+      const scope = yield* Scope.make();
+      const processed: string[] = [];
+      const worker = yield* makeDrainableWorker((item: string) =>
+        item === "interrupt"
+          ? Effect.interrupt
+          : Effect.sync(() => {
+              processed.push(item);
+            }),
+      ).pipe(Effect.provideService(Scope.Scope, scope));
+
+      yield* worker.enqueue("interrupt");
+      yield* worker.enqueue("follower");
+      const drained = yield* worker.drain.pipe(Effect.timeoutOption("300 millis"));
+      if (drained._tag === "Some") yield* Scope.close(scope, Exit.void);
+
+      expect(drained._tag).toBe("Some");
+      expect(processed).toEqual(["follower"]);
+      expect(yield* worker.status).toMatchObject({ phase: "stopped", outstanding: 0 });
+    }),
+  );
+
   it.live("stops producer subscriptions before draining accepted work", () =>
     Effect.scoped(
       Effect.gen(function* () {

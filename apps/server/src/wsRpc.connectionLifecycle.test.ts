@@ -22,7 +22,7 @@ import {
 } from "@synara/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Deferred, Duration, Effect, Exit, Layer, Schema, Scope, Stream } from "effect";
-import { HttpRouter, HttpServerRequest } from "effect/unstable/http";
+import { Headers, HttpRouter, HttpServerRequest } from "effect/unstable/http";
 import { Rpc, RpcGroup, RpcSerialization, RpcServer } from "effect/unstable/rpc";
 import { afterEach, describe, expect, it } from "vitest";
 import WebSocket, { type RawData } from "ws";
@@ -44,6 +44,7 @@ import {
   makeWebsocketNegotiationRouteLayer,
   makeWebsocketRpcRouteLayer,
   WS_NEGOTIATED_REVISION_HEADER,
+  wsFeatureRpcSerialization,
 } from "./wsRpc";
 import {
   makeWsConnectionSessions,
@@ -70,7 +71,20 @@ const BudgetStreamRpc = Rpc.make("test.budget-stream", {
   error: WsRpcError,
   stream: true,
 });
-const PingRpcGroup = RpcGroup.make(PingRpc, SlowRpc, WsGitRunStackedActionRpc, BudgetStreamRpc);
+const SessionHeadersRpc = Rpc.make("test.session-headers", {
+  payload: Schema.Struct({}),
+  success: Schema.Struct({
+    sessionKey: Schema.NullOr(Schema.String),
+    negotiatedRevision: Schema.NullOr(Schema.String),
+  }),
+});
+const PingRpcGroup = RpcGroup.make(
+  PingRpc,
+  SlowRpc,
+  WsGitRunStackedActionRpc,
+  BudgetStreamRpc,
+  SessionHeadersRpc,
+);
 
 interface RunningTestServer {
   readonly origin: string;
@@ -267,10 +281,10 @@ async function startTestServer(): Promise<RunningTestServer> {
   const observedRpc = { decoderCalls: 0, handlerCalls: 0 };
   const observedSlowRpc = { started: 0, completed: 0, finalized: 0 };
   const serializationLayer = Layer.succeed(RpcSerialization.RpcSerialization, {
-    contentType: RpcSerialization.json.contentType,
-    includesFraming: RpcSerialization.json.includesFraming,
+    contentType: wsFeatureRpcSerialization.contentType,
+    includesFraming: wsFeatureRpcSerialization.includesFraming,
     makeUnsafe: () => {
-      const parser = RpcSerialization.json.makeUnsafe();
+      const parser = wsFeatureRpcSerialization.makeUnsafe();
       return {
         decode: (data: Uint8Array | string) => {
           observedRpc.decoderCalls += 1;
@@ -379,6 +393,11 @@ async function startTestServer(): Promise<RunningTestServer> {
             ),
           );
         },
+        "test.session-headers": (_input: {}, { headers }: { readonly headers: Headers.Headers }) =>
+          Effect.succeed({
+            sessionKey: Headers.get(headers, WS_CONNECTION_SESSION_HEADER) ?? null,
+            negotiatedRevision: Headers.get(headers, WS_NEGOTIATED_REVISION_HEADER) ?? null,
+          }),
         "test.ping": (_input: { readonly label: string }) =>
           Effect.sync(() => {
             observedRpc.handlerCalls += 1;
@@ -987,6 +1006,64 @@ describe("websocketRpcRouteLayer connection lifecycle", () => {
       await waitForClose(socket);
       await waitForObserved(() => server.connectionSessions.lookup(sessionKey) === undefined);
       expect(interests.accepts(sessionKey, event)).toBe(false);
+    } finally {
+      await server.close();
+    }
+  }, 4_000);
+
+  it("ignores client RPC headers that try to replace server-set connection headers", async () => {
+    const server = await startTestServer();
+    try {
+      const issued = await Effect.runPromise(server.sessions.issue({ role: "client" }));
+      const websocket = await Effect.runPromise(
+        server.sessions.issueWebSocketToken(issued.sessionId),
+      );
+      const socket = await connect(featureSocketUrl(server, websocket.token));
+      expect(server.observedConnectionSessionKeys).toHaveLength(1);
+      const sessionKey = server.observedConnectionSessionKeys[0]!;
+
+      const exitFrame = new Promise<Record<string, unknown>>((resolve, reject) => {
+        const timeout = setTimeout(
+          () => reject(new Error("Timed out waiting for RPC exit")),
+          2_000,
+        );
+        socket.on("message", (data: RawData) => {
+          const frame = JSON.parse(data.toString()) as Record<string, unknown>;
+          if (frame._tag !== "Exit" || String(frame.requestId) !== "701") return;
+          clearTimeout(timeout);
+          resolve(frame);
+        });
+      });
+      socket.send(
+        JSON.stringify({
+          _tag: "Request",
+          id: "701",
+          tag: "test.session-headers",
+          payload: {},
+          headers: [
+            ["X-Synara-WS-Connection-Session", "forged-session-key"],
+            [WS_CONNECTION_SESSION_HEADER, "forged-lowercase-key"],
+            ["X-Synara-Negotiated-Protocol-Revision", "999"],
+            ["x-trace", "kept"],
+          ],
+        }),
+      );
+
+      expect(await exitFrame).toMatchObject({
+        exit: {
+          _tag: "Success",
+          value: {
+            sessionKey,
+            negotiatedRevision: String(WS_PROTOCOL_MAX_REVISION),
+          },
+        },
+      });
+      expect(server.connectionSessions.lookup(sessionKey)).toEqual({
+        role: "client",
+        attachmentPrincipal: { ownerKind: "session", ownerId: issued.sessionId },
+      });
+      socket.close();
+      await waitForClose(socket);
     } finally {
       await server.close();
     }

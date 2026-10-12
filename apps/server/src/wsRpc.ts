@@ -163,8 +163,12 @@ import {
 import { makeDispatchCommandNormalizer } from "./orchestration/dispatchCommandNormalization";
 import {
   coalescedLiveToolOutputStream,
+  DEFAULT_LIVE_UPDATE_BUFFER_LIMITS,
+  LatestLiveUpdates,
   LiveToolOutputHub,
   type LiveToolOutputHubShape,
+  type LiveUpdateBufferLimits,
+  liveUpdateBufferOverflowError,
 } from "./orchestration/liveToolOutput";
 import { sanitizeOrchestrationEventProviderOptions } from "./orchestration/providerOptionsSecurity";
 import { prepareQuitResume } from "./orchestration/quitResume";
@@ -224,6 +228,7 @@ import {
   WS_CONNECTION_SESSION_HEADER,
   WsConnectionSessions,
   WsConnectionSessionsLive,
+  withoutClientReservedRpcHeaders,
   type WsConnectionSession,
 } from "./wsConnectionSessions";
 import {
@@ -238,6 +243,7 @@ import {
   shouldRejectUntrustedRequestOrigin,
 } from "./trustedOrigins";
 import { bufferLiveUiStream, type LiveUiStreamDropReport } from "./wsStreamBackpressure";
+import { boundedSnapshotEventStream, boundedTerminalEventStream } from "./wsBoundedEventStreams";
 import {
   makeCursorSafeSnapshotLiveStream,
   makeResnapshotEscalationTracker,
@@ -278,6 +284,13 @@ class WsRequestAdmissionMiddleware extends RpcMiddleware.Service<WsRequestAdmiss
 // handler map.
 export const WS_NEGOTIATED_REVISION_HEADER = "x-synara-negotiated-protocol-revision";
 
+export const WS_CONNECTION_SESSION_REQUIRED_CODE = "WS_CONNECTION_SESSION_REQUIRED";
+
+export const wsFeatureRpcSerialization = withoutClientReservedRpcHeaders(RpcSerialization.json, [
+  WS_CONNECTION_SESSION_HEADER,
+  WS_NEGOTIATED_REVISION_HEADER,
+]);
+
 export function negotiatedRevisionFromHeaders(headers: Headers.Headers): number {
   const revision = Number(Headers.get(headers, WS_NEGOTIATED_REVISION_HEADER) ?? Number.NaN);
   return Number.isSafeInteger(revision) ? revision : 0;
@@ -294,32 +307,36 @@ type ThreadOrLiveItem =
   | { readonly source: "live"; readonly live: ThreadLiveUpdate };
 
 interface LiveGateState {
-  readonly threadItemSeen: boolean;
-  readonly heldLive: ReadonlyMap<string, ThreadLiveUpdate>;
+  threadItemSeen: boolean;
+  readonly heldLive: LatestLiveUpdates;
 }
 
 function gateLiveUntilFirstThreadItem(
+  threadId: ThreadId,
   state: LiveGateState,
   next: ThreadOrLiveItem,
-): readonly [LiveGateState, ReadonlyArray<OrchestrationThreadStreamItem>] {
+): Effect.Effect<
+  readonly [LiveGateState, ReadonlyArray<OrchestrationThreadStreamItem>],
+  WsRpcError
+> {
   if (next.source === "thread") {
     const released = state.threadItemSeen
       ? []
-      : [...state.heldLive.values()].map(
-          (live): OrchestrationThreadStreamItem => ({ kind: "live", live }),
-        );
-    return [
-      { threadItemSeen: true, heldLive: new Map() },
+      : state.heldLive
+          .takeAll()
+          .map((live): OrchestrationThreadStreamItem => ({ kind: "live", live }));
+    state.threadItemSeen = true;
+    return Effect.succeed([
+      state,
       isClientThreadStreamItem(next.item) ? [next.item, ...released] : released,
-    ];
+    ]);
   }
   if (state.threadItemSeen) {
-    return [state, [{ kind: "live", live: next.live }]];
+    return Effect.succeed([state, [{ kind: "live", live: next.live }]]);
   }
-  const heldLive = new Map(state.heldLive);
-  heldLive.delete(next.live.itemId);
-  heldLive.set(next.live.itemId, next.live);
-  return [{ threadItemSeen: false, heldLive }, []];
+  return state.heldLive.trySet(next.live)
+    ? Effect.succeed([state, []])
+    : Effect.fail(liveUpdateBufferOverflowError(threadId));
 }
 
 export function withoutResumedMarker<E, R>(
@@ -332,17 +349,18 @@ export function withLiveToolOutputItems<E, R>(
   items: Stream.Stream<ThreadStreamOutput, E, R>,
   hub: LiveToolOutputHubShape,
   threadId: ThreadId,
-): Stream.Stream<OrchestrationThreadStreamItem, E, R> {
+  limits: LiveUpdateBufferLimits = DEFAULT_LIVE_UPDATE_BUFFER_LIMITS,
+): Stream.Stream<OrchestrationThreadStreamItem, E | WsRpcError, R> {
   return Stream.merge(
     items.pipe(Stream.map((item): ThreadOrLiveItem => ({ source: "thread", item }))),
-    coalescedLiveToolOutputStream(hub, threadId).pipe(
+    coalescedLiveToolOutputStream(hub, threadId, limits).pipe(
       Stream.map((live): ThreadOrLiveItem => ({ source: "live", live })),
     ),
     { haltStrategy: "left" },
   ).pipe(
-    Stream.mapAccum(
-      (): LiveGateState => ({ threadItemSeen: false, heldLive: new Map() }),
-      gateLiveUntilFirstThreadItem,
+    Stream.mapAccumEffect(
+      (): LiveGateState => ({ threadItemSeen: false, heldLive: new LatestLiveUpdates(limits) }),
+      (state, next) => gateLiveUntilFirstThreadItem(threadId, state, next),
     ),
   );
 }
@@ -400,10 +418,19 @@ const wsRequestAdmissionMiddlewareLayer = Layer.effect(
       // Handler fibers descend from the RPC server fiber (forked at layer build),
       // not from the connection's HTTP upgrade fiber, so connection-scoped
       // services must be re-provided here from the connection-session registry.
-      const scoped = provideWsConnectionSession(
-        effect,
-        connectionSessions.lookup(Headers.get(options.headers, WS_CONNECTION_SESSION_HEADER)),
+      const session = connectionSessions.lookup(
+        Headers.get(options.headers, WS_CONNECTION_SESSION_HEADER),
       );
+      if (!session) {
+        return Effect.fail(
+          new WsRpcError({
+            message: "The request has no authenticated connection session.",
+            code: WS_CONNECTION_SESSION_REQUIRED_CODE,
+            retryable: false,
+          }),
+        );
+      }
+      const scoped = provideWsConnectionSession(effect, session);
       return RpcSchema.isStreamSchema(options.rpc.successSchema)
         ? scoped
         : admission.guard(options.clientId, options.rpc._tag, scoped);
@@ -736,7 +763,7 @@ const makeWsRpcHandlersLayer = () =>
         negotiatedRevision: number,
         threadId: ThreadId,
         items: Stream.Stream<ThreadStreamOutput, E, R>,
-      ): Stream.Stream<OrchestrationThreadStreamItem, E, R> =>
+      ): Stream.Stream<OrchestrationThreadStreamItem, E | WsRpcError, R> =>
         negotiatedRevision >= WS_THREAD_LIVE_ITEMS_MIN_REVISION
           ? withLiveToolOutputItems(items, liveToolOutputHub, threadId)
           : withoutResumedMarker(items);
@@ -2315,19 +2342,10 @@ const makeWsRpcHandlersLayer = () =>
             "Failed to close terminal",
           ),
         [WS_METHODS.subscribeTerminalEvents]: (_, { clientId }) =>
-          // Terminal output is an ordered byte stream with renderer ACK accounting.
-          // Keep this lossless: dropping chunks would create holes until reattach.
           streamAdmission.guard(
             clientId,
             { key: "terminal.events" },
-            Stream.callback((queue) =>
-              Effect.gen(function* () {
-                const unsubscribe = yield* terminalManager.subscribe((event) => {
-                  Effect.runFork(Queue.offer(queue, event).pipe(Effect.asVoid));
-                });
-                yield* Effect.addFinalizer(() => Effect.sync(unsubscribe));
-              }),
-            ),
+            boundedTerminalEventStream(terminalManager.subscribe),
           ),
 
         [WS_METHODS.serverGetRuntimeStatus]: () =>
@@ -3133,20 +3151,23 @@ const makeWsRpcHandlersLayer = () =>
           streamAdmission.guard(
             clientId,
             { key: "automation.events" },
-            Stream.merge(
-              Stream.fromEffect(
-                automationService.list({}).pipe(
-                  Effect.map(({ definitions, runs, memories }) => ({
-                    type: "snapshot" as const,
-                    definitions,
-                    runs,
-                    memories,
-                  })),
+            boundedSnapshotEventStream(
+              Stream.merge(
+                Stream.fromEffect(
+                  automationService.list({}).pipe(
+                    Effect.map(({ definitions, runs, memories }) => ({
+                      type: "snapshot" as const,
+                      definitions,
+                      runs,
+                      memories,
+                    })),
+                  ),
                 ),
+                automationService.streamEvents,
+              ).pipe(
+                Stream.mapError((cause) => toWsRpcError(cause, "Automation event stream failed")),
               ),
-              automationService.streamEvents,
-            ).pipe(
-              Stream.mapError((cause) => toWsRpcError(cause, "Automation event stream failed")),
+              { label: "automation.events" },
             ),
           ),
         // Keep refusal handling for hosts that do not offer Tasks.
@@ -3163,8 +3184,11 @@ const makeWsRpcHandlersLayer = () =>
             ? streamAdmission.guard(
                 clientId,
                 { key: "todo.events" },
-                todoService.streamChanges.pipe(
-                  Stream.mapError((cause) => toWsRpcError(cause, "Task event stream failed")),
+                boundedSnapshotEventStream(
+                  todoService.streamChanges.pipe(
+                    Stream.mapError((cause) => toWsRpcError(cause, "Task event stream failed")),
+                  ),
+                  { label: "todo.events" },
                 ),
               )
             : Stream.fail(tasksUnavailableError()),
@@ -3256,7 +3280,11 @@ const makeRpcWebSocketHttpEffect = Effect.gen(function* () {
   // Keep handler-owned jobs alive for the HTTP server lifetime. Effect.provide
   // with a Layer would close its build scope as soon as this constructor returns.
   const handlers = yield* Layer.buildWithScope(
-    makeWsRpcLayer().pipe(Layer.provideMerge(RpcSerialization.layerJson)),
+    makeWsRpcLayer().pipe(
+      Layer.provideMerge(
+        Layer.succeed(RpcSerialization.RpcSerialization, wsFeatureRpcSerialization),
+      ),
+    ),
     yield* Effect.scope,
   );
   return yield* RpcServer.toHttpEffectWebsocket(AdmittedWsFeatureRpcGroup, {

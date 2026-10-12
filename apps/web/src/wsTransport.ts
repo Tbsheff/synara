@@ -871,6 +871,15 @@ function omitNullUserInputAnswers(input: unknown): unknown {
   };
 }
 
+const REPLAYABLE_PUSH_CHANNELS: ReadonlySet<string> = new Set([
+  WS_CHANNELS.serverWelcome,
+  WS_CHANNELS.serverMaintenanceUpdated,
+  WS_CHANNELS.serverConfigUpdated,
+  WS_CHANNELS.serverProviderStatusesUpdated,
+  WS_CHANNELS.serverSettingsUpdated,
+  WS_CHANNELS.serverKeepAwakeUpdated,
+]);
+
 export function isServerLifecyclePushChannel(channel: string): boolean {
   return channel === WS_CHANNELS.serverWelcome || channel === WS_CHANNELS.serverMaintenanceUpdated;
 }
@@ -1777,7 +1786,7 @@ export class WsTransport {
       channel,
       data,
     } as WsPush;
-    this.latestPushByChannel.set(channel, message);
+    if (REPLAYABLE_PUSH_CHANNELS.has(channel)) this.latestPushByChannel.set(channel, message);
     const listeners = this.listeners.get(channel);
     if (!listeners) return;
     for (const listener of listeners) {

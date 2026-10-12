@@ -7,7 +7,7 @@ import path from "node:path";
 import zlib from "node:zlib";
 
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
-import { Effect, Exit, Layer, Scope } from "effect";
+import { Effect, Exit, Layer, Option, Scope } from "effect";
 import { HttpRouter } from "effect/unstable/http";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -20,6 +20,7 @@ import {
   type ServerConfigShape,
 } from "./config";
 import {
+  attachmentsEffectRouteLayer,
   editorIconEffectRouteLayer,
   isLegacyTokenAuthorized,
   makeDesktopComputerEmergencyStopRouteLayer,
@@ -37,6 +38,11 @@ import {
   type OrchestrationEngineShape,
 } from "./orchestration/Services/OrchestrationEngine";
 import { ComputerService, type ComputerServiceShape } from "./computer/Services/ComputerService";
+import {
+  type ManagedAttachmentBlob,
+  ManagedAttachmentRepository,
+  type ManagedAttachmentRepositoryShape,
+} from "./persistence/Services/ManagedAttachments";
 import type { ServerReadiness } from "./server/readiness";
 import {
   DESKTOP_COMPUTER_EMERGENCY_STOP_ROUTE_PATH,
@@ -146,7 +152,11 @@ type TestedRoute =
     }
   | { readonly kind: "static" }
   | { readonly kind: "favicon" }
-  | { readonly kind: "editor-icon" };
+  | { readonly kind: "editor-icon" }
+  | {
+      readonly kind: "attachments";
+      readonly managedBlobs?: ReadonlyArray<ManagedAttachmentBlob>;
+    };
 
 async function withEffectServer(
   config: ServerConfigShape,
@@ -180,6 +190,8 @@ async function withEffectServer(
             yield* httpServer.serve(yield* HttpRouter.toHttpEffect(projectFaviconEffectRouteLayer));
           } else if (route.kind === "editor-icon") {
             yield* httpServer.serve(yield* HttpRouter.toHttpEffect(editorIconEffectRouteLayer));
+          } else if (route.kind === "attachments") {
+            yield* httpServer.serve(yield* HttpRouter.toHttpEffect(attachmentsEffectRouteLayer));
           } else {
             yield* httpServer.serve(
               yield* HttpRouter.toHttpEffect(makeHealthEffectRouteLayer(route.readiness)),
@@ -195,6 +207,16 @@ async function withEffectServer(
               ...(route.kind === "emergency-stop" && route.computerService
                 ? [Layer.succeed(ComputerService, route.computerService)]
                 : []),
+              Layer.succeed(ManagedAttachmentRepository, {
+                findClaimedById: ({ attachmentId }) =>
+                  Effect.succeed(
+                    Option.fromNullishOr(
+                      (route.kind === "attachments" ? route.managedBlobs : undefined)?.find(
+                        (blob) => blob.attachmentId === attachmentId,
+                      ),
+                    ),
+                  ),
+              } as Partial<ManagedAttachmentRepositoryShape> as ManagedAttachmentRepositoryShape),
               ...(route.kind === "health" && route.eventLoop
                 ? [Layer.succeed(ServerEventLoopMonitor, { getSnapshot: () => route.eventLoop! })]
                 : []),
@@ -724,6 +746,52 @@ describe("production Effect HTTP routes", () => {
         }
       }
     });
+  });
+
+  it("serves attachments with nosniff and a sandbox CSP, downloading anything but raster images", async () => {
+    const config = makeConfig();
+    mkdirSync(path.join(config.attachmentsDir, "objects", "ht"), { recursive: true });
+    writeFileSync(
+      path.join(config.attachmentsDir, "objects", "ht", "att_v2_html.html"),
+      "<script>fetch('/api/auth/ws-ticket')</script>",
+    );
+    writeFileSync(
+      path.join(config.attachmentsDir, "thread-svg.svg"),
+      '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>',
+    );
+    writeFileSync(path.join(config.attachmentsDir, "thread-png.png"), "png-bytes");
+    const htmlBlob = {
+      attachmentId: "att_v2_html",
+      originalName: 'evil"\r\nSet-Cookie: x=1.html',
+      relativePath: "objects/ht/att_v2_html.html",
+      sizeBytes: null,
+    } as Partial<ManagedAttachmentBlob> as ManagedAttachmentBlob;
+
+    await withEffectServer(
+      config,
+      { kind: "attachments", managedBlobs: [htmlBlob] },
+      async (origin) => {
+        for (const attachmentPath of ["att_v2_html", "thread-svg.svg"]) {
+          const response = await fetch(`${origin}/attachments/${attachmentPath}`);
+          expect(response.status).toBe(200);
+          const disposition = response.headers.get("content-disposition") ?? "";
+          expect(disposition).toMatch(/^attachment(;|$)/);
+          expect(disposition).not.toMatch(/[\r\n]|Set-Cookie: /);
+          expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+          const csp = response.headers.get("content-security-policy") ?? "";
+          expect(csp).toContain("sandbox");
+          expect(csp).toContain("default-src 'none'");
+          expect(response.headers.get("cache-control")).toBe("private, no-store");
+        }
+
+        const png = await fetch(`${origin}/attachments/thread-png.png`);
+        expect(png.status).toBe(200);
+        expect(png.headers.get("content-type")).toContain("image/png");
+        expect(png.headers.get("content-disposition")).toBeNull();
+        expect(png.headers.get("x-content-type-options")).toBe("nosniff");
+        expect(png.headers.get("content-security-policy")).toContain("sandbox");
+      },
+    );
   });
 
   it("uses the deployed favicon and editor-icon routes before static fallback", async () => {

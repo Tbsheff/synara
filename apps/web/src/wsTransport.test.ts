@@ -10,6 +10,7 @@ import {
   CommandId,
   MessageId,
   type ClientOrchestrationCommand,
+  ORCHESTRATION_WS_CHANNELS,
   ORCHESTRATION_WS_METHODS,
   ThreadId,
   WS_CHANNELS,
@@ -2123,6 +2124,68 @@ describe("WsTransport", () => {
     settleStream();
     await unsubscribe;
     expect(unsubscribeResolved).toBe(true);
+  });
+
+  it("does not retain a thread snapshot push after the thread is unsubscribed", async () => {
+    const { transport, internals } = makeBareTransport();
+    const threadId = "thread-snapshot-retention";
+    const input = { threadId };
+    let deliver: (event: unknown) => void = () => undefined;
+    const startStream = vi.fn(
+      (_client: unknown, _key: string, _stream: unknown, listener: (event: unknown) => void) => {
+        deliver = listener;
+      },
+    );
+    Object.assign(internals, {
+      listeners: new Map(),
+      latestPushByChannel: new Map(),
+      sequence: 0,
+      getClient: vi.fn(() => new Promise(() => undefined)),
+      startStream,
+    });
+    internals.threadSubscriptions.set(threadId, input);
+    const received: unknown[] = [];
+    const stopListening = transport.subscribe(ORCHESTRATION_WS_CHANNELS.threadEvent, (message) => {
+      received.push(message.data);
+    });
+
+    await internals.startThreadStream(
+      { [ORCHESTRATION_WS_METHODS.subscribeThread]: vi.fn(() => ({})) },
+      threadId,
+      input,
+    );
+    const snapshotItem = { kind: "snapshot", snapshot: { thread: { id: threadId } } };
+    deliver(snapshotItem);
+    expect(received).toEqual([snapshotItem]);
+
+    stopListening();
+    await transport.request(ORCHESTRATION_WS_METHODS.unsubscribeThread, { threadId });
+
+    expect(transport.getLatestPush(ORCHESTRATION_WS_CHANNELS.threadEvent)).toBeNull();
+  });
+
+  it("keeps replaying the latest server state push to late subscribers", () => {
+    const { transport, internals } = makeBareTransport();
+    Object.assign(internals, {
+      listeners: new Map([[WS_CHANNELS.serverSettingsUpdated, new Set()]]),
+      latestPushByChannel: new Map(),
+      sequence: 0,
+    });
+    const settings = { theme: "dark" };
+    (internals as unknown as { emit(channel: string, data: unknown): void }).emit(
+      WS_CHANNELS.serverSettingsUpdated,
+      settings,
+    );
+
+    const replayed: unknown[] = [];
+    transport.subscribe(
+      WS_CHANNELS.serverSettingsUpdated,
+      (message) => replayed.push(message.data),
+      { replayLatest: true },
+    );
+
+    expect(replayed).toEqual([settings]);
+    expect(transport.getLatestPush(WS_CHANNELS.serverSettingsUpdated)?.data).toBe(settings);
   });
 
   it("cancels owned capacity retry timers when a stream stops", async () => {

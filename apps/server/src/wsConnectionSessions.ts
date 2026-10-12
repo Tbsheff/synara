@@ -1,15 +1,7 @@
-// Purpose: correlate authenticated WebSocket upgrades with RPC handler execution.
-// Layer: server transport support
-//
-// RpcServer.toHttpEffectWebsocket forks the RPC server on the layer-build scope,
-// so services provided around the per-connection HTTP upgrade effect never reach
-// handler fibers. This registry bridges that gap: the upgrade route registers the
-// connection's authenticated session under an unguessable key, injects the key as
-// a synthetic request header (overriding any client-supplied value), and the RPC
-// admission middleware resolves it back into handler-scoped services.
 import { randomUUID } from "node:crypto";
 
 import { Effect, Layer, Scope, ServiceMap } from "effect";
+import { RpcSerialization } from "effect/unstable/rpc";
 
 import {
   CurrentManagedAttachmentPrincipal,
@@ -28,11 +20,6 @@ export interface WsConnectionSession {
   readonly attachmentPrincipal: ManagedAttachmentPrincipal;
 }
 
-/**
- * Synthetic header carrying the connection-session key. It is set server-side on
- * the upgrade request (never sent to clients), and Headers.set overrides any
- * value a client tried to smuggle in, so entries cannot be forged or replayed.
- */
 export const WS_CONNECTION_SESSION_HEADER = "x-synara-ws-connection-session";
 
 export interface WsConnectionSessionsShape {
@@ -99,4 +86,50 @@ export function provideWsConnectionSession<A, E, R>(
         Effect.provideService(CurrentManagedAttachmentPrincipal, session.attachmentPrincipal),
       )
     : effect;
+}
+
+function withoutReservedHeaders(message: unknown, reserved: ReadonlySet<string>): unknown {
+  if (Array.isArray(message)) {
+    return message.map((entry) => withoutReservedHeaders(entry, reserved));
+  }
+  if (
+    typeof message !== "object" ||
+    message === null ||
+    (message as { readonly _tag?: unknown })._tag !== "Request"
+  ) {
+    return message;
+  }
+  const headers = (message as { readonly headers?: unknown }).headers;
+  const kept = Array.isArray(headers)
+    ? headers.filter(
+        (entry): entry is readonly [string, string] =>
+          Array.isArray(entry) &&
+          entry.length === 2 &&
+          typeof entry[0] === "string" &&
+          typeof entry[1] === "string" &&
+          !reserved.has(entry[0].toLowerCase()),
+      )
+    : [];
+  return { ...message, headers: kept };
+}
+
+export function withoutClientReservedRpcHeaders(
+  serialization: RpcSerialization.RpcSerialization["Service"],
+  reservedHeaders: ReadonlyArray<string>,
+): RpcSerialization.RpcSerialization["Service"] {
+  const reserved: ReadonlySet<string> = new Set(
+    reservedHeaders.map((header) => header.toLowerCase()),
+  );
+  return RpcSerialization.RpcSerialization.of({
+    contentType: serialization.contentType,
+    includesFraming: serialization.includesFraming,
+    makeUnsafe: () => {
+      const parser = serialization.makeUnsafe();
+      return {
+        decode: (data) =>
+          parser.decode(data).map((message) => withoutReservedHeaders(message, reserved)),
+        encode: parser.encode,
+      };
+    },
+  });
 }

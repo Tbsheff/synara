@@ -7,7 +7,7 @@
  *
  * @module DrainableWorker
  */
-import { Cause, Data, Deferred, Effect, Exit, Queue, Ref, Scope } from "effect";
+import { Cause, Data, Deferred, Effect, Exit, Fiber, Queue, Ref, Scope } from "effect";
 
 export const DEFAULT_DRAINABLE_WORKER_CAPACITY = 256;
 
@@ -164,23 +164,19 @@ export const makeDrainableWorker = <A, E, R>(
         Effect.flatMap((accepted) => (accepted ? Effect.void : finishOne)),
       );
 
+    const processItemIsolatedFromConsumer = (item: A) =>
+      Effect.gen(function* () {
+        const itemFiber = yield* Effect.forkChild(Effect.suspend(() => process(item)));
+        const outcome = yield* Fiber.await(itemFiber);
+        if (outcome._tag === "Failure" && !Cause.hasInterruptsOnly(outcome.cause)) {
+          yield* Effect.logError("drainable worker item failed", {
+            cause: Cause.pretty(outcome.cause),
+          });
+        }
+      }).pipe(Effect.ensuring(finishOne));
+
     yield* Effect.forkScoped(
-      Effect.forever(
-        Queue.take(queue).pipe(
-          Effect.flatMap((item) =>
-            process(item).pipe(
-              Effect.catchCause((cause) =>
-                Cause.hasInterruptsOnly(cause)
-                  ? Effect.failCause(cause)
-                  : Effect.logError("drainable worker item failed", {
-                      cause: Cause.pretty(cause),
-                    }),
-              ),
-              Effect.ensuring(finishOne),
-            ),
-          ),
-        ),
-      ),
+      Effect.forever(Queue.take(queue).pipe(Effect.flatMap(processItemIsolatedFromConsumer))),
     );
 
     const enqueue: DrainableWorker<A>["enqueue"] = (item) =>
