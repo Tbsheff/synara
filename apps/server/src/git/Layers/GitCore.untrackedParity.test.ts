@@ -305,7 +305,13 @@ describe("GitCore untracked parity with per-file git diff --no-index", () => {
 
         expect(fs.readFileSync(path.join(root, ".git/index"))).toEqual(indexBefore);
         expect(objectsAfter).toBe(objectsBefore);
-        expect(details.workingTree).toEqual(legacyMoveAwareSummary(root));
+        const expected = legacyMoveAwareSummary(root);
+        expect(details.workingTree).toEqual({
+          ...expected,
+          files: expected.files.map((file) =>
+            file.path === "staged.txt" ? { ...file, staged: true } : file,
+          ),
+        });
         const paths = details.workingTree.files.map((file) => file.path);
         expect(paths).toContain("lib-moved/file-3.txt");
         expect(paths.some((filePath) => filePath.includes("node_modules"))).toBe(false);
