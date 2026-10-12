@@ -72,3 +72,45 @@ Compare the parent commit with the limit commit for the before/after run. The
 measurements isolate this limit from the later parsed-prefix cache change.
 Large code blocks lose syntax colors. They retain the full plain code and
 its existing layout. No new display helper was needed.
+
+## Parsed Shiki prefix cache
+
+`StableShikiHtml` caches the parsed prefix by highlighted HTML alone. It caches
+line elements by that parsed value and keeps the plain tail as a separate text
+child. It builds combined HTML only for the parser fallback or active find
+marks. The existing plain-tail escape helper now lives with the small Shiki HTML
+helpers; the syntax-highlighting module re-exports it for its existing callers.
+This keeps the find renderer from loading the highlighter just to append text.
+
+The compiled Chromium test sends 60 updates with six highlighted-prefix changes.
+It failed before the fix with 60 parser calls. It also checks escaped tails,
+fallback marks, PRE identity, line-node identity and complete visible code.
+
+| Count for 60 updates         | Before | After | Reduction |
+| ---------------------------- | -----: | ----: | --------: |
+| Prefix parses                |     60 |     6 |       90% |
+| Highlighted line prop builds |    120 |    12 |       90% |
+
+Run `bun run --cwd apps/web test:browser src/components/ChatMarkdown.shikiParsing.browser.tsx`.
+Counts use the same fixed update sequence before and after. They do not measure
+frame time or claim a live-provider speed gain. Active find marks still require
+combined HTML, as before. This change reuses the current parser and append helper.
+
+## Verification
+
+- `bun run fmt:check`: passed on 4,803 files.
+- `bun run lint`: passed with 0 errors and 1,033 warnings; filesystem budget passed.
+- `bun run typecheck`: all eight packages passed with narrow local CDP heap types.
+- Affected unit tests: nine files, 203 tests passed.
+- Requested ChatMarkdown and MessagesTimeline browser command: 105 of 106 tests
+  passed in two final runs. The burst-reveal frame assertion observed 174 and 180
+  visible characters against a 140-character limit. Height growth stayed at 95 px
+  against its 200 px limit. The isolated burst file passed all four tests.
+- Base commit `50bdb4681`: all 101 existing browser tests passed, and its isolated
+  burst file passed all four tests. The temporary base copy served the linked
+  dependency assets through an explicit Vite filesystem allow list.
+- Final full browser scope with `--retry 1`: all 27 files and 106 tests passed.
+
+The runs also logged ResizeObserver notifications. The full-suite burst assertion
+has an intermittent failure on the final tree; the green run permits one retry.
+First-attempt frame-level parity under the full benchmark load remains unverified.

@@ -1151,8 +1151,7 @@ function LoadedShikiCodeBlock({
 
   return (
     <FindAwareShikiHtml
-      html={syntaxHighlighting.appendPlainTextToHighlightedHtml(highlightedHtml, renderedTail)}
-      highlightedHtml={highlightedHtml}
+      html={highlightedHtml}
       plainTail={renderedTail}
       sourceOffset={sourceOffset}
     />
