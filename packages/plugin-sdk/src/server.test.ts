@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { createPluginRegistry, definePlugin, object, string } from "./index";
 
@@ -8,6 +8,95 @@ const echo = {
 };
 
 describe("plugin registry", () => {
+  it("waits for async setup before publishing its registrations", async () => {
+    const registry = createPluginRegistry({ host: {} as never, storage: {} as never });
+    let release!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const activation = registry.activate(
+      { id: "acme.echo", displayName: "Echo", apiVersion: 1, version: "1.0.0" },
+      definePlugin(async (api) => {
+        await ready;
+        api.rpc.register("echo", echo, ({ value }) => Promise.resolve({ value }));
+      }),
+    );
+    expect(registry.list()).toEqual([]);
+    release();
+    const generation = await activation;
+    await expect(
+      registry.call({
+        pluginId: "acme.echo",
+        generation,
+        method: "echo",
+        input: { value: "ready" },
+      }),
+    ).resolves.toEqual({ value: "ready" });
+  });
+
+  it("retains the old generation and revokes candidate storage after async setup failure", async () => {
+    const set = vi.fn(() => Promise.resolve());
+    const registry = createPluginRegistry({ host: {} as never, storage: { set } as never });
+    const manifest = {
+      id: "acme.echo",
+      displayName: "Echo",
+      apiVersion: 1 as const,
+      version: "1.0.0",
+    };
+    const generation = await registry.activate(
+      manifest,
+      definePlugin((api) => {
+        api.rpc.register("echo", echo, ({ value }) => Promise.resolve({ value }));
+      }),
+    );
+    let storage: Parameters<Parameters<typeof definePlugin>[0]>[0]["storage"] | undefined;
+    const failed = Promise.reject(new Error("setup failed"));
+    void failed.catch(() => undefined);
+    await expect(
+      registry.activate(
+        manifest,
+        definePlugin((api) => {
+          storage = api.storage;
+          return failed;
+        }),
+      ),
+    ).rejects.toThrow("setup failed");
+    await expect(storage!.set("key", "late")).rejects.toThrow("setup failed");
+    expect(set).not.toHaveBeenCalled();
+    await expect(
+      registry.call({ pluginId: manifest.id, generation, method: "echo", input: { value: "old" } }),
+    ).resolves.toEqual({ value: "old" });
+  });
+
+  it("bounds async setup and revokes late registrations after timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const registry = createPluginRegistry({
+        host: {} as never,
+        storage: {} as never,
+        setupTimeoutMs: 10,
+      });
+      let api: Parameters<Parameters<typeof definePlugin>[0]>[0] | undefined;
+      const activation = registry.activate(
+        { id: "acme.echo", displayName: "Echo", apiVersion: 1, version: "1.0.0" },
+        definePlugin((candidate) => {
+          api = candidate;
+          return new Promise<void>(() => {});
+        }),
+      );
+      const assertion = expect(activation).rejects.toThrow("setup timed out");
+      void assertion.catch(() => undefined);
+      await vi.advanceTimersByTimeAsync(10);
+      await assertion;
+      expect(registry.list()).toEqual([]);
+      expect(() => api!.rpc.register("echo", echo, async ({ value }) => ({ value }))).toThrow(
+        "setup timed out",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("validates calls and namespaces methods by plugin generation", async () => {
     const registry = createPluginRegistry({ host: {} as never, storage: {} as never });
     await registry.activate(

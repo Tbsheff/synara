@@ -270,7 +270,15 @@ export function collectPluginAppRegistrations(
     },
   };
 
-  setup(api);
+  const result: unknown = setup(api);
+  if (
+    result !== null &&
+    (typeof result === "object" || typeof result === "function") &&
+    typeof (result as { readonly then?: unknown }).then === "function"
+  ) {
+    void Promise.resolve(result).catch(() => undefined);
+    throw new Error(`Plugin app setup must be synchronous: ${pluginId}`);
+  }
 
   return {
     pluginId,
