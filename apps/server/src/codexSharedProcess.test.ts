@@ -315,6 +315,19 @@ describe("Codex shared process lifecycle", () => {
     await h.registry.stopAll();
   });
 
+  it("fails every original member and tears down when a failure handler throws", async () => {
+    const h = harness();
+    const p = await h.acquire();
+    h.failures[0]!.mockImplementation(() => {
+      p.members.delete(h.owners[1]!);
+      throw new Error("session consumer failed");
+    });
+    expect(() => p.fail(new Error("process crashed"))).not.toThrow();
+    for (const failure of h.failures) expect(failure).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(h.teardown).toHaveBeenCalledTimes(1));
+    await h.registry.stopAll();
+  });
+
   it("keeps a teardown failure as a replacement barrier", async () => {
     const h = harness();
     const p = await h.acquire();

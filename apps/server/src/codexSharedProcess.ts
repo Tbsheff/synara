@@ -26,7 +26,7 @@ export function codexSharedProcessKey(identity: CodexSharedProcessIdentity): str
         ...identity,
         env: Object.entries(identity.env)
           .filter((entry): entry is [string, string] => entry[1] !== undefined)
-          .sort(([a], [b]) => a.localeCompare(b)),
+          .toSorted(([a], [b]) => a.localeCompare(b)),
       }),
     )
     .digest("hex");
@@ -299,7 +299,14 @@ export class CodexSharedProcess<T extends object> {
   fail(cause: unknown, code: number | null = null, signal: NodeJS.Signals | null = null): void {
     if (this.failed || this.shutdown) return;
     this.failed = cause instanceof Error ? cause : new Error(String(cause));
-    for (const member of [...this.members.values()]) member.failure(this.failed, code, signal);
+    const members = [...this.members.values()];
+    for (const member of members) {
+      try {
+        member.failure(this.failed, code, signal);
+      } catch {
+        continue;
+      }
+    }
     void this.stop().catch(() => undefined);
   }
 
