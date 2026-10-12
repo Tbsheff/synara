@@ -7237,11 +7237,17 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
                   // permission suggestions below.
                   context.approvalsAlwaysAllowedForSession = true;
                 }
+                const sessionPermissionUpdates =
+                  decision === "acceptForSession"
+                    ? (pendingApproval.suggestions ?? []).filter(
+                        (suggestion) => suggestion.type !== "setMode",
+                      )
+                    : [];
                 return {
                   behavior: "allow",
                   updatedInput: toolInput,
-                  ...(decision === "acceptForSession" && pendingApproval.suggestions
-                    ? { updatedPermissions: [...pendingApproval.suggestions] }
+                  ...(sessionPermissionUpdates.length > 0
+                    ? { updatedPermissions: sessionPermissionUpdates }
                     : {}),
                 } satisfies PermissionResult;
               }

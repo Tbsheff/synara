@@ -7794,6 +7794,65 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     );
   });
 
+  it.effect("keeps the thread permission mode when a session grant carries a mode change", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "approval-required",
+      });
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "Plan the change",
+        attachments: [],
+        interactionMode: "plan",
+      });
+      const requestOpened = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.type === "request.opened"),
+        Stream.runHead,
+        Effect.forkChild,
+      );
+
+      const directoryGrant: PermissionUpdate = {
+        type: "addDirectories",
+        directories: ["/tmp/claude-adapter-test/notes"],
+        destination: "session",
+      };
+      const permission = harness.getLastCreateQueryInput()!.options.canUseTool!(
+        "Write",
+        { file_path: "/tmp/claude-adapter-test/notes/plan.md", content: "plan" },
+        {
+          signal: new AbortController().signal,
+          suggestions: [
+            { type: "setMode", mode: "acceptEdits", destination: "session" },
+            directoryGrant,
+          ],
+          toolUseID: "tool-use-write",
+          requestId: "request-tool-use-write",
+        },
+      );
+      const opened = yield* Fiber.join(requestOpened);
+      assert.equal(opened._tag, "Some");
+      if (opened._tag !== "Some" || opened.value.type !== "request.opened") return;
+      yield* adapter.respondToRequest(
+        session.threadId,
+        ApprovalRequestId.makeUnsafe(String(opened.value.requestId)),
+        "acceptForSession",
+      );
+
+      const result = (yield* Effect.promise(() => permission)) as PermissionResult & {
+        readonly updatedPermissions?: unknown;
+      };
+      assert.equal(result.behavior, "allow");
+      assert.deepEqual(result.updatedPermissions, [directoryGrant]);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("keeps Auto reviewer-gated after accepting one request for the session", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
@@ -7908,13 +7967,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         readonly updatedPermissions?: unknown;
       } | null;
       assert.equal(allowedPermissionResult?.behavior, "allow");
-      assert.deepEqual(allowedPermissionResult?.updatedPermissions, [
-        {
-          type: "setMode",
-          mode: "default",
-          destination: "session",
-        },
-      ]);
+      assert.isUndefined(allowedPermissionResult?.updatedPermissions);
 
       const secondPermissionPromise = canUseTool(
         "Bash",
