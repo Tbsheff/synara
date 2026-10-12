@@ -704,8 +704,7 @@ export function BetaChannelSettingsPanel({ active }: { readonly active: boolean 
               </div>
               <p className="m-0 text-ui-xs text-muted-foreground">
                 Error details are filtered, but may still include private information. Crash dumps
-                include app memory that can't be filtered. Reports and dumps are kept with no expiry
-                date.
+                stay on this device and are never sent. Reports are kept with no expiry date.
               </p>
             </div>
           </DisclosureRegion>

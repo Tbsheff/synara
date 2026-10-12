@@ -267,4 +267,43 @@ describe("imported browser session restoration", () => {
     await expect(first.shutdown()).rejects.toThrow("Secure browser session persistence failed.");
     expect(existsSync(join(directory, "active-run"))).toBe(true);
   });
+
+  async function savedSessionDirectory() {
+    const directory = await home();
+    const first = new BrowserSessionRestore(directory, backend(), store);
+    await first.initialize();
+    await first.rememberImport(["example.test"]);
+    await first.shutdown();
+    return directory;
+  }
+
+  function slowKeyStore() {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    return {
+      store: { ...store, available: async () => (await gate, true) },
+      release,
+    };
+  }
+
+  it("refuses to restore cookies after startup cancelled a slow key store", async () => {
+    const directory = await savedSessionDirectory();
+    const keys = slowKeyStore();
+    const next = backend([]);
+    const restore = new BrowserSessionRestore(directory, next, keys.store);
+    const controller = new AbortController();
+    const initializing = restore.initialize(controller.signal);
+    controller.abort();
+    keys.release();
+
+    await expect(initializing).rejects.toThrow("restoration is unavailable");
+    expect(next.restore).not.toHaveBeenCalled();
+    await expect(restore.rememberImport(["example.test"])).rejects.toThrow(
+      "Secure browser session storage is unavailable",
+    );
+    await restore.shutdown();
+    expect(existsSync(join(directory, "active-run"))).toBe(true);
+  });
 });

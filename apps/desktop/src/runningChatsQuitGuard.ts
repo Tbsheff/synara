@@ -115,6 +115,7 @@ export interface RunningChatsQuitGuard {
     readonly presentNativeConfirmation?: (
       chats: ReadonlyArray<DesktopQuitConfirmationChat>,
     ) => boolean | Promise<boolean>;
+    readonly confirmWithoutRenderer?: () => Promise<boolean>;
   }) => Promise<boolean>;
 }
 
@@ -124,7 +125,9 @@ interface PendingQuitConfirmation {
   readonly presentNativeConfirmation:
     | ((chats: ReadonlyArray<DesktopQuitConfirmationChat>) => boolean | Promise<boolean>)
     | undefined;
+  readonly confirmWithoutRenderer: (() => Promise<boolean>) | undefined;
   waitingForDecision: boolean;
+  confirmingWithoutRenderer: boolean;
   readyTimer: ReturnType<typeof setTimeout> | null;
   readonly resolve: (allow: boolean) => void;
 }
@@ -148,18 +151,13 @@ export function makeRunningChatsQuitGuard(
     current?.resolve(allow);
   };
 
-  const presentNativeSheet = (
+  const settleFromNativeDialog = (
     current: PendingQuitConfirmation,
-    chats: ReadonlyArray<DesktopQuitConfirmationChat>,
+    ask: () => boolean | Promise<boolean>,
   ): void => {
-    const presenter = current.presentNativeConfirmation;
-    if (!presenter) {
-      finish(true);
-      return;
-    }
     const requestId = current.requestId;
     void Promise.resolve()
-      .then(() => presenter(chats))
+      .then(ask)
       .then(
         (allow) => {
           if (pending?.requestId === requestId) {
@@ -168,10 +166,37 @@ export function makeRunningChatsQuitGuard(
         },
         () => {
           if (pending?.requestId === requestId) {
-            finish(true);
+            finish(false);
           }
         },
       );
+  };
+
+  const confirmPendingWithoutRenderer = (current: PendingQuitConfirmation): void => {
+    if (current.readyTimer) {
+      clearTimeout(current.readyTimer);
+      current.readyTimer = null;
+    }
+    current.waitingForDecision = true;
+    current.confirmingWithoutRenderer = true;
+    const confirm = current.confirmWithoutRenderer;
+    if (!confirm) {
+      finish(false);
+      return;
+    }
+    settleFromNativeDialog(current, confirm);
+  };
+
+  const presentNativeSheet = (
+    current: PendingQuitConfirmation,
+    chats: ReadonlyArray<DesktopQuitConfirmationChat>,
+  ): void => {
+    const presenter = current.presentNativeConfirmation;
+    if (!presenter) {
+      confirmPendingWithoutRenderer(current);
+      return;
+    }
+    settleFromNativeDialog(current, () => presenter(chats));
   };
 
   return {
@@ -197,6 +222,9 @@ export function makeRunningChatsQuitGuard(
         finish(response.allow);
         return;
       }
+      if (pending.confirmingWithoutRenderer) {
+        return;
+      }
       if (pending.readyTimer) {
         clearTimeout(pending.readyTimer);
         pending.readyTimer = null;
@@ -218,7 +246,21 @@ export function makeRunningChatsQuitGuard(
         return inFlight;
       }
       if (!input.isRendererAvailable()) {
-        return Promise.resolve(true);
+        const confirm = input.confirmWithoutRenderer;
+        if (!confirm) {
+          return Promise.resolve(false);
+        }
+        return Promise.resolve()
+          .then(confirm)
+          .then(
+            (allow) => {
+              if (allow) {
+                allowed = true;
+              }
+              return allow;
+            },
+            () => false,
+          );
       }
 
       inFlight = new Promise<boolean>((resolve) => {
@@ -228,10 +270,12 @@ export function makeRunningChatsQuitGuard(
           requestId,
           presentation,
           presentNativeConfirmation: input.presentNativeConfirmation,
+          confirmWithoutRenderer: input.confirmWithoutRenderer,
           waitingForDecision: false,
+          confirmingWithoutRenderer: false,
           readyTimer: setTimeout(() => {
             if (pending?.requestId === requestId && !pending.waitingForDecision) {
-              finish(true);
+              confirmPendingWithoutRenderer(pending);
             }
           }, input.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS),
           resolve: (allow) => {
@@ -242,7 +286,9 @@ export function makeRunningChatsQuitGuard(
         try {
           input.send({ requestId, presentation });
         } catch {
-          finish(true);
+          if (pending?.requestId === requestId) {
+            confirmPendingWithoutRenderer(pending);
+          }
         }
       });
       return inFlight;

@@ -140,10 +140,12 @@ carries the OS version (major.minor) and UI language. The install UUID is
 generated locally on first launch (`crypto.randomUUID`) — it is not derived
 from your hardware, account, or IP.
 
-Crash dumps: Electron's `crashReporter` uploads minidumps to the diagnostics
-endpoint. Minidumps are memory snapshots of the crashed process and can in
-principle contain fragments of that process's memory; they are stored in R2 and
-can't be redacted. They are kept with no expiry date.
+Crash dumps stay on your machine. Electron's `crashReporter` writes minidumps
+to the local crash dump folder only (`uploadToServer: false`). Minidumps are raw
+process memory, so they cannot pass the allowlist or redaction and are never
+uploaded. Crashes reach diagnostics only as the `app.renderer-crash` and
+`app.child-process-crash` events above. A native crash of the main process
+sends no event.
 
 ## What usage counters do not collect
 
@@ -154,8 +156,7 @@ can't be redacted. They are kept with no expiry date.
 - Screenshots, window contents, or keystrokes
 
 These are not intentionally sampled for the usage counters. Free-text error
-fields may still contain fragments of work despite redaction, and raw crash
-minidumps can contain fragments of process memory, including sensitive data.
+fields may still contain fragments of work despite redaction.
 
 The only free-text fields are `message`, `stack`, and `logTail`. Before they
 are written to the queue, each is passed through `redactDiagnosticText`
@@ -188,17 +189,15 @@ batches as NDJSON over HTTPS to `https://synara-beta-diagnostics.kartik-9f9.work
 (override with `SYNARA_BETA_DIAGNOSTICS_URL` for local development; only `https://`
 or loopback targets are accepted). Events land in a Cloudflare D1 database and
 are kept with no expiry date, so crash and error trends can be compared across
-all beta releases. Crash dumps land in the `synara-beta-crash-dumps` R2 bucket
-and are also kept with no expiry date. The ingest worker
+all beta releases. The ingest worker
 and its private dashboard live outside this repository (they run on the
 maintainers' Cloudflare account). The worker re-runs the same allowlist and
 `redactDiagnosticText` and drops unknown events/fields, so the documented
 schema is enforced at the endpoint, not just the client.
 
 Ingest is intentionally open. Beta builds are public binaries, so any token
-baked into them would be public too, and Electron's crash uploader cannot send
-custom headers anyway. Abuse is bounded instead: per-IP rate limits (120
-requests a minute for ingest, 10 for login), request and dump size caps, and
+baked into them would be public too. Abuse is bounded instead: per-IP rate
+limits (120 requests a minute for ingest, 10 for login), request size caps, and
 the server-side allowlist and redaction.
 
 If the endpoint is unreachable the queue stays on disk and retries on the next

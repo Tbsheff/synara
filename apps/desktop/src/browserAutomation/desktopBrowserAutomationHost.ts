@@ -58,6 +58,9 @@ const MAX_IDEMPOTENCY_ENTRIES = 512;
 const IDEMPOTENCY_TTL_MS = 15 * 60_000;
 const MAX_IDEMPOTENCY_TOMBSTONES = 4_096;
 const IDEMPOTENCY_TOMBSTONE_TTL_MS = 24 * 60 * 60_000;
+const IDEMPOTENCY_RETAINED_BYTE_BUDGET = 64 * 1024 * 1024;
+const RETAINED_BYTES_MAX_DEPTH = 8;
+const RETAINED_BYTES_PER_SCALAR = 8;
 const WINDOW_OPEN_RECONCILIATION_TIMEOUT_MS = 2_000;
 const WINDOW_OPEN_EVENT_LOOP_GRACE_MS = 16;
 
@@ -76,6 +79,7 @@ export interface DesktopBrowserAutomationHostOptions {
   readonly requestOpenPanel?: (threadId: ThreadId) => void | Promise<void>;
   readonly vault?: BrowserVault;
   readonly vaultCapture?: BrowserVaultCapture;
+  readonly idempotencyRetainedByteBudget?: number;
 }
 
 interface SessionAffinity {
@@ -89,6 +93,7 @@ interface IdempotencyEntry {
   readonly result: Promise<unknown>;
   settled: boolean;
   expiresAt: number;
+  retainedBytes: number;
   readonly effecting: boolean;
 }
 
@@ -96,6 +101,18 @@ interface IdempotencyTombstone {
   readonly fingerprint: string;
   readonly expiresAt: number;
 }
+
+const estimateRetainedBytes = (value: unknown, depth = 0): number => {
+  if (typeof value === "string") return value.length;
+  if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) return value.byteLength;
+  if (value === null || typeof value !== "object" || depth >= RETAINED_BYTES_MAX_DEPTH)
+    return RETAINED_BYTES_PER_SCALAR;
+  let total = 0;
+  for (const [key, item] of Object.entries(value)) {
+    total += key.length + estimateRetainedBytes(item, depth + 1);
+  }
+  return total;
+};
 
 const boundedMapSet = <K, V>(map: Map<K, V>, key: K, value: V, maximum: number): void => {
   map.delete(key);
@@ -292,6 +309,7 @@ export class DesktopBrowserAutomationHost {
   private readonly affinities = new Map<string, SessionAffinity>();
   private readonly idempotency = new Map<string, IdempotencyEntry>();
   private readonly idempotencyTombstones = new Map<string, IdempotencyTombstone>();
+  private idempotencySweep: ReturnType<typeof setTimeout> | null = null;
   private readonly lockTails = new Map<string, Promise<void>>();
   private readonly activeOperations = new Set<Promise<unknown>>();
   private readonly diagnostics = new BrowserDiagnosticsStore();
@@ -311,6 +329,9 @@ export class DesktopBrowserAutomationHost {
     this.disposed = true;
     this.disposal = (async () => {
       await Promise.allSettled([...this.activeOperations]);
+      this.clearIdempotencySweep();
+      this.idempotency.clear();
+      this.idempotencyTombstones.clear();
     })();
     return this.disposal;
   }
@@ -487,13 +508,15 @@ export class DesktopBrowserAutomationHost {
           result: operation,
           settled: false,
           expiresAt: Number.POSITIVE_INFINITY,
+          retainedBytes: 0,
           effecting: !definition.annotations.readOnlyHint,
         };
         this.idempotency.set(cacheKey, entry);
         void operation.then(
-          () => {
+          (output: unknown) => {
             entry.settled = true;
             entry.expiresAt = performance.now() + IDEMPOTENCY_TTL_MS;
+            entry.retainedBytes = estimateRetainedBytes(output);
             this.trimIdempotencyCache();
           },
           (error: unknown) => {
@@ -566,9 +589,52 @@ export class DesktopBrowserAutomationHost {
       if (!settled) break;
       this.evictIdempotencyEntry(settled[0], settled[1], now);
     }
+    this.trimIdempotencyBytes(now);
     while (this.idempotencyTombstones.size > MAX_IDEMPOTENCY_TOMBSTONES) {
       this.idempotencyTombstones.delete(this.idempotencyTombstones.keys().next().value as string);
     }
+    this.scheduleIdempotencySweep(now);
+  }
+
+  private trimIdempotencyBytes(now: number): void {
+    const budget = this.options.idempotencyRetainedByteBudget ?? IDEMPOTENCY_RETAINED_BYTE_BUDGET;
+    let retained = 0;
+    for (const entry of this.idempotency.values()) retained += entry.retainedBytes;
+    for (const evictEffecting of [false, true]) {
+      for (const [key, entry] of this.idempotency) {
+        if (retained <= budget) return;
+        if (!entry.settled || entry.effecting !== evictEffecting) continue;
+        retained -= entry.retainedBytes;
+        this.evictIdempotencyEntry(key, entry, now);
+      }
+    }
+  }
+
+  private scheduleIdempotencySweep(now: number): void {
+    this.clearIdempotencySweep();
+    if (this.disposed) return;
+    let nextExpiry = Number.POSITIVE_INFINITY;
+    for (const entry of this.idempotency.values()) {
+      if (entry.settled) nextExpiry = Math.min(nextExpiry, entry.expiresAt);
+    }
+    for (const tombstone of this.idempotencyTombstones.values()) {
+      nextExpiry = Math.min(nextExpiry, tombstone.expiresAt);
+    }
+    if (!Number.isFinite(nextExpiry)) return;
+    this.idempotencySweep = setTimeout(
+      () => {
+        this.idempotencySweep = null;
+        this.trimIdempotencyCache();
+      },
+      Math.max(0, nextExpiry - now),
+    );
+    this.idempotencySweep.unref?.();
+  }
+
+  private clearIdempotencySweep(): void {
+    if (this.idempotencySweep === null) return;
+    clearTimeout(this.idempotencySweep);
+    this.idempotencySweep = null;
   }
 
   private evictIdempotencyEntry(key: string, entry: IdempotencyEntry, now: number): void {

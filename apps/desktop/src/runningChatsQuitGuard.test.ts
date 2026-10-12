@@ -61,17 +61,29 @@ describe("running chats quit guard", () => {
     });
   });
 
-  it("allows quit immediately when the renderer is unavailable", async () => {
+  it("asks natively when the renderer is unavailable", async () => {
     const guard = makeRunningChatsQuitGuard(() => "q1");
     const send = vi.fn();
+    const confirmWithoutRenderer = vi.fn(async () => true);
 
     await expect(
       guard.askRenderer({
         send,
         isRendererAvailable: () => false,
+        confirmWithoutRenderer,
       }),
     ).resolves.toBe(true);
     expect(send).not.toHaveBeenCalled();
+    expect(confirmWithoutRenderer).toHaveBeenCalledOnce();
+  });
+
+  it("stays when the renderer is unavailable and no native ask exists", async () => {
+    const guard = makeRunningChatsQuitGuard(() => "q1");
+
+    await expect(
+      guard.askRenderer({ send: vi.fn(), isRendererAvailable: () => false }),
+    ).resolves.toBe(false);
+    expect(guard.hasAllowedQuit()).toBe(false);
   });
 
   it("waits for an explicit decision even when no chats are running", async () => {
@@ -128,7 +140,7 @@ describe("running chats quit guard", () => {
     await expect(second).resolves.toBe(false);
   });
 
-  it("fails open if the renderer never acknowledges the request", async () => {
+  it("stays open if the renderer never acknowledges and no native ask exists", async () => {
     vi.useFakeTimers();
     const guard = makeRunningChatsQuitGuard(() => "q1");
     const decision = guard.askRenderer({
@@ -138,7 +150,82 @@ describe("running chats quit guard", () => {
     });
 
     await vi.advanceTimersByTimeAsync(50);
+    await expect(decision).resolves.toBe(false);
+    expect(guard.hasAllowedQuit()).toBe(false);
+  });
+
+  it("asks natively when the renderer never acknowledges, and stays on Stay", async () => {
+    vi.useFakeTimers();
+    const guard = makeRunningChatsQuitGuard(() => "q1");
+    let answer!: (allow: boolean) => void;
+    const confirmWithoutRenderer = vi.fn(
+      () =>
+        new Promise<boolean>((resolve) => {
+          answer = resolve;
+        }),
+    );
+    const decision = guard.askRenderer({
+      send: vi.fn(),
+      isRendererAvailable: () => true,
+      readyTimeoutMs: 50,
+      confirmWithoutRenderer,
+    });
+
+    await vi.advanceTimersByTimeAsync(50);
+    expect(confirmWithoutRenderer).toHaveBeenCalledOnce();
+    expect(guard.hasPendingAsk()).toBe(true);
+    guard.receiveResponse({ requestId: "q1", phase: "ready", runningCount: 1 });
+    answer(false);
+
+    await expect(decision).resolves.toBe(false);
+    expect(guard.hasAllowedQuit()).toBe(false);
+  });
+
+  it("quits only after the user picks Quit in the native fallback", async () => {
+    vi.useFakeTimers();
+    const guard = makeRunningChatsQuitGuard(() => "q1");
+    const decision = guard.askRenderer({
+      send: vi.fn(),
+      isRendererAvailable: () => true,
+      readyTimeoutMs: 50,
+      confirmWithoutRenderer: async () => true,
+    });
+
+    await vi.advanceTimersByTimeAsync(50);
     await expect(decision).resolves.toBe(true);
+    expect(guard.hasAllowedQuit()).toBe(true);
+  });
+
+  it("asks natively instead of quitting when the request cannot be sent", async () => {
+    const guard = makeRunningChatsQuitGuard(() => "q1");
+    const confirmWithoutRenderer = vi.fn(async () => false);
+    const decision = guard.askRenderer({
+      send: () => {
+        throw new Error("Renderer unavailable.");
+      },
+      isRendererAvailable: () => true,
+      confirmWithoutRenderer,
+    });
+
+    await expect(decision).resolves.toBe(false);
+    expect(confirmWithoutRenderer).toHaveBeenCalledOnce();
+    expect(guard.hasAllowedQuit()).toBe(false);
+  });
+
+  it("stays when the native fallback fails", async () => {
+    vi.useFakeTimers();
+    const guard = makeRunningChatsQuitGuard(() => "q1");
+    const decision = guard.askRenderer({
+      send: vi.fn(),
+      isRendererAvailable: () => true,
+      readyTimeoutMs: 50,
+      confirmWithoutRenderer: async () => {
+        throw new Error("dialog failed");
+      },
+    });
+
+    await vi.advanceTimersByTimeAsync(50);
+    await expect(decision).resolves.toBe(false);
   });
 
   it("does not time out after the renderer says chats are running", async () => {
@@ -221,7 +308,7 @@ describe("running chats quit guard", () => {
     expect(guard.hasAllowedQuit()).toBe(false);
   });
 
-  it("fails open if the native sheet presenter throws", async () => {
+  it("stays if the native sheet presenter throws", async () => {
     const guard = makeRunningChatsQuitGuard(() => "q1");
     const decision = guard.askRenderer({
       send: vi.fn(),
@@ -239,6 +326,7 @@ describe("running chats quit guard", () => {
       chats: [{ id: "a", title: "Fix the tray" }],
     });
 
-    await expect(decision).resolves.toBe(true);
+    await expect(decision).resolves.toBe(false);
+    expect(guard.hasAllowedQuit()).toBe(false);
   });
 });
