@@ -254,7 +254,7 @@ The server refuses a mode that a provider cannot enforce:
 | Provider        | Limit                                                                                                                                                 |
 | --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Pi, Antigravity | Full access only. Plan turns are refused because their tools cannot be kept read-only.                                                                |
-| ACP agents      | **Approve once** is refused when the agent offers only a persistent grant. The request stays open for **Approve for session** or **Decline**.         |
+| ACP agents      | **Approve once** is refused when the agent offers only a persistent grant. The request stays open for **Always allow this session** or **Decline**.   |
 | Cursor, Grok    | Rollback and edit-and-resend stop the native session. The next turn starts a new session with the retained transcript, because the CLI cannot rewind. |
 
 After a successfully completed Codex turn, Synara retires that turn's internal tool credential.

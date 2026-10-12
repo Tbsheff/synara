@@ -54,7 +54,7 @@ describe("AcpAdapterSupport", () => {
     expect(selectAcpPermissionOptionId("accept", persistentOnly)).toBeUndefined();
     expect(selectAcpPermissionOptionId("acceptForSession", persistentOnly)).toBe("allow-session");
     expect(acpApprovalDecisionUnavailableIssue("accept", persistentOnly)).toContain(
-      "Approve for session",
+      "Always allow this session",
     );
     expect(acpApprovalDecisionUnavailableIssue("acceptForSession", persistentOnly)).toBeUndefined();
     expect(acpApprovalDecisionUnavailableIssue("decline", persistentOnly)).toBeUndefined();

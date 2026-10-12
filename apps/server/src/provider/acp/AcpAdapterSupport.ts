@@ -140,7 +140,7 @@ export function acpApprovalDecisionUnavailableIssue(
     return undefined;
   }
   return options.some((option) => option.kind === "allow_always" && option.optionId.trim())
-    ? "This provider can allow this request only for the rest of the session. Choose Approve for session or Decline."
+    ? "This provider can allow this request only for the rest of the session. Choose Always allow this session or Decline."
     : "This provider offers no way to allow this request. Choose Decline.";
 }
 
