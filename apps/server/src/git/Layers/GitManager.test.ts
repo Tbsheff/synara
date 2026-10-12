@@ -2804,12 +2804,15 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       yield* runGit(repoDir, ["add", "staged.txt"]);
       const { manager } = yield* makeManager();
 
-      const result = yield* runStackedAction(manager, {
-        cwd: repoDir,
-        action: "commit",
-        commitScope: undefined,
-        commitMessage: "Commit staged work",
-      });
+      const result = yield* manager.runStackedAction(
+        {
+          actionId: "test-action-id",
+          cwd: repoDir,
+          action: "commit",
+          commitMessage: "Commit staged work",
+        },
+        undefined,
+      );
 
       expect(result.commit.status).toBe("created");
       expect(
