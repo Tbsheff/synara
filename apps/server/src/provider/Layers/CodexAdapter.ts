@@ -4001,6 +4001,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
           {
             prepareConcurrency: 8,
             prepareKey: (item) => (item.trustedClose ? undefined : item.validationKey),
+            laneKey: (item) => item.nativeEvent.threadId,
             prepare: ({
               inspect,
               trustedClose,
