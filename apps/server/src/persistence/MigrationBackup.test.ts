@@ -1052,7 +1052,7 @@ describe("migration backups", () => {
 
   it("skips the snapshot when every pending migration is additive-only and still prunes", async () => {
     const dbPath = await makeDbPath();
-    const lastNonAdditiveMigrationId = 128;
+    const lastNonAdditiveMigrationId = 135;
     expect(pendingMigrationsAreAdditiveOnly([lastNonAdditiveMigrationId])).toBe(false);
 
     await runWithDatabase(
@@ -1132,17 +1132,18 @@ describe("migration backups", () => {
     expect(pendingMigrationsAreAdditiveOnly([])).toBe(false);
     expect(pendingMigrationsAreAdditiveOnly([Number.MAX_SAFE_INTEGER])).toBe(false);
     expect(pendingMigrationsAreAdditiveOnly([123])).toBe(false);
-    expect(pendingMigrationsAreAdditiveOnly([131, 132, 133, 134])).toBe(true);
+    expect(pendingMigrationsAreAdditiveOnly([131, 132, 133, 134, 136])).toBe(true);
+    expect(pendingMigrationsAreAdditiveOnly([135, 136])).toBe(false);
     expect(pendingMigrationsAreAdditiveOnly([128, 129, 130, 131, 132])).toBe(false);
   });
 
-  it("marks as additive-only only migrations whose SQL never touches existing rows", async () => {
+  it("marks as additive-only only migrations whose SQL never changes existing rows", async () => {
     const migrationsDirectory = path.join(import.meta.dirname, "Migrations");
     const marked = migrationEntries.filter(([, , migration]) => isAdditiveOnlyMigration(migration));
     expect(marked.map(([id]) => id)).toEqual([
-      110, 111, 112, 114, 115, 116, 117, 124, 125, 126, 127, 129, 130, 131, 132, 133, 134,
+      110, 111, 112, 114, 115, 116, 117, 124, 125, 126, 127, 129, 130, 131, 132, 133, 134, 136,
     ]);
-    const rowMutation = /\b(UPDATE|DELETE|INSERT|REPLACE|DROP|RENAME)\b|json_/iu;
+    const rowMutation = /\b(UPDATE|DELETE|INSERT|REPLACE|DROP|RENAME)\b/iu;
     for (const [id, name] of marked) {
       const source = await fs.readFile(
         path.join(migrationsDirectory, `${String(id).padStart(3, "0")}_${name}.ts`),

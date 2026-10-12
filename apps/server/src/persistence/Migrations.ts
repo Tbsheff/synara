@@ -150,6 +150,8 @@ import Migration0131 from "./Migrations/131_ProjectSourceFolders.ts";
 import Migration0132 from "./Migrations/132_PluginStorage.ts";
 import Migration0133 from "./Migrations/133_ProposedPlanPartial.ts";
 import Migration0134 from "./Migrations/134_CloudSubmissions.ts";
+import Migration0135 from "./Migrations/135_DropUnusedReceiptSequenceIndex.ts";
+import Migration0136 from "./Migrations/136_ThreadTitleVersionIndex.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -300,6 +302,8 @@ export const migrationEntries = [
   [132, "PluginStorage", Migration0132],
   [133, "ProposedPlanPartial", Migration0133],
   [134, "CloudSubmissions", Migration0134],
+  [135, "DropUnusedReceiptSequenceIndex", Migration0135],
+  [136, "ThreadTitleVersionIndex", Migration0136],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

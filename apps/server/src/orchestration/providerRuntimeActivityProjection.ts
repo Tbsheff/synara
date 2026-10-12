@@ -2558,12 +2558,16 @@ export function providerActivityUpdateDedupeKey(
 }
 
 export function providerActivityUpdateFingerprint(activity: OrchestrationThreadActivity): string {
-  return stringifyJsonLike({
-    kind: activity.kind,
-    summary: activity.summary,
-    payload: activity.payload,
-    turnId: activity.turnId,
-  });
+  return createHash("sha256")
+    .update(
+      stringifyJsonLike({
+        kind: activity.kind,
+        summary: activity.summary,
+        payload: activity.payload,
+        turnId: activity.turnId,
+      }),
+    )
+    .digest("hex");
 }
 
 function compareActivityPayloadEntries(

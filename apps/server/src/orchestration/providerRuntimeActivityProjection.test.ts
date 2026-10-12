@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import type { OrchestrationThreadActivity, ProviderRuntimeEvent } from "@synara/contracts";
 import {
   ApprovalRequestId,
@@ -766,7 +768,7 @@ describe("provider runtime activity projection", () => {
     expect(providerActivityUpdateDedupeKey(event, THREAD_ID, activity!)).toBe(
       `${THREAD_ID}:codex:tool.updated:tool-1`,
     );
-    expect(providerActivityUpdateFingerprint(activity!)).toContain('"kind":"tool.updated"');
+    expect(providerActivityUpdateFingerprint(activity!)).toMatch(/^[a-f0-9]{64}$/);
   });
 
   it.each(["antigravity"] as const)(
@@ -2456,4 +2458,51 @@ it("ignores malformed provider approval scopes", () => {
     }),
   );
   expect(activity?.payload).not.toHaveProperty("approvalRuleOptions");
+});
+
+describe("activity update fingerprints", () => {
+  const activity: OrchestrationThreadActivity = {
+    id: EventId.makeUnsafe("fingerprint-activity"),
+    kind: "tool.updated",
+    tone: "tool",
+    summary: "Tool progress",
+    payload: { detail: "x".repeat(8_000), status: "running" },
+    turnId: TURN_ID,
+    createdAt: CREATED_AT,
+    sequence: 1,
+  };
+
+  it("retains a fixed-size digest of the unchanged serialized fields", () => {
+    const canonical = JSON.stringify({
+      kind: activity.kind,
+      summary: activity.summary,
+      payload: activity.payload,
+      turnId: activity.turnId,
+    });
+    expect(providerActivityUpdateFingerprint(activity)).toBe(
+      createHash("sha256").update(canonical).digest("hex"),
+    );
+    expect(providerActivityUpdateFingerprint(activity)).toHaveLength(64);
+    expect(
+      providerActivityUpdateFingerprint({
+        ...activity,
+        id: EventId.makeUnsafe("duplicate-id"),
+        tone: "info",
+        createdAt: "2026-07-21T10:00:00.000Z",
+        sequence: 2,
+      }),
+    ).toBe(providerActivityUpdateFingerprint(activity));
+  });
+
+  it("detects changes to each field used for duplicate suppression", () => {
+    const fingerprint = providerActivityUpdateFingerprint(activity);
+    for (const change of [
+      { kind: "task.progress" },
+      { summary: "Changed progress" },
+      { payload: { detail: "x".repeat(8_000), status: "completed" } },
+      { turnId: TurnId.makeUnsafe("other-turn") },
+    ] as const) {
+      expect(providerActivityUpdateFingerprint({ ...activity, ...change })).not.toBe(fingerprint);
+    }
+  });
 });
