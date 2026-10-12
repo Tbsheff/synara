@@ -3070,6 +3070,8 @@ export const OrchestrationSearchThreadsInput = Schema.Struct({
   limit: Schema.optional(
     PositiveInt.check(Schema.isLessThanOrEqualTo(ORCHESTRATION_SEARCH_THREADS_MAX_LIMIT)),
   ),
+  cursor: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(1024))),
+  includeArchived: Schema.optional(Schema.Boolean),
 });
 export type OrchestrationSearchThreadsInput = typeof OrchestrationSearchThreadsInput.Type;
 
@@ -3078,11 +3080,14 @@ export const OrchestrationThreadSearchMatch = Schema.Struct({
   /** Text around the first hit of the thread's best matching message. */
   excerpt: Schema.String.check(Schema.isMaxLength(ORCHESTRATION_SEARCH_THREADS_MAX_EXCERPT_LENGTH)),
   matchCount: PositiveInt,
+  messageId: Schema.optional(MessageId),
+  archived: Schema.optional(Schema.Boolean),
 });
 export type OrchestrationThreadSearchMatch = typeof OrchestrationThreadSearchMatch.Type;
 
 export const OrchestrationSearchThreadsResult = Schema.Struct({
   matches: Schema.Array(OrchestrationThreadSearchMatch),
+  nextCursor: Schema.optional(Schema.String),
 });
 export type OrchestrationSearchThreadsResult = typeof OrchestrationSearchThreadsResult.Type;
 
