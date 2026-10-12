@@ -60,18 +60,27 @@ function activeCustomAnswer(draft: PendingUserInputDraftAnswer | undefined): str
   return draftAnswerMode(draft) === "custom" ? normalizeDraftAnswer(draft?.customAnswer) : null;
 }
 
+export function allowsPendingUserInputCustomAnswer(
+  question: UserInputQuestion | null | undefined,
+): boolean {
+  return question?.isOther !== false || question.options.length === 0;
+}
+
 export function resolvePendingUserInputAnswer(
   question: UserInputQuestion,
   draft: PendingUserInputDraftAnswer | undefined,
 ): string | string[] | null {
-  const customAnswer = question.isOther === false ? null : activeCustomAnswer(draft);
+  const customAnswer = allowsPendingUserInputCustomAnswer(question)
+    ? activeCustomAnswer(draft)
+    : null;
   if (customAnswer) {
     return customAnswer;
   }
 
   const selectedOptionLabels = normalizeSelectedOptionLabels(draft?.selectedOptionLabels).filter(
     (label) =>
-      question.isOther !== false || question.options.some((option) => option.label === label),
+      allowsPendingUserInputCustomAnswer(question) ||
+      question.options.some((option) => option.label === label),
   );
   if (question.multiSelect) {
     return selectedOptionLabels.length > 0 ? selectedOptionLabels : null;
@@ -187,11 +196,11 @@ export function derivePendingUserInputProgress(
     ? resolvePendingUserInputAnswer(activeQuestion, activeDraft)
     : null;
   const customAnswer =
-    activeQuestion?.isOther !== false && draftAnswerMode(activeDraft) === "custom"
+    allowsPendingUserInputCustomAnswer(activeQuestion) && draftAnswerMode(activeDraft) === "custom"
       ? (activeDraft?.customAnswer ?? "")
       : "";
   const usingCustomAnswer =
-    activeQuestion?.isOther !== false && activeCustomAnswer(activeDraft) !== null;
+    allowsPendingUserInputCustomAnswer(activeQuestion) && activeCustomAnswer(activeDraft) !== null;
   const answeredQuestionCount = countAnsweredPendingUserInputQuestions(questions, draftAnswers);
   const isLastQuestion =
     questions.length === 0 ? true : normalizedQuestionIndex >= questions.length - 1;

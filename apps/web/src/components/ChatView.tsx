@@ -1,3 +1,4 @@
+import { allowsPendingUserInputCustomAnswer } from "~/pendingUserInput";
 import { type LegendListRef } from "@legendapp/list/react";
 import {
   parseComputerInvocation,
@@ -1839,7 +1840,7 @@ export default function ChatView({
     isComposerApprovalState ||
     pluginOwnsPendingUserInput ||
     isSidechatExpired ||
-    composerPendingProgress?.activeQuestion?.isOther === false;
+    !allowsPendingUserInputCustomAnswer(composerPendingProgress?.activeQuestion);
   const canCollapsePastedTextToDraft = shouldEnableComposerPastedTextCollapse({
     isComposerApprovalState,
     hasPendingUserInput: pendingUserInputs.length > 0,
@@ -6301,7 +6302,9 @@ export default function ChatView({
                       : pluginOwnsPendingUserInput
                         ? "Answer the question above to continue"
                         : composerPendingProgress
-                          ? composerPendingProgress.activeQuestion?.isOther === false
+                          ? !allowsPendingUserInputCustomAnswer(
+                              composerPendingProgress.activeQuestion,
+                            )
                             ? "Choose a listed option above"
                             : composerPendingProgress.activeQuestion?.options.length === 0
                               ? "Type your answer to continue"

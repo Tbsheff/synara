@@ -313,3 +313,21 @@ describe("options-only questions", () => {
     ).toBe("");
   });
 });
+
+it("accepts free text when isOther is false but no options exist", () => {
+  const question = {
+    id: "free-text",
+    header: "Answer",
+    question: "What should change?",
+    options: [],
+    isOther: false,
+  };
+  const draft = { customAnswer: "Keep the existing API", answerMode: "custom" as const };
+  expect(resolvePendingUserInputAnswer(question, draft)).toBe("Keep the existing API");
+  expect(derivePendingUserInputProgress([question], { [question.id]: draft }, 0)).toMatchObject({
+    customAnswer: "Keep the existing API",
+    usingCustomAnswer: true,
+    canAdvance: true,
+    isComplete: true,
+  });
+});
