@@ -96,6 +96,7 @@ import { withoutProviderCredentialEnvironment } from "./providerChildEnvironment
 import { resolveCodexServiceTier } from "./codexServiceTier.ts";
 import { assertCodexWorkingDirectoryExists } from "./codexWorkingDirectory.ts";
 import { executableIdentity, resolveExecutable } from "./executableLookup.ts";
+import { resolveCodexNativeLaunch } from "./codexNativeLaunch.ts";
 import {
   teardownChildProcessTree,
   teardownProviderProcessTree,
@@ -415,10 +416,12 @@ const CODEX_VERSION_CHECK_MAX_OUTPUT_BYTES = 1024 * 1024;
 /**
  * How long a successful `codex --version` verdict stays valid. Session start and
  * resume both gate on it, so without memoization every one of those paths spawned a
- * fresh Codex process. Failures are never cached, so installing or upgrading Codex
+ * fresh Codex process. It outlives the 30-minute provider idle reaper so a session
+ * restarted after an idle stop reuses the verdict; a cache hit still re-stats the
+ * probed binary, and failures are never cached, so installing or upgrading Codex
  * takes effect immediately.
  */
-const CODEX_VERSION_CHECK_CACHE_TTL_MS = 10 * 60 * 1000;
+const CODEX_VERSION_CHECK_CACHE_TTL_MS = 60 * 60 * 1000;
 
 const ANSI_ESCAPE_CHAR = String.fromCharCode(27);
 const ANSI_ESCAPE_REGEX = new RegExp(`${ANSI_ESCAPE_CHAR}\\[[0-9;]*m`, "g");
@@ -1348,6 +1351,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     const now = new Date().toISOString();
     let context: CodexSessionContext | undefined;
     let gatewaySessionLease: AgentGatewaySessionLease | undefined;
+    let versionGate: Promise<void> | undefined;
     let previousSessionStopped = false;
 
     if (input.resumeCursor !== undefined && !input.expectedCodexContinuationGeneration) {
@@ -1394,7 +1398,8 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       const codexShadowHomePath = codexOptions.shadowHomePath;
       const codexAccountId = codexOptions.accountId;
       const codexEnvironment = codexOptions.environment;
-      await this.assertSupportedCodexCliVersion({
+      assertCodexWorkingDirectoryExists(resolvedCwd);
+      versionGate = this.startCodexCliVersionGate({
         binaryPath: codexBinaryPath,
         cwd: resolvedCwd,
         ...(minimumVersion
@@ -1423,11 +1428,14 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         input.expectedCodexContinuationGeneration,
       );
       const launchAuthFingerprint = processLaunch.authFingerprint;
+      const appServerLaunch = await resolveCodexNativeLaunch(codexBinaryPath, processLaunch.env, {
+        cwd: resolvedCwd,
+      });
       const child = this.spawnAppServer({
         lowerPriority: (await this.runPromise(providerProcessPriorityEnabled)) as boolean,
-        binaryPath: codexBinaryPath,
+        binaryPath: appServerLaunch.binaryPath,
         cwd: resolvedCwd,
-        env: processLaunch.env,
+        env: appServerLaunch.env,
       });
 
       context = {
@@ -1492,6 +1500,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         if (!this.isContextRoutable(context)) throw error;
         log.warn("account/read failed", { error });
       }
+      await versionGate;
 
       const normalizedModel = resolveCodexModelForAccount(
         normalizeCodexModelSlug(input.model),
@@ -1638,16 +1647,19 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       }).pipe(this.runPromise);
       return { ...context.session };
     } catch (error) {
+      const versionGateError = await readCodexCliVersionGateFailure(versionGate);
       const failureError =
+        versionGateError ??
         context?.terminalFailure?.error ??
         (error instanceof Error
           ? error
           : new Error("Failed to start Codex session.", { cause: error }));
-      const cause = context?.transportError ?? failureError;
-      const message = context?.terminalFailure?.message ?? failureError.message;
+      const cause = versionGateError ?? context?.transportError ?? failureError;
+      const message =
+        versionGateError?.message ?? context?.terminalFailure?.message ?? failureError.message;
       if (context) {
         if (
-          !context.terminalFailure &&
+          (versionGateError !== undefined || !context.terminalFailure) &&
           // A stop the failure itself started still reports the failed start;
           // only an unrelated stop or replacement silences it.
           (!context.stopping || context.failureStopping === true) &&
@@ -2413,6 +2425,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     const now = new Date().toISOString();
     let context: CodexSessionContext | undefined;
     let gatewaySessionLease: AgentGatewaySessionLease | undefined;
+    let versionGate: Promise<void> | undefined;
 
     if (!input.expectedCodexContinuationGeneration) {
       throw new Error("Codex native fork requires a verified continuation source generation.");
@@ -2463,7 +2476,8 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         runtimeMode: input.runtimeMode,
         threadOpenMethod: "thread/fork",
       });
-      await this.assertSupportedCodexCliVersion({
+      assertCodexWorkingDirectoryExists(resolvedCwd);
+      versionGate = this.startCodexCliVersionGate({
         binaryPath: codexBinaryPath,
         cwd: resolvedCwd,
         ...(minimumVersion
@@ -2492,12 +2506,15 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       signal?.throwIfAborted();
       const launchAuthFingerprint = processLaunch.authFingerprint;
       const lowerPriority = (await this.runPromise(providerProcessPriorityEnabled)) as boolean;
+      const appServerLaunch = await resolveCodexNativeLaunch(codexBinaryPath, processLaunch.env, {
+        cwd: resolvedCwd,
+      });
       signal?.throwIfAborted();
       const child = this.spawnAppServer({
         lowerPriority,
-        binaryPath: codexBinaryPath,
+        binaryPath: appServerLaunch.binaryPath,
         cwd: resolvedCwd,
-        env: processLaunch.env,
+        env: appServerLaunch.env,
       });
 
       context = {
@@ -2547,6 +2564,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       } catch {
         // Fork can proceed without account metadata; model fallback will stay best-effort.
       }
+      await versionGate;
 
       const normalizedModel =
         input.modelSelection?.provider === "codex"
@@ -2630,16 +2648,19 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         },
       };
     } catch (error) {
+      const versionGateError = await readCodexCliVersionGateFailure(versionGate);
       const failureError =
+        versionGateError ??
         context?.terminalFailure?.error ??
         (error instanceof Error
           ? error
           : new Error("Failed to fork Codex thread.", { cause: error }));
-      const cause = context?.transportError ?? failureError;
-      const message = context?.terminalFailure?.message ?? failureError.message;
+      const cause = versionGateError ?? context?.transportError ?? failureError;
+      const message =
+        versionGateError?.message ?? context?.terminalFailure?.message ?? failureError.message;
       if (context) {
         if (
-          !context.terminalFailure &&
+          (versionGateError !== undefined || !context.terminalFailure) &&
           // A stop the failure itself started still reports the failed start;
           // only an unrelated stop or replacement silences it.
           (!context.stopping || context.failureStopping === true) &&
@@ -4013,11 +4034,14 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     if (launchAuthFingerprint !== expectedAuthFingerprint) {
       throw new Error("Codex authentication changed before discovery launch; retry the request.");
     }
+    const appServerLaunch = await resolveCodexNativeLaunch(codexBinaryPath, processLaunch.env, {
+      cwd: normalizedCwd,
+    });
     const child = this.spawnAppServer({
       lowerPriority: false,
-      binaryPath: codexBinaryPath,
+      binaryPath: appServerLaunch.binaryPath,
       cwd: normalizedCwd,
-      env: processLaunch.env,
+      env: appServerLaunch.env,
     });
     const context: CodexSessionContext = {
       session: {
@@ -5093,6 +5117,14 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     });
   }
 
+  private startCodexCliVersionGate(
+    input: Parameters<typeof assertSupportedCodexCliVersion>[0],
+  ): Promise<void> {
+    const gate = Promise.resolve().then(() => this.assertSupportedCodexCliVersion(input));
+    gate.catch(() => undefined);
+    return gate;
+  }
+
   private async assertSupportedCodexCliVersion(input: {
     readonly binaryPath: string;
     readonly cwd: string;
@@ -5662,20 +5694,25 @@ async function runCodexCliVersionGate(input: {
   });
   const env = await buildCodexProcessEnv({
     ...codexProcessEnvInputForOptions(codexOptions),
+    skipHomeOverlay: true,
     ...(input.expectedSharedContinuationGeneration
       ? { expectedSharedContinuationGeneration: input.expectedSharedContinuationGeneration }
       : {}),
   });
+  const launch = await resolveCodexNativeLaunch(input.binaryPath, env, { cwd: input.cwd });
   // Resolved against the env the spawn below uses, never `process.env`. On macOS and Linux
   // `buildCodexProcessEnv` can replace PATH with the login shell's, so resolving through the
   // process environment could fingerprint a different `codex` than the one being probed — or
   // none at all — and the staleness check would then be watching the wrong file.
-  const resolvedPath = resolveExecutable(input.binaryPath, { env });
+  const resolvedPath =
+    launch.binaryPath !== input.binaryPath
+      ? launch.binaryPath
+      : resolveExecutable(input.binaryPath, { env });
   const identity = resolvedPath ? executableIdentity(resolvedPath) : null;
   const result = await runCodexVersionCommand({
-    binaryPath: input.binaryPath,
+    binaryPath: launch.binaryPath,
     cwd: input.cwd,
-    env,
+    env: launch.env,
   });
 
   if (result.error) {
@@ -5842,6 +5879,18 @@ async function assertSupportedCodexCliVersion(input: {
   );
   codexCliVersionGates.set(key, entry);
   await entry.promise;
+}
+
+async function readCodexCliVersionGateFailure(
+  gate: Promise<void> | undefined,
+): Promise<Error | undefined> {
+  if (!gate) return undefined;
+  try {
+    await gate;
+    return undefined;
+  } catch (error) {
+    return error instanceof Error ? error : new Error(String(error));
+  }
 }
 
 export const __codexCliVersionGateTesting = {

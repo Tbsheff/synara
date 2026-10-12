@@ -45,6 +45,7 @@ import {
 
 export const ORCHESTRATION_WS_METHODS = {
   getSnapshot: "orchestration.getSnapshot",
+  getCounts: "orchestration.getCounts",
   getShellSnapshot: "orchestration.getShellSnapshot",
   getThreadDetailSnapshot: "orchestration.getThreadDetailSnapshot",
   searchThreads: "orchestration.searchThreads",
@@ -2893,6 +2894,14 @@ export type OrchestrationGetSnapshotInput = typeof OrchestrationGetSnapshotInput
 const OrchestrationGetSnapshotResult = OrchestrationReadModel;
 export type OrchestrationGetSnapshotResult = typeof OrchestrationGetSnapshotResult.Type;
 
+export const OrchestrationGetCountsInput = Schema.Struct({});
+export type OrchestrationGetCountsInput = typeof OrchestrationGetCountsInput.Type;
+export const OrchestrationGetCountsResult = Schema.Struct({
+  projectCount: NonNegativeInt,
+  threadCount: NonNegativeInt,
+});
+export type OrchestrationGetCountsResult = typeof OrchestrationGetCountsResult.Type;
+
 export const OrchestrationGetShellSnapshotInput = Schema.Struct({});
 export type OrchestrationGetShellSnapshotInput = typeof OrchestrationGetShellSnapshotInput.Type;
 const OrchestrationGetShellSnapshotResult = OrchestrationShellSnapshot;
@@ -3115,6 +3124,10 @@ export const OrchestrationRpcSchemas = {
   getSnapshot: {
     input: OrchestrationGetSnapshotInput,
     output: OrchestrationGetSnapshotResult,
+  },
+  getCounts: {
+    input: OrchestrationGetCountsInput,
+    output: OrchestrationGetCountsResult,
   },
   getShellSnapshot: {
     input: OrchestrationGetShellSnapshotInput,

@@ -15,6 +15,7 @@ import {
   searchWorkspaceContent,
   searchWorkspaceEntries,
   resolveWorkspaceFileReferences,
+  WorkspaceContentSearchSupersededError,
 } from "./workspaceEntries";
 
 const tempDirs: string[] = [];
@@ -721,5 +722,78 @@ describe("searchWorkspaceContent", () => {
       { path: "zzz-last.txt", lineNumber: 1, lineText: "needle at the end of the alphabet" },
     ]);
     expect(result.truncated).toBe(false);
+  });
+
+  it("stops at the limit with the same rows a full scan returns first", async () => {
+    const cwd = makeTempDir("synara-content-search-early-stop-");
+    const padding = "filler line\n".repeat(30_000);
+    for (let index = 0; index < 40; index += 1) {
+      const name = String(index).padStart(2, "0");
+      const directory = index % 3 === 0 ? "a/deep" : index % 3 === 1 ? "b" : ".";
+      const slow = index % 4 === 0 ? padding : "";
+      writeFile(
+        cwd,
+        `${directory}/file${name}.ts`,
+        `${slow}needle ${name}\nneedle again ${name}\n`,
+      );
+    }
+    const full = await searchWorkspaceContent({ cwd, query: "needle", limit: 200 });
+    expect(full.matches).toHaveLength(80);
+    expect(full.truncated).toBe(false);
+
+    const openSpy = vi.spyOn(fsPromises, "open");
+    for (let run = 0; run < 4; run += 1) {
+      openSpy.mockClear();
+      const limited = await searchWorkspaceContent({ cwd, query: "needle", limit: 7 });
+      expect(limited.matches).toEqual(full.matches.slice(0, 7));
+      expect(limited.truncated).toBe(true);
+      expect(openSpy.mock.calls.length).toBeLessThan(20);
+    }
+  });
+
+  it("aborts an older scan of the same workspace when a newer query starts", async () => {
+    const cwd = makeTempDir("synara-content-search-supersede-");
+    const otherCwd = makeTempDir("synara-content-search-supersede-other-");
+    for (let index = 0; index < 400; index += 1) {
+      writeFile(cwd, `src/file${index}.ts`, `nothing ${index}\n`);
+    }
+    writeFile(cwd, "zz.ts", "fresh needle\n");
+    writeFile(otherCwd, "a.ts", "needle elsewhere\n");
+    await searchWorkspaceContent({ cwd, query: "warm" });
+
+    const older = searchWorkspaceContent({ cwd, query: "absent" });
+    const otherWorkspace = searchWorkspaceContent({ cwd: otherCwd, query: "needle" });
+    const newer = searchWorkspaceContent({ cwd, query: "needle" });
+
+    await expect(older).rejects.toBeInstanceOf(WorkspaceContentSearchSupersededError);
+    expect((await newer).matches).toEqual([
+      { path: "zz.ts", lineNumber: 1, lineText: "fresh needle" },
+    ]);
+    expect((await otherWorkspace).matches).toHaveLength(1);
+  });
+
+  it("stops reading files once the caller's signal aborts", async () => {
+    const cwd = makeTempDir("synara-content-search-signal-");
+    for (let index = 0; index < 400; index += 1) {
+      writeFile(cwd, `src/file${index}.ts`, `nothing ${index}\n`);
+    }
+    await searchWorkspaceContent({ cwd, query: "warm" });
+    const controller = new AbortController();
+    const reason = new Error("caller went away");
+    const realOpen = fsPromises.open;
+    const openSpy = vi
+      .spyOn(fsPromises, "open")
+      .mockImplementation((...args: Parameters<typeof fsPromises.open>) => {
+        if (openSpy.mock.calls.length === 10) controller.abort(reason);
+        return realOpen(...args);
+      });
+
+    await expect(
+      searchWorkspaceContent({ cwd, query: "absent" }, { signal: controller.signal }),
+    ).rejects.toBe(reason);
+    const opensAtAbort = openSpy.mock.calls.length;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(openSpy.mock.calls.length).toBe(opensAtAbort);
+    expect(opensAtAbort).toBeLessThan(400);
   });
 });

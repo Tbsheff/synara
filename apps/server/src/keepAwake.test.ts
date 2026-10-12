@@ -4,7 +4,7 @@ import { resolveExecutable } from "@synara/shared/executable";
 import {
   EventId,
   type OrchestrationEvent,
-  type OrchestrationReadModel,
+  type OrchestrationSession,
   ThreadId,
   TurnId,
 } from "@synara/contracts";
@@ -75,14 +75,12 @@ describe("keepAwake pure helpers", () => {
   });
 
   it("seedActiveThreads collects threads with a running turn", () => {
-    const readModel = {
-      threads: [
-        { id: "t1", session: { status: "running", activeTurnId: "turn-1" } },
-        { id: "t2", session: { status: "running", activeTurnId: null } },
-        { id: "thread-without-session", session: null },
-      ],
-    } as unknown as Pick<OrchestrationReadModel, "threads">;
-    expect([...seedActiveThreads(readModel)]).toEqual(["t1"]);
+    const sessions = [
+      { threadId: "t1", status: "running", activeTurnId: "turn-1" },
+      { threadId: "t2", status: "running", activeTurnId: null },
+      { threadId: "t3", status: "ready", activeTurnId: "turn-3" },
+    ] as unknown as Parameters<typeof seedActiveThreads>[0];
+    expect([...seedActiveThreads(sessions)]).toEqual(["t1"]);
   });
 
   it("applySessionEvent adds and removes threads on thread.session-set", () => {
@@ -156,19 +154,11 @@ function makeHarness(input: {
     },
     restartDelay: () => input.restartDelay ?? Duration.zero,
   };
-  const readModel = {
-    snapshotSequence: 0,
-    spaces: [],
-    projects: [],
-    updatedAt: NOW,
-    threads: (input.initialThreads ?? []).map((thread) => ({
-      id: thread.id,
-      session:
-        thread.activeTurnId === null
-          ? null
-          : { status: "running", activeTurnId: thread.activeTurnId },
-    })),
-  } as unknown as OrchestrationReadModel;
+  const sessions = (input.initialThreads ?? []).flatMap((thread) =>
+    thread.activeTurnId === null
+      ? []
+      : [{ threadId: thread.id, status: "running", activeTurnId: thread.activeTurnId }],
+  ) as unknown as ReadonlyArray<OrchestrationSession>;
 
   const layer = Effect.gen(function* () {
     const eventsPubSub = yield* PubSub.unbounded<OrchestrationEvent>();
@@ -178,7 +168,8 @@ function makeHarness(input: {
       ),
     } as unknown as (typeof OrchestrationEngineService)["Service"];
     const snapshotQuery = {
-      getSnapshot: () => Effect.succeed(readModel),
+      getSnapshot: () => Effect.die(new Error("keep-awake must not hydrate the full snapshot")),
+      listThreadSessions: () => Effect.succeed(sessions),
     } as unknown as (typeof ProjectionSnapshotQuery)["Service"];
     const keepAwakeLayer = Layer.effect(KeepAwakeService, makeKeepAwake(runtime)).pipe(
       Layer.provideMerge(ServerSettingsService.layerTest({ keepAwakeMode: input.mode })),

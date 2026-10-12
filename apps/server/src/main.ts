@@ -68,6 +68,7 @@ import { ProviderSessionReaperLive } from "./provider/Layers/ProviderSessionReap
 import { ProviderRuntimeReconcilerLive } from "./provider/Layers/ProviderRuntimeReconciler";
 import { Server } from "./effectServer";
 import { ServerLoggerLive } from "./serverLogger";
+import { ServerTracingLive } from "./serverTracing";
 import { ServerSettingsService } from "./serverSettings";
 import { formatHostForUrl, isLoopbackHost, isWildcardHost } from "./startupAccess";
 import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine";
@@ -419,6 +420,7 @@ const LayerLive = (input: CliInput) => {
     Layer.provideMerge(SqlitePersistence.layerConfig),
     Layer.provideMerge(ServerLoggerLive),
     Layer.provideMerge(ServerConfigLive(input)),
+    Layer.provideMerge(ServerTracingLive),
   );
 };
 

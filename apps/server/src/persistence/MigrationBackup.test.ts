@@ -23,9 +23,11 @@ import {
   TRACKER_REPAIR_SNAPSHOT_RETENTION,
   createMigrationBackup,
   estimateMigrationBackupRequiredBytes,
+  inspectMigrationBackupPlan,
   inspectPendingMigrationRecovery,
   migrationBackupDirectory,
   migrationRecoveryMarkerPath,
+  pendingMigrationsAreAdditiveOnly,
   reclaimOrphanedMigrationArtifacts,
   requireNoPendingMigrationRecovery,
   restoreMarkedMigrationBackup,
@@ -36,6 +38,7 @@ import { migrationEntries, runMigrations } from "./Migrations.ts";
 import * as NodeSqliteClient from "./NodeSqliteClient.ts";
 import { makeSqlitePersistenceLive } from "./Layers/Sqlite.ts";
 import PluginStorageMigration from "./Migrations/132_PluginStorage.ts";
+import { isAdditiveOnlyMigration } from "./Migrations/additiveOnly.ts";
 
 vi.mock("node:fs/promises", async () => {
   const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
@@ -1045,6 +1048,109 @@ describe("migration backups", () => {
     // A current schema is a no-op startup and must not consume retention slots.
     expect(await startDatabase()).toBe(migrationEntries.length);
     expect(await backupPaths(dbPath)).toEqual([]);
+  });
+
+  it("skips the snapshot when every pending migration is additive-only and still prunes", async () => {
+    const dbPath = await makeDbPath();
+    const lastNonAdditiveMigrationId = 128;
+    expect(pendingMigrationsAreAdditiveOnly([lastNonAdditiveMigrationId])).toBe(false);
+
+    await runWithDatabase(
+      dbPath,
+      Effect.gen(function* () {
+        yield* runMigrations({ toMigrationInclusive: lastNonAdditiveMigrationId });
+        for (let version = 0; version < MIGRATION_BACKUP_RETENTION + 2; version += 1) {
+          yield* createMigrationBackup(dbPath, {
+            sourceVersion: `v${version}`,
+            targetVersion: version + 1,
+          });
+        }
+        yield* Effect.promise(() => fs.rm(migrationBackupProvenancePath(dbPath), { force: true }));
+        const before = new Set(yield* Effect.promise(() => backupPaths(dbPath)));
+
+        yield* runWithPreMigrationBackup(dbPath, runMigrations());
+
+        const after = yield* Effect.promise(() => backupPaths(dbPath));
+        expect(after).toHaveLength(MIGRATION_BACKUP_RETENTION);
+        expect(after.every((backupPath) => before.has(backupPath))).toBe(true);
+        const sql = yield* SqlClient.SqlClient;
+        const tracker = yield* sql<{ readonly migrationId: number }>`
+          SELECT MAX(migration_id) AS "migrationId" FROM effect_sql_migrations
+        `;
+        expect(tracker[0]?.migrationId).toBe(Math.max(...migrationEntries.map(([id]) => id)));
+      }),
+    );
+
+    await expect(fs.stat(migrationRecoveryMarkerPath(dbPath))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(fs.stat(migrationBackupProvenancePath(dbPath))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("keeps the snapshot when any pending migration is not marked additive-only", async () => {
+    const dbPath = await makeDbPath();
+
+    await runWithDatabase(
+      dbPath,
+      Effect.gen(function* () {
+        yield* runMigrations({ toMigrationInclusive: 127 });
+        yield* runWithPreMigrationBackup(dbPath, runMigrations());
+      }),
+    );
+
+    expect(await backupPaths(dbPath)).toHaveLength(1);
+    expect(path.basename((await backupPaths(dbPath))[0]!)).toContain("pre-migration-v127-to-v");
+  });
+
+  it.each([104, 109])(
+    "keeps the snapshot when the tracker needs an alias repair at %i",
+    async (historicalId) => {
+      const dbPath = await makeDbPath();
+
+      const plan = await runWithDatabase(
+        dbPath,
+        Effect.gen(function* () {
+          const sql = yield* SqlClient.SqlClient;
+          yield* runMigrations({ toMigrationInclusive: historicalId - 1 });
+          yield* PluginStorageMigration;
+          yield* sql`
+            INSERT INTO effect_sql_migrations (migration_id, name)
+            VALUES (${historicalId}, 'PluginStorage')
+          `;
+          return yield* inspectMigrationBackupPlan;
+        }),
+      );
+
+      expect(plan).not.toBeNull();
+      expect(plan?.pendingMigrationIds).toBeUndefined();
+    },
+  );
+
+  it("treats empty, unknown and unmarked pending sets as needing a snapshot", () => {
+    expect(pendingMigrationsAreAdditiveOnly([])).toBe(false);
+    expect(pendingMigrationsAreAdditiveOnly([Number.MAX_SAFE_INTEGER])).toBe(false);
+    expect(pendingMigrationsAreAdditiveOnly([123])).toBe(false);
+    expect(pendingMigrationsAreAdditiveOnly([131, 132])).toBe(true);
+    expect(pendingMigrationsAreAdditiveOnly([128, 129, 130, 131, 132])).toBe(false);
+  });
+
+  it("marks as additive-only only migrations whose SQL never touches existing rows", async () => {
+    const migrationsDirectory = path.join(import.meta.dirname, "Migrations");
+    const marked = migrationEntries.filter(([, , migration]) => isAdditiveOnlyMigration(migration));
+    expect(marked.map(([id]) => id)).toEqual([
+      110, 111, 112, 114, 115, 116, 117, 124, 125, 126, 127, 129, 130, 131, 132,
+    ]);
+    const rowMutation = /\b(UPDATE|DELETE|INSERT|REPLACE|DROP|RENAME)\b|json_/iu;
+    for (const [id, name] of marked) {
+      const source = await fs.readFile(
+        path.join(migrationsDirectory, `${String(id).padStart(3, "0")}_${name}.ts`),
+        "utf8",
+      );
+      const code = source.replaceAll(/\/\*[\s\S]*?\*\//gu, "").replaceAll(/^\s*\/\/.*$/gmu, "");
+      expect({ id, mutates: rowMutation.test(code) }).toEqual({ id, mutates: false });
+    }
   });
 
   it("repairs SQLite files before the live connection executes any statement", async () => {

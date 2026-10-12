@@ -1384,6 +1384,8 @@ const makeWsRpcHandlersLayer = () =>
             projectionReadModelQuery.getSnapshot(),
             "Failed to load orchestration snapshot",
           ),
+        [ORCHESTRATION_WS_METHODS.getCounts]: () =>
+          rpcEffect(projectionReadModelQuery.getCounts(), "Failed to load orchestration counts"),
         [ORCHESTRATION_WS_METHODS.getShellSnapshot]: () =>
           rpcEffect(
             projectionReadModelQuery.getShellSnapshot(),

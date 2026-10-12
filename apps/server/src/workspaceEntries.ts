@@ -1002,12 +1002,39 @@ async function searchFileContent(
   }
 }
 
+const contentSearchPathCollator = new Intl.Collator();
+
+const contentSearchFilePathsByIndex = new WeakMap<WorkspaceIndex, ReadonlyArray<string>>();
+
+function contentSearchFilePaths(index: WorkspaceIndex): ReadonlyArray<string> {
+  const cached = contentSearchFilePathsByIndex.get(index);
+  if (cached) {
+    return cached;
+  }
+  const filePaths = index.entries
+    .filter((entry) => entry.kind === "file")
+    .map((entry) => entry.path)
+    .toSorted(contentSearchPathCollator.compare);
+  contentSearchFilePathsByIndex.set(index, filePaths);
+  return filePaths;
+}
+
+export class WorkspaceContentSearchSupersededError extends Error {
+  constructor() {
+    super("A newer content search for this workspace replaced this one.");
+    this.name = "WorkspaceContentSearchSupersededError";
+  }
+}
+
+const activeContentSearchByCwd = new Map<string, AbortController>();
+
 // Grep-style keyword search over the project's tracked workspace files.
 // Reuses the workspace index (git ls-files when available) so the file set
 // respects .gitignore, then scans file contents with a hard time budget and
 // per-file match caps so a query in a large repository stays responsive.
 export async function searchWorkspaceContent(
   input: ProjectSearchContentInput,
+  options: { readonly signal?: AbortSignal } = {},
 ): Promise<ProjectSearchContentResult> {
   const normalizedQuery = input.query.trim().toLowerCase();
   if (normalizedQuery.length < CONTENT_SEARCH_MIN_QUERY_LENGTH) {
@@ -1019,60 +1046,77 @@ export async function searchWorkspaceContent(
     Math.min(input.limit ?? CONTENT_SEARCH_DEFAULT_LIMIT, CONTENT_SEARCH_MAX_LIMIT),
   );
 
-  const index = await getWorkspaceIndex(input.cwd);
-  // Scan every indexed file: the time budget is the only scan bound. A fixed
-  // file-count cap over the localeCompare-sorted index would permanently
-  // exclude directories late in the alphabet, silently, on every query.
-  const filePaths = index.entries
-    .filter((entry) => entry.kind === "file")
-    .map((entry) => entry.path);
+  const generation = new AbortController();
+  activeContentSearchByCwd.get(input.cwd)?.abort(new WorkspaceContentSearchSupersededError());
+  activeContentSearchByCwd.set(input.cwd, generation);
+  const signal = options.signal
+    ? AbortSignal.any([generation.signal, options.signal])
+    : generation.signal;
 
-  const deadline = Date.now() + CONTENT_SEARCH_TIME_BUDGET_MS;
-  const collected: ContentSearchMatch[] = [];
-  let scannedFiles = 0;
-  let truncated = index.truncated;
+  try {
+    signal.throwIfAborted();
+    const index = await getWorkspaceIndex(input.cwd);
+    signal.throwIfAborted();
+    const filePaths = contentSearchFilePaths(index);
+    const deadline = Date.now() + CONTENT_SEARCH_TIME_BUDGET_MS;
+    const fileMatches: Array<ReadonlyArray<ContentSearchMatch> | undefined> = [];
+    let nextIndex = 0;
+    let settledPrefix = 0;
+    let settledMatchCount = 0;
+    let scanEnd = filePaths.length;
+    let timedOut = false;
 
-  let nextIndex = 0;
-  const workers = Array.from(
-    { length: Math.max(1, Math.min(CONTENT_SEARCH_LINE_READ_CONCURRENCY, filePaths.length)) },
-    async () => {
-      while (nextIndex < filePaths.length) {
-        if (Date.now() > deadline) {
-          truncated = true;
-          break;
-        }
-        const currentIndex = nextIndex;
-        nextIndex += 1;
-        const fileMatches = await searchFileContent(
-          input.cwd,
-          filePaths[currentIndex] as string,
-          normalizedQuery,
-        );
-        scannedFiles += 1;
-        if (fileMatches && fileMatches.length > 0) {
-          collected.push(...fileMatches);
+    const settlePrefix = () => {
+      while (settledPrefix < scanEnd) {
+        const matches = fileMatches[settledPrefix];
+        if (matches === undefined) return;
+        settledMatchCount += matches.length;
+        settledPrefix += 1;
+        if (settledMatchCount >= limit) {
+          scanEnd = settledPrefix;
         }
       }
-    },
-  );
-  await Promise.all(workers);
+    };
 
-  if (Date.now() > deadline) {
-    truncated = true;
+    const workers = Array.from(
+      { length: Math.max(1, Math.min(CONTENT_SEARCH_LINE_READ_CONCURRENCY, filePaths.length)) },
+      async () => {
+        while (nextIndex < scanEnd && !signal.aborted) {
+          if (Date.now() > deadline) {
+            timedOut = true;
+            break;
+          }
+          const currentIndex = nextIndex;
+          nextIndex += 1;
+          const matches = await searchFileContent(
+            input.cwd,
+            filePaths[currentIndex] as string,
+            normalizedQuery,
+          );
+          fileMatches[currentIndex] = matches ?? [];
+          settlePrefix();
+        }
+      },
+    );
+    await Promise.all(workers);
+    signal.throwIfAborted();
+
+    const collected: ContentSearchMatch[] = [];
+    for (let fileIndex = 0; fileIndex < scanEnd; fileIndex += 1) {
+      const matches = fileMatches[fileIndex];
+      if (matches) collected.push(...matches);
+    }
+
+    return {
+      matches: collected.slice(0, limit),
+      truncated:
+        index.truncated || timedOut || settledPrefix < filePaths.length || collected.length > limit,
+    };
+  } finally {
+    if (activeContentSearchByCwd.get(input.cwd) === generation) {
+      activeContentSearchByCwd.delete(input.cwd);
+    }
   }
-
-  const orderedMatches = collected
-    .toSorted((left, right) => {
-      const pathDelta = left.path.localeCompare(right.path);
-      if (pathDelta !== 0) return pathDelta;
-      return left.lineNumber - right.lineNumber;
-    })
-    .slice(0, limit);
-
-  return {
-    matches: orderedMatches,
-    truncated: truncated || collected.length > limit || scannedFiles < filePaths.length,
-  };
 }
 
 // Resolve a workspace-relative reference that omits its leading directories.

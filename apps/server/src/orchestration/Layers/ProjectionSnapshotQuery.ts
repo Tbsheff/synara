@@ -1611,6 +1611,31 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       `,
   });
 
+  const listExistingThreadSessionRows = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: ProjectionThreadSessionDbRowSchema,
+    execute: () =>
+      sql`
+        SELECT
+          sessions.thread_id AS "threadId",
+          sessions.status,
+          sessions.provider_name AS "providerName",
+          sessions.provider_instance_id AS "providerInstanceId",
+          sessions.provider_session_id AS "providerSessionId",
+          sessions.provider_thread_id AS "providerThreadId",
+          sessions.runtime_mode AS "runtimeMode",
+          sessions.active_turn_id AS "activeTurnId",
+          sessions.last_error AS "lastError",
+          sessions.last_activity_at AS "lastActivityAt",
+          sessions.last_progress_at AS "lastProgressAt",
+          sessions.updated_at AS "updatedAt"
+        FROM projection_thread_sessions AS sessions
+        INNER JOIN projection_threads AS threads
+          ON threads.thread_id = sessions.thread_id
+        ORDER BY sessions.thread_id ASC
+      `,
+  });
+
   const listCheckpointRows = SqlSchema.findAll({
     Request: Schema.Void,
     Result: ProjectionCheckpointDbRowSchema,
@@ -3099,6 +3124,17 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       ),
     );
 
+  const listThreadSessions: ProjectionSnapshotQueryShape["listThreadSessions"] = () =>
+    listExistingThreadSessionRows(undefined).pipe(
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "ProjectionSnapshotQuery.listThreadSessions:query",
+          "ProjectionSnapshotQuery.listThreadSessions:decodeRows",
+        ),
+      ),
+      Effect.map((rows) => rows.map(toProjectedSession)),
+    );
+
   const getSnapshotSequence: ProjectionSnapshotQueryShape["getSnapshotSequence"] = () =>
     listProjectionStateRows(undefined).pipe(
       Effect.mapError(
@@ -3808,6 +3844,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     getSnapshot,
     getShellSnapshot,
     getCounts,
+    listThreadSessions,
     getSnapshotSequence,
     listStaleInFlightThreadIds,
     listThreadProgressIncludingNativeChildren,

@@ -596,7 +596,10 @@ export function createWsNativeApi(): NativeApi {
       searchEntries: (input) => transport.request(WS_METHODS.projectsSearchEntries, input),
       searchLocalEntries: (input) =>
         transport.request(WS_METHODS.projectsSearchLocalEntries, input),
-      searchContent: (input) => transport.request(WS_METHODS.projectsSearchContent, input),
+      searchContent: (input, options) =>
+        options?.signal
+          ? transport.request(WS_METHODS.projectsSearchContent, input, { signal: options.signal })
+          : transport.request(WS_METHODS.projectsSearchContent, input),
       prewarmSearchIndex: (input) =>
         transport.request(WS_METHODS.projectsPrewarmSearchIndex, input),
       readFile: (input, options) =>
@@ -843,6 +846,7 @@ export function createWsNativeApi(): NativeApi {
     },
     orchestration: {
       getSnapshot: () => transport.request(ORCHESTRATION_WS_METHODS.getSnapshot),
+      getCounts: () => transport.request(ORCHESTRATION_WS_METHODS.getCounts),
       getShellSnapshot: () => transport.request(ORCHESTRATION_WS_METHODS.getShellSnapshot),
       getThreadDetailSnapshot: (input) =>
         transport.request(ORCHESTRATION_WS_METHODS.getThreadDetailSnapshot, input),

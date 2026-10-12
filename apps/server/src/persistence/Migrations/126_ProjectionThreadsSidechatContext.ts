@@ -1,6 +1,8 @@
 import * as Effect from "effect/Effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
+import { additiveOnlyMigration } from "./additiveOnly.ts";
+
 import { columnExists } from "./schemaHelpers.ts";
 
 /**
@@ -8,13 +10,15 @@ import { columnExists } from "./schemaHelpers.ts";
  * about. Additive and nullable: every existing thread reads back as `null`, and a Stable build
  * that never writes the column ignores it.
  */
-export default Effect.gen(function* () {
-  const sql = yield* SqlClient.SqlClient;
+export default additiveOnlyMigration(
+  Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
 
-  if (!(yield* columnExists(sql, "projection_threads", "sidechat_context_json"))) {
-    yield* sql`
+    if (!(yield* columnExists(sql, "projection_threads", "sidechat_context_json"))) {
+      yield* sql`
       ALTER TABLE projection_threads
       ADD COLUMN sidechat_context_json TEXT
     `;
-  }
-});
+    }
+  }),
+);

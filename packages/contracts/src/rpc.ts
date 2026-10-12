@@ -453,6 +453,12 @@ export const WsOrchestrationGetSnapshotRpc = Rpc.make(ORCHESTRATION_WS_METHODS.g
   error: WsRpcError,
 });
 
+export const WsOrchestrationGetCountsRpc = Rpc.make(ORCHESTRATION_WS_METHODS.getCounts, {
+  payload: OrchestrationRpcSchemas.getCounts.input,
+  success: OrchestrationRpcSchemas.getCounts.output,
+  error: WsRpcError,
+});
+
 export const WsOrchestrationGetShellSnapshotRpc = Rpc.make(
   ORCHESTRATION_WS_METHODS.getShellSnapshot,
   {
@@ -1937,6 +1943,7 @@ export const WsFeatureRpcGroup = RpcGroup.make(
   WsLoadProjectImportHistoryRpc,
   WsOrchestrationRegenerateThreadTitleRpc,
   WsOrchestrationGetSnapshotRpc,
+  WsOrchestrationGetCountsRpc,
   WsOrchestrationGetShellSnapshotRpc,
   WsOrchestrationGetThreadDetailSnapshotRpc,
   WsOrchestrationSearchThreadsRpc,

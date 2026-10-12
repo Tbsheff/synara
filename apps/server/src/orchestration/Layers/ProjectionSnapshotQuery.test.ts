@@ -1956,6 +1956,68 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
     }),
   );
 
+  it.effect("lists the same thread sessions the full snapshot attaches to threads", () =>
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+
+      yield* sql`DELETE FROM projection_projects`;
+      yield* sql`DELETE FROM projection_threads`;
+      yield* sql`DELETE FROM projection_thread_sessions`;
+      yield* sql`
+        INSERT INTO projection_threads (
+          thread_id, project_id, title, model_selection_json, branch, worktree_path,
+          latest_turn_id, created_at, updated_at, deleted_at
+        )
+        VALUES
+          (
+            'thread-live', 'project-sessions', 'Live', '{"provider":"codex","model":"gpt-5-codex"}',
+            NULL, NULL, NULL, '2026-03-01T00:00:00.000Z', '2026-03-01T00:00:01.000Z', NULL
+          ),
+          (
+            'thread-deleted', 'project-sessions', 'Deleted',
+            '{"provider":"codex","model":"gpt-5-codex"}', NULL, NULL, NULL,
+            '2026-03-01T00:00:00.000Z', '2026-03-01T00:00:01.000Z', '2026-03-01T00:00:02.000Z'
+          ),
+          (
+            'thread-idle', 'project-sessions', 'Idle', '{"provider":"codex","model":"gpt-5-codex"}',
+            NULL, NULL, NULL, '2026-03-01T00:00:00.000Z', '2026-03-01T00:00:01.000Z', NULL
+          )
+      `;
+      yield* sql`
+        INSERT INTO projection_thread_sessions (
+          thread_id, status, provider_name, provider_session_id, provider_thread_id,
+          runtime_mode, active_turn_id, last_error, updated_at
+        )
+        VALUES
+          (
+            'thread-live', 'running', 'codex', 'session-live', 'provider-live',
+            'full-access', 'turn-live', NULL, '2026-03-01T00:00:03.000Z'
+          ),
+          (
+            'thread-deleted', 'running', 'codex', 'session-deleted', 'provider-deleted',
+            'full-access', 'turn-deleted', NULL, '2026-03-01T00:00:03.000Z'
+          ),
+          (
+            'thread-orphan', 'running', 'codex', 'session-orphan', 'provider-orphan',
+            'full-access', 'turn-orphan', NULL, '2026-03-01T00:00:03.000Z'
+          )
+      `;
+
+      const sessions = yield* snapshotQuery.listThreadSessions();
+      const snapshot = yield* snapshotQuery.getSnapshot();
+
+      assert.deepEqual(
+        sessions,
+        snapshot.threads.flatMap((thread) => (thread.session ? [thread.session] : [])),
+      );
+      assert.deepEqual(
+        sessions.map((session) => session.threadId),
+        [ThreadId.makeUnsafe("thread-deleted"), ThreadId.makeUnsafe("thread-live")],
+      );
+    }),
+  );
+
   it.effect("hydrates shell reads from stored thread summary columns", () =>
     Effect.gen(function* () {
       const snapshotQuery = yield* ProjectionSnapshotQuery;
