@@ -65,8 +65,13 @@ export function useTimelineRowOverlapGuard(
   const tailFollowListRef = tailFollow?.listRef;
   const tailFollowEnabled = tailFollow?.enabled === true;
   const tailFollowRef = useRef({ listRef: tailFollowListRef, enabled: tailFollowEnabled });
+  const pendingTailFollowFrameRef = useRef<number | null>(null);
   useLayoutEffect(() => {
     tailFollowRef.current = { listRef: tailFollowListRef, enabled: tailFollowEnabled };
+    if (!tailFollowEnabled && pendingTailFollowFrameRef.current !== null) {
+      window.cancelAnimationFrame(pendingTailFollowFrameRef.current);
+      pendingTailFollowFrameRef.current = null;
+    }
   }, [tailFollowListRef, tailFollowEnabled]);
   const followTailBeforePaint = useCallback(function followTail(): void {
     if (!tailFollowRef.current.enabled) return;
@@ -218,7 +223,14 @@ export function useTimelineRowOverlapGuard(
     (entries?: readonly ResizeObserverEntry[]) => {
       pushOverlappingRowsDown(entries);
       endContentAtShrunkTailBeforePaint(entries);
-      followTailBeforePaint();
+      if (entries) {
+        followTailBeforePaint();
+      } else if (tailFollowRef.current.enabled && pendingTailFollowFrameRef.current === null) {
+        pendingTailFollowFrameRef.current = window.requestAnimationFrame(() => {
+          pendingTailFollowFrameRef.current = null;
+          followTailBeforePaint();
+        });
+      }
     },
     [endContentAtShrunkTailBeforePaint, followTailBeforePaint, pushOverlappingRowsDown],
   );
@@ -229,6 +241,7 @@ export function useTimelineRowOverlapGuard(
     if (!(scroller instanceof HTMLElement)) return;
     const viewportResizes = new ResizeObserver(followTailBeforePaint);
     viewportResizes.observe(scroller);
+    if (scroller.firstElementChild) viewportResizes.observe(scroller.firstElementChild);
     return () => viewportResizes.disconnect();
   }, [followTailBeforePaint, tailFollowEnabled, tailFollowListRef]);
 
@@ -236,6 +249,10 @@ export function useTimelineRowOverlapGuard(
     const observedRows = observedRowsRef.current;
     const positionObservers = positionObserversRef.current;
     return () => {
+      if (pendingTailFollowFrameRef.current !== null) {
+        window.cancelAnimationFrame(pendingTailFollowFrameRef.current);
+        pendingTailFollowFrameRef.current = null;
+      }
       observerRef.current?.disconnect();
       observerRef.current = null;
       observedRows.clear();
