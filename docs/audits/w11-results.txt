@@ -1,0 +1,110 @@
+W11 transcript and timeline audit
+Base: feat/transcript-parity at b616e6c6a. Scope: all 13 W11 rows.
+
+Fixed rows. Paths below are relative to the repository root.
+
+§2 #20 — apps/web/src/components/chat/useChatTranscriptScroll.ts
+Test: transcriptScroll.test.ts, "does not resume a detached reader when layout shrink reaches the end".
+Before: expected false, received true. Browser regression also covers the hook after a height shrink.
+Change: geometry alone cannot clear reader detachment; user scrolling or an explicit end jump can.
+
+§3 #12 — apps/web/src/components/ChatMarkdown.tsx; apps/web/src/lib/markdownStreamingRepair.ts
+Tests: "does not rescan completed code lines on each output chunk"; "bounds repair time for unmatched code runs"; "bounds repair time for mixed emphasis markers"; "bounds normalization time for many unmatched brackets".
+Before: scanned 99,690 characters; assertion required less than 5,958. The three time assertions required less than 1,000 ms and measured 1,825.57 ms, 2,677.31 ms, and 5,446.52 ms.
+Change: retain completed-line state, index bracket/code-run pairs once, and keep separate emphasis indexes. Mutable tail text still needs repair. Existing prefix and block identity tests cover syntax and edits.
+
+§6 #5 — apps/web/src/components/chat/toolCallGroup.logic.ts
+Tests: "shows failed and stopped counts in a folded tool summary"; "counts failed exit codes and interrupted commands in settled summaries".
+Before: expected "Ran commands · 1 failed, 1 stopped", received "Ran commands".
+Change: folded summaries include failed and stopped counts, including command outcomes.
+
+§6 #6 — apps/web/src/components/chat/TimelineWorkEntryRow.tsx
+Test: TimelineWorkEntryRow.typedRows.test.tsx, "keeps the Read result disclosure when a file opener exists".
+Before: expected data-tool-detail-trigger="true"; markup omitted it.
+Change: captured Read results and errors remain available beside Open file.
+
+§6 #11 — apps/web/src/components/ChatMarkdown.tsx
+Tests: ChatMarkdown.copy.test.tsx, "copies the raw fenced source without removing its indentation"; "reports a rejected code copy".
+Before: expected "    if ok:\n        run()\n", received "if ok:\n    run()\n". Expected an error toast; received zero calls.
+Change: code copy keeps raw indentation and reports clipboard failure.
+
+§6 #12 — apps/web/src/components/chat/GeneratedMarkdownImage.tsx; apps/web/src/index.css
+Test: GeneratedMarkdownImage.test.tsx, "renders a plain frame without an image viewer".
+Before: expected no aria-label="Expand generated image"; markup contained the inert button.
+Change: previews without a viewer have no expansion control or zoom cursor. Download remains available.
+
+§6 #18 — apps/web/src/components/ui/dialog.tsx
+Test: dialog.test.tsx, "gives the shared dialog backdrop a reduced motion rule".
+Before: expected motion-reduce:transition-none; markup omitted it.
+Change: shared dialog surfaces use disclosureMotion.ts rules. A browser test checks computed transition durations.
+
+§7 #9 — apps/web/src/workLog.ts; apps/web/src/components/chat/useChatWorkLog.ts; TimelineWorkEntryRow.tsx; ToolCallDetailsDialog.tsx
+Test: workLog.test.ts, "retains settled routed subagent history with outcome and route".
+Before: expected the settled entry; received [].
+Change: settled routed work stays in the parent, with outcome, last update, prompt, and an action that opens the resolved child thread.
+
+§7 #10 — apps/server/src/orchestration/exportThreadArchive.ts
+Test: exportThreadArchive.test.ts, "exports ordered work, outcomes and turn links in both archive files".
+Before: expected the ordered activities array; received undefined.
+Change: thread.json keeps activities and message turn IDs. transcript.md interleaves work as expandable sections with captured payloads.
+
+§7 #11 — apps/web/src/components/chat/threadFind.logic.ts; MessagesTimeline.logic.ts; MessagesTimeline.tsx; TimelineWorkEntryRow.tsx; apps/web/src/components/ChatView.tsx
+Tests: "finds command text and captured tool output by work entry id"; "opens settled turn that owns work find match".
+Before: expected one output match, received []; expected the owning terminal row, received null.
+Change: find indexes captured work, opens folded groups and settled turns, and shows the selected source excerpt with the existing find renderer.
+
+§7 #12 — apps/web/src/components/chat/ToolCallDetailsDialog.tsx
+Test: "offers separate copy controls for command and split output".
+Before: expected aria-label="Copy command"; markup omitted it.
+Change: reuse CopyTextButton for command, output, stdout, and stderr.
+Dropped part: nested output tail-follow already exists in feat/transcript-parity commit 79cf31f36. No full row was dropped.
+
+§7 #13 — apps/web/src/components/chat/ThreadErrorBanner.tsx
+Test: ThreadErrorBanner.test.tsx, "gives a cause-based next step for %s" (authentication, missing CLI, connection, rate limit).
+Before: expected data-thread-error-recovery="true"; markup omitted it for each known cause.
+Change: known causes suggest sign-in, install/path setup, retry, or wait. Unknown errors keep their original text.
+
+§7 #17 — apps/web/src/components/ChatMarkdown.tsx; apps/web/src/components/chat/MarkdownMermaidBlock.tsx; apps/web/src/lib/remarkBackslashMath.ts
+Tests: "renders backslash math outside code and links"; "offers a lazy diagram view for settled Mermaid source"; "keeps Markdown emphasis markers inside backslash math".
+Before: expected class="katex" or data-mermaid-block="true"; markup omitted them. The emphasis case rendered <em>b</em> instead of math.
+Change: settled Mermaid blocks load a renderer with source/failure fallback. Backslash math keeps source positions, excludes code/links, and consumes emphasis markers as math source.
+Mermaid settings use strict security and lock source-controlled overrides, following https://mermaid.js.org/config/schema-docs/config-properties-securitylevel.html and https://mermaid.js.org/config/setup/mermaid/interfaces/MermaidConfig.html.
+
+Reuse: CopyTextButton, Button, existing detail sections, ChatFindRenderProvider, FindAwareMarkdownText, and disclosureMotion.ts. No comparable Mermaid renderer existed; added one lazy renderer. Updated docs/core-concepts.md.
+
+Verification:
+- bun run fmt:check: passed.
+- bun run lint: passed, 0 errors, 978 warnings; filesystem budget passed.
+- bun run typecheck: passed, all 8 tasks.
+- bun run --cwd apps/web test <16 affected files> --maxWorkers=1 --no-file-parallelism: 575 tests passed. Files: workLog.test.ts; ChatMarkdown.test.tsx; ChatMarkdown.copy.test.tsx; ChatMarkdown.blocks.test.tsx; transcriptScroll.test.ts; toolCallGroup.logic.test.ts; TimelineWorkEntryRow.typedRows.test.tsx; ToolCallDetailsDialog.test.tsx; GeneratedMarkdownImage.test.tsx; ThreadErrorBanner.test.tsx; threadFind.logic.test.ts; MessagesTimeline.logic.test.ts; MarkdownMermaidBlock.test.ts; ComposerSubagentStrip.logic.test.ts; ui/dialog.test.tsx; markdownStreamingRepair.test.ts.
+- bun run --cwd apps/server test src/orchestration/exportThreadArchive.test.ts: 6 tests passed.
+- Browser command, from apps/web: ../../node_modules/.bin/vitest run --config vitest.browser.config.ts --root . src/components/chat/useChatTranscriptScroll.browser.tsx src/components/chat/TimelineWorkEntryRow.rows.browser.tsx src/components/chat/GeneratedMarkdownImage.browser.tsx src/components/chat/ThreadFindBar.browser.tsx src/components/chat/MarkdownMermaidBlock.browser.tsx src/components/ui/dialog.browser.tsx. Chromium could not start: bootstrap_check_in permission denied (1100). No browser tests ran. Browser files pass typecheck; real diagram rendering, clipboard interaction, scrolling, and computed reduced-motion behavior remain unverified.
+- No platform/process boundary or migration code changed; windows-runtime:check and migrations:check do not apply.
+- The parallel affected run had two import timeouts under load; the serial affected run above passed. The initial broad run used an obsolete Markdown test mock; the corrected mock and both Markdown suites passed.
+
+Local code commits, with no push:
+d0c7853f1 fix(web): keep detached transcript readers in place
+ad4e27b42 fix(server): include ordered work history in thread archives
+262013499 fix(web): preserve outcomes and searchable settled work
+8beeafad1 fix(web): remove inert image controls and honor reduced motion
+013efde8a fix(web): render transcript diagrams and bound Markdown repair
+
+Unchanged-branch checks used a git archive of b616e6c6a inside this worktree, with the same installed dependencies and GIT_CONFIG_GLOBAL=/dev/null:
+- CodexAppServerManager and ProviderRuntimeIngestion: the same 13 selected failures repeat.
+- SidebarActivityView and inbox: the same 2 date failures repeat.
+- Canary: the same process-list failure repeats (sandbox denies ps).
+- Brand identity, notarization, and native icon: pass when run alone; their broad-run timeouts did not repeat.
+- CheckpointReactor: all 14 cases that failed in the broad run pass on the unchanged branch with the direct package command. The root run still used Git hooks despite its environment prefix; the direct package command avoids that path.
+
+Broad suite: GIT_CONFIG_GLOBAL=/dev/null bun run test --continue.
+Stopped after about 31 minutes while server Git fixtures continued to hit the global comment hook. The full server suite did not finish. Root task environment handling did not keep the hook override effective; direct package runs are listed separately above.
+Completed package results:
+- plugin-sdk: 12 passed.
+- contracts: 206 passed.
+- shared: 1,018 passed, 1 skipped.
+- scripts: 248 passed, 3 failed. Canary repeats on the base branch; brand identity and notarization pass alone.
+- desktop: 1,399 passed, 1 failed, 6 skipped. Native icon passes alone.
+- web: 5,646 passed, 3 failed, 3 skipped. Two date failures repeat on the base branch. The third was the obsolete repair mock, now fixed; all 575 affected tests pass after that correction.
+Direct Git rerun: GIT_CONFIG_GLOBAL=/dev/null bun run --cwd apps/server test src/git/Layers/GitCore.test.ts src/git/Layers/GitCore.concurrency.test.ts src/git/Layers/GitManager.test.ts. Stopped after about 6 minutes without a test result. No pass is claimed.
+
+Server failures seen before interruption: 13 provider failures repeat on the base branch; 14 CheckpointReactor failures pass on the base branch when run directly. The remaining server suite is a verification gap, not a claimed pass.
