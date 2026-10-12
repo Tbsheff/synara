@@ -1044,7 +1044,7 @@ const make = Effect.gen(function* () {
 
   const bufferedProposedPlanById = yield* Cache.make<
     string,
-    { text: string; createdAt: string; lastPreviewAt?: number }
+    { text: string; createdAt: string; lastPreviewAt?: number; lastDeltaEventId?: EventId }
   >({
     capacity: BUFFERED_PROPOSED_PLAN_BY_ID_CACHE_CAPACITY,
     timeToLive: BUFFERED_PROPOSED_PLAN_BY_ID_TTL,
@@ -1397,11 +1397,18 @@ const make = Effect.gen(function* () {
       Effect.map(Option.getOrElse(() => "")),
     );
 
-  const appendBufferedProposedPlan = (planId: string, delta: string, createdAt: string) =>
+  const appendBufferedProposedPlan = (
+    planId: string,
+    delta: string,
+    createdAt: string,
+    eventId: EventId,
+  ) =>
     Cache.getOption(bufferedProposedPlanById, planId).pipe(
       Effect.flatMap((existingEntry) => {
         const existing = Option.getOrUndefined(existingEntry);
+        if (existing?.lastDeltaEventId === eventId) return Effect.void;
         return Cache.set(bufferedProposedPlanById, planId, {
+          lastDeltaEventId: eventId,
           text: appendCappedBufferedText(
             existing?.text ?? "",
             delta,
@@ -1415,9 +1422,6 @@ const make = Effect.gen(function* () {
         });
       }),
     );
-
-  const takeBufferedProposedPlan = (planId: string) =>
-    takeCached(bufferedProposedPlanById, planId).pipe(Effect.map(Option.getOrUndefined));
 
   const appendBufferedToolOutput = (key: string, delta: string) =>
     Cache.getOption(bufferedToolOutputByKey, key).pipe(
@@ -1433,9 +1437,6 @@ const make = Effect.gen(function* () {
         ),
       ),
     );
-
-  const takeBufferedToolOutput = (key: string) =>
-    takeCached(bufferedToolOutputByKey, key).pipe(Effect.map(Option.getOrUndefined));
 
   const appendBufferedReasoningSummary = (
     key: string,
@@ -2298,7 +2299,9 @@ const make = Effect.gen(function* () {
     updatedAt: string;
   }) =>
     Effect.gen(function* () {
-      const bufferedPlan = yield* takeBufferedProposedPlan(input.planId);
+      const bufferedPlan = Option.getOrUndefined(
+        yield* Cache.getOption(bufferedProposedPlanById, input.planId),
+      );
       const bufferedMarkdown = normalizeNonEmptyString(bufferedPlan?.text);
       const fallbackMarkdown = normalizeNonEmptyString(input.fallbackMarkdown);
       const planMarkdown = bufferedMarkdown ?? fallbackMarkdown;
@@ -3324,7 +3327,7 @@ const make = Effect.gen(function* () {
 
       if (proposedPlanDelta && proposedPlanDelta.length > 0) {
         const planId = proposedPlanIdFromEvent(event, thread.id);
-        yield* appendBufferedProposedPlan(planId, proposedPlanDelta, now);
+        yield* appendBufferedProposedPlan(planId, proposedPlanDelta, now, event.eventId);
         yield* publishProposedPlanPreview({
           event,
           threadId: thread.id,
@@ -3449,7 +3452,9 @@ const make = Effect.gen(function* () {
       }
 
       const finalAssistantMessageId =
-        event.type === "turn.completed" && event.payload.finalAssistantItemId !== undefined
+        event.type === "turn.completed" &&
+        terminalApplicability?.reason !== "ambiguous-missing-turn-id" &&
+        event.payload.finalAssistantItemId !== undefined
           ? yield* resolveFinalAssistantMessageId({
               event,
               thread,
@@ -3458,8 +3463,8 @@ const make = Effect.gen(function* () {
             })
           : undefined;
 
-      if (isTerminalTurnEvent) {
-        const finalizedTurnId = eventTurnId ?? activeTurnId ?? undefined;
+      if (isTerminalTurnEvent && terminalApplicability?.reason !== "ambiguous-missing-turn-id") {
+        const finalizedTurnId = eventTurnId;
         if (!(event.type === "turn.completed" && runtimeTurnState(event) === "completed")) {
           yield* settleUnfinishedToolOutputs({
             threadId: thread.id,
@@ -3522,8 +3527,15 @@ const make = Effect.gen(function* () {
         });
         liveToolOutputHub.clearThread(thread.id);
         yield* clearOutstandingTurns(thread.id);
+        const exitedTurnIds = new Set<TurnId>();
         const exitedTurnId = eventTurnId ?? activeTurnId ?? undefined;
-        if (exitedTurnId) {
+        if (exitedTurnId) exitedTurnIds.add(exitedTurnId);
+        for (const key of yield* Cache.keys(turnMessageIdsByTurnKey)) {
+          const prefix = `${thread.id}:`;
+          if (key.startsWith(prefix))
+            exitedTurnIds.add(TurnId.makeUnsafe(key.slice(prefix.length)));
+        }
+        for (const exitedTurnId of exitedTurnIds) {
           yield* finalizeBufferedAssistantMessagesForTurn({
             event,
             threadId: thread.id,
@@ -3727,7 +3739,12 @@ const make = Effect.gen(function* () {
               completedReasoning,
             )
           : event.type === "item.completed" && toolOutputKey
-            ? withBufferedToolOutputData(event, yield* takeBufferedToolOutput(toolOutputKey))
+            ? withBufferedToolOutputData(
+                event,
+                Option.getOrUndefined(
+                  yield* Cache.getOption(bufferedToolOutputByKey, toolOutputKey),
+                ),
+              )
             : event;
       // Bind durable runtime feedback before session recovery clears the turn.
       const activityTurnId = isTerminalTurnEvent ? eventTurnId : (eventTurnId ?? activeTurnId);
@@ -3737,8 +3754,8 @@ const make = Effect.gen(function* () {
         (event.type === "runtime.error" || event.type === "runtime.warning" || isTerminalTurnEvent)
           ? { ...activityEvent, turnId: activityTurnId }
           : activityEvent;
-      if (isTerminalTurnEvent) {
-        yield* settleBufferedReasoningSummaries(thread.id, event, toTurnId(event.turnId));
+      if (isTerminalTurnEvent && terminalApplicability?.reason !== "ambiguous-missing-turn-id") {
+        yield* settleBufferedReasoningSummaries(thread.id, event, eventTurnId);
       } else if (event.type === "session.exited") {
         yield* settleBufferedReasoningSummaries(thread.id, event);
       } else if (event.type === "runtime.error") {
@@ -3750,8 +3767,7 @@ const make = Effect.gen(function* () {
       }
 
       const snapshotKey = providerRuntimeProgressKey(event);
-      const projectionTurnId =
-        event.type === "turn.completed" ? (eventTurnId ?? activeTurnId ?? undefined) : undefined;
+      const projectionTurnId = event.type === "turn.completed" ? eventTurnId : undefined;
       const turnOrigin = projectionTurnId
         ? Option.getOrUndefined(
             yield* Cache.getOption(
@@ -3843,6 +3859,7 @@ const make = Effect.gen(function* () {
         yield* Cache.invalidate(turnOriginByTurnKey, providerTurnKey(thread.id, projectionTurnId));
       }
       if (event.type === "item.completed" && event.itemId) {
+        if (toolOutputKey) yield* Cache.invalidate(bufferedToolOutputByKey, toolOutputKey);
         yield* Cache.invalidate(startedToolItemByKey, `${thread.id}:${event.itemId}`);
       }
 

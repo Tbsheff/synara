@@ -4186,7 +4186,8 @@ describe("ProviderRuntimeIngestion", () => {
       const thread = await waitForThread(
         harness.engine,
         (entry) =>
-          (type !== "turn.completed" || publishedActivities.length >= 2) &&
+          (type !== "turn.completed" ||
+            publishedActivities.includes("evt-aborted-reasoning-terminal")) &&
           entry.activities.some(
             (activity: ProviderRuntimeTestActivity) =>
               activity.id === stableActivityId &&
@@ -10039,6 +10040,223 @@ describe("ProviderRuntimeIngestion", () => {
         expect(text).toBe(`${prefix}${tail}`);
       },
     );
+
+    it.each(["before-commit", "after-commit"] as const)(
+      "retains completed tool output across a write failure (%s)",
+      async (failure) => {
+        let fired = 0;
+        const harness = await createHarness({
+          persistedStream: true,
+          faults: {
+            dispatch: (command) => {
+              if (
+                command.type === "thread.activity.append" &&
+                command.activity.kind === "tool.completed" &&
+                fired === 0
+              ) {
+                fired += 1;
+                return failure;
+              }
+            },
+          },
+        });
+        await appendRuntimeEvent(
+          harness,
+          toolStarted(
+            "tool-retry-start",
+            "tool-retry-turn",
+            "tool-retry",
+            "2026-10-11T00:00:00.000Z",
+          ),
+        );
+        await appendRuntimeEvent(harness, {
+          type: "content.delta",
+          eventId: asEventId("tool-retry-output"),
+          provider: "codex",
+          threadId: asThreadId("thread-1"),
+          turnId: asTurnId("tool-retry-turn"),
+          itemId: asItemId("tool-retry"),
+          createdAt: "2026-10-11T00:00:01.000Z",
+          payload: { streamKind: "command_output", delta: "saved output tail" },
+        });
+        await drainUntilSettled(harness.drain);
+        await appendRuntimeEvent(harness, {
+          ...toolStarted(
+            "tool-retry-done",
+            "tool-retry-turn",
+            "tool-retry",
+            "2026-10-11T00:00:02.000Z",
+          ),
+          type: "item.completed",
+          payload: {
+            itemType: "command_execution",
+            status: "completed",
+            command: { command: "bun run test" },
+          },
+        });
+        await drainUntilSettled(harness.drain);
+        expect(fired).toBe(1);
+        const activity = (await harness.readProjectedThread())?.activities.find(
+          (row) => row.kind === "tool.completed",
+        );
+        expect((activity?.payload as { command?: { output?: string } })?.command?.output).toBe(
+          "saved output tail",
+        );
+      },
+    );
+
+    it.each(["before-commit", "after-commit"] as const)(
+      "does not repeat a plan delta after a preview write failure (%s)",
+      async (failure) => {
+        let fired = 0;
+        const harness = await createHarness({
+          persistedStream: true,
+          faults: {
+            dispatch: (command) => {
+              if (command.type === "thread.proposed-plan.upsert" && fired === 0) {
+                fired += 1;
+                return failure;
+              }
+            },
+          },
+        });
+        await appendRuntimeEvent(harness, {
+          type: "turn.proposed.delta",
+          eventId: asEventId("plan-retry-delta"),
+          provider: "codex",
+          threadId: asThreadId("thread-1"),
+          turnId: asTurnId("plan-retry-turn"),
+          createdAt: "2026-10-11T00:00:01.000Z",
+          payload: { delta: "- exact step\n" },
+        });
+        await drainUntilSettled(harness.drain);
+        await appendRuntimeEvent(
+          harness,
+          turnCompleted("plan-retry-done", "plan-retry-turn", "2026-10-11T00:00:02.000Z"),
+        );
+        await drainUntilSettled(harness.drain);
+        expect(fired).toBe(1);
+        expect((await harness.readProjectedThread())?.proposedPlans[0]?.planMarkdown).toBe(
+          "- exact step",
+        );
+      },
+    );
+
+    it.each(["before-commit", "after-commit"] as const)(
+      "retains the final plan buffer across a write failure (%s)",
+      async (failure) => {
+        let fired = 0;
+        const harness = await createHarness({
+          persistedStream: true,
+          faults: {
+            dispatch: (command) => {
+              if (
+                command.type === "thread.proposed-plan.upsert" &&
+                !command.proposedPlan.partial &&
+                fired === 0
+              ) {
+                fired += 1;
+                return failure;
+              }
+            },
+          },
+        });
+        await appendRuntimeEvent(harness, {
+          type: "turn.proposed.delta",
+          eventId: asEventId("plan-settle-delta"),
+          provider: "codex",
+          threadId: asThreadId("thread-1"),
+          turnId: asTurnId("plan-settle-turn"),
+          createdAt: "2026-10-11T00:00:01.000Z",
+          payload: { delta: "- final step\n" },
+        });
+        await drainUntilSettled(harness.drain);
+        await appendRuntimeEvent(
+          harness,
+          turnCompleted("plan-settle-done", "plan-settle-turn", "2026-10-11T00:00:02.000Z"),
+        );
+        await drainUntilSettled(harness.drain);
+        expect(fired).toBe(1);
+        const plan = (await harness.readProjectedThread())?.proposedPlans[0];
+        expect(plan?.planMarkdown).toBe("- final step");
+        expect(plan?.partial).toBeUndefined();
+      },
+    );
+
+    it("leaves overlapping turns untouched by an ambiguous turnless completion", async () => {
+      const harness = await createHarness({ persistedStream: true });
+      for (const turnId of ["overlap-a", "overlap-b"]) {
+        await appendRuntimeEvent(
+          harness,
+          turnStarted(`start-${turnId}`, turnId, "2026-10-11T00:00:00.000Z"),
+        );
+        await appendRuntimeEvent(
+          harness,
+          assistantDelta({ eventId: `delta-${turnId}`, turnId, itemId: turnId, delta: turnId }),
+        );
+      }
+      await drainUntilSettled(harness.drain);
+      await appendRuntimeEvent(harness, {
+        type: "turn.completed",
+        eventId: asEventId("ambiguous-done"),
+        provider: "codex",
+        threadId: asThreadId("thread-1"),
+        createdAt: "2026-10-11T00:00:02.000Z",
+        payload: { state: "completed" },
+      });
+      await drainUntilSettled(harness.drain);
+      const thread = await harness.readProjectedThread();
+      expect(
+        thread?.messages.filter((row) => row.role === "assistant").map((row) => row.streaming),
+      ).toEqual([true, true]);
+    });
+
+    it("flushes sibling turns before session exit clears buffered replies", async () => {
+      const harness = await createHarness({ persistedStream: true });
+      for (const turnId of ["sibling-a", "sibling-b"]) {
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.turn.start",
+            commandId: CommandId.makeUnsafe(`request-${turnId}`),
+            threadId: asThreadId("thread-1"),
+            message: {
+              messageId: asMessageId(`request-${turnId}`),
+              role: "user",
+              text: "reply",
+              attachments: [],
+            },
+            assistantDeliveryMode: "buffered",
+            interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+            runtimeMode: "approval-required",
+            createdAt: "2026-10-11T00:00:00.000Z",
+          }),
+        );
+      }
+      await harness.drain();
+      for (const turnId of ["sibling-a", "sibling-b"]) {
+        await appendRuntimeEvent(
+          harness,
+          turnStarted(`start-${turnId}`, turnId, "2026-10-11T00:00:00.500Z"),
+        );
+        await appendRuntimeEvent(
+          harness,
+          assistantDelta({ eventId: `delta-${turnId}`, turnId, itemId: turnId, delta: turnId }),
+        );
+        await drainUntilSettled(harness.drain);
+        expect(await assistantMessageText(harness, `assistant:${turnId}`)).toBeUndefined();
+      }
+      await appendRuntimeEvent(harness, {
+        type: "session.exited",
+        eventId: asEventId("sibling-exit"),
+        provider: "codex",
+        threadId: asThreadId("thread-1"),
+        createdAt: "2026-10-11T00:00:02.000Z",
+        payload: { exitKind: "error" },
+      });
+      await drainUntilSettled(harness.drain);
+      expect(await assistantMessageText(harness, "assistant:sibling-b")).toBe("sibling-b");
+      expect(await assistantMessageText(harness, "assistant:sibling-a")).toBe("sibling-a");
+    });
 
     it("persists the buffered output of a command that its interrupted turn never completed", async () => {
       const harness = await createHarness({ persistedStream: true });
