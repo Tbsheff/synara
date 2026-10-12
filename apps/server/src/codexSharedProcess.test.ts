@@ -178,6 +178,21 @@ describe("Codex shared process routing", () => {
     await h.registry.stopAll();
   });
 
+  it("fails the process when a successful open cannot identify the native lease", async () => {
+    const h = harness();
+    const p = await h.acquire();
+    const id = p.allocateRequest(h.owners[0]!, "thread/start", {});
+    h.emit({ id, result: { thread: {} } });
+    for (const failure of h.failures)
+      expect(failure).toHaveBeenCalledWith(
+        expect.objectContaining({ message: expect.stringContaining("native thread ID") }),
+        null,
+        null,
+      );
+    await vi.waitFor(() => expect(h.teardown).toHaveBeenCalledTimes(1));
+    await h.registry.stopAll();
+  });
+
   it("never guesses ownership for unknown approvals or threadless tool events", async () => {
     const h = harness();
     await h.acquire();

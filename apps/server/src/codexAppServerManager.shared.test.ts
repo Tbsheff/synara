@@ -36,6 +36,7 @@ async function fixture(mode: ServerSettings["codexAppServerMode"] = "shared") {
   const requests: CodexSharedMessage[] = [];
   const loaded = new Set<string>();
   const leases: AgentGatewaySessionLease[] = [];
+  let accountSnapshot: unknown = { account: { type: "apiKey" } };
   let nextThread = 0;
   let nextTurn = 0;
   const emit = (child: ChildProcessWithoutNullStreams, message: CodexSharedMessage) =>
@@ -75,7 +76,7 @@ async function fixture(mode: ServerSettings["codexAppServerMode"] = "shared") {
           loaded.delete(String(params?.threadId));
           respond({});
         } else if (request.method === "turn/start") respond({ turn: { id: `turn-${++nextTurn}` } });
-        else if (request.method === "account/read") respond({ account: { type: "apiKey" } });
+        else if (request.method === "account/read") respond(accountSnapshot);
         else respond({});
       }
     });
@@ -114,11 +115,12 @@ async function fixture(mode: ServerSettings["codexAppServerMode"] = "shared") {
   );
   const events: ProviderEvent[] = [];
   manager.on("event", (event) => events.push(event));
-  const start = (id: string, environment: Record<string, string> = {}) =>
+  const start = (id: string, environment: Record<string, string> = {}, model?: string) =>
     manager.startSession({
       threadId: ThreadId.makeUnsafe(id),
       cwd: root,
       runtimeMode: "approval-required",
+      ...(model ? { model } : {}),
       providerOptions: {
         codex: {
           binaryPath,
@@ -144,6 +146,9 @@ async function fixture(mode: ServerSettings["codexAppServerMode"] = "shared") {
     leases,
     events,
     start,
+    setAccount: (account: { type: string; planType?: string }) => {
+      accountSnapshot = { account };
+    },
     spawnAppServer,
     teardownProcessTree,
     emit,
@@ -151,6 +156,19 @@ async function fixture(mode: ServerSettings["codexAppServerMode"] = "shared") {
 }
 
 describe("shared Codex manager", () => {
+  it("uses current account capabilities when a new session joins an existing process", async () => {
+    const h = await fixture();
+    h.setAccount({ type: "chatgpt", planType: "pro" });
+    await h.start("a", {}, "gpt-5.3-codex-spark");
+    h.setAccount({ type: "chatgpt", planType: "plus" });
+    await h.start("b", {}, "gpt-5.3-codex-spark");
+    const opens = h.requests.filter((request) => request.method === "thread/start");
+    expect((opens[0]!.params as { model: string }).model).toBe("gpt-5.3-codex-spark");
+    expect((opens[1]!.params as { model: string }).model).not.toBe("gpt-5.3-codex-spark");
+    expect(h.children).toHaveLength(1);
+    expect(h.requests.filter((r) => r.method === "initialize")).toHaveLength(1);
+  });
+
   it("shares metadata discovery with live threads across working directories", async () => {
     const h = await fixture();
     await h.start("a");

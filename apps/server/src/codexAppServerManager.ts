@@ -1520,22 +1520,18 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   private async initializeSessionProcess(context: CodexSessionContext): Promise<void> {
     if (context.sharedProcess) {
       try {
-        const account = await context.sharedProcess.initialize(
-          buildCodexInitializeParams(),
-          this.synaraSkillsDir,
-        );
+        await context.sharedProcess.initialize(buildCodexInitializeParams(), this.synaraSkillsDir);
         this.assertContextAuthCurrent(context);
-        context.account = readCodexAccountSnapshot(account);
       } catch (error) {
         context.sharedProcess.fail(error);
         throw error;
       }
-      return;
+    } else {
+      await this.sendRequest(context, "initialize", buildCodexInitializeParams());
+      this.assertContextAuthCurrent(context);
+      await this.writeMessage(context, { method: "initialized" });
+      await this.registerSynaraSkillsRoot(context);
     }
-    await this.sendRequest(context, "initialize", buildCodexInitializeParams());
-    this.assertContextAuthCurrent(context);
-    await this.writeMessage(context, { method: "initialized" });
-    await this.registerSynaraSkillsRoot(context);
     try {
       context.account = readCodexAccountSnapshot(
         await this.sendRequest(context, "account/read", {}),

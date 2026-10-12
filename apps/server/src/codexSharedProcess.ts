@@ -55,7 +55,7 @@ function record(value: unknown): Record<string, unknown> | undefined {
 function threadId(params: unknown): string | undefined {
   const value = record(params);
   const id = value?.threadId ?? record(value?.thread)?.id ?? value?.conversationId;
-  return typeof id === "string" ? id : undefined;
+  return typeof id === "string" && id.trim().length > 0 ? id : undefined;
 }
 
 const GLOBAL_NOTIFICATIONS = new Set([
@@ -78,7 +78,7 @@ export class CodexSharedProcess<T extends object> {
   private readonly early = new Map<string, CodexSharedMessage[]>();
   private earlyBytes = 0;
   private nextId = 1;
-  private initialization: Promise<unknown> | undefined;
+  private initialization: Promise<void> | undefined;
   private idleTimer: ReturnType<typeof setTimeout> | undefined;
   private shutdown: Promise<void> | undefined;
   failed: Error | undefined;
@@ -126,7 +126,7 @@ export class CodexSharedProcess<T extends object> {
     this.members.set(owner, member);
   }
 
-  initialize(params: unknown, skillsDir?: string): Promise<unknown> {
+  initialize(params: unknown, skillsDir?: string): Promise<void> {
     return (this.initialization ??= (async () => {
       await this.control("initialize", params);
       await this.write({ method: "initialized" });
@@ -136,12 +136,6 @@ export class CodexSharedProcess<T extends object> {
         } catch {
           if (this.stopping) throw this.failed ?? new Error("Shared Codex initialization failed.");
         }
-      }
-      try {
-        return await this.control("account/read", {});
-      } catch {
-        if (this.stopping) throw this.failed ?? new Error("Shared Codex initialization failed.");
-        return undefined;
       }
     })());
   }
@@ -356,20 +350,22 @@ export class CodexSharedProcess<T extends object> {
         ["thread/start", "thread/resume", "thread/fork"].includes(request.method)
       ) {
         const id = threadId(message.result);
-        if (id) {
-          try {
-            this.bind(request.owner, id);
-          } catch (error) {
-            this.requests.delete(message.id as number);
-            this.deliver(request.owner, {
-              id: message.id,
-              error: {
-                code: -32602,
-                message: error instanceof Error ? error.message : String(error),
-              },
-            });
-            return;
-          }
+        if (!id) {
+          this.fail(new Error("Shared Codex thread-open response omitted its native thread ID."));
+          return;
+        }
+        try {
+          this.bind(request.owner, id);
+        } catch (error) {
+          this.requests.delete(message.id as number);
+          this.deliver(request.owner, {
+            id: message.id,
+            error: {
+              code: -32602,
+              message: error instanceof Error ? error.message : String(error),
+            },
+          });
+          return;
         }
       }
       this.requests.delete(message.id as number);
