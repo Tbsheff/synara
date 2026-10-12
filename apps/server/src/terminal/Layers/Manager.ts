@@ -87,6 +87,10 @@ export type { TerminalSubprocessActivity } from "../subprocessActivity";
 
 const DEFAULT_HISTORY_LINE_LIMIT = 5_000;
 const DEFAULT_PERSIST_DEBOUNCE_MS = 250;
+const HISTORY_FILE_COMPACT_AT_CAP_MULTIPLE = 2;
+const DEFAULT_INACTIVE_HISTORY_MAX_AGE_MS = 30 * 24 * 60 * 60_000;
+const DEFAULT_INACTIVE_HISTORY_MAX_BYTES = 64 * 1024 * 1024;
+const HISTORY_MAINTENANCE_INTERVAL_MS = 10 * 60_000;
 const DEFAULT_SUBPROCESS_POLL_INTERVAL_MS = 1_000;
 /**
  * When every running terminal is idle (no live subprocess and no recent
@@ -753,6 +757,8 @@ interface TerminalManagerOptions {
   logsDir?: string;
   historyLineLimit?: number;
   historyByteLimit?: number;
+  inactiveHistoryMaxAgeMs?: number;
+  inactiveHistoryMaxBytes?: number;
   ptyAdapter: PtyAdapterShape;
   shellResolver?: () => string;
   subprocessChecker?: TerminalSubprocessChecker;
@@ -763,6 +769,13 @@ interface TerminalManagerOptions {
   maxRetainedInactiveSessions?: number;
   managedProfileResolver?: () => Promise<ReadonlyArray<ManagedTerminalProfile>>;
   providerAuthResolver?: (instanceId: string) => Promise<ProviderAuthenticationLaunch>;
+}
+
+interface PendingHistoryPersist {
+  readonly session: TerminalSessionState;
+  appendChunks: string[];
+  appendBytes: number;
+  requiresFullRewrite: boolean;
 }
 
 interface KillEscalationHandle {
@@ -783,16 +796,15 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
   private readonly historyByteLimit: number;
   private readonly ptyAdapter: PtyAdapterShape;
   private readonly shellResolver: () => string;
-  private readonly persistQueues = new Map<string, Promise<void>>();
+  private readonly persistInFlight = new Map<string, Promise<boolean>>();
   private readonly persistTimers = new Map<string, ReturnType<typeof setTimeout>>();
-  /**
-   * Pending persist work keyed by session. Stores a materializer thunk rather
-   * than a string so the O(maxBytes) history cap only runs when the debounced
-   * write actually fires (≈4/s) — never on the per-flush hot path.
-   */
-  private readonly pendingPersistHistory = new Map<string, () => string>();
-  private readonly persistedHistoryByKey = new Map<string, string>();
+  private readonly pendingPersistHistory = new Map<string, PendingHistoryPersist>();
+  private readonly persistedHistoryByKey = new Map<string, number>();
   private persistTempCounter = 0;
+  private readonly inactiveHistoryMaxAgeMs: number;
+  private readonly inactiveHistoryMaxBytes: number;
+  private historyMaintenance = Promise.resolve();
+  private readonly historyMaintenanceTimer: ReturnType<typeof setInterval>;
   private readonly threadLocks = new Map<string, Promise<void>>();
   private readonly persistDebounceMs: number;
   private readonly subprocessChecker: TerminalSubprocessChecker;
@@ -847,7 +859,17 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
       options.maxRetainedInactiveSessions ?? DEFAULT_MAX_RETAINED_INACTIVE_SESSIONS;
     this.managedProfileResolver = options.managedProfileResolver;
     this.providerAuthResolver = options.providerAuthResolver;
+    this.inactiveHistoryMaxAgeMs =
+      options.inactiveHistoryMaxAgeMs ?? DEFAULT_INACTIVE_HISTORY_MAX_AGE_MS;
+    this.inactiveHistoryMaxBytes =
+      options.inactiveHistoryMaxBytes ?? DEFAULT_INACTIVE_HISTORY_MAX_BYTES;
     ensurePrivateDirectorySync(this.logsDir);
+    void this.pruneInactiveHistory();
+    this.historyMaintenanceTimer = setInterval(
+      () => void this.pruneInactiveHistory(),
+      HISTORY_MAINTENANCE_INTERVAL_MS,
+    );
+    this.historyMaintenanceTimer.unref?.();
     if (this.managedWrapperBinDir) {
       try {
         const preparedWrappers = prepareManagedTerminalAgentWrappers({
@@ -868,6 +890,74 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
         this.managedWrapperZshDir = null;
       }
     }
+  }
+
+  private pruneInactiveHistory(): Promise<void> {
+    this.historyMaintenance = this.historyMaintenance.then(async () => {
+      try {
+        const protectedFile = (filePath: string) => {
+          for (const threadId of this.threadLocks.keys()) {
+            const name = path.basename(filePath);
+            const prefix = toSafeThreadId(threadId);
+            if (
+              name === `${prefix}.log` ||
+              name.startsWith(`${prefix}_`) ||
+              filePath === this.legacyHistoryPath(threadId)
+            )
+              return true;
+          }
+          for (const session of this.sessions.values()) {
+            if (
+              filePath === this.historyPath(session.threadId, session.terminalId) ||
+              filePath === this.legacyHistoryPath(session.threadId)
+            )
+              return true;
+          }
+          for (const key of new Set([
+            ...this.persistInFlight.keys(),
+            ...this.pendingPersistHistory.keys(),
+          ])) {
+            const [threadId, terminalId] = key.split("\u0000");
+            if (threadId && terminalId && filePath === this.historyPath(threadId, terminalId))
+              return true;
+          }
+          return false;
+        };
+        const files: Array<{ filePath: string; size: number; mtimeMs: number }> = [];
+        for (const entry of await fs.promises.readdir(this.logsDir, { withFileTypes: true })) {
+          if (!entry.isFile() || !entry.name.endsWith(".log")) continue;
+          const filePath = path.join(this.logsDir, entry.name);
+          if (protectedFile(filePath)) continue;
+          try {
+            const stat = await fs.promises.lstat(filePath);
+            if (stat.isFile()) files.push({ filePath, size: stat.size, mtimeMs: stat.mtimeMs });
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+          }
+        }
+        files.sort((left, right) => left.mtimeMs - right.mtimeMs);
+        let totalBytes = files.reduce((total, file) => total + file.size, 0);
+        const cutoff = Date.now() - this.inactiveHistoryMaxAgeMs;
+        for (const file of files) {
+          if (file.mtimeMs > cutoff && totalBytes <= this.inactiveHistoryMaxBytes) continue;
+          if (protectedFile(file.filePath)) {
+            totalBytes -= file.size;
+            continue;
+          }
+          const current = await fs.promises.lstat(file.filePath).catch(() => undefined);
+          if (!current?.isFile() || current.mtimeMs !== file.mtimeMs || current.size !== file.size)
+            continue;
+          if (protectedFile(file.filePath)) continue;
+          await fs.promises.rm(file.filePath, { force: true });
+          totalBytes -= file.size;
+        }
+      } catch (error) {
+        this.logger.warn("failed to prune inactive terminal history", {
+          error: describeErrorMessage(error, "Unknown history retention error"),
+        });
+      }
+    });
+    return this.historyMaintenance;
   }
 
   private async refreshManagedProfileWrappers(): Promise<void> {
@@ -908,6 +998,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     const input = decodeTerminalOpenInput(raw);
     await this.refreshManagedProfileWrappers();
     return this.runWithThreadLock(input.threadId, async () => {
+      await this.historyMaintenance;
       await this.assertValidCwd(input.cwd);
 
       const sessionKey = toSessionKey(input.threadId, input.terminalId);
@@ -1011,19 +1102,11 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
         existing.cwd = input.cwd;
         existing.runtimeEnv = nextRuntimeEnv;
         resetSessionHistory(existing);
-        await this.persistHistory(
-          existing.threadId,
-          existing.terminalId,
-          existing.history.toString(),
-        );
+        await this.persistHistory(existing);
       } else if (existing.status === "exited" || existing.status === "error") {
         existing.runtimeEnv = nextRuntimeEnv;
         resetSessionHistory(existing);
-        await this.persistHistory(
-          existing.threadId,
-          existing.terminalId,
-          existing.history.toString(),
-        );
+        await this.persistHistory(existing);
       } else if (runtimeEnvChanged) {
         existing.runtimeEnv = nextRuntimeEnv;
       }
@@ -1132,7 +1215,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
       const session = this.requireSession(input.threadId, input.terminalId);
       resetSessionHistory(session);
       session.updatedAt = new Date().toISOString();
-      await this.persistHistory(input.threadId, input.terminalId, session.history.toString());
+      await this.persistHistory(session);
       this.emitEvent({
         type: "cleared",
         threadId: input.threadId,
@@ -1217,7 +1300,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
       const rows = input.rows ?? session.rows;
 
       resetSessionHistory(session);
-      await this.persistHistory(input.threadId, input.terminalId, session.history.toString());
+      await this.persistHistory(session);
       await this.startSession(session, { ...input, cols, rows }, "restarted");
       return this.snapshot(session);
     });
@@ -1239,6 +1322,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
 
       await this.closeThreadSessions(input.threadId, input.deleteHistory === true);
     });
+    await this.pruneInactiveHistory();
   }
 
   private async assertSessionIdle(threadId: string, terminalId: string): Promise<void> {
@@ -1291,6 +1375,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
         (session) => Date.parse(session.lastOpenedAt) <= cutoff,
       ),
     );
+    await this.pruneInactiveHistory();
   }
 
   private async closeThreadSessions(
@@ -1319,20 +1404,32 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
   }
 
   dispose(): void {
-    this.disposeInternal({ keepEscalationTimers: false });
+    this.disposeInternal({ keepEscalationTimers: false, keepPendingHistory: false });
   }
 
   async disposeForShutdown(): Promise<void> {
-    const pendingEscalations = this.disposeInternal({ keepEscalationTimers: true });
-    if (pendingEscalations > 0) {
-      await new Promise((resolve) =>
-        setTimeout(resolve, this.processKillGraceMs + SHUTDOWN_ESCALATION_SETTLE_MS),
-      );
-    }
+    const pendingEscalations = this.disposeInternal({
+      keepEscalationTimers: true,
+      keepPendingHistory: true,
+    });
+    await Promise.all([
+      this.flushAllPersistQueues(),
+      this.historyMaintenance,
+      pendingEscalations > 0
+        ? new Promise((resolve) =>
+            setTimeout(resolve, this.processKillGraceMs + SHUTDOWN_ESCALATION_SETTLE_MS),
+          )
+        : undefined,
+    ]);
     this.clearAllKillEscalationTimers();
+    this.clearPersistState();
   }
 
-  private disposeInternal(options: { keepEscalationTimers: boolean }): number {
+  private disposeInternal(options: {
+    keepEscalationTimers: boolean;
+    keepPendingHistory: boolean;
+  }): number {
+    clearInterval(this.historyMaintenanceTimer);
     this.stopSubprocessPolling();
     this.processSnapshotObserver?.dispose();
     const sessions = [...this.sessions.values()];
@@ -1349,10 +1446,20 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     if (!options.keepEscalationTimers) {
       this.clearAllKillEscalationTimers();
     }
-    this.pendingPersistHistory.clear();
+    if (!options.keepPendingHistory) {
+      this.clearPersistState();
+    }
     this.threadLocks.clear();
-    this.persistQueues.clear();
     return this.killEscalationTimers.size;
+  }
+
+  private clearPersistState(): void {
+    for (const timer of this.persistTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.persistTimers.clear();
+    this.pendingPersistHistory.clear();
+    this.persistInFlight.clear();
   }
 
   private clearAllKillEscalationTimers(): void {
@@ -1587,7 +1694,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     }
     if (sanitized.visibleText.length > 0) {
       session.history.append(sanitized.visibleText);
-      this.queuePersist(session);
+      this.queuePersist(session, sanitized.visibleText);
       const normalizedSignature = normalizeProviderOutputSignature(sanitized.visibleText);
       if (normalizedSignature.length > 0 && normalizedSignature !== session.lastOutputSignature) {
         // Only refresh on genuinely new output. Repeated identical redraws (idle prompt
@@ -1792,6 +1899,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     session.exitCode = Number.isInteger(event.exitCode) ? event.exitCode : null;
     session.exitSignal = Number.isInteger(event.signal) ? event.signal : null;
     session.updatedAt = new Date().toISOString();
+    this.persistNow(session.threadId, session.terminalId);
     this.emitEvent({
       type: "exited",
       threadId: session.threadId,
@@ -1956,100 +2064,142 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
       const key = toSessionKey(session.threadId, session.terminalId);
       this.flushOutputBuffer(session);
       this.sessions.delete(key);
-      this.clearPersistTimer(session.threadId, session.terminalId);
-      this.pendingPersistHistory.delete(key);
-      // Release the cached history reference once the final write lands (the write
-      // re-populates it on completion). The session is gone, so retaining it would
-      // leak up to historyByteLimit per evicted key for the server's lifetime.
-      void this.enqueuePersistWrite(
-        session.threadId,
-        session.terminalId,
-        session.history.toString(),
-      ).finally(() => {
+      void this.flushPersistQueue(session.threadId, session.terminalId).finally(() => {
         this.releasePersistedHistoryCache(session.threadId, session.terminalId);
       });
       this.clearKillEscalationTimer(session.process);
     }
   }
 
-  /**
-   * Mark a session's history dirty for a debounced persist. The history string is
-   * materialized lazily (in the debounce timer / flush), so the hot output path
-   * never pays the cap cost. The thunk reads `session.history` at write time so it
-   * always persists the latest content, even after the session is removed.
-   */
-  private queuePersist(session: TerminalSessionState): void {
+  private queuePersist(session: TerminalSessionState, appendedText: string): void {
     if (session.providerAuthInstanceId) return;
-    const persistenceKey = toSessionKey(session.threadId, session.terminalId);
-    this.pendingPersistHistory.set(persistenceKey, () => session.history.toString());
+    const pending = this.pendingPersistFor(session);
+    if (!pending.requiresFullRewrite) {
+      pending.appendChunks.push(appendedText);
+      pending.appendBytes += Buffer.byteLength(appendedText, "utf8");
+      if (pending.appendBytes > this.historyByteLimit) {
+        pending.appendChunks = [];
+        pending.appendBytes = 0;
+        pending.requiresFullRewrite = true;
+      }
+    }
     this.schedulePersist(session.threadId, session.terminalId);
   }
 
-  private async persistHistory(
-    threadId: string,
-    terminalId: string,
-    history: string,
-  ): Promise<void> {
-    if (this.sessions.get(toSessionKey(threadId, terminalId))?.providerAuthInstanceId) return;
-    const persistenceKey = toSessionKey(threadId, terminalId);
-    this.clearPersistTimer(threadId, terminalId);
-    this.pendingPersistHistory.delete(persistenceKey);
-    await this.enqueuePersistWrite(threadId, terminalId, history);
+  private pendingPersistFor(session: TerminalSessionState): PendingHistoryPersist {
+    const persistenceKey = toSessionKey(session.threadId, session.terminalId);
+    const existing = this.pendingPersistHistory.get(persistenceKey);
+    if (existing?.session === session) return existing;
+    const created: PendingHistoryPersist = {
+      session,
+      appendChunks: [],
+      appendBytes: 0,
+      requiresFullRewrite: false,
+    };
+    this.pendingPersistHistory.set(persistenceKey, created);
+    return created;
   }
 
-  private enqueuePersistWrite(
-    threadId: string,
-    terminalId: string,
-    history: string,
-  ): Promise<void> {
+  private async persistHistory(session: TerminalSessionState): Promise<void> {
+    if (session.providerAuthInstanceId) return;
+    const pending = this.pendingPersistFor(session);
+    pending.appendChunks = [];
+    pending.appendBytes = 0;
+    pending.requiresFullRewrite = true;
+    await this.flushPersistQueue(session.threadId, session.terminalId);
+  }
+
+  private persistNow(threadId: string, terminalId: string): void {
+    this.clearPersistTimer(threadId, terminalId);
+    void this.startPersistWrite(threadId, terminalId);
+  }
+
+  private startPersistWrite(threadId: string, terminalId: string): Promise<boolean> {
     const persistenceKey = toSessionKey(threadId, terminalId);
-    const task = async () => {
-      if (this.persistedHistoryByKey.get(persistenceKey) === history) {
-        return;
-      }
-      // Atomic replace: write a temp file then rename, so a crash mid-write can
-      // never leave a torn history file. History is byte-capped, so this writes
-      // at most ~historyByteLimit bytes regardless of total output volume.
-      const finalPath = this.historyPath(threadId, terminalId);
-      const tempPath = `${finalPath}.tmp-${process.pid}-${(this.persistTempCounter += 1)}`;
-      try {
-        await fs.promises.writeFile(tempPath, history, {
-          encoding: "utf8",
-          mode: PRIVATE_FILE_MODE,
-        });
-        await fs.promises.rename(tempPath, finalPath);
-        await repairPrivateFile(finalPath);
-        this.persistedHistoryByKey.set(persistenceKey, history);
-      } catch (error) {
-        await fs.promises.rm(tempPath, { force: true }).catch(() => undefined);
-        throw error;
-      }
-    };
-    const previous = this.persistQueues.get(persistenceKey) ?? Promise.resolve();
-    const next = previous
-      .catch(() => undefined)
-      .then(task)
-      .catch((error) => {
+    const inFlight = this.persistInFlight.get(persistenceKey);
+    if (inFlight) return inFlight;
+    const pending = this.pendingPersistHistory.get(persistenceKey);
+    if (!pending) return Promise.resolve(true);
+    this.pendingPersistHistory.delete(persistenceKey);
+    const write = this.writePendingHistory(threadId, terminalId, pending).then(
+      () => true,
+      (error: unknown) => {
+        this.persistedHistoryByKey.delete(persistenceKey);
+        if (!this.pendingPersistHistory.has(persistenceKey)) {
+          this.pendingPersistHistory.set(persistenceKey, {
+            session: pending.session,
+            appendChunks: [],
+            appendBytes: 0,
+            requiresFullRewrite: true,
+          });
+        }
         this.logger.warn("failed to persist terminal history", {
           threadId,
           terminalId,
           error: error instanceof Error ? error.message : String(error),
         });
-      });
-    this.persistQueues.set(persistenceKey, next);
-    const finalized = next.finally(() => {
-      if (this.persistQueues.get(persistenceKey) === next) {
-        this.persistQueues.delete(persistenceKey);
+        return false;
+      },
+    );
+    this.persistInFlight.set(persistenceKey, write);
+    void write.then((succeeded) => {
+      if (this.persistInFlight.get(persistenceKey) === write) {
+        this.persistInFlight.delete(persistenceKey);
       }
-      if (
-        this.pendingPersistHistory.has(persistenceKey) &&
-        !this.persistTimers.has(persistenceKey)
-      ) {
+      if (succeeded && this.pendingPersistHistory.has(persistenceKey)) {
         this.schedulePersist(threadId, terminalId);
       }
     });
-    void finalized.catch(() => undefined);
-    return finalized;
+    return write;
+  }
+
+  private async writePendingHistory(
+    threadId: string,
+    terminalId: string,
+    pending: PendingHistoryPersist,
+  ): Promise<void> {
+    const persistenceKey = toSessionKey(threadId, terminalId);
+    const finalPath = this.historyPath(threadId, terminalId);
+    const fileBytes = this.persistedHistoryByKey.get(persistenceKey);
+    const appendFits =
+      fileBytes !== undefined &&
+      fileBytes + pending.appendBytes <=
+        this.historyByteLimit * HISTORY_FILE_COMPACT_AT_CAP_MULTIPLE;
+    if (!pending.requiresFullRewrite && appendFits) {
+      if (pending.appendBytes === 0) return;
+      await fs.promises.appendFile(finalPath, pending.appendChunks.join(""), {
+        encoding: "utf8",
+        mode: PRIVATE_FILE_MODE,
+      });
+      if (fileBytes === 0) await repairPrivateFile(finalPath);
+      this.persistedHistoryByKey.set(persistenceKey, fileBytes + pending.appendBytes);
+      return;
+    }
+    await this.replaceHistoryFile(threadId, terminalId, pending.session.history.toString());
+  }
+
+  private async replaceHistoryFile(
+    threadId: string,
+    terminalId: string,
+    history: string,
+  ): Promise<void> {
+    const finalPath = this.historyPath(threadId, terminalId);
+    const tempPath = `${finalPath}.tmp-${process.pid}-${(this.persistTempCounter += 1)}`;
+    try {
+      await fs.promises.writeFile(tempPath, history, {
+        encoding: "utf8",
+        mode: PRIVATE_FILE_MODE,
+      });
+      await fs.promises.rename(tempPath, finalPath);
+      await repairPrivateFile(finalPath);
+      this.persistedHistoryByKey.set(
+        toSessionKey(threadId, terminalId),
+        Buffer.byteLength(history, "utf8"),
+      );
+    } catch (error) {
+      await fs.promises.rm(tempPath, { force: true }).catch(() => undefined);
+      throw error;
+    }
   }
 
   private schedulePersist(threadId: string, terminalId: string): void {
@@ -2057,10 +2207,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     if (this.persistTimers.has(persistenceKey)) return;
     const timer = setTimeout(() => {
       this.persistTimers.delete(persistenceKey);
-      const materialize = this.pendingPersistHistory.get(persistenceKey);
-      if (materialize === undefined) return;
-      this.pendingPersistHistory.delete(persistenceKey);
-      void this.enqueuePersistWrite(threadId, terminalId, materialize());
+      void this.startPersistWrite(threadId, terminalId);
     }, this.persistDebounceMs);
     timer.unref?.();
     this.persistTimers.set(persistenceKey, timer);
@@ -2084,13 +2231,11 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
         maxLines: this.historyLineLimit,
         maxBytes: this.historyByteLimit,
       });
-      if (capped !== raw) {
-        await fs.promises.writeFile(nextPath, capped, {
-          encoding: "utf8",
-          mode: PRIVATE_FILE_MODE,
-        });
+      if (capped === raw) {
+        this.persistedHistoryByKey.set(persistenceKey, Buffer.byteLength(raw, "utf8"));
+      } else {
+        await this.replaceHistoryFile(threadId, terminalId, capped);
       }
-      this.persistedHistoryByKey.set(persistenceKey, capped);
       return capped;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
@@ -2111,12 +2256,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
       });
 
       // Migrate legacy transcript filename to the terminal-scoped path.
-      await fs.promises.writeFile(nextPath, capped, {
-        encoding: "utf8",
-        mode: PRIVATE_FILE_MODE,
-      });
-      await repairPrivateFile(nextPath);
-      this.persistedHistoryByKey.set(persistenceKey, capped);
+      await this.replaceHistoryFile(threadId, terminalId, capped);
       try {
         await fs.promises.rm(legacyPath, { force: true });
       } catch (cleanupError) {
@@ -2129,7 +2269,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
       return capped;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        this.persistedHistoryByKey.set(persistenceKey, "");
+        this.persistedHistoryByKey.set(persistenceKey, 0);
         return "";
       }
       throw error;
@@ -2155,21 +2295,26 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
 
   private async flushPersistQueue(threadId: string, terminalId: string): Promise<void> {
     const persistenceKey = toSessionKey(threadId, terminalId);
-    this.clearPersistTimer(threadId, terminalId);
-
     while (true) {
-      const materialize = this.pendingPersistHistory.get(persistenceKey);
-      if (materialize !== undefined) {
-        this.pendingPersistHistory.delete(persistenceKey);
-        await this.enqueuePersistWrite(threadId, terminalId, materialize());
+      this.clearPersistTimer(threadId, terminalId);
+      const inFlight = this.persistInFlight.get(persistenceKey);
+      if (inFlight) {
+        await inFlight;
+        continue;
       }
-
-      const pending = this.persistQueues.get(persistenceKey);
-      if (!pending) {
-        return;
-      }
-      await pending.catch(() => undefined);
+      if (!this.pendingPersistHistory.has(persistenceKey)) return;
+      const succeeded = await this.startPersistWrite(threadId, terminalId);
+      if (!succeeded) return;
     }
+  }
+
+  private async flushAllPersistQueues(): Promise<void> {
+    await Promise.all(this.persistInFlight.values());
+    await Promise.all(
+      [...this.pendingPersistHistory.values()].map(({ session }) =>
+        this.flushPersistQueue(session.threadId, session.terminalId),
+      ),
+    );
   }
 
   private updateSubprocessPollingState(): void {
@@ -2392,18 +2537,13 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     }
   }
 
-  /**
-   * Drop the write-dedup entry for a session that is no longer resident.
-   *
-   * `persistedHistoryByKey` only exists to skip a redundant rewrite of identical
-   * history, and the final persist re-populates it *after* the session was removed.
-   * Without this release every closed-but-not-deleted session (archiving keeps its
-   * history on disk) would pin up to `historyByteLimit` of scrollback in memory for
-   * the lifetime of the process. Dropping the entry costs at most one redundant file
-   * write later; `readHistory` re-populates it when the terminal is reopened.
-   */
   private releasePersistedHistoryCache(threadId: string, terminalId: string): void {
-    this.persistedHistoryByKey.delete(toSessionKey(threadId, terminalId));
+    const persistenceKey = toSessionKey(threadId, terminalId);
+    this.persistedHistoryByKey.delete(persistenceKey);
+    const pending = this.pendingPersistHistory.get(persistenceKey);
+    if (pending && pending.session !== this.sessions.get(persistenceKey)) {
+      this.pendingPersistHistory.delete(persistenceKey);
+    }
   }
 
   private sessionsForThread(threadId: string): TerminalSessionState[] {
