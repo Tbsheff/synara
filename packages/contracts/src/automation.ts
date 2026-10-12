@@ -46,27 +46,32 @@ export const AutomationSchedule = Schema.Union([
   }),
   Schema.Struct({
     type: Schema.Literal("interval"),
+    endsAt: Schema.optional(AutomationIsoDateTime),
     everySeconds: PositiveInt,
   }),
   Schema.Struct({
     type: Schema.Literal("daily"),
+    endsAt: Schema.optional(AutomationIsoDateTime),
     timeOfDay: AutomationTimeOfDay,
     timezone: Schema.optional(AutomationTimezone),
   }),
   // Runs at `timeOfDay` on every weekday (Mon-Fri) in the optional schedule timezone.
   Schema.Struct({
     type: Schema.Literal("weekdays"),
+    endsAt: Schema.optional(AutomationIsoDateTime),
     timeOfDay: AutomationTimeOfDay,
     timezone: Schema.optional(AutomationTimezone),
   }),
   Schema.Struct({
     type: Schema.Literal("weekly"),
     dayOfWeek: NonNegativeInt.check(Schema.isLessThanOrEqualTo(6)),
+    endsAt: Schema.optional(AutomationIsoDateTime),
     timeOfDay: AutomationTimeOfDay,
     timezone: Schema.optional(AutomationTimezone),
   }),
   Schema.Struct({
     type: Schema.Literal("cron"),
+    endsAt: Schema.optional(AutomationIsoDateTime),
     expression: AutomationCronExpression,
     timezone: AutomationTimezone,
   }),
@@ -127,6 +132,7 @@ export const AutomationRunResult = Schema.Struct({
   ]),
   summary: Schema.NullOr(TrimmedNonEmptyString.check(Schema.isMaxLength(2_000))),
   title: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(160))),
+  cancellationRequestedAt: Schema.optional(AutomationIsoDateTime),
   decision: Schema.optional(Schema.Literals(["notify", "silent"])),
   severity: Schema.optional(Schema.Literals(["info", "warning", "error"])),
   unread: Schema.Boolean,

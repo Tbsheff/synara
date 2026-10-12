@@ -722,7 +722,7 @@ function AutomationDetailView() {
                       onChange={(value) =>
                         patch({
                           schedule: {
-                            type: "interval",
+                            ...schedule,
                             everySeconds: Number.parseInt(value, 10),
                           },
                         })
@@ -765,9 +765,8 @@ function AutomationDetailView() {
                       onCommit={(value) =>
                         patch({
                           schedule: {
-                            type: "cron",
+                            ...schedule,
                             expression: value,
-                            timezone: schedule.timezone,
                           },
                         })
                       }
@@ -848,6 +847,28 @@ function AutomationDetailView() {
                     onChange={applyModelSelection}
                   />
                 </EditRow>
+                {schedule.type !== "manual" &&
+                schedule.type !== "once" &&
+                schedule.type !== "project-event" ? (
+                  <EditRow label="End date">
+                    <input
+                      type="datetime-local"
+                      aria-label="End date"
+                      value={schedule.endsAt ? datetimeLocalFromIso(schedule.endsAt) : ""}
+                      disabled={!editable}
+                      title={editDisabledTitle}
+                      onChange={(event) => {
+                        const { endsAt: _previous, ...cadence } = schedule;
+                        patch({
+                          schedule: event.target.value
+                            ? { ...cadence, endsAt: isoFromDatetimeLocal(event.target.value) }
+                            : cadence,
+                        });
+                      }}
+                      className="min-w-0 rounded-md border border-border bg-transparent px-2 py-1 text-ui leading-snug"
+                    />
+                  </EditRow>
+                ) : null}
                 <ModelOptionRows
                   modelSelection={definition.modelSelection}
                   disabled={!editable}

@@ -5,7 +5,14 @@
 
 import { describe, expect, it } from "vitest";
 
-import { automationCronExpressionError, automationTimezoneError } from "./automationForm";
+import {
+  automationCronExpressionError,
+  automationTimezoneError,
+  formFromDefinition,
+  createInputFromForm,
+  isoFromDatetimeLocal,
+  scheduleFromKind,
+} from "./automationForm";
 
 describe("automationCronExpressionError", () => {
   it("accepts structurally valid 5-field expressions", () => {
@@ -42,5 +49,22 @@ describe("automationTimezoneError", () => {
   it("rejects unknown zones", () => {
     expect(automationTimezoneError("Europe/Atlantis")).toBe("Unknown timezone");
     expect(automationTimezoneError("not a zone")).toBe("Unknown timezone");
+  });
+});
+
+it("includes the end date when creating a recurring automation", () => {
+  const form = { ...formFromDefinition(null, "project"), endsAt: "2026-11-01T09:00" };
+  expect(createInputFromForm(form).schedule).toMatchObject({
+    endsAt: isoFromDatetimeLocal(form.endsAt),
+  });
+});
+
+it("keeps the end date when changing a recurring cadence", () => {
+  const endsAt = "2026-11-01T09:00:00Z";
+  expect(
+    scheduleFromKind("weekly", { type: "interval", everySeconds: 3600, endsAt }),
+  ).toMatchObject({ type: "weekly", endsAt });
+  expect(scheduleFromKind("manual", { type: "interval", everySeconds: 3600, endsAt })).toEqual({
+    type: "manual",
   });
 });

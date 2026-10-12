@@ -209,6 +209,16 @@ the thread list and expires after the inactivity window set in Settings → Conv
 (1 hour by default, 24 hours, or never). Its empty view likewise shows only the
 composer and keeps the workspace assigned by Code review.
 
+## Automations
+
+Recurring automations can have an **End date**. Synara saves the date with the schedule
+and does not start scheduled runs at or after that time, including runs delayed while
+the server was offline. Clear the date to remove the limit. Runs already in progress
+continue until they finish or you cancel them.
+
+Cancel reports success after the automation turn stops. If a stop fails or takes too
+long, the run stays active with cancellation pending, and the server retries the stop.
+
 ## Code review
 
 Code review lists the open or closed pull requests and issues of the GitHub repositories behind

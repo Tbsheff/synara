@@ -61,6 +61,7 @@ import {
   type MarkAutomationRunFailedResult,
 } from "../../persistence/Services/AutomationRepository.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
+import { waitForThreadTurnStop } from "../../orchestration/waitForThreadTurnStop.ts";
 import { runWorktreeSetupScript } from "../../worktreeSetup.ts";
 import type { ProjectionTurn } from "../../persistence/Services/ProjectionTurns.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
@@ -83,6 +84,7 @@ import { buildAutomationRunEnvelope } from "../runEnvelope.ts";
 import { resolveAutomationStopPolicy } from "../stopPolicy.ts";
 import {
   type AutomationScheduleJitterContext,
+  automationScheduleHasEnded,
   computeAutomationScheduleSpacingSeconds,
   computeNextAutomationRunAt,
   computeNextAutomationRunAtAfter,
@@ -1313,7 +1315,7 @@ export const AutomationServiceLive = Layer.effect(
         });
 
         const stopIfRunCannotDispatch = (latest: AutomationRun, detail: string) =>
-          latest.status === "running"
+          latest.status === "running" && latest.result?.cancellationRequestedAt === undefined
             ? Effect.succeed(latest)
             : publish({ type: "run-upserted", run: latest }).pipe(
                 Effect.flatMap(() =>
@@ -2397,6 +2399,10 @@ export const AutomationServiceLive = Layer.effect(
           return;
         }
 
+        if (run.result?.cancellationRequestedAt !== undefined) {
+          yield* cancelRunById({ runId: run.id });
+          return;
+        }
         const shellOption = yield* projectionSnapshotQuery
           .getThreadShellById(threadId)
           .pipe(Effect.mapError(toServiceError("Failed to load automation thread state.")));
@@ -2547,10 +2553,38 @@ export const AutomationServiceLive = Layer.effect(
         }
       });
 
+    const stopRun = (run: AutomationRun, now: string) =>
+      Effect.gen(function* () {
+        if (!run.threadId || run.status === "pending") return;
+        yield* orchestrationEngine
+          .dispatch({
+            type: "thread.turn.interrupt",
+            commandId: CommandId.makeUnsafe(`automation:${run.id}:stop:${randomUUID()}`),
+            threadId: run.threadId,
+            ...(run.turnId ? { turnId: run.turnId } : {}),
+            createdAt: now,
+          })
+          .pipe(
+            Effect.mapError(
+              toServiceError("Failed to stop the automation turn. The stop remains pending."),
+            ),
+          );
+        const stopped = yield* waitForThreadTurnStop(
+          () => projectionSnapshotQuery.getThreadShellById(run.threadId!),
+          run.turnId,
+        ).pipe(Effect.mapError(toServiceError("Failed to check the automation stop.")));
+        if (Option.isNone(stopped))
+          return yield* Effect.fail(
+            new AutomationServiceError({
+              message: "Automation turn did not stop. The stop remains pending.",
+            }),
+          );
+      });
+
     const failRunForTimeout = (definition: AutomationDefinition, run: AutomationRun, now: string) =>
       Effect.gen(function* () {
         const summary = `Automation run exceeded its ${definition.maxRuntimeSeconds}-second runtime limit.`;
-        yield* interruptRunBestEffort(run, now);
+        yield* stopRun(run, now);
         const failedResult = yield* automationRepository
           .markRunFailed({ id: run.id, error: summary, finishedAt: now })
           .pipe(Effect.mapError(toServiceError("Failed to time out automation run.")));
@@ -2563,20 +2597,22 @@ export const AutomationServiceLive = Layer.effect(
       });
 
     const reconcileActiveRun = (run: AutomationRun, now: string) =>
-      automationRepository.getDefinitionById({ id: run.automationId }).pipe(
-        Effect.mapError(toServiceError("Failed to load automation.")),
-        Effect.flatMap((definitionOption) =>
-          Option.match(definitionOption, {
-            onNone: () => Effect.void,
-            onSome: (definition) =>
-              hasExceededMaxRuntime(definition, run, now)
-                ? failRunForTimeout(definition, run, now)
-                : run.threadId
-                  ? reconcileThread({ threadId: run.threadId })
-                  : Effect.void,
-          }),
-        ),
-      );
+      run.result?.cancellationRequestedAt !== undefined
+        ? cancelRunById({ runId: run.id }).pipe(Effect.asVoid)
+        : automationRepository.getDefinitionById({ id: run.automationId }).pipe(
+            Effect.mapError(toServiceError("Failed to load automation.")),
+            Effect.flatMap((definitionOption) =>
+              Option.match(definitionOption, {
+                onNone: () => Effect.void,
+                onSome: (definition) =>
+                  hasExceededMaxRuntime(definition, run, now)
+                    ? failRunForTimeout(definition, run, now)
+                    : run.threadId
+                      ? reconcileThread({ threadId: run.threadId })
+                      : Effect.void,
+              }),
+            ),
+          );
 
     const reconcileActiveRuns: AutomationServiceShape["reconcileActiveRuns"] = () =>
       automationRepository
@@ -3147,6 +3183,31 @@ export const AutomationServiceLive = Layer.effect(
     const cancelRunById = (input: { readonly runId: AutomationRunId }) =>
       Effect.gen(function* () {
         const now = isoNow();
+        const current = yield* automationRepository
+          .getRunById({ id: input.runId })
+          .pipe(Effect.mapError(toServiceError("Failed to load automation run.")));
+        if (Option.isNone(current))
+          return yield* Effect.fail(
+            new AutomationServiceError({ message: "Automation run was not found." }),
+          );
+        if (isTerminalRunStatus(current.value.status)) return current.value;
+        const requested = yield* automationRepository
+          .markRunResult({
+            id: input.runId,
+            updatedAt: now,
+            result: {
+              ...current.value.result,
+              outcome: "unknown",
+              cancellationRequestedAt: current.value.result?.cancellationRequestedAt ?? now,
+              title: "Cancellation requested",
+              summary: "Waiting for the automation turn to stop.",
+              unread: true,
+              archivedAt: current.value.result?.archivedAt ?? null,
+            },
+          })
+          .pipe(Effect.mapError(toServiceError("Failed to request automation cancellation.")));
+        yield* publish({ type: "run-upserted", run: requested });
+        yield* stopRun(requested, now);
         const run = yield* automationRepository
           .cancelRun({ ...input, now })
           .pipe(Effect.mapError(toServiceError("Failed to cancel automation run.")));
@@ -3154,13 +3215,7 @@ export const AutomationServiceLive = Layer.effect(
           yield* publish({ type: "run-upserted", run });
           return run;
         }
-        return yield* publishRunResult(
-          run,
-          "cancelled",
-          now,
-          "Automation run was cancelled.",
-          true,
-        );
+        return yield* publishRunResult(run, "cancelled", now, "Automation run was cancelled.");
       });
 
     const deleteAutomation: AutomationServiceShape["delete"] = (input) =>
@@ -3168,11 +3223,9 @@ export const AutomationServiceLive = Layer.effect(
         const activeRuns = yield* automationRepository
           .listActiveRunsForDefinition({ automationId: input.id })
           .pipe(Effect.mapError(toServiceError("Failed to load active automation runs.")));
-        yield* Effect.forEach(
-          activeRuns,
-          (run) => cancelRunById({ runId: run.id }).pipe(Effect.catch(() => Effect.void)),
-          { concurrency: 1 },
-        );
+        yield* Effect.forEach(activeRuns, (run) => cancelRunById({ runId: run.id }), {
+          concurrency: 1,
+        });
         yield* automationRepository
           .archiveDefinition({ id: input.id, archivedAt: isoNow() })
           .pipe(Effect.mapError(toServiceError("Failed to delete automation.")));
@@ -3479,7 +3532,10 @@ export const AutomationServiceLive = Layer.effect(
       now: string,
     ) =>
       Effect.gen(function* () {
-        if (definition.schedule.type === "once" && nextRunAt === null) {
+        if (
+          nextRunAt === null &&
+          (definition.schedule.type === "once" || "endsAt" in definition.schedule)
+        ) {
           yield* automationRepository
             .disableDefinition({ id: definition.id, now, reason: "schedule" })
             .pipe(Effect.mapError(toServiceError("Failed to complete one-shot automation.")));
@@ -3506,6 +3562,18 @@ export const AutomationServiceLive = Layer.effect(
     // schedule advancement, so dispatch failures still leave auditable history.
     const runDueDefinition = (definition: AutomationDefinition, now: string) =>
       Effect.gen(function* () {
+        if (automationScheduleHasEnded(definition.schedule, now)) {
+          yield* automationRepository
+            .disableDefinitionIfUnchanged({
+              id: definition.id,
+              expectedUpdatedAt: definition.updatedAt,
+              now,
+              reason: "schedule",
+            })
+            .pipe(Effect.mapError(toServiceError("Failed to end automation schedule.")));
+          yield* publishDefinition(definition.id);
+          return Option.none<AutomationRunNowResult>();
+        }
         if (!isAutomationAvailable(definition)) return Option.none<AutomationRunNowResult>();
         if (definition.proposalState === "pending") {
           return Option.none<AutomationRunNowResult>();
@@ -3682,7 +3750,9 @@ export const AutomationServiceLive = Layer.effect(
           now,
           {
             nextRunAt,
-            disable: definition.schedule.type === "once" && nextRunAt === null,
+            disable:
+              nextRunAt === null &&
+              (definition.schedule.type === "once" || "endsAt" in definition.schedule),
           },
         );
         yield* publishDefinition(definition.id);
@@ -3715,6 +3785,19 @@ export const AutomationServiceLive = Layer.effect(
       Effect.gen(function* () {
         const definition = yield* requireDefinition(run.automationId);
         if (!isAutomationAvailable(definition)) return Option.none<AutomationRunNowResult>();
+        if (automationScheduleHasEnded(definition.schedule, now)) {
+          yield* automationRepository
+            .disableDefinitionIfUnchanged({
+              id: definition.id,
+              expectedUpdatedAt: definition.updatedAt,
+              now,
+              reason: "schedule",
+            })
+            .pipe(Effect.mapError(toServiceError("Failed to end automation schedule.")));
+          yield* markScheduledRunSkipped(run, "Automation schedule has ended.", now);
+          yield* publishDefinition(definition.id);
+          return Option.none<AutomationRunNowResult>();
+        }
         if (!definition.enabled) {
           return Option.none<AutomationRunNowResult>();
         }

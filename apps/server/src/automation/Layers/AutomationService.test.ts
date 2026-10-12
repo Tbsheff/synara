@@ -21,7 +21,7 @@ import {
 } from "@synara/contracts";
 import { isTemporaryWorktreeBranch } from "@synara/shared/git";
 import { unresolvedAutomationInstanceId } from "@synara/shared/providerInstances";
-import { Duration, Effect, Layer, Option, Stream } from "effect";
+import { Deferred, Duration, Effect, Fiber, Layer, Option, Stream } from "effect";
 import { TestClock } from "effect/testing";
 import { afterEach, vi } from "vitest";
 
@@ -459,6 +459,13 @@ const orchestrationEngine = {
       : Effect.gen(function* () {
           if (dispatchHook) {
             yield* dispatchHook(command);
+          }
+          if (
+            command.type === "thread.turn.interrupt" &&
+            !dispatchHook &&
+            Option.isSome(threadShell)
+          ) {
+            threadShell = Option.some({ ...threadShell.value, latestTurn: null, session: null });
           }
           dispatchedCommands.push(command);
           return { sequence: dispatchedCommands.length };
@@ -2405,7 +2412,7 @@ layer("AutomationService", (it) => {
     }),
   );
 
-  it.effect("times out active runs that exceed maxRuntimeSeconds", () =>
+  it.effect("retries failed runtime-limit stops before failing the run", () =>
     Effect.gen(function* () {
       resetHarness();
       const service = yield* AutomationService;
@@ -2455,6 +2462,13 @@ layer("AutomationService", (it) => {
         startedAt: "2000-01-01T00:00:00.000Z",
       });
 
+      failDispatchType = "thread.turn.interrupt";
+      yield* service.reconcileActiveRuns();
+      assert.strictEqual(
+        (yield* service.list({ projectId })).runs.find((entry) => entry.id === run.id)?.status,
+        "running",
+      );
+      failDispatchType = null;
       yield* service.reconcileActiveRuns();
 
       const listed = yield* service.list({ projectId });
@@ -6175,6 +6189,86 @@ layer("AutomationService", (it) => {
         const reloaded = yield* service.list({ projectId });
         assert.strictEqual(reloaded.runs.find((entry) => entry.id === run.id)?.status, "cancelled");
       }),
+  );
+
+  it.effect("persists recurring end dates and refuses expired scheduled claims", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const repository = yield* AutomationRepository;
+      for (const definition of (yield* service.list({ projectId })).definitions) {
+        yield* repository.disableDefinition({ id: definition.id, now, reason: "user" });
+      }
+      const endsAt = "2099-06-16T10:02:00.000Z";
+      const created = yield* service.create({
+        ...createInput("local"),
+        schedule: { type: "interval", everySeconds: 60, endsAt },
+      });
+      assert.strictEqual(
+        "endsAt" in created.schedule ? created.schedule.endsAt : undefined,
+        endsAt,
+      );
+      yield* repository.setDefinitionNextRunAt({
+        id: created.id,
+        nextRunAt: "2099-06-16T10:01:00.000Z",
+        updatedAt: now,
+      });
+      const results = yield* service.runDueOnce({ now: endsAt, leaseOwnerId: "end-date-test" });
+      assert.strictEqual(
+        results.filter((result) => result.run.automationId === created.id).length,
+        0,
+      );
+      const listed = yield* service.list({ projectId });
+      assert.strictEqual(listed.runs.filter((run) => run.automationId === created.id).length, 0);
+      const saved = listed.definitions.find((entry) => entry.id === created.id)!;
+      assert.strictEqual(saved.enabled, false);
+      assert.strictEqual(saved.nextRunAt, null);
+    }),
+  );
+
+  it.effect("keeps cancellation pending when an interrupt fails and retries on reconcile", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const created = yield* service.create(createInput("local"));
+      const { run } = yield* service.runNow({ automationId: created.id });
+      failDispatchType = "thread.turn.interrupt";
+      const exit = yield* Effect.exit(service.cancelRun({ runId: run.id }));
+      assert.strictEqual(exit._tag, "Failure");
+      const pending = yield* service.list({ projectId });
+      assert.notStrictEqual(pending.runs.find((entry) => entry.id === run.id)?.status, "cancelled");
+      failDispatchType = null;
+      yield* service.reconcileThread({ threadId: run.threadId! });
+      assert.strictEqual(
+        (yield* service.list({ projectId })).runs.find((entry) => entry.id === run.id)?.status,
+        "cancelled",
+      );
+    }),
+  );
+
+  it.effect("refuses cancellation success when the reactor ignores the interrupt", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const created = yield* service.create(createInput("local"));
+      const { run } = yield* service.runNow({ automationId: created.id });
+      threadShell = Option.some(
+        makeThreadShell({ id: run.threadId!, latestTurn: makeLatestTurn("running") }),
+      );
+      const checking = yield* Deferred.make<void>();
+      dispatchHook = (command) =>
+        command.type === "thread.turn.interrupt"
+          ? Deferred.succeed(checking, undefined).pipe(Effect.asVoid)
+          : Effect.void;
+      const fiber = yield* service.cancelRun({ runId: run.id }).pipe(Effect.exit, Effect.forkChild);
+      yield* Deferred.await(checking);
+      yield* TestClock.adjust("6 seconds");
+      assert.strictEqual((yield* Fiber.join(fiber))._tag, "Failure");
+      assert.notStrictEqual(
+        (yield* service.list({ projectId })).runs.find((entry) => entry.id === run.id)?.status,
+        "cancelled",
+      );
+    }),
   );
 
   it.effect("deleting an automation cancels and interrupts its active runs", () =>
