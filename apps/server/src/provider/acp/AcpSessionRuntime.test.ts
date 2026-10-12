@@ -1,7 +1,19 @@
 import { describe, expect, it } from "vitest";
 
 import * as OfficialAcp from "@agentclientprotocol/sdk";
-import { Deferred, Duration, Effect, Exit, Fiber, Layer, Queue, Scope, Sink, Stream } from "effect";
+import {
+  Deferred,
+  Duration,
+  Effect,
+  Exit,
+  Fiber,
+  Layer,
+  PlatformError,
+  Queue,
+  Scope,
+  Sink,
+  Stream,
+} from "effect";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import { TestClock } from "effect/testing";
 import type * as Acp from "@agentclientprotocol/sdk";
@@ -616,6 +628,111 @@ describe("AcpSessionRuntime initialize validation", () => {
     expect(error).toBe(validationError);
     expect(sessionNewCalls).toBe(0);
   });
+});
+
+describe("AcpSessionRuntime stdin writer failure", () => {
+  it("fails pending and later requests with the transport error when stdin writes fail while the child stays alive", async () => {
+    const clientToAgent = Effect.runSync(Queue.unbounded<Uint8Array>());
+    const agentToClient = Effect.runSync(Queue.unbounded<Uint8Array>());
+    const promptStarted = Deferred.makeUnsafe<void>();
+    let stdinBroken = false;
+    let agentConnection: { close(error?: unknown): void } | undefined;
+    const agentApp = OfficialAcp.agent({ name: "stdin-failure-agent" })
+      .onRequest(OfficialAcp.methods.agent.initialize, () => ({
+        protocolVersion: 1,
+        agentCapabilities: {},
+        authMethods: [],
+      }))
+      .onRequest(OfficialAcp.methods.agent.session.new, () => ({ sessionId: "stdin-session" }))
+      .onRequest(OfficialAcp.methods.agent.session.prompt, () => {
+        Deferred.doneUnsafe(promptStarted, Effect.void);
+        return new Promise<never>(() => {});
+      });
+    const spawnerLayer = Layer.succeed(
+      ChildProcessSpawner.ChildProcessSpawner,
+      ChildProcessSpawner.make(() =>
+        Effect.sync(() => {
+          const input = new ReadableStream<Uint8Array>({
+            pull: (controller) =>
+              Effect.runPromise(Queue.take(clientToAgent)).then((chunk) => {
+                controller.enqueue(chunk);
+              }),
+          });
+          const output = new WritableStream<Uint8Array>({
+            write: (chunk) =>
+              Effect.runPromise(Queue.offer(agentToClient, chunk)).then(() => undefined),
+          });
+          agentConnection = agentApp.connect(OfficialAcp.ndJsonStream(output, input));
+          return ChildProcessSpawner.makeHandle({
+            pid: ChildProcessSpawner.ProcessId(0x7ff_f_fffe),
+            exitCode: Effect.never,
+            isRunning: Effect.succeed(true),
+            kill: () => Effect.void,
+            stdin: Sink.forEach((chunk: Uint8Array) =>
+              stdinBroken
+                ? Effect.fail(
+                    PlatformError.systemError({
+                      _tag: "BadResource",
+                      module: "ChildProcess",
+                      method: "stdin",
+                      description: "stdin pipe closed",
+                    }),
+                  )
+                : Queue.offer(clientToAgent, chunk),
+            ),
+            stdout: Stream.fromQueue(agentToClient),
+            stderr: Stream.never,
+            all: Stream.never,
+            getInputFd: () => Sink.drain,
+            getOutputFd: () => Stream.never,
+          });
+        }),
+      ),
+    );
+    const runtimeLayer = AcpSessionRuntime.layer({
+      spawn: { command: "in-memory-acp-agent", args: [] },
+      cwd: process.cwd(),
+      clientInfo: { name: "stdin-failure-test", version: "0.0.0" },
+      authPolicy: "on-demand",
+      teardownProcessTree: async () => ({ escalated: false, signalErrors: [] }),
+    }).pipe(Layer.provide(spawnerLayer));
+    const settle = <A, E>(fiber: Fiber.Fiber<A, E>) =>
+      Fiber.join(fiber).pipe(
+        Effect.flip,
+        Effect.timeoutOrElse({
+          duration: Duration.seconds(2),
+          onTimeout: () => Effect.succeed("timed out" as const),
+        }),
+      );
+    try {
+      await Effect.runPromise(
+        Effect.gen(function* () {
+          const runtime = yield* AcpSessionRuntime;
+          yield* runtime.start();
+          const prompt = yield* runtime
+            .prompt({ prompt: [{ type: "text", text: "test" }] })
+            .pipe(Effect.forkChild);
+          yield* Deferred.await(promptStarted);
+          stdinBroken = true;
+          const later = yield* runtime.request("_test/ping", {}).pipe(Effect.forkChild);
+          const expected = {
+            _tag: "AcpTransportError",
+            detail: expect.stringContaining("stdin pipe closed"),
+          };
+          expect(yield* settle(prompt)).toMatchObject(expected);
+          expect(yield* settle(later)).toMatchObject(expected);
+          const afterFailure = yield* runtime.request("_test/ping", {}).pipe(Effect.forkChild);
+          expect(yield* settle(afterFailure)).toMatchObject(expected);
+          const cancel = yield* runtime.cancel.pipe(Effect.forkChild);
+          expect(yield* settle(cancel)).toMatchObject(expected);
+        }).pipe(Effect.provide(runtimeLayer), Effect.scoped),
+      );
+    } finally {
+      agentConnection?.close();
+      await Effect.runPromise(Queue.shutdown(clientToAgent));
+      await Effect.runPromise(Queue.shutdown(agentToClient));
+    }
+  }, 15_000);
 });
 
 describe("AcpSessionRuntime startup timeouts", () => {

@@ -60,7 +60,7 @@ import {
 } from "../../agentGateway/sessionLease.ts";
 import { ServerConfig, type ServerConfigShape } from "../../config.ts";
 import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
-import { loadProviderPromptImageBlocks } from "../promptAttachments.ts";
+import { loadProviderPromptImageBlocks, stripPromptImageData } from "../promptAttachments.ts";
 import { settleConcurrentTeardowns } from "../settleConcurrentTeardowns.ts";
 import {
   ProviderAdapterProcessError,
@@ -1370,6 +1370,7 @@ export function makeCursorAdapter(
         if (harnessPolicy) {
           promptParts.unshift(harnessPolicy);
         }
+        const completedTurnPrompt = stripPromptImageData(promptParts, input.attachments);
 
         ctx.activeTurnId = turnId;
         ctx.activeTurnFailedToolDetail = undefined;
@@ -1409,7 +1410,7 @@ export function makeCursorAdapter(
                   return;
                 }
                 const completedCost = finalizeCursorActiveTurnCost(ctx);
-                ctx.turns.push({ id: turnId, items: [{ prompt: promptParts, error }] });
+                ctx.turns.push({ id: turnId, items: [{ prompt: completedTurnPrompt, error }] });
                 const detail = error.message;
                 ctx.session = {
                   ...ctx.session,
@@ -1443,7 +1444,7 @@ export function makeCursorAdapter(
                   return;
                 }
                 const completedCost = finalizeCursorActiveTurnCost(ctx);
-                ctx.turns.push({ id: turnId, items: [{ prompt: promptParts, result }] });
+                ctx.turns.push({ id: turnId, items: [{ prompt: completedTurnPrompt, result }] });
                 const { lastError: _lastError, ...sessionWithoutLastError } = ctx.session;
                 ctx.session = {
                   ...sessionWithoutLastError,
@@ -1479,7 +1480,10 @@ export function makeCursorAdapter(
                 return;
               }
               const completedCost = finalizeCursorActiveTurnCost(ctx);
-              ctx.turns.push({ id: turnId, items: [{ prompt: promptParts, interrupted: true }] });
+              ctx.turns.push({
+                id: turnId,
+                items: [{ prompt: completedTurnPrompt, interrupted: true }],
+              });
               const { lastError: _lastError, ...sessionWithoutLastError } = ctx.session;
               ctx.session = {
                 ...sessionWithoutLastError,

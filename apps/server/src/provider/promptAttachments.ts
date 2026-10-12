@@ -76,3 +76,20 @@ export function loadProviderPromptImageBlocks(input: {
     { concurrency: 4 },
   );
 }
+
+export function stripPromptImageData(
+  promptParts: ReadonlyArray<{ readonly type: string }>,
+  attachments: ReadonlyArray<ChatAttachment> | undefined,
+): Array<unknown> {
+  const images = filterProviderPromptImageAttachments(attachments);
+  let imageIndex = 0;
+  return promptParts.map((part) => {
+    if (part.type !== "image") return part;
+    const attachmentId = images[imageIndex++]?.id;
+    return {
+      type: "image",
+      mimeType: "mimeType" in part ? part.mimeType : undefined,
+      ...(attachmentId !== undefined ? { attachmentId } : {}),
+    };
+  });
+}

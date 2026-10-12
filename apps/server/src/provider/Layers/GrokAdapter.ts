@@ -66,7 +66,7 @@ import { ServerConfig, type ServerConfigShape } from "../../config.ts";
 import { buildProviderChildEnvironment } from "../../providerChildEnvironment.ts";
 import { buildProviderProcessEnv } from "../providerProcessEnv.ts";
 import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
-import { loadProviderPromptImageBlocks } from "../promptAttachments.ts";
+import { loadProviderPromptImageBlocks, stripPromptImageData } from "../promptAttachments.ts";
 import { settleConcurrentTeardowns } from "../settleConcurrentTeardowns.ts";
 import {
   ProviderAdapterProcessError,
@@ -141,6 +141,7 @@ import { resolveProviderSessionInstanceId } from "../Services/ProviderAdapter.ts
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 
 const PROVIDER = "grok" as const;
+
 export const resolveGrokStartInstanceId = resolveProviderSessionInstanceId;
 
 export const takeGrokSynaraHarnessPolicyTextPart = (
@@ -1904,6 +1905,7 @@ export function makeGrokAdapter(
         if (harnessPolicy) {
           promptParts.unshift(harnessPolicy);
         }
+        const completedTurnPrompt = stripPromptImageData(promptParts, input.attachments);
 
         // A stop can land while the pre-prompt work or attachment reads above were
         // in flight; opening the turn now would publish turn.started (and a
@@ -1975,7 +1977,7 @@ export function makeGrokAdapter(
                   return;
                 }
                 const completedCost = finalizeAcpActiveTurnCost(ctx);
-                ctx.turns.push({ id: turnId, items: [{ prompt: promptParts, error }] });
+                ctx.turns.push({ id: turnId, items: [{ prompt: completedTurnPrompt, error }] });
                 const detail = error.message;
                 ctx.session = {
                   ...ctx.session,
@@ -2034,7 +2036,7 @@ export function makeGrokAdapter(
                   return;
                 }
                 const completedCost = finalizeAcpActiveTurnCost(ctx);
-                ctx.turns.push({ id: turnId, items: [{ prompt: promptParts, result }] });
+                ctx.turns.push({ id: turnId, items: [{ prompt: completedTurnPrompt, result }] });
                 const { lastError: _lastError, ...sessionWithoutLastError } = ctx.session;
                 ctx.session = {
                   ...sessionWithoutLastError,
@@ -2084,7 +2086,10 @@ export function makeGrokAdapter(
                 return;
               }
               const completedCost = finalizeAcpActiveTurnCost(ctx);
-              ctx.turns.push({ id: turnId, items: [{ prompt: promptParts, interrupted: true }] });
+              ctx.turns.push({
+                id: turnId,
+                items: [{ prompt: completedTurnPrompt, interrupted: true }],
+              });
               const { lastError: _lastError, ...sessionWithoutLastError } = ctx.session;
               ctx.session = {
                 ...sessionWithoutLastError,
