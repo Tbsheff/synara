@@ -576,7 +576,7 @@ describe("Beta import isolation from Stable", () => {
     stableDb.close();
   });
 
-  it("detaches imported threads from worktrees that live in Stable's home", async () => {
+  it("detaches imported threads from Stable's worktrees and scratch folders", async () => {
     const stableHome = await seedStableHome(makeRoot());
     const stableWorktree = join(stableHome, "worktrees", "repo", "feature");
     const externalWorktree = join(stableHome, "..", "elsewhere", "feature");
@@ -588,6 +588,11 @@ describe("Beta import isolation from Stable", () => {
       text: `look in ${stableWorktree}`,
     };
     const sessionPayload = { cwd: stableWorktree, model: "m" };
+    const scratchSessionPayload = {
+      cwd: join(stableHome, "..", "Caches", ".synara-0", "synara-codex-workspaces", "t-scratch-1"),
+      model: "m",
+    };
+    const projectSessionPayload = { cwd: externalWorktree, model: "m" };
     const metaUpdated = {
       threadId: "t-stable",
       envMode: "worktree",
@@ -607,7 +612,9 @@ describe("Beta import isolation from Stable", () => {
       `INSERT INTO orchestration_events VALUES (1, ${sqlJson(threadCreated)})`,
       `INSERT INTO orchestration_events VALUES (2, ${sqlJson(metaUpdated)})`,
       `CREATE TABLE provider_session_runtime (thread_id TEXT PRIMARY KEY, runtime_payload_json TEXT)`,
-      `INSERT INTO provider_session_runtime VALUES ('t-stable', ${sqlJson(sessionPayload)})`,
+      `INSERT INTO provider_session_runtime VALUES ('t-stable', ${sqlJson(sessionPayload)}),
+         ('t-scratch', ${sqlJson(scratchSessionPayload)}),
+         ('t-project', ${sqlJson(projectSessionPayload)})`,
     ]);
 
     const betaState = await importInto(stableHome, async () => 0);
@@ -639,11 +646,15 @@ describe("Beta import isolation from Stable", () => {
       workingDirectory: null,
       nested: { associatedWorktreePath: null },
     });
-    const [session] = await readBeta<{ payload: string }>(
+    const sessions = await readBeta<{ id: string; payload: string }>(
       betaState,
-      "SELECT runtime_payload_json AS payload FROM provider_session_runtime",
+      "SELECT thread_id AS id, runtime_payload_json AS payload FROM provider_session_runtime ORDER BY thread_id",
     );
-    expect(JSON.parse(session!.payload)).toEqual({ model: "m" });
+    expect(sessions.map((row) => [row.id, JSON.parse(row.payload)])).toEqual([
+      ["t-project", projectSessionPayload],
+      ["t-scratch", { model: "m" }],
+      ["t-stable", { model: "m" }],
+    ]);
   });
 
   it("reports repositories whose checkpoint refs could not be copied", async () => {

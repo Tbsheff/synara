@@ -38,6 +38,8 @@ import {
   type BetaImportRequest,
 } from "@synara/shared/betaChannel";
 
+import { isScratchWorkspacePath } from "@synara/shared/threadWorkspace";
+
 import { BETA_CHECKPOINT_REFS_PREFIX, parseManagedCheckpointRef } from "./checkpointing/Utils";
 import { runProcess } from "./processRunner";
 
@@ -497,7 +499,7 @@ function rewriteImportedEventPayloads(
   }
 }
 
-function forgetSourceHomeSessionCwds(db: StagedDatabase, sourceWorktreeRoots: readonly string[]) {
+function forgetStableSessionCwds(db: StagedDatabase, sourceWorktreeRoots: readonly string[]) {
   const columns = tableColumns(db, "provider_session_runtime");
   if (!columns.has("runtime_payload_json")) return;
   const update = db.prepare(
@@ -516,7 +518,10 @@ function forgetSourceHomeSessionCwds(db: StagedDatabase, sourceWorktreeRoots: re
     }
     if (!payload || typeof payload !== "object") continue;
     const record = payload as Record<string, unknown>;
-    if (typeof record.cwd === "string" && isWithinAny(record.cwd, sourceWorktreeRoots)) {
+    if (
+      typeof record.cwd === "string" &&
+      (isWithinAny(record.cwd, sourceWorktreeRoots) || isScratchWorkspacePath(record.cwd))
+    ) {
       delete record.cwd;
       update.run(JSON.stringify(record), row.threadId);
     }
@@ -538,7 +543,7 @@ async function isolateImportedDatabase(input: {
       moveCheckpointRefsToBetaNamespace(db);
       detachSourceHomeWorktrees(db, input.sourceWorktreeRoots);
       rewriteImportedEventPayloads(db, input.sourceWorktreeRoots);
-      forgetSourceHomeSessionCwds(db, input.sourceWorktreeRoots);
+      forgetStableSessionCwds(db, input.sourceWorktreeRoots);
       db.exec("COMMIT");
       return repositories;
     } catch (error) {
