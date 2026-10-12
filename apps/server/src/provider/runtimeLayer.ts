@@ -43,11 +43,16 @@ export function makeServerProviderLayer(
           stream: "native",
         })
       : undefined;
-    const canonicalEventLogger = logProviderEvents
-      ? yield* makeEventNdjsonLogger(providerEventLogPath, {
-          stream: "canonical",
-        })
+    const canonicalEventLogger = nativeEventLogger
+      ? {
+          ...nativeEventLogger,
+          write: (event: unknown, threadId: Parameters<typeof nativeEventLogger.write>[1]) =>
+            nativeEventLogger.write(event, threadId, "canonical"),
+        }
       : undefined;
+    if (nativeEventLogger) {
+      yield* Effect.addFinalizer(() => nativeEventLogger.close());
+    }
     const providerSessionDirectoryLayer = ProviderSessionDirectoryLive.pipe(
       Layer.provide(ProviderSessionRuntimeRepositoryLive),
     );

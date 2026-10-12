@@ -327,10 +327,11 @@
     }
   },
   "packages/shared/src/logging.ts": {
-    "reason": "Shared synchronous rotating log sink (writes, rotation and initialization); existing legacy references frozen pending profiling.",
+    "reason": "Legacy synchronous log sink; truncateSync bounds failed rotation. Provider event logs use async writes and rotation.",
     "references": {
       "mkdirSync": 1,
       "appendFileSync": 2,
+      "truncateSync": 1,
       "existsSync": 3,
       "rmSync": 2,
       "renameSync": 2,

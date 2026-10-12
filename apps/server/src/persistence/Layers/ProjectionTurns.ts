@@ -1,4 +1,9 @@
-import { OrchestrationCheckpointFile, ThreadId, TurnId } from "@synara/contracts";
+import {
+  MAX_THREAD_CHECKPOINTS,
+  OrchestrationCheckpointFile,
+  ThreadId,
+  TurnId,
+} from "@synara/contracts";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 import { Effect, Layer, Option, Schema, Struct } from "effect";
@@ -307,15 +312,37 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
       `,
   });
 
+  const retireCheckpointRows = (threadId: string) => sql`
+    UPDATE projection_turns SET checkpoint_status = NULL, checkpoint_files_json = '[]'
+    WHERE thread_id = ${threadId} AND completed_at IS NOT NULL
+      AND state NOT IN ('pending', 'running')
+      AND checkpoint_turn_count IS NOT NULL
+      AND turn_id NOT IN (
+        SELECT turn_id FROM projection_turns WHERE thread_id = ${threadId}
+          AND checkpoint_turn_count IS NOT NULL AND completed_at IS NOT NULL
+        ORDER BY checkpoint_turn_count DESC, turn_id DESC LIMIT ${MAX_THREAD_CHECKPOINTS}
+      )
+  `;
+
   const upsertByTurnId: ProjectionTurnRepositoryShape["upsertByTurnId"] = (row) =>
-    upsertProjectionTurnById(row).pipe(
-      Effect.mapError(
-        toPersistenceSqlOrDecodeError(
-          "ProjectionTurnRepository.upsertByTurnId:query",
-          "ProjectionTurnRepository.upsertByTurnId:encodeRequest",
+    sql
+      .withTransaction(
+        upsertProjectionTurnById(row).pipe(
+          Effect.tap(() =>
+            row.checkpointTurnCount !== null && row.completedAt !== null
+              ? retireCheckpointRows(row.threadId).pipe(Effect.asVoid)
+              : Effect.void,
+          ),
         ),
-      ),
-    );
+      )
+      .pipe(
+        Effect.mapError(
+          toPersistenceSqlOrDecodeError(
+            "ProjectionTurnRepository.upsertByTurnId:query",
+            "ProjectionTurnRepository.upsertByTurnId:encodeRequest",
+          ),
+        ),
+      );
 
   const replacePendingTurnStart: ProjectionTurnRepositoryShape["replacePendingTurnStart"] = (row) =>
     sql

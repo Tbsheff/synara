@@ -1676,9 +1676,7 @@ function mapItemLifecycle(
         canonicalThreadId,
         codexHome,
       )
-    : data !== undefined
-      ? withMinimalRawPayload(runtimeEventBase(event, canonicalThreadId), event)
-      : runtimeEventBase(event, canonicalThreadId);
+    : withMinimalRawPayload(runtimeEventBase(event, canonicalThreadId), event);
 
   return {
     ...base,

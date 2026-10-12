@@ -98,6 +98,12 @@ function providerEnvironmentSecretName(input: {
   return `provider-env-${Buffer.from(input.instanceId, "utf8").toString("base64url")}-${Buffer.from(input.name, "utf8").toString("base64url")}`;
 }
 
+type StoredProviderSecrets = ReadonlyMap<string, Uint8Array>;
+
+function bytesEqual(left: Uint8Array, right: Uint8Array): boolean {
+  return left.byteLength === right.byteLength && left.every((byte, index) => byte === right[index]);
+}
+
 function providerConfigSecretName(input: { readonly instanceId: string; readonly key: string }) {
   return `provider-config-${Buffer.from(input.instanceId, "utf8").toString("base64url")}-${Buffer.from(input.key, "utf8").toString("base64url")}`;
 }
@@ -665,8 +671,12 @@ const makeServerSettings = Effect.gen(function* () {
 
   const materializeProviderEnvironmentSecrets = (
     settings: ServerSettings,
-  ): Effect.Effect<ServerSettings, ServerSettingsError> =>
+  ): Effect.Effect<
+    { readonly settings: ServerSettings; readonly storedSecrets: StoredProviderSecrets },
+    ServerSettingsError
+  > =>
     Effect.gen(function* () {
+      const storedSecrets = new Map<string, Uint8Array>();
       const providerInstances: Record<string, ProviderInstanceConfig> = {
         ...settings.providerInstances,
       };
@@ -679,8 +689,9 @@ const makeServerSettings = Effect.gen(function* () {
               environment.push(variable);
               continue;
             }
+            const secretName = providerEnvironmentSecretName({ instanceId, name: variable.name });
             const secret = yield* secretStore
-              .get(providerEnvironmentSecretName({ instanceId, name: variable.name }))
+              .get(secretName)
               .pipe(
                 Effect.mapError((cause) =>
                   secretStoreError(
@@ -689,6 +700,7 @@ const makeServerSettings = Effect.gen(function* () {
                   ),
                 ),
               );
+            if (secret) storedSecrets.set(secretName, secret);
             const { valueRedacted: _valueRedacted, ...materialized } = variable;
             environment.push({
               ...materialized,
@@ -703,8 +715,9 @@ const makeServerSettings = Effect.gen(function* () {
           let changed = false;
           for (const key of SENSITIVE_PROVIDER_INSTANCE_CONFIG_KEYS) {
             if (config[`${key}Redacted`] !== true) continue;
+            const secretName = providerConfigSecretName({ instanceId, key });
             const secret = yield* secretStore
-              .get(providerConfigSecretName({ instanceId, key }))
+              .get(secretName)
               .pipe(
                 Effect.mapError((cause) =>
                   secretStoreError(
@@ -713,6 +726,7 @@ const makeServerSettings = Effect.gen(function* () {
                   ),
                 ),
               );
+            if (secret) storedSecrets.set(secretName, secret);
             config[key] = secret ? providerEnvironmentTextDecoder.decode(secret) : "";
             delete config[`${key}Redacted`];
             changed = true;
@@ -722,8 +736,11 @@ const makeServerSettings = Effect.gen(function* () {
         providerInstances[instanceId] = materializedInstance;
       }
       return {
-        ...settings,
-        providerInstances: providerInstances as ServerSettings["providerInstances"],
+        settings: {
+          ...settings,
+          providerInstances: providerInstances as ServerSettings["providerInstances"],
+        },
+        storedSecrets,
       };
     });
 
@@ -738,11 +755,14 @@ const makeServerSettings = Effect.gen(function* () {
 
   const writeTrackedProviderSecret = (
     snapshots: ProviderSecretSnapshots,
+    storedSecrets: StoredProviderSecrets,
     name: string,
     value: Uint8Array,
     detail: string,
   ): Effect.Effect<void, ServerSettingsError> =>
     Effect.gen(function* () {
+      const stored = storedSecrets.get(name);
+      if (stored && bytesEqual(stored, value)) return;
       if (!snapshots.has(name)) {
         const previous = yield* secretStore
           .get(name)
@@ -833,6 +853,7 @@ const makeServerSettings = Effect.gen(function* () {
   const persistProviderEnvironmentSecrets = (
     current: ServerSettings,
     next: ServerSettings,
+    storedSecrets: StoredProviderSecrets,
     snapshots: ProviderSecretSnapshots,
   ): Effect.Effect<
     {
@@ -871,6 +892,7 @@ const makeServerSettings = Effect.gen(function* () {
               if (value.length > 0) {
                 yield* writeTrackedProviderSecret(
                   snapshots,
+                  storedSecrets,
                   secretName,
                   providerEnvironmentTextEncoder.encode(value),
                   `secret for provider instance '${instanceId}' environment variable '${variable.name}'`,
@@ -903,6 +925,7 @@ const makeServerSettings = Effect.gen(function* () {
             nextConfigSecretKeys.add(secretName);
             yield* writeTrackedProviderSecret(
               snapshots,
+              storedSecrets,
               secretName,
               providerEnvironmentTextEncoder.encode(value),
               `secret for provider instance '${instanceId}' config '${key}'`,
@@ -1048,6 +1071,7 @@ const makeServerSettings = Effect.gen(function* () {
       if (!exists) {
         return {
           settings: yield* withCredentialState(DEFAULT_SERVER_SETTINGS),
+          storedSecrets: new Map() as StoredProviderSecrets,
           revision: 0,
           migrated: false,
         };
@@ -1074,6 +1098,7 @@ const makeServerSettings = Effect.gen(function* () {
         });
         return {
           settings: yield* withCredentialState(DEFAULT_SERVER_SETTINGS),
+          storedSecrets: new Map() as StoredProviderSecrets,
           revision: 0,
           migrated: false,
         };
@@ -1089,11 +1114,12 @@ const makeServerSettings = Effect.gen(function* () {
       // Materialize every existing redacted secret before startup persists a
       // plaintext-secret discovery. Otherwise an empty redacted marker could be
       // mistaken for a cleared value and remove the still-referenced secret.
-      const materializedSettings = yield* materializeProviderEnvironmentSecrets(
+      const materialized = yield* materializeProviderEnvironmentSecrets(
         yield* withCredentialState(migrateSettings(decoded.value, decoded.migrationVersion)),
       );
       return {
-        settings: materializedSettings,
+        settings: materialized.settings,
+        storedSecrets: materialized.storedSecrets,
         revision: decoded.revision,
         migrated:
           hasPlaintextInstanceSecrets ||
@@ -1145,6 +1171,7 @@ const makeServerSettings = Effect.gen(function* () {
         const persisted = yield* persistProviderEnvironmentSecrets(
           loaded.settings,
           loaded.settings,
+          loaded.storedSecrets,
           providerSecretSnapshots,
         );
         obsoleteSecretNames = persisted.obsoleteSecretNames;
@@ -1209,7 +1236,12 @@ const makeServerSettings = Effect.gen(function* () {
               settings: persistedSettings,
               liveSecretNames,
               obsoleteSecretNames,
-            } = yield* persistProviderEnvironmentSecrets(current, next, providerSecretSnapshots);
+            } = yield* persistProviderEnvironmentSecrets(
+              current,
+              next,
+              disk.storedSecrets,
+              providerSecretSnapshots,
+            );
             yield* writeSettingsAtomically({
               revision: nextRevision,
               migrationVersion: SERVER_SETTINGS_MIGRATION_VERSION,

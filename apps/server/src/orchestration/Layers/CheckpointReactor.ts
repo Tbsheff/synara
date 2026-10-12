@@ -50,6 +50,7 @@ import {
   checkpointRefForThreadTurnStart,
   checkpointRefForThreadTurnStartInManagedFamily,
   isManagedCheckpointRefForThread,
+  parseManagedCheckpointRef,
   resolveThreadWorkspaceCwd,
 } from "../../checkpointing/Utils.ts";
 import { clearWorkspaceIndexCache } from "../../workspaceEntries.ts";
@@ -888,6 +889,17 @@ const make = Effect.gen(function* () {
     // blocked different workspace can keep this already completed raw row
     // below the global acknowledgement cursor until the next restart.
     if (completed.length) return;
+    const projectedTurn = yield* projectionTurnRepository.getByTurnId({
+      threadId: event.threadId,
+      turnId,
+    });
+    if (
+      Option.isSome(projectedTurn) &&
+      projectedTurn.value.completedAt !== null &&
+      projectedTurn.value.checkpointTurnCount !== null &&
+      projectedTurn.value.checkpointStatus === null
+    )
+      return;
     const thread = yield* getThreadDetail(event.threadId);
     if (!thread) {
       yield* Effect.logDebug("turn-completion checkpoint skipped: thread not found", {
@@ -2034,6 +2046,53 @@ const make = Effect.gen(function* () {
         : effect;
     });
 
+  const pruneRetiredCheckpointRefs = Effect.fnUntraced(function* (threadId: ThreadId) {
+    const thread = yield* getThreadDetail(threadId);
+    if (!thread) return;
+    const project = yield* getProjectShell(thread.projectId);
+    if (!project) return;
+    const workspace = yield* resolveCheckpointWorkspace({ threadId, thread, project });
+    if (!workspace?.isGitRepository) return;
+    const retired = (yield* projectionTurnRepository.listByThreadId({ threadId }))
+      .filter(
+        (turn) =>
+          turn.turnId !== null &&
+          turn.completedAt !== null &&
+          turn.state !== "pending" &&
+          turn.state !== "running" &&
+          turn.checkpointTurnCount !== null &&
+          turn.checkpointStatus === null &&
+          turn.checkpointRef !== null &&
+          isManagedCheckpointRefForThread(turn.checkpointRef, threadId),
+      )
+      .slice(0, 200);
+    for (const turn of retired) {
+      if (!turn.turnId || !turn.checkpointRef) continue;
+      const refs = [turn.checkpointRef];
+      const startRef = checkpointRefForThreadTurnStartInManagedFamily(
+        turn.checkpointRef,
+        threadId,
+        turn.turnId,
+      );
+      if (startRef) refs.push(startRef);
+      if (turn.pendingMessageId) {
+        const family = parseManagedCheckpointRef(turn.checkpointRef);
+        if (family)
+          refs.push(
+            CheckpointRef.makeUnsafe(
+              `${family.familyPrefix}/message-start/${Encoding.encodeBase64Url(turn.pendingMessageId)}`,
+            ),
+          );
+      }
+      yield* checkpointStore.deleteCheckpointRefs({ cwd: workspace.cwd, checkpointRefs: refs });
+      yield* projectionTurnRepository.upsertByTurnId({
+        ...turn,
+        turnId: turn.turnId,
+        checkpointRef: null,
+      });
+    }
+  });
+
   const processDomainEvent = Effect.fnUntraced(function* (event: OrchestrationEvent) {
     if (event.type === "thread.turn-start-requested") {
       yield* rememberPendingMessageStart(event);
@@ -2061,6 +2120,14 @@ const make = Effect.gen(function* () {
     // status transition.
     if (event.type === "thread.turn-diff-completed") {
       yield* captureCheckpointFromPlaceholder(event);
+      yield* pruneRetiredCheckpointRefs(event.payload.threadId).pipe(
+        Effect.catch((error) =>
+          Effect.logWarning("checkpoint history retention cleanup failed", {
+            threadId: event.payload.threadId,
+            detail: error.message,
+          }),
+        ),
+      );
     }
   });
 

@@ -77,6 +77,7 @@ import {
 import { ProviderSessionNotFoundError, type ProviderServiceError } from "../../provider/Errors.ts";
 import {
   CHECKPOINT_REFS_PREFIX,
+  checkpointRefForThreadRevertRescue,
   checkpointRefForThreadMessageStart,
   checkpointRefForThreadTurn,
   checkpointRefForThreadTurnLive,
@@ -579,6 +580,101 @@ describe("CheckpointReactor", () => {
       failures,
     };
   }
+
+  it("retires old checkpoint restore entries and refs together while preserving baselines and recovery refs", async () => {
+    const harness = await createHarness({ startReactor: false, seedFilesystemCheckpoints: false });
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const oldRef = checkpointRefForThreadTurn(threadId, 1);
+    const startRef = checkpointRefForThreadTurnStart(threadId, asTurnId("retention-turn-1"));
+    const messageRef = checkpointRefForThreadMessageStart(
+      threadId,
+      MessageId.makeUnsafe("retention-message-1"),
+    );
+    const baseline = checkpointRefForThreadTurn(threadId, 0);
+    const rescue = checkpointRefForThreadRevertRescue(threadId, "retention-rescue");
+    for (const checkpointRef of [oldRef, startRef, messageRef, baseline, rescue]) {
+      runGit(harness.cwd, ["update-ref", checkpointRef, "HEAD"]);
+    }
+    await runtime!.runPromise(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        yield* sql`WITH RECURSIVE counts(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM counts WHERE n < 501)
+        INSERT INTO projection_turns (thread_id, turn_id, pending_message_id, state, requested_at, started_at,
+          completed_at, checkpoint_turn_count, checkpoint_ref, checkpoint_status, checkpoint_files_json)
+        SELECT ${threadId}, 'retention-turn-' || n, 'retention-message-' || n, 'completed',
+          '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z',
+          n, ${oldRef.slice(0, oldRef.lastIndexOf("/") + 1)} || n, 'ready', '[]' FROM counts`;
+      }),
+    );
+    await harness.start();
+    const complete = (count: number) =>
+      harness.engine.dispatch({
+        type: "thread.turn.diff.complete",
+        commandId: CommandId.makeUnsafe(`retention-${count}`),
+        threadId,
+        turnId: asTurnId(`retention-turn-${count}`),
+        checkpointRef: checkpointRefForThreadTurn(threadId, count),
+        checkpointTurnCount: count,
+        status: "ready",
+        files: [],
+        completedAt: "2026-01-02T00:00:00.000Z",
+        createdAt: "2026-01-02T00:00:00.000Z",
+      });
+    let failDelete = true;
+    harness.failures.deleteCheckpointRefs = (input) => {
+      if (failDelete && input.checkpointRefs.includes(oldRef))
+        return new GitCommandError({
+          operation: "retention-test",
+          command: "git update-ref -d",
+          cwd: harness.cwd,
+          detail: "locked ref",
+        });
+      return null;
+    };
+    await Effect.runPromise(complete(502));
+    await Effect.runPromise(harness.reactor.drain.pipe(Effect.timeout("30 seconds")));
+    const detail = await runtime!.runPromise(
+      Effect.gen(function* () {
+        const query = yield* ProjectionSnapshotQuery;
+        return Option.getOrThrow(yield* query.getThreadDetailById(threadId));
+      }),
+    );
+    expect(detail.checkpoints.length).toBe(500);
+    expect(detail.checkpoints.some((checkpoint) => checkpoint.checkpointTurnCount === 1)).toBe(
+      false,
+    );
+    expect(
+      await Effect.runPromise(
+        harness.checkpointStore.hasCheckpointRef({ cwd: harness.cwd, checkpointRef: oldRef }),
+      ),
+    ).toBe(true);
+    failDelete = false;
+    await Effect.runPromise(complete(503));
+    await Effect.runPromise(harness.reactor.drain.pipe(Effect.timeout("30 seconds")));
+    for (const checkpointRef of [oldRef, startRef, messageRef]) {
+      expect(
+        await Effect.runPromise(
+          harness.checkpointStore.hasCheckpointRef({ cwd: harness.cwd, checkpointRef }),
+        ),
+      ).toBe(false);
+    }
+    for (const checkpointRef of [baseline, rescue]) {
+      expect(
+        await Effect.runPromise(
+          harness.checkpointStore.hasCheckpointRef({ cwd: harness.cwd, checkpointRef }),
+        ),
+      ).toBe(true);
+    }
+    await Effect.runPromise(
+      harness.provider.publish(nativeCompletion("retention-replay", threadId, "retention-turn-1")),
+    );
+    await Effect.runPromise(harness.reactor.drain.pipe(Effect.timeout("30 seconds")));
+    expect(
+      await Effect.runPromise(
+        harness.checkpointStore.hasCheckpointRef({ cwd: harness.cwd, checkpointRef: oldRef }),
+      ),
+    ).toBe(false);
+  });
 
   it.each(["first registration", "registered backlog"] as const)(
     "adopts an existing domain journal without capturing historical turn starts from today's tree: %s",

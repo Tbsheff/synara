@@ -848,6 +848,38 @@ realStopLayer("CodexAdapterLive real manager lifecycle", (it) => {
 });
 
 lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
+  it.effect("stores lifecycle data once while retaining raw protocol metadata", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const marker = "unique-lifecycle-data-".repeat(500);
+      for (const method of ["item/started", "item/completed"]) {
+        const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+        lifecycleManager.emit("event", {
+          id: asEventId(`evt-single-data-${method}`),
+          kind: "notification",
+          provider: "codex",
+          createdAt: new Date().toISOString(),
+          method,
+          threadId: asThreadId("thread-1"),
+          turnId: asTurnId("turn-1"),
+          itemId: asItemId("msg-single-data"),
+          payload: {
+            item: { type: "agentMessage", id: "msg-single-data", auditPayload: marker },
+          },
+        } satisfies ProviderEvent);
+        const firstEvent = yield* Fiber.join(firstEventFiber);
+        assert.equal(firstEvent._tag, "Some");
+        if (firstEvent._tag !== "Some") return;
+        const event = firstEvent.value;
+        assert.equal(JSON.stringify(event).split(marker).length - 1, 1);
+        assert.equal(event.raw?.method, method);
+        assert.deepEqual(event.raw?.payload, {});
+        assert.equal(event.threadId, "thread-1");
+        assert.equal(event.itemId, "msg-single-data");
+      }
+    }),
+  );
+
   it.effect("maps session/started to a canonical session.started runtime event", () =>
     Effect.gen(function* () {
       const adapter = yield* CodexAdapter;
