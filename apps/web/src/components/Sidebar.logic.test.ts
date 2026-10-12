@@ -1,3 +1,5 @@
+import { useThreadSelectionStore } from "../threadSelectionStore";
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -2321,4 +2323,33 @@ describe("sortProjectsForSidebar", () => {
       ProjectId.makeUnsafe("project-1"),
     ]);
   });
+});
+
+it("passes only rendered chat and project rows to range selection", () => {
+  const source = readFileSync(new URL("./Sidebar.tsx", import.meta.url), "utf8");
+  expect(source.includes("renderedChatThreadIds,")).toBe(true);
+  expect(
+    source.includes("renderThreadRow(entry.thread, renderedProjectThreadIds, entry.depth)"),
+  ).toBe(true);
+});
+
+it("keeps hidden chats out of a range to a distant revealed active row", () => {
+  const ids = Array.from({ length: 9 }, (_, index) => ThreadId.makeUnsafe(`preview-${index}`));
+  const { visibleEntries } = getVisibleSidebarEntriesForPreview({
+    entries: ids.map((rowId) => ({ rowId, rootRowId: rowId })),
+    activeEntryId: ids[8],
+    previewLimit: 5,
+  });
+  const selection = useThreadSelectionStore.getState();
+  selection.clearSelection();
+  selection.setAnchor(ids[0]!);
+  selection.rangeSelectTo(
+    ids[8]!,
+    visibleEntries.map((entry) => entry.rowId),
+  );
+  expect([...useThreadSelectionStore.getState().selectedThreadIds]).toEqual([
+    ...ids.slice(0, 5),
+    ids[8],
+  ]);
+  selection.clearSelection();
 });

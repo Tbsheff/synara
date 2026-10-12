@@ -8,7 +8,9 @@ import { describe, expect, it } from "vitest";
 // exceptions, so the number of fixed sizes may shrink but must not grow.
 const MAX_FIXED_TEXT_SIZES = 23;
 
-const FIXED_TEXT_SIZE = /(?<![\w[-])text-(?:xs|sm|base|\[(?:9|1[0-4])(?:\.5)?px\])(?![\w-])/g;
+const FIXED_TEXT_SIZE =
+  /(?<![\w[-])text-(?:xs|sm|base|\[(?:(?:[0-9]|1[0-4])(?:\.\d+)?px|0(?:\.\d+)?rem)\])(?![\w-])/g;
+const FIXED_CSS_SIZE = /font-size:\s*\d+(?:\.\d+)?(?:px|rem)\s*;/g;
 const LONG_FORM_TOKEN = /text-\[length:var\(--app-font-size-/g;
 
 function sourceFiles(dir: string): string[] {
@@ -29,6 +31,16 @@ describe("UI font sizes", () => {
       .filter((line) => !/^\s*(\/\/|\*|\/\*|\{\/\*)/.test(line))
       .join("\n"),
   }));
+
+  it("detects small pixels, rem sizes, and fixed CSS sizes", () => {
+    expect("text-[8px] text-[0.9375rem]".match(FIXED_TEXT_SIZE)).toHaveLength(2);
+    expect("font-size: 0.72rem;".match(FIXED_CSS_SIZE)).toHaveLength(1);
+    expect("font-size: var(--app-font-size-ui-sm);".match(FIXED_CSS_SIZE)).toBeNull();
+  });
+
+  it("keeps stylesheet UI actions on user font tokens", () => {
+    expect(readFileSync(join(srcDir, "index.css"), "utf8").match(FIXED_CSS_SIZE)).toBeNull();
+  });
 
   it("does not add fixed Tailwind text sizes", () => {
     const hits = files.flatMap(({ path, code }) =>

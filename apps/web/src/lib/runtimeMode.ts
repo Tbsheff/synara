@@ -42,3 +42,9 @@ export const RUNTIME_MODE_PRESENTATION: Record<
     description: "Unrestricted access to the internet and any file on your computer",
   },
 };
+
+export function providerSupportsPlanMode(provider: ProviderKind): boolean {
+  return provider !== "pi" && provider !== "antigravity";
+}
+
+export const providerSupportsApprovalRequiredMode = providerSupportsPlanMode;

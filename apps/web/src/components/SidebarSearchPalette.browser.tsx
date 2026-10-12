@@ -11,9 +11,10 @@ import type { SidebarSearchThread } from "./SidebarSearchPalette.logic";
 import type { ThreadImportTarget } from "../lib/threadImport";
 
 const searchThreads = vi.hoisted(() => vi.fn());
+const browse = vi.hoisted(() => vi.fn());
 vi.mock("~/nativeApi", async (importOriginal) => ({
   ...(await importOriginal<typeof import("~/nativeApi")>()),
-  readNativeApi: () => ({ orchestration: { searchThreads } }),
+  readNativeApi: () => ({ orchestration: { searchThreads }, filesystem: { browse } }),
 }));
 
 const thread: SidebarSearchThread = {
@@ -152,15 +153,16 @@ it("finds a thread through server message hits when its messages are not loaded"
       },
     ],
   });
-  const { onOpenThread } = await renderPalette({ ...thread, messages: [] });
-  await page.getByPlaceholder("Search chats or run a command").fill("webhook retries");
+  const { onOpenThread, onOpenChange } = await renderPalette({ ...thread, messages: [] });
+  await page.getByPlaceholder("Search chats or run a command").fill("  webhook retries  ");
 
   const result = page.getByRole("option", { name: /Fix login flow/ });
   await expect.element(result).toHaveTextContent("refund webhook retries three times");
   await expect.element(result).toHaveTextContent("2 chat hits");
   expect(searchThreads).toHaveBeenCalledWith({ query: "webhook retries", limit: 50 });
   await result.click();
-  expect(onOpenThread).toHaveBeenCalledWith(thread.id);
+  expect(onOpenThread).toHaveBeenCalledExactlyOnceWith(thread.id, "webhook retries");
+  expect(onOpenChange).toHaveBeenCalledExactlyOnceWith(false);
 });
 
 it("shows only unique matching metadata so a space match is not buried behind project names", async () => {
@@ -325,4 +327,22 @@ describe("SidebarSearchPalette import targets", () => {
       }
     });
   }
+});
+
+it("uses the Oh My Pi session placeholder", async () => {
+  await renderPalette(thread, {
+    mode: "import",
+    importTargets: [
+      { provider: "omp", instanceId: "omp", label: "Oh My Pi" } as ThreadImportTarget,
+    ],
+  });
+  await expect.element(page.getByPlaceholder("Paste an Oh My Pi session id")).toBeVisible();
+});
+
+it("shows a folder browse error without a create offer", async () => {
+  browse.mockRejectedValue(new Error("Access denied"));
+  await renderPalette();
+  await page.getByPlaceholder("Search chats or run a command").fill("/restricted/missing");
+  await expect.element(page.getByRole("status")).toHaveTextContent("Could not read this folder");
+  expect(page.getByRole("button", { name: /Create & Add/ }).length).toBe(0);
 });

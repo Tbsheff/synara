@@ -8,10 +8,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const harness = vi.hoisted(() => ({
   dispatch: vi.fn(),
+  register: vi.fn(),
+  setPrompt: vi.fn(),
+  uncertain: vi.fn(),
   dispatchAsGoal: vi.fn(),
 }));
 
 vi.mock("./kanbanDispatch", () => ({
+  hasUncertainDraftThreadDispatch: harness.uncertain,
   dispatchKanbanDraftThread: harness.dispatch,
   dispatchKanbanDraftThreadAsGoal: harness.dispatchAsGoal,
 }));
@@ -19,9 +23,9 @@ vi.mock("./kanbanDispatch", () => ({
 vi.mock("../composerDraftStore", () => ({
   useComposerDraftStore: {
     getState: () => ({
-      registerDraftThread: vi.fn(),
+      registerDraftThread: harness.register,
       copyTransferableComposerState: vi.fn(),
-      setPrompt: vi.fn(),
+      setPrompt: harness.setPrompt,
       setModelSelection: vi.fn(),
       setRuntimeMode: vi.fn(),
       setInteractionMode: vi.fn(),
@@ -43,6 +47,10 @@ const BASE_INPUT = {
 } as const;
 
 beforeEach(() => {
+  harness.register.mockClear();
+  harness.setPrompt.mockClear();
+  harness.uncertain.mockReset();
+  harness.uncertain.mockReturnValue(false);
   harness.dispatch.mockReset();
   harness.dispatchAsGoal.mockReset();
   harness.dispatch.mockResolvedValue({ kind: "dispatched" });
@@ -85,13 +93,46 @@ describe("createAndSendKanbanTask send-as-goal routing", () => {
   });
 });
 
+it("reuses the saved thread after dispatch fails and applies the edited prompt", async () => {
+  harness.dispatch.mockResolvedValueOnce({ kind: "error", message: "Refused" });
+  const first = await createAndSendKanbanTask(BASE_INPUT);
+  const retried = await createAndSendKanbanTask({
+    ...BASE_INPUT,
+    threadId: first.threadId,
+    prompt: "Edited task",
+  });
+  expect(retried.threadId).toBe(first.threadId);
+  expect(harness.register).toHaveBeenCalledTimes(1);
+  expect(harness.setPrompt).toHaveBeenLastCalledWith(first.threadId, "Edited task");
+  expect(harness.dispatch.mock.calls[1]?.[0]).toEqual(
+    expect.objectContaining({ threadId: first.threadId }),
+  );
+});
+
+it("does not replace the saved composer while an exact send is unresolved", async () => {
+  harness.dispatch.mockResolvedValueOnce({
+    kind: "error",
+    message: "Reply lost",
+    outcomeUnknown: true,
+  });
+  const first = await createAndSendKanbanTask(BASE_INPUT);
+  harness.setPrompt.mockClear();
+  harness.uncertain.mockReturnValue(true);
+  await createAndSendKanbanTask({
+    ...BASE_INPUT,
+    threadId: first.threadId,
+    prompt: "Edited while pending",
+  });
+  expect(harness.setPrompt).not.toHaveBeenCalled();
+});
+
 it("reuses an existing task and reports its identity before dispatch throws", async () => {
   const first = await createAndSendKanbanTask(BASE_INPUT);
-  const onThreadCreated = vi.fn();
+  const onCreated = vi.fn();
   harness.dispatch.mockRejectedValueOnce(new Error("send failed"));
   await expect(
-    createAndSendKanbanTask({ ...BASE_INPUT, existingThreadId: first.threadId, onThreadCreated }),
+    createAndSendKanbanTask({ ...BASE_INPUT, threadId: first.threadId, onCreated }),
   ).rejects.toThrow("send failed");
-  expect(onThreadCreated).toHaveBeenCalledWith(first.threadId);
+  expect(onCreated).toHaveBeenCalledWith(first.threadId);
   expect(harness.dispatch.mock.calls.at(-1)?.[0].threadId).toBe(first.threadId);
 });

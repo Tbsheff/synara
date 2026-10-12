@@ -491,15 +491,19 @@ function BrowserLocalServerThumbnail({ server }: { server: ServerLocalServerProc
 }
 
 // Replaces about:blank with a local-server launcher so the browser never opens to white.
-function BrowserLocalServersHome({
+export function BrowserLocalServersHome({
   activeTabId,
   loading,
+  pending = false,
+  error,
   onNavigate,
   onRefresh,
   servers,
 }: {
   activeTabId: string | null;
   loading: boolean;
+  pending?: boolean;
+  error?: string | null;
   onNavigate: (url: string, tabId: string | null) => void;
   onRefresh: () => void;
   servers: readonly ServerLocalServerProcess[];
@@ -510,7 +514,7 @@ function BrowserLocalServersHome({
     <div className="absolute inset-0 z-20 flex flex-col overflow-hidden bg-[#0d0d0d] text-white">
       <div className="mx-auto flex h-full w-full max-w-[52rem] flex-col px-8 py-9">
         <div className="flex shrink-0 items-center justify-between">
-          <p className="text-[15px] font-medium text-white/35">Local</p>
+          <p className="text-ui-lg font-medium text-white/35">Local</p>
           <Button
             type="button"
             variant="ghost"
@@ -525,9 +529,20 @@ function BrowserLocalServersHome({
           </Button>
         </div>
 
-        {!hasServers ? (
+        {error ? (
+          <div
+            role="alert"
+            className="mt-4 flex items-center justify-between gap-3 text-ui text-white/70"
+          >
+            <span>{error}</span>
+            <Button variant="outline" size="sm" disabled={loading} onClick={onRefresh}>
+              Retry
+            </Button>
+          </div>
+        ) : null}
+        {!hasServers && !error ? (
           <div className="flex min-h-0 flex-1 flex-col items-center justify-center text-center">
-            {loading ? (
+            {loading || pending ? (
               <>
                 <RefreshCwIcon className="mb-4 size-12 animate-spin text-white/20" />
                 <p className="text-ui font-semibold text-white">Scanning local servers</p>
@@ -2045,7 +2060,13 @@ export function BrowserPanel({
             {showLocalServersHome ? (
               <BrowserLocalServersHome
                 activeTabId={activeTab?.id ?? null}
-                loading={localServersQuery.isLoading || localServersQuery.isFetching}
+                loading={localServersQuery.isFetching}
+                pending={showLocalServersHome && localServersQuery.isPending}
+                error={
+                  localServersQuery.isError
+                    ? localServersQuery.error?.message || "Local server scan failed."
+                    : null
+                }
                 onNavigate={onOpenLocalServer}
                 onRefresh={() => void localServersQuery.refetch()}
                 servers={localServersQuery.data?.servers ?? []}

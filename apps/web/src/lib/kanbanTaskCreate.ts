@@ -12,9 +12,11 @@ import type {
 } from "@synara/contracts";
 
 import type { ProviderInstanceOption } from "../appSettings";
+import { useComposerDraftStore } from "../composerDraftStore";
 import { createDraftThread, type DraftThreadInput } from "./draftThreadCreate";
 import {
   dispatchKanbanDraftThread,
+  hasUncertainDraftThreadDispatch,
   dispatchKanbanDraftThreadAsGoal,
   type KanbanDraftDispatchResult,
 } from "./kanbanDispatch";
@@ -26,8 +28,22 @@ export type KanbanDraftTaskInput = Omit<DraftThreadInput, "workingDirectory">;
  * project's regular composer draft is untouched, so any number of tasks can be
  * created back to back.
  */
-export function createKanbanDraftTask(input: KanbanDraftTaskInput): ThreadId {
-  return createDraftThread(input);
+export function createKanbanDraftTask(
+  input: KanbanDraftTaskInput & { threadId?: ThreadId | undefined },
+): ThreadId {
+  if (!input.threadId) return createDraftThread(input);
+  const threadId = input.threadId;
+  if (hasUncertainDraftThreadDispatch(threadId)) return threadId;
+  const store = useComposerDraftStore.getState();
+  if (input.sourceComposerThreadId && store.draftsByThreadId[input.sourceComposerThreadId]) {
+    store.copyTransferableComposerState(input.sourceComposerThreadId, threadId);
+  } else {
+    store.setPrompt(threadId, input.prompt);
+  }
+  store.setModelSelection(threadId, input.modelSelection);
+  store.setRuntimeMode(threadId, input.runtimeMode);
+  store.setInteractionMode(threadId, input.interactionMode);
+  return threadId;
 }
 
 /**
@@ -41,8 +57,8 @@ export function createKanbanDraftTask(input: KanbanDraftTaskInput): ThreadId {
  */
 export async function createAndSendKanbanTask(
   input: KanbanDraftTaskInput & {
-    existingThreadId?: ThreadId | undefined;
-    onThreadCreated?: ((threadId: ThreadId) => void) | undefined;
+    threadId?: ThreadId | undefined;
+    onCreated?: ((threadId: ThreadId) => void) | undefined;
     defaultProvider: ProviderKind;
     assistantDeliveryMode: AssistantDeliveryMode;
     providerOptions?: ProviderStartOptions | undefined;
@@ -50,8 +66,8 @@ export async function createAndSendKanbanTask(
     providerInstances?: ReadonlyArray<Pick<ProviderInstanceOption, "instanceId" | "provider">>;
   },
 ): Promise<{ threadId: ThreadId; result: KanbanDraftDispatchResult }> {
-  const threadId = input.existingThreadId ?? createKanbanDraftTask(input);
-  input.onThreadCreated?.(threadId);
+  const threadId = createKanbanDraftTask(input);
+  input.onCreated?.(threadId);
   const dispatch =
     input.sendAsGoal === true ? dispatchKanbanDraftThreadAsGoal : dispatchKanbanDraftThread;
   const result = await dispatch({

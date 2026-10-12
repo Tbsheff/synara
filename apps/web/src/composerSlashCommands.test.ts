@@ -536,3 +536,19 @@ describe("composerSlashCommands", () => {
     }
   });
 });
+
+it.each(["pi", "antigravity", "omp", "codex"] as const)(
+  "offers Plan only for capable %s",
+  (provider) => {
+    const commands = getAvailableComposerSlashCommands({
+      provider,
+      supportsFastSlashCommand: false,
+      canOfferCompactCommand: false,
+      canOfferReviewCommand: false,
+      canOfferForkCommand: false,
+      canOfferSideCommand: false,
+      canOfferExportCommand: false,
+    });
+    expect(commands.includes("plan")).toBe(provider !== "pi" && provider !== "antigravity");
+  },
+);

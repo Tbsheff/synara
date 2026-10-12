@@ -68,6 +68,7 @@ export interface SidebarSearchThread {
   provider: ProviderKind;
   createdAt: string;
   updatedAt?: string | undefined;
+  archivedAt?: string | null | undefined;
   messages: readonly {
     text: string;
   }[];
@@ -93,6 +94,7 @@ export function areSidebarSearchThreadListsEqual(
       left.provider !== right.provider ||
       left.createdAt !== right.createdAt ||
       left.updatedAt !== right.updatedAt ||
+      left.archivedAt !== right.archivedAt ||
       left.messages !== right.messages
     ) {
       return false;
@@ -105,6 +107,7 @@ export function areSidebarSearchThreadListsEqual(
 export interface SidebarSearchServerThreadMatch {
   excerpt: string;
   matchCount: number;
+  localScore?: number | undefined;
 }
 
 export interface SidebarSearchThreadMatch {
@@ -113,6 +116,7 @@ export interface SidebarSearchThreadMatch {
   matchKind: "message" | "project" | "title";
   snippet: string | null;
   messageMatchCount: number;
+  messageScore?: number | null | undefined;
 }
 
 function normalizeText(value: string): string {
@@ -182,6 +186,8 @@ function buildMessageSnippet(
   return truncateSnippet(displayMessage, earliestTokenIndex, matchedToken.length);
 }
 
+const messageTextCache = new WeakMap<object, { normalized: string; display: string }>();
+
 function scoreMessage(
   messages: SidebarSearchThread["messages"],
   query: string,
@@ -196,7 +202,13 @@ function scoreMessage(
   let matchCount = 0;
 
   for (const message of messages) {
-    const normalizedMessage = normalizeText(message.text);
+    let cached = messageTextCache.get(message);
+    if (!cached) {
+      const display = normalizeDisplayText(message.text);
+      cached = { display, normalized: display.toLowerCase() };
+      messageTextCache.set(message, cached);
+    }
+    const normalizedMessage = cached.normalized;
     if (!normalizedMessage) continue;
 
     let score: number | null = null;
@@ -218,7 +230,7 @@ function scoreMessage(
     matchCount += 1;
     if (bestScore === null || score > bestScore) {
       bestScore = score;
-      bestSnippet = buildMessageSnippet(message.text, query, queryTokens);
+      bestSnippet = buildMessageSnippet(cached.display, query, queryTokens);
     }
   }
 
@@ -383,10 +395,14 @@ export function buildSidebarSearchServerThreadMatches(
   if (!result) return serverMatches;
   const isCurrent = normalizeText(result.query) === normalizeText(query);
   const queryTokens = tokenizeQuery(query);
-  for (const { threadId, excerpt, matchCount } of result.matches) {
+  for (const { threadId, excerpt, matchCount, localScore } of result.matches) {
     const normalizedExcerpt = normalizeText(excerpt);
     if (isCurrent || queryTokens.every((token) => normalizedExcerpt.includes(token))) {
-      serverMatches.set(threadId, { excerpt, matchCount });
+      serverMatches.set(threadId, {
+        excerpt,
+        matchCount,
+        ...(localScore === undefined ? {} : { localScore }),
+      });
     }
   }
   return serverMatches;
@@ -413,7 +429,7 @@ function resolveMessageMatch(
   const excerptMatch = scoreMessage([{ text: serverMatch.excerpt }], query, queryTokens);
   return {
     messageMatchCount,
-    score: excerptMatch.score ?? SERVER_MESSAGE_MATCH_SCORE,
+    score: serverMatch.localScore ?? excerptMatch.score ?? SERVER_MESSAGE_MATCH_SCORE,
     snippet: excerptMatch.snippet ?? buildMessageSnippet(serverMatch.excerpt, query, queryTokens),
   };
 }
@@ -421,14 +437,16 @@ function resolveMessageMatch(
 export function matchSidebarSearchThreads(
   threads: readonly SidebarSearchThread[],
   query: string,
-  limit = 8,
+  limit = Number.POSITIVE_INFINITY,
   serverMatches?: ReadonlyMap<string, SidebarSearchServerThreadMatch>,
+  localMessageQuery = query,
 ): SidebarSearchThreadMatch[] {
   const normalizedQuery = normalizeText(query);
   const queryTokens = tokenizeQuery(query);
 
   if (!normalizedQuery) {
     return threads
+      .filter((thread) => !thread.archivedAt)
       .map((thread) => ({
         id: `thread:${thread.id}`,
         thread,
@@ -455,7 +473,7 @@ export function matchSidebarSearchThreads(
       const projectRemoteName = normalizeText(thread.projectRemoteName);
       const spaceName = normalizeText(thread.spaceName);
       const messageMatch = resolveMessageMatch(
-        thread,
+        localMessageQuery === query ? thread : { ...thread, messages: [] },
         normalizedQuery,
         queryTokens,
         serverMatches?.get(thread.id),
@@ -502,6 +520,7 @@ export function matchSidebarSearchThreads(
         matchKind,
         snippet,
         messageMatchCount: messageMatch.messageMatchCount,
+        messageScore: messageMatch.score,
         recency: Date.parse(thread.updatedAt ?? thread.createdAt) || 0,
         titleLength: thread.title.length,
       };
@@ -514,11 +533,57 @@ export function matchSidebarSearchThreads(
       return left.index - right.index;
     })
     .slice(0, limit)
-    .map(({ id, matchKind, messageMatchCount, snippet, thread }) => ({
+    .map(({ id, matchKind, messageMatchCount, messageScore, snippet, thread }) => ({
       id,
+      messageScore,
       thread,
       matchKind,
       snippet,
       messageMatchCount,
     }));
+}
+
+export function sidebarImportPlaceholder(provider: ProviderKind): string {
+  return provider === "claudeAgent"
+    ? "Paste a Claude session id"
+    : provider === "cursor"
+      ? "Paste a Cursor session id"
+      : provider === "droid"
+        ? "Paste a Droid session id"
+        : provider === "opencode"
+          ? "Paste an OpenCode session id"
+          : provider === "pi"
+            ? "Paste a Pi session id"
+            : provider === "omp"
+              ? "Paste an Oh My Pi session id"
+              : "Paste a Codex thread id";
+}
+
+export function canCreateSidebarBrowseFolder(input: {
+  canBrowse: boolean;
+  hasHighlightedFolder: boolean;
+  query: string;
+  hasTrailingSeparator: boolean;
+  hasExactEntry: boolean;
+  fetching: boolean;
+  resolved: boolean;
+  failed: boolean;
+}): boolean {
+  return (
+    input.resolved &&
+    !input.failed &&
+    input.canBrowse &&
+    !input.hasHighlightedFolder &&
+    input.query.trim().length > 0 &&
+    !input.hasTrailingSeparator &&
+    !input.hasExactEntry &&
+    !input.fetching
+  );
+}
+
+export function shouldShowSidebarThreadMatchContext(
+  context: string | null,
+  archivedAt?: string | null,
+): boolean {
+  return Boolean(context || archivedAt);
 }

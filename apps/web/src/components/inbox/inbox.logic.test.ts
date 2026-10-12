@@ -1,3 +1,4 @@
+import { inboxAttentionReadState } from "./inbox.logic";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { ProjectId, ThreadId, TodoId, type Todo } from "@synara/contracts";
@@ -416,5 +417,23 @@ describe("selectInboxTasks", () => {
     expect(tasks.open.map((item) => item.todo.id)).toEqual(["with-agent", "overdue", "today"]);
     expect(tasks.doneToday.map((item) => item.todo.id)).toEqual(["done-today"]);
     expect(tasks.overdue).toBe(1);
+  });
+});
+
+describe("inbox attention read state", () => {
+  it("does not claim all clear while an enabled read is pending", () => {
+    expect(inboxAttentionReadState([{ enabled: true, isPending: true, isError: false }])).toBe(
+      "pending",
+    );
+  });
+  it("surfaces failed reads even with cached rows", () => {
+    expect(inboxAttentionReadState([{ enabled: true, isPending: false, isError: true }])).toBe(
+      "error",
+    );
+  });
+  it("ignores disabled pending and failed reads", () => {
+    expect(inboxAttentionReadState([{ enabled: false, isPending: true, isError: true }])).toBe(
+      "ready",
+    );
   });
 });

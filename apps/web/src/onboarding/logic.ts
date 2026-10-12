@@ -135,7 +135,11 @@ export type ProviderSetupState =
   | "disabled";
 
 export function classifyProviderSetup(input: {
-  readonly status: Pick<ServerProviderStatus, "available" | "authStatus"> | null | undefined;
+  readonly status:
+    | (Pick<ServerProviderStatus, "available" | "authStatus"> &
+        Partial<Pick<ServerProviderStatus, "status" | "message">>)
+    | null
+    | undefined;
   readonly disabled: boolean;
   readonly detecting?: boolean;
   readonly detectionFailed?: boolean;
@@ -143,6 +147,14 @@ export function classifyProviderSetup(input: {
   if (input.disabled) return "disabled";
   if (!input.status && input.detecting) return "detecting";
   if (!input.status && input.detectionFailed) return "check-failed";
+  if (input.status?.available && input.status.authStatus === "unauthenticated")
+    return "needs-sign-in";
+  if (input.status?.status === "error") {
+    if (!input.status.available && /not installed|not on PATH/.test(input.status.message ?? "")) {
+      return "not-installed";
+    }
+    return "check-failed";
+  }
   if (!input.status || !input.status.available) return "not-installed";
   // Providers whose auth is not probed report "unknown"; treat a detected binary as
   // usable rather than nagging for a sign-in Synara cannot verify.

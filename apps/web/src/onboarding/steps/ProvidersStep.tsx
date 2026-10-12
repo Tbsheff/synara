@@ -180,7 +180,7 @@ export function ProvidersStep(props: { readonly detection: ProviderDetection }) 
   return (
     <div className="flex flex-col gap-3">
       <div className="grid grid-cols-3 gap-2.5">
-        {rows.map(({ descriptor, state }) => {
+        {rows.map(({ descriptor, state, status }) => {
           const presentation = STATE_PRESENTATION[state];
           const enabled = state !== "disabled";
           const canConnectInline =
@@ -242,6 +242,11 @@ export function ProvidersStep(props: { readonly detection: ProviderDetection }) 
                     </a>
                   ) : null}
                 </span>
+                {state === "check-failed" && status?.message ? (
+                  <span role="alert" className="text-ui-sm text-warning">
+                    {status.message}
+                  </span>
+                ) : null}
               </label>
               <Checkbox
                 id={checkboxId}

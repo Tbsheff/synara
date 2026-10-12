@@ -47,11 +47,19 @@ describe("ExpandedImageOverlay", () => {
       await expect
         .element(page.getByRole("dialog", { name: "Expanded image preview" }))
         .toBeInTheDocument();
+      await userEvent.keyboard("{Tab}{Tab}{Tab}");
+      expect(
+        page
+          .getByRole("dialog", { name: "Expanded image preview" })
+          .element()
+          .contains(document.activeElement),
+      ).toBe(true);
       await userEvent.keyboard("{Escape}");
       await expect
         .element(page.getByRole("dialog", { name: "Expanded image preview" }))
         .not.toBeInTheDocument();
       await expect.element(page.getByRole("dialog", { name: "New task" })).toBeInTheDocument();
+      await expect.element(page.getByRole("button", { name: "Preview attachment" })).toHaveFocus();
       await expect
         .element(page.getByRole("textbox", { name: "Task draft" }))
         .toHaveValue("Keep my draft");

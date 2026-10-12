@@ -26,6 +26,7 @@ import { useRefreshProviderStatusesNow } from "~/hooks/useProviderStatusRefresh"
 import { createAndSendKanbanTask, createKanbanDraftTask } from "~/lib/kanbanTaskCreate";
 import { resolveProviderSendAvailabilityWithRefresh } from "~/lib/providerAvailability";
 import { buildModelSelection } from "~/providerModelOptions";
+import { isRequestOutcomeUnknown } from "~/lib/requestOutcome";
 import { truncateKanbanTaskPreview } from "./KanbanNewTaskDialog.logic";
 
 interface UseKanbanTaskSubmitInput {
@@ -83,18 +84,35 @@ export function useKanbanTaskSubmit(input: UseKanbanTaskSubmitInput) {
   } = input;
   const navigate = useNavigate();
   const [isCreating, setIsCreating] = useState(false);
+  const [isSendOutcomeUnknown, setIsSendOutcomeUnknown] = useState(false);
   const refreshProviderStatuses = useRefreshProviderStatusesNow();
   // Synchronous re-entry guard: repeated Cmd+Enter can fire before React flushes
   // the loading state, and two passes here would create two tasks.
   const isCreatingRef = useRef(false);
-  const pendingTaskRef = useRef<Parameters<typeof createAndSendKanbanTask>[0] | null>(null);
+  const createdTaskRef = useRef<ThreadId | undefined>(undefined);
+  const savedTaskTargetRef = useRef<{ projectId: ProjectId; envMode: DraftThreadEnvMode } | null>(
+    null,
+  );
+  const [savedTaskTarget, setSavedTaskTarget] = useState(savedTaskTargetRef.current);
+  const taskTargetMatches =
+    savedTaskTarget === null ||
+    (savedTaskTarget.projectId === selectedProjectId && savedTaskTarget.envMode === envMode);
+  const rememberCreatedTask = (threadId: ThreadId) => {
+    createdTaskRef.current = threadId;
+    if (savedTaskTargetRef.current === null && selectedProjectId !== null) {
+      savedTaskTargetRef.current = { projectId: selectedProjectId, envMode };
+      setSavedTaskTarget(savedTaskTargetRef.current);
+    }
+  };
 
   const canCreate =
     selectedProjectId !== null &&
     hasSendableContent &&
     selectedModel !== null &&
     !isCreating &&
-    !isPreparingImages;
+    !isPreparingImages &&
+    !(sendAsDraft && isSendOutcomeUnknown) &&
+    taskTargetMatches;
 
   const handleCreate = async () => {
     if (
@@ -102,13 +120,27 @@ export function useKanbanTaskSubmit(input: UseKanbanTaskSubmitInput) {
       !hasSendableContent ||
       selectedModel === null ||
       isCreating ||
-      isCreatingRef.current
+      isCreatingRef.current ||
+      (sendAsDraft && isSendOutcomeUnknown) ||
+      (savedTaskTargetRef.current !== null &&
+        (savedTaskTargetRef.current.projectId !== selectedProjectId ||
+          savedTaskTargetRef.current.envMode !== envMode))
     ) {
       return;
     }
 
     isCreatingRef.current = true;
-    await waitForPendingImages();
+    try {
+      await waitForPendingImages();
+    } catch (error) {
+      isCreatingRef.current = false;
+      toastManager.add({
+        type: "error",
+        title: "Could not prepare task images",
+        description: error instanceof Error ? error.message : "Try adding the images again.",
+      });
+      return;
+    }
     const truncatedPrompt = truncateKanbanTaskPreview(taskPreview);
     // The scratch draft carries the full selection (model + reasoning effort +
     // speed) set through the picker; fall back to a bare selection otherwise.
@@ -141,7 +173,10 @@ export function useKanbanTaskSubmit(input: UseKanbanTaskSubmitInput) {
     };
 
     if (sendAsDraft) {
-      createKanbanDraftTask(taskInput);
+      createdTaskRef.current = createKanbanDraftTask({
+        ...taskInput,
+        threadId: createdTaskRef.current,
+      });
       toastManager.add({
         type: "success",
         title: "Task added to Drafts",
@@ -168,28 +203,25 @@ export function useKanbanTaskSubmit(input: UseKanbanTaskSubmitInput) {
     }
 
     setIsCreating(true);
-    const pendingTask = pendingTaskRef.current ?? {
+    void createAndSendKanbanTask({
       ...taskInput,
+      threadId: createdTaskRef.current,
+      onCreated: rememberCreatedTask,
       defaultProvider,
       assistantDeliveryMode,
       providerOptions: providerOptionsForDispatch,
       ...(sendAsGoal ? { sendAsGoal: true as const } : {}),
       providerInstances,
-    };
-    pendingTaskRef.current = pendingTask;
-    void createAndSendKanbanTask({
-      ...pendingTask,
-      onThreadCreated: (threadId) => {
-        pendingTaskRef.current = { ...pendingTask, existingThreadId: threadId };
-      },
     })
       .then(({ threadId, result }) => {
+        rememberCreatedTask(threadId);
+        setIsSendOutcomeUnknown(result.kind === "error" && result.outcomeUnknown === true);
         if (result.kind === "dispatched") {
           if (result.deferred) {
             toastManager.add({
               type: "info",
               title: "Chat send in progress",
-              description: "The board stood down; the running chat send owns this turn.",
+              description: "This task is already being sent from its chat.",
             });
             onOpenChange(false);
             return;
@@ -208,7 +240,7 @@ export function useKanbanTaskSubmit(input: UseKanbanTaskSubmitInput) {
             title: "Finish this task in the chat",
             description:
               result.reason === "worktree-pending"
-                ? "Worktree setup stays on the normal composer send path."
+                ? "Open the chat to set up the worktree and send this task."
                 : "The task was saved as a draft.",
           });
           onOpenChange(false);
@@ -229,6 +261,7 @@ export function useKanbanTaskSubmit(input: UseKanbanTaskSubmitInput) {
         setIsCreating(false);
       })
       .catch((error: unknown) => {
+        setIsSendOutcomeUnknown(isRequestOutcomeUnknown(error));
         toastManager.add({
           type: "error",
           title: "Couldn't start the task",
@@ -242,6 +275,7 @@ export function useKanbanTaskSubmit(input: UseKanbanTaskSubmitInput) {
   return {
     isCreating,
     canCreate,
+    savedTaskTarget,
     handleCreate,
   };
 }

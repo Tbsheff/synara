@@ -256,3 +256,46 @@ describe("toggleSelection", () => {
     expect([...toggleSelection(added, "a")]).toEqual(["b"]);
   });
 });
+
+describe("provider probe failures", () => {
+  it.each([true, false])("shows failed checks when available is %s", (available) => {
+    expect(
+      classifyProviderSetup({
+        status: {
+          available,
+          authStatus: "unknown",
+          status: "error",
+          message: "CLI health check timed out",
+        },
+        disabled: false,
+      }),
+    ).toBe("check-failed");
+  });
+  it("keeps a known missing executable distinct from a failed check", () => {
+    expect(
+      classifyProviderSetup({
+        status: {
+          available: false,
+          authStatus: "unknown",
+          status: "error",
+          message: "Codex CLI (`codex`) is not installed or not on PATH.",
+        },
+        disabled: false,
+      }),
+    ).toBe("not-installed");
+  });
+});
+
+it("offers sign-in when the failed auth check confirms missing credentials", () => {
+  expect(
+    classifyProviderSetup({
+      status: {
+        available: true,
+        authStatus: "unauthenticated",
+        status: "error",
+        message: "Run codex login",
+      },
+      disabled: false,
+    }),
+  ).toBe("needs-sign-in");
+});

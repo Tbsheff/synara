@@ -58,6 +58,7 @@ import { useTaskRows, useTodoList, useTodoMutations } from "../tasks/useTodos";
 import { UsageProgressTrack } from "../UsageProgressTrack";
 import {
   groupInboxThreads,
+  inboxAttentionReadState,
   recapBucketsByStart,
   recapInputForRange,
   recapTokens,
@@ -147,6 +148,34 @@ function tileSpanClassName(index: number, count: number): string {
 
 function Tile({ className, children }: { className?: string | undefined; children: ReactNode }) {
   return <section className={cn("min-w-0 rounded-2xl bg-muted", className)}>{children}</section>;
+}
+
+export function InboxAttentionReadNotice({
+  read,
+}: {
+  read: { label: string; isError: boolean; error?: unknown; refetch: () => unknown };
+}) {
+  const errorMessage =
+    typeof read.error === "object" &&
+    read.error !== null &&
+    "message" in read.error &&
+    typeof read.error.message === "string"
+      ? read.error.message
+      : "";
+  return (
+    <Tile className="flex items-center justify-between gap-3 p-4">
+      <span role={read.isError ? "alert" : "status"} className="text-ui text-muted-foreground">
+        {read.isError
+          ? `${read.label} could not load. ${errorMessage || "Other results may be incomplete."}`
+          : `Loading ${read.label.toLowerCase()}...`}
+      </span>
+      {read.isError ? (
+        <Button variant="outline" size="sm" onClick={() => void read.refetch()}>
+          Retry
+        </Button>
+      ) : null}
+    </Tile>
+  );
 }
 
 /** A provider logo or project favicon sized by the caller (text-sized in the digest). */
@@ -612,7 +641,8 @@ export default function InboxView() {
 
   // Today's to-dos, where the connected server offers Tasks.
   const tasksAvailable = useTasksSurfaceEnabled() && inboxAvailable;
-  const { todos } = useTodoList(tasksAvailable);
+  const todoList = useTodoList(tasksAvailable);
+  const { todos } = todoList;
   const todoMutations = useTodoMutations();
   // Ticks faster than the page: a just-linked chat settles from Starting to missing.
   const taskNowMs = useNowMs(tasksAvailable, 15_000);
@@ -637,7 +667,17 @@ export default function InboxView() {
   const openTaskCount = tasksAvailable ? inboxTasks.open.length : 0;
   const taskSummary =
     openTaskCount > 0 ? ` ${openTaskCount} ${pluralize(openTaskCount, "task")} to do.` : "";
-  const showsTaskColumn = hasTasks || tasksAvailable;
+  const attentionReads = [
+    {
+      ...reviewRequestQuery,
+      enabled: inboxAvailable && projects.some((project) => project.kind === "project"),
+      label: "PR reviews",
+    },
+    { ...automationsQuery, enabled: inboxAvailable, label: "Automation runs" },
+    { ...todoList, enabled: tasksAvailable, label: "Tasks" },
+  ];
+  const attentionReadState = inboxAttentionReadState(attentionReads);
+  const showsTaskColumn = hasTasks || tasksAvailable || attentionReadState !== "ready";
 
   if (!inboxAvailable) return null;
 
@@ -647,7 +687,11 @@ export default function InboxView() {
       ? `${dateLabel}. ${needsYouCount} ${needsYouCount === 1 ? "thing needs" : "things need"} you.${taskSummary}`
       : hasTasks || openTaskCount > 0
         ? `${dateLabel}.${taskSummary}`
-        : `${dateLabel}. You’re all caught up.`;
+        : attentionReadState === "error"
+          ? `${dateLabel}. Some attention checks failed.`
+          : attentionReadState === "pending"
+            ? `${dateLabel}. Checking what needs you.`
+            : `${dateLabel}. You’re all caught up.`;
 
   return (
     <RouteInsetSurface>
@@ -685,6 +729,11 @@ export default function InboxView() {
             <div className={cn("grid gap-3 @2xl:gap-4", showsTaskColumn && "@5xl:grid-cols-12")}>
               {showsTaskColumn ? (
                 <div className="flex min-w-0 flex-col gap-3 self-start @2xl:gap-4 @5xl:col-span-4">
+                  {attentionReads
+                    .filter((read) => read.enabled && (read.isError || read.isPending))
+                    .map((read) => (
+                      <InboxAttentionReadNotice key={read.label} read={read} />
+                    ))}
                   {hasTasks ? (
                     <Tile className="px-2 py-3">
                       <InboxTaskList

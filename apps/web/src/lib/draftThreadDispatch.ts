@@ -19,7 +19,7 @@ import type {
   TurnId,
 } from "@synara/contracts";
 import { PROVIDER_SEND_TURN_MAX_ATTACHMENTS } from "@synara/contracts";
-import type { ComposerFileAttachment, ComposerThreadDraftState } from "../composerDraftDomain";
+import type { ComposerFileAttachment } from "../composerDraftDomain";
 import { revokeObjectPreviewUrl } from "../composerDraftAttachments";
 import { hasActiveComposerSend } from "./composerSendOwnership";
 import { clearPendingTurnDispatch, markPendingTurnDispatch } from "../pendingTurnDispatch";
@@ -200,15 +200,18 @@ function buildDraftPromptFileAttachment(input: {
 // duplicate thread.turn.start commands while the session is still starting. Same
 // pattern as threadCreatePromotion's inFlightThreadCreateById.
 const inFlightDispatchByThreadId = new Map<ThreadId, Promise<DraftThreadDispatchResult>>();
-const uncertainDraftTurnByThreadId = new Map<
+const uncertainDispatchByThreadId = new Map<
   ThreadId,
   {
     command: Extract<ClientOrchestrationCommand, { type: "thread.turn.start" }>;
     staged: StagedComposerAttachments;
-    draft: ComposerThreadDraftState | null;
-    warning: string | undefined;
+    finish: () => DraftThreadDispatchResult;
   }
 >();
+
+export function hasUncertainDraftThreadDispatch(threadId: ThreadId): boolean {
+  return uncertainDispatchByThreadId.has(threadId);
+}
 
 export function waitForDraftThreadDispatchToSettle(
   threadId: ThreadId,
@@ -250,27 +253,41 @@ async function dispatchDraftThreadOnce(
     return { kind: "unavailable" };
   }
 
-  const uncertain = uncertainDraftTurnByThreadId.get(threadId);
+  const uncertain = uncertainDispatchByThreadId.get(threadId);
   if (uncertain) {
+    let accepted = false;
+    try {
+      const snapshot = await api.orchestration.getThreadDetailSnapshot({ threadId });
+      accepted =
+        snapshot?.thread.messages.some(
+          (message) => message.id === uncertain.command.message.messageId,
+        ) ?? false;
+    } catch (error) {
+      return {
+        kind: "error",
+        message:
+          error instanceof Error ? error.message : "Could not confirm the task send. Try again.",
+        outcomeUnknown: true,
+      };
+    }
     markPendingTurnDispatch(threadId);
     try {
+      if (accepted) {
+        return uncertain.finish();
+      }
       await api.orchestration.dispatchCommand(uncertain.command);
-      uncertain.staged.commit();
-      uncertainDraftTurnByThreadId.delete(threadId);
-      const store = useComposerDraftStore.getState();
-      if (composerDraftsMatchForCleanup(store.draftsByThreadId[threadId], uncertain.draft))
-        store.clearComposerContent(threadId);
-      return { kind: "dispatched", ...(uncertain.warning ? { warning: uncertain.warning } : {}) };
+      return uncertain.finish();
     } catch (error) {
       input.hooks?.onDispatchAbandoned?.();
       if (!isRequestOutcomeUnknown(error)) {
-        uncertainDraftTurnByThreadId.delete(threadId);
+        uncertainDispatchByThreadId.delete(threadId);
         await uncertain.staged.cleanup();
         clearPendingTurnDispatch(threadId);
       }
       return {
         kind: "error",
-        message: error instanceof Error ? error.message : "Could not send the drafted prompt.",
+        message:
+          error instanceof Error ? error.message : "Could not confirm the task send. Try again.",
         ...(isRequestOutcomeUnknown(error) ? { outcomeUnknown: true } : {}),
       };
     }
@@ -428,6 +445,17 @@ async function dispatchDraftThreadOnce(
   });
 
   let goalWarning: string | undefined;
+  const finish = (): DraftThreadDispatchResult => {
+    uncertainDispatchByThreadId.delete(threadId);
+    const currentStore = useComposerDraftStore.getState();
+    if (
+      composerDraftsMatchForCleanup(currentStore.draftsByThreadId[threadId], draftComposerState)
+    ) {
+      currentStore.clearComposerContent(threadId);
+    }
+    markPendingTurnDispatch(threadId);
+    return { kind: "dispatched", ...(goalWarning ? { warning: goalWarning } : {}) };
+  };
   markPendingTurnDispatch(threadId);
   try {
     if (thread === null) {
@@ -510,7 +538,7 @@ async function dispatchDraftThreadOnce(
     }
 
     const stagedTurnAttachments = await turnAttachmentsPromise;
-    const turnCommand: Extract<ClientOrchestrationCommand, { type: "thread.turn.start" }> = {
+    const command = {
       type: "thread.turn.start",
       commandId: newCommandId(),
       threadId,
@@ -529,19 +557,20 @@ async function dispatchDraftThreadOnce(
       runtimeMode,
       interactionMode,
       createdAt,
-    };
-    uncertainDraftTurnByThreadId.set(threadId, {
-      command: turnCommand,
+    } satisfies Extract<ClientOrchestrationCommand, { type: "thread.turn.start" }>;
+    uncertainDispatchByThreadId.set(threadId, {
+      command,
       staged: stagedTurnAttachments,
-      draft: draftComposerState,
-      warning: goalWarning,
+      finish: () => {
+        stagedTurnAttachments.commit();
+        return finish();
+      },
     });
-    await api.orchestration.dispatchCommand(turnCommand);
+    await api.orchestration.dispatchCommand(command);
     stagedTurnAttachments.commit();
-    uncertainDraftTurnByThreadId.delete(threadId);
   } catch (error) {
-    if (!isRequestOutcomeUnknown(error) || !uncertainDraftTurnByThreadId.has(threadId)) {
-      uncertainDraftTurnByThreadId.delete(threadId);
+    if (!isRequestOutcomeUnknown(error) || !uncertainDispatchByThreadId.has(threadId)) {
+      uncertainDispatchByThreadId.delete(threadId);
       await turnAttachmentsPromise.then(
         (staged) => staged.cleanup(),
         () => undefined,
@@ -556,12 +585,5 @@ async function dispatchDraftThreadOnce(
     };
   }
 
-  // Clear the consumed draft only while we still own it. An open composer may
-  // have received new text or attachments while the dispatch reply was pending.
-  const currentStore = useComposerDraftStore.getState();
-  if (composerDraftsMatchForCleanup(currentStore.draftsByThreadId[threadId], draftComposerState)) {
-    currentStore.clearComposerContent(threadId);
-  }
-  markPendingTurnDispatch(threadId);
-  return { kind: "dispatched", ...(goalWarning ? { warning: goalWarning } : {}) };
+  return finish();
 }

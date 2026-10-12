@@ -20,6 +20,7 @@ import {
 import { automationListRowIcon, useAutomations } from "~/routes/-automations.shared";
 import { SIDEBAR_SECTION_LABEL_CLASS_NAME } from "~/sidebarRowStyles";
 import { useStore } from "~/store";
+import { Button } from "./ui/button";
 import { SidebarPanelTitle } from "./SidebarPanelTitle";
 import { SidebarPrimaryAction } from "./SidebarPrimaryAction";
 import { SidebarGroup, SidebarMenu } from "./ui/sidebar";
@@ -37,9 +38,8 @@ export function RailAutomationsPanel({
     select: (params) => (typeof params.automationId === "string" ? params.automationId : null),
   });
   const projects = useStore((state) => state.projects);
-  const { data, isLoading, createMutation, runsByAutomationId } = useAutomations(
-    (threadId) => void navigate({ to: "/$threadId", params: { threadId } }),
-  );
+  const { data, isPending, isError, error, refetch, createMutation, runsByAutomationId } =
+    useAutomations((threadId) => void navigate({ to: "/$threadId", params: { threadId } }));
   const now = useAutomationListClock();
 
   const active = data.definitions.filter((definition) => definition.enabled);
@@ -99,11 +99,19 @@ export function RailAutomationsPanel({
         </SidebarMenu>
       </SidebarGroup>
       <SidebarGroup className="gap-2 px-1.5 py-1.5">
-        {isLoading ? (
+        {isError ? (
+          <div role="alert" className="flex flex-col gap-2 px-2 text-ui text-muted-foreground">
+            <span>{error?.message || "Automations could not load."}</span>
+            <Button variant="outline" size="sm" onClick={() => void refetch()}>
+              Retry
+            </Button>
+          </div>
+        ) : null}
+        {isPending && data.definitions.length === 0 ? (
           <div className="px-2 pt-4 text-center text-ui text-muted-foreground/58">
             Loading automations...
           </div>
-        ) : data.definitions.length === 0 ? (
+        ) : data.definitions.length === 0 && !isError ? (
           <div className="px-2 pt-4 text-center text-ui text-muted-foreground/58">
             No automations yet
           </div>
