@@ -88,3 +88,14 @@ export function htmlAttributesToReactProps(
   }
   return props;
 }
+
+function escapeHtmlText(value: string): string {
+  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+}
+
+export function appendPlainTextToHighlightedHtml(html: string, plainText: string): string {
+  if (plainText.length === 0) return html;
+  const insertAt = html.lastIndexOf("</code>");
+  if (insertAt === -1) return html;
+  return `${html.slice(0, insertAt)}${escapeHtmlText(plainText)}${html.slice(insertAt)}`;
+}

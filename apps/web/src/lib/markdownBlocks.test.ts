@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -172,5 +173,59 @@ describe("remarkMarkdownBlockOrigin", () => {
     expect(tree.children[0]!.position.start).toEqual({ line: 11, column: 1, offset: 100 });
     expect(tree.children[0]!.position.end).toEqual({ line: 11, column: 3, offset: 102 });
     expect(shared).toEqual({ line: 1, column: 1, offset: 0 });
+  });
+});
+
+describe("sealed Markdown block text", () => {
+  it("owns and reuses sealed text while keeping source offsets and UTF-16 units", async () => {
+    const { createMarkdownBlockTextCache } = await import("./markdownBlocks");
+    const materialize = createMarkdownBlockTextCache();
+    const sealed = "A😀\ud800\udfff\r\n";
+    const first = `${sealed}\nopen`;
+    const blocks = materialize(first, first, splitMarkdownBlocks(first));
+    expect(blocks[0]!.text).toBe(sealed);
+    expect(blocks[0]!.sourceText).toBe(sealed);
+    expect(blocks[1]!.text).toBe("\nopen");
+    const next = `${first} tail`;
+    const updated = materialize(next, next, splitMarkdownBlocks(next));
+    expect(updated[0]).toBe(blocks[0]);
+    expect(updated.map((block) => block.text).join("")).toBe(next);
+    expect(updated[1]!.start).toBe(sealed.length);
+    const replacement = next.replace("A", "B");
+    const replaced = materialize(replacement, replacement, splitMarkdownBlocks(replacement));
+    expect(replaced[0]!.text).toBe(sealed.replace("A", "B"));
+    expect(replaced[0]).not.toBe(blocks[0]);
+    const referenced = `${next}\n\n[x]: /tmp/file`;
+    expect(materialize(referenced, referenced, splitMarkdownBlocks(referenced))).toHaveLength(1);
+  });
+});
+
+describe("sealed Markdown memory", () => {
+  it("does not retain growing parent messages through sealed block strings", () => {
+    const result = execFileSync(
+      process.execPath,
+      [
+        "--expose-gc",
+        "--input-type=module",
+        "-e",
+        `import * as blocks from ${JSON.stringify(new URL("./markdownBlocks.ts", import.meta.url).href)};
+      const materialize = blocks.createMarkdownBlockTextCache?.();
+      global.gc();
+      const before = process.memoryUsage().heapUsed;
+      const retained = [];
+      for (let index = 0; index < 100; index++) {
+        const text = Array.from({ length: index + 1 }, (_, n) => String(n).padStart(5, "0") + "x".repeat(10478) + "\\n\\n").join("") + "tail";
+        const ranges = blocks.splitMarkdownBlocks(text);
+        const block = materialize ? materialize(text, text, ranges)[index] : ranges[index];
+        retained.push(materialize ? block.text : text.slice(block.start, block.end));
+      }
+      global.gc();
+      console.log(JSON.stringify({ bytes: process.memoryUsage().heapUsed - before, chars: retained.reduce((sum, text) => sum + text.length, 0) }));`,
+      ],
+      { encoding: "utf8" },
+    );
+    const measured = JSON.parse(result) as { bytes: number; chars: number };
+    expect(measured.chars).toBeGreaterThan(1_000_000);
+    expect(measured.bytes).toBeLessThan(5 * 1024 * 1024);
   });
 });

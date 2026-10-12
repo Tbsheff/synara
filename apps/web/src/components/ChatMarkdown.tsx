@@ -58,6 +58,7 @@ import { copyTextToClipboard } from "../hooks/useCopyToClipboard";
 import { resolveDiffThemeName, type DiffThemeName } from "../lib/diffRendering";
 import {
   loadSyntaxHighlighting,
+  MAX_SYNTAX_HIGHLIGHT_INPUT_CHARS,
   type SyntaxHighlightingModule,
 } from "../lib/syntaxHighlightingLoader";
 import {
@@ -74,6 +75,7 @@ import {
   createStreamingMarkdownRepair,
 } from "../lib/markdownStreamingRepair";
 import {
+  createMarkdownBlockTextCache,
   remarkMarkdownBlockOrigin,
   splitMarkdownBlocks,
   type MarkdownBlock,
@@ -1116,7 +1118,14 @@ function LoadedShikiCodeBlock({
   isStreaming,
   sourceOffset,
 }: HighlightedCodeBlockProps) {
-  const cacheKey = syntaxHighlighting.createSyntaxHighlightCacheKey(code, language, themeName);
+  const exceedsSizeLimit = code.length + plainTail.length > MAX_SYNTAX_HIGHLIGHT_INPUT_CHARS;
+  const highlightCode = exceedsSizeLimit ? "" : code;
+  const renderedTail = exceedsSizeLimit ? code + plainTail : plainTail;
+  const cacheKey = syntaxHighlighting.createSyntaxHighlightCacheKey(
+    highlightCode,
+    language,
+    themeName,
+  );
   const cachedHighlightedHtml = isStreaming
     ? null
     : syntaxHighlighting.getCachedSyntaxHighlightedHtml(cacheKey);
@@ -1126,20 +1135,24 @@ function LoadedShikiCodeBlock({
       : null;
   const highlightedHtml =
     cachedHighlightedHtml ??
-    syntaxHighlighting.highlightCodeToHtmlWithFallback(highlighter!, code, language, themeName);
+    syntaxHighlighting.highlightCodeToHtmlWithFallback(
+      highlighter!,
+      highlightCode,
+      language,
+      themeName,
+    );
   const needsCaching = !isStreaming && cachedHighlightedHtml == null;
 
   useEffect(() => {
     if (needsCaching) {
-      syntaxHighlighting.cacheSyntaxHighlightedHtml(cacheKey, highlightedHtml, code);
+      syntaxHighlighting.cacheSyntaxHighlightedHtml(cacheKey, highlightedHtml, highlightCode);
     }
-  }, [cacheKey, code, highlightedHtml, needsCaching, syntaxHighlighting]);
+  }, [cacheKey, highlightCode, highlightedHtml, needsCaching, syntaxHighlighting]);
 
   return (
     <FindAwareShikiHtml
-      html={syntaxHighlighting.appendPlainTextToHighlightedHtml(highlightedHtml, plainTail)}
-      highlightedHtml={highlightedHtml}
-      plainTail={plainTail}
+      html={highlightedHtml}
+      plainTail={renderedTail}
       sourceOffset={sourceOffset}
     />
   );
@@ -1319,7 +1332,13 @@ const MARKDOWN_COMPONENTS: Components = {
     const fence = parseCodeFenceInfo(rawFenceInfo);
     const blockStart = node?.position?.start?.offset ?? 0;
     const blockState = isStreaming
-      ? classifyStreamingCodeBlock(parsedText, blockStart, node?.position?.end?.offset)
+      ? classifyStreamingCodeBlock(
+          parsedText,
+          blockStart - context.sourceBase,
+          node?.position?.end?.offset === undefined
+            ? undefined
+            : node.position.end.offset - context.sourceBase,
+        )
       : "settled";
     const sourceOffset = locateInSource(context, code, blockStart);
     const highlightedFallback = (
@@ -1688,10 +1707,15 @@ function ChatMarkdown({
   const [hasStreamed, setHasStreamed] = useState(isLive);
   if (isLive && !hasStreamed) setHasStreamed(true);
   const splitsIntoBlocks = hasStreamed && !isUserVariant && !parseHtml;
+  const materializeBlocks = useMemo(() => createMarkdownBlockTextCache(), [revealKey]);
   const blocks = useMemo(
     () =>
-      splitsIntoBlocks ? splitMarkdownBlocks(renderedText) : singleMarkdownBlock(renderedText),
-    [renderedText, splitsIntoBlocks],
+      materializeBlocks(
+        renderedText,
+        sourceText,
+        splitsIntoBlocks ? splitMarkdownBlocks(renderedText) : singleMarkdownBlock(renderedText),
+      ),
+    [materializeBlocks, renderedText, sourceText, splitsIntoBlocks],
   );
   const composerChipsRemarkPlugin = useMemo(
     () =>
@@ -1796,15 +1820,11 @@ function ChatMarkdown({
           <Fragment key={block.start}>
             {index > 0 ? "\n" : null}
             <MarkdownBlockView
-              text={renderedText.slice(block.start, block.end)}
+              text={block.text}
               origin={block.start}
               line={block.line}
-              sourceText={
-                index === lastBlockIndex
-                  ? sourceText.slice(block.start)
-                  : sourceText.slice(block.start, block.end)
-              }
-              parsedText={index === lastBlockIndex && isLive ? renderedText : ""}
+              sourceText={block.sourceText}
+              parsedText={index === lastBlockIndex && isLive ? block.text : ""}
               isStreaming={index === lastBlockIndex && isLive}
               baseContext={baseContext}
               remarkPlugins={remarkPlugins}
