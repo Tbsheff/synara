@@ -1676,13 +1676,12 @@ function mapItemLifecycle(
         canonicalThreadId,
         codexHome,
       )
-    : runtimeEventBase(event, canonicalThreadId);
+    : data !== undefined
+      ? withMinimalRawPayload(runtimeEventBase(event, canonicalThreadId), event)
+      : runtimeEventBase(event, canonicalThreadId);
 
   return {
     ...base,
-    ...(data !== event.payload && !generatedImageReference && base.raw
-      ? { raw: { ...base.raw, payload: data } }
-      : {}),
     type: lifecycle,
     payload: {
       itemType: canonicalItemType,
