@@ -163,8 +163,12 @@ import {
 import { makeDispatchCommandNormalizer } from "./orchestration/dispatchCommandNormalization";
 import {
   coalescedLiveToolOutputStream,
+  DEFAULT_LIVE_UPDATE_BUFFER_LIMITS,
+  LatestLiveUpdates,
   LiveToolOutputHub,
   type LiveToolOutputHubShape,
+  type LiveUpdateBufferLimits,
+  liveUpdateBufferOverflowError,
 } from "./orchestration/liveToolOutput";
 import { sanitizeOrchestrationEventProviderOptions } from "./orchestration/providerOptionsSecurity";
 import { prepareQuitResume } from "./orchestration/quitResume";
@@ -303,32 +307,36 @@ type ThreadOrLiveItem =
   | { readonly source: "live"; readonly live: ThreadLiveUpdate };
 
 interface LiveGateState {
-  readonly threadItemSeen: boolean;
-  readonly heldLive: ReadonlyMap<string, ThreadLiveUpdate>;
+  threadItemSeen: boolean;
+  readonly heldLive: LatestLiveUpdates;
 }
 
 function gateLiveUntilFirstThreadItem(
+  threadId: ThreadId,
   state: LiveGateState,
   next: ThreadOrLiveItem,
-): readonly [LiveGateState, ReadonlyArray<OrchestrationThreadStreamItem>] {
+): Effect.Effect<
+  readonly [LiveGateState, ReadonlyArray<OrchestrationThreadStreamItem>],
+  WsRpcError
+> {
   if (next.source === "thread") {
     const released = state.threadItemSeen
       ? []
-      : [...state.heldLive.values()].map(
-          (live): OrchestrationThreadStreamItem => ({ kind: "live", live }),
-        );
-    return [
-      { threadItemSeen: true, heldLive: new Map() },
+      : state.heldLive
+          .takeAll()
+          .map((live): OrchestrationThreadStreamItem => ({ kind: "live", live }));
+    state.threadItemSeen = true;
+    return Effect.succeed([
+      state,
       isClientThreadStreamItem(next.item) ? [next.item, ...released] : released,
-    ];
+    ]);
   }
   if (state.threadItemSeen) {
-    return [state, [{ kind: "live", live: next.live }]];
+    return Effect.succeed([state, [{ kind: "live", live: next.live }]]);
   }
-  const heldLive = new Map(state.heldLive);
-  heldLive.delete(next.live.itemId);
-  heldLive.set(next.live.itemId, next.live);
-  return [{ threadItemSeen: false, heldLive }, []];
+  return state.heldLive.trySet(next.live)
+    ? Effect.succeed([state, []])
+    : Effect.fail(liveUpdateBufferOverflowError(threadId));
 }
 
 export function withoutResumedMarker<E, R>(
@@ -341,17 +349,18 @@ export function withLiveToolOutputItems<E, R>(
   items: Stream.Stream<ThreadStreamOutput, E, R>,
   hub: LiveToolOutputHubShape,
   threadId: ThreadId,
-): Stream.Stream<OrchestrationThreadStreamItem, E, R> {
+  limits: LiveUpdateBufferLimits = DEFAULT_LIVE_UPDATE_BUFFER_LIMITS,
+): Stream.Stream<OrchestrationThreadStreamItem, E | WsRpcError, R> {
   return Stream.merge(
     items.pipe(Stream.map((item): ThreadOrLiveItem => ({ source: "thread", item }))),
-    coalescedLiveToolOutputStream(hub, threadId).pipe(
+    coalescedLiveToolOutputStream(hub, threadId, limits).pipe(
       Stream.map((live): ThreadOrLiveItem => ({ source: "live", live })),
     ),
     { haltStrategy: "left" },
   ).pipe(
-    Stream.mapAccum(
-      (): LiveGateState => ({ threadItemSeen: false, heldLive: new Map() }),
-      gateLiveUntilFirstThreadItem,
+    Stream.mapAccumEffect(
+      (): LiveGateState => ({ threadItemSeen: false, heldLive: new LatestLiveUpdates(limits) }),
+      (state, next) => gateLiveUntilFirstThreadItem(threadId, state, next),
     ),
   );
 }
@@ -754,7 +763,7 @@ const makeWsRpcHandlersLayer = () =>
         negotiatedRevision: number,
         threadId: ThreadId,
         items: Stream.Stream<ThreadStreamOutput, E, R>,
-      ): Stream.Stream<OrchestrationThreadStreamItem, E, R> =>
+      ): Stream.Stream<OrchestrationThreadStreamItem, E | WsRpcError, R> =>
         negotiatedRevision >= WS_THREAD_LIVE_ITEMS_MIN_REVISION
           ? withLiveToolOutputItems(items, liveToolOutputHub, threadId)
           : withoutResumedMarker(items);

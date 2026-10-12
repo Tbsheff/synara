@@ -1,15 +1,19 @@
 import {
+  ORCHESTRATION_STREAM_OVERFLOW_CODE,
   type OrchestrationThreadStreamItem,
   RuntimeItemId,
   ThreadId,
   TurnId,
   WS_THREAD_LIVE_ITEMS_MIN_REVISION,
 } from "@synara/contracts";
-import { Effect, Fiber, Option, Queue, Stream } from "effect";
+import { Cause, Effect, Exit, Fiber, Option, Queue, Stream } from "effect";
 import { Headers } from "effect/unstable/http";
 import { describe, expect, it } from "vitest";
 
-import { makeLiveToolOutputHub } from "./orchestration/liveToolOutput";
+import {
+  coalescedLiveToolOutputStream,
+  makeLiveToolOutputHub,
+} from "./orchestration/liveToolOutput";
 import {
   negotiatedRevisionFromHeaders,
   makeThreadDetailStream,
@@ -143,6 +147,65 @@ describe("withLiveToolOutputItems", () => {
     expect(live?.kind === "live" && live.live.kind === "tool-output" && live.live.tail).toBe(
       "tick1\ntick2\n",
     );
+  });
+});
+
+describe("live tool output buffers", () => {
+  const limits = { maxItems: 4, maxTailChars: 1_024 };
+  const overflowCode = (exit: Exit.Exit<unknown, unknown>) =>
+    Exit.isFailure(exit)
+      ? (Cause.squash(exit.cause) as { readonly code?: string }).code
+      : "no-failure";
+  const appendDistinctItems = (hub: ReturnType<typeof makeLiveToolOutputHub>, count: number) => {
+    for (let index = 0; index < count; index++) {
+      hub.append({
+        threadId,
+        turnId,
+        itemId: RuntimeItemId.makeUnsafe(`item-budget-${index}`),
+        streamKind: "command_output",
+        delta: `line-${index}\n`,
+      });
+    }
+  };
+
+  it("fails a stalled live subscriber instead of retaining every distinct tool", async () => {
+    const hub = makeLiveToolOutputHub({ minIntervalMs: 0 });
+    const exit = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const pull = yield* Stream.toPull(coalescedLiveToolOutputStream(hub, threadId, limits));
+          appendDistinctItems(hub, 12);
+          return yield* Effect.exit(pull.pipe(Effect.timeout("1 second")));
+        }),
+      ),
+    );
+    expect(overflowCode(exit)).toBe(ORCHESTRATION_STREAM_OVERFLOW_CODE);
+  });
+
+  it("fails the thread stream when live tails held for bootstrap exceed the limit", async () => {
+    const hub = makeLiveToolOutputHub({ minIntervalMs: 0 });
+    const exit = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fiber = yield* withLiveToolOutputItems(Stream.never, hub, threadId, limits).pipe(
+            Stream.runDrain,
+            Effect.forkScoped,
+          );
+          for (let index = 0; index < 12; index++) {
+            hub.append({
+              threadId,
+              turnId,
+              itemId: RuntimeItemId.makeUnsafe(`item-held-${index}`),
+              streamKind: "command_output",
+              delta: `line-${index}\n`,
+            });
+            yield* Effect.sleep("2 millis");
+          }
+          return yield* Fiber.await(fiber).pipe(Effect.timeout("1 second"));
+        }),
+      ),
+    );
+    expect(overflowCode(exit)).toBe(ORCHESTRATION_STREAM_OVERFLOW_CODE);
   });
 });
 

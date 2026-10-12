@@ -8,6 +8,8 @@ import {
   TRANSCRIPT_LIVE_OUTPUT_MIN_INTERVAL_MS,
   TRANSCRIPT_OUTPUT_TAIL_MAX_CHARS,
   type TurnId,
+  ORCHESTRATION_STREAM_OVERFLOW_CODE,
+  WsRpcError,
 } from "@synara/contracts";
 import { Effect, Queue, ServiceMap, Stream } from "effect";
 
@@ -269,28 +271,86 @@ export const LiveToolOutputHub = ServiceMap.Reference<LiveToolOutputHubShape>(
   { defaultValue: () => makeLiveToolOutputHub() },
 );
 
+export interface LiveUpdateBufferLimits {
+  readonly maxItems: number;
+  readonly maxTailChars: number;
+}
+
+export const DEFAULT_LIVE_UPDATE_BUFFER_LIMITS: LiveUpdateBufferLimits = {
+  maxItems: 1_024,
+  maxTailChars: 8 * 1024 * 1024,
+};
+
+const liveUpdateTailChars = (update: ThreadLiveUpdate): number =>
+  update.kind === "tool-output" ? update.tail.length : 0;
+
+export function liveUpdateBufferOverflowError(threadId: ThreadId): WsRpcError {
+  return new WsRpcError({
+    message: `Live tool output for thread ${threadId} exceeded its buffer; resume from the last received sequence.`,
+    code: ORCHESTRATION_STREAM_OVERFLOW_CODE,
+    retryable: true,
+  });
+}
+
+export class LatestLiveUpdates {
+  private readonly updates = new Map<string, ThreadLiveUpdate>();
+  private tailChars = 0;
+
+  constructor(private readonly limits: LiveUpdateBufferLimits) {}
+
+  get size(): number {
+    return this.updates.size;
+  }
+
+  trySet(update: ThreadLiveUpdate): boolean {
+    const previous = this.updates.get(update.itemId);
+    const nextTailChars =
+      this.tailChars - (previous ? liveUpdateTailChars(previous) : 0) + liveUpdateTailChars(update);
+    const nextSize = previous ? this.updates.size : this.updates.size + 1;
+    if (nextSize > this.limits.maxItems || nextTailChars > this.limits.maxTailChars) return false;
+    this.updates.delete(update.itemId);
+    this.updates.set(update.itemId, update);
+    this.tailChars = nextTailChars;
+    return true;
+  }
+
+  takeAll(): ThreadLiveUpdate[] {
+    const updates = [...this.updates.values()];
+    this.updates.clear();
+    this.tailChars = 0;
+    return updates;
+  }
+}
+
 export function coalescedLiveToolOutputStream(
   hub: LiveToolOutputHubShape,
   threadId: ThreadId,
-): Stream.Stream<ThreadLiveUpdate> {
+  limits: LiveUpdateBufferLimits = DEFAULT_LIVE_UPDATE_BUFFER_LIMITS,
+): Stream.Stream<ThreadLiveUpdate, WsRpcError> {
   return Stream.unwrap(
     Effect.gen(function* () {
-      const pending = new Map<string, ThreadLiveUpdate>();
+      const pending = new LatestLiveUpdates(limits);
+      let overflowed = false;
       const wake = yield* Queue.sliding<void>(1);
+      let unsubscribe = () => {};
       const offer = (update: ThreadLiveUpdate) => {
-        pending.delete(update.itemId);
-        pending.set(update.itemId, update);
+        if (overflowed) return;
+        if (!pending.trySet(update)) {
+          overflowed = true;
+          pending.takeAll();
+          unsubscribe();
+        }
         Queue.offerUnsafe(wake, undefined);
       };
       for (const update of hub.current(threadId)) offer(update);
-      const unsubscribe = hub.subscribe(threadId, offer);
-      yield* Effect.addFinalizer(() => Effect.sync(unsubscribe));
+      if (!overflowed) unsubscribe = hub.subscribe(threadId, offer);
+      yield* Effect.addFinalizer(() => Effect.sync(() => unsubscribe()));
       return Stream.fromQueue(wake).pipe(
-        Stream.flatMap(() => {
-          const updates = [...pending.values()];
-          pending.clear();
-          return Stream.fromIterable(updates);
-        }),
+        Stream.flatMap(() =>
+          overflowed
+            ? Stream.fail(liveUpdateBufferOverflowError(threadId))
+            : Stream.fromIterable(pending.takeAll()),
+        ),
       );
     }),
   );
