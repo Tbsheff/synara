@@ -1068,12 +1068,13 @@ const makeAutomationRepository = Effect.gen(function* () {
 
   const markRunResultRow = SqlSchema.void({
     Request: MarkAutomationRunResultInput,
-    execute: ({ id, result, updatedAt }) =>
+    execute: ({ id, result, updatedAt, onlyActive }) =>
       sql`
         UPDATE automation_runs
         SET result_json = ${result === null ? null : JSON.stringify(result)},
             updated_at = ${updatedAt}
         WHERE run_id = ${id}
+          AND (${onlyActive ? 1 : 0} = 0 OR status IN ('pending', 'claimed', 'running', 'waiting-for-approval'))
       `,
   });
 

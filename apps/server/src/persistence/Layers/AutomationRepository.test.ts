@@ -1945,4 +1945,53 @@ layer("AutomationRepository", (it) => {
       assert.strictEqual(cancelled.finishedAt, "2026-06-16T10:01:00.000Z");
     }),
   );
+  it.effect("does not replace a completed result with a late cancellation request", () =>
+    Effect.gen(function* () {
+      const repository = yield* AutomationRepository;
+      yield* runMigrations();
+      const now = "2026-06-16T10:00:00.000Z";
+      const definition = yield* repository.createDefinition({
+        id: AutomationId.makeUnsafe("cancel-completion-race"),
+        input: createInput,
+        now,
+      });
+      const run = yield* repository.createRun({
+        id: AutomationRunId.makeUnsafe("cancel-completion-race-run"),
+        automationId: definition.id,
+        projectId: definition.projectId,
+        threadId: null,
+        trigger: { type: "manual" },
+        scheduledFor: now,
+        permissionSnapshot,
+        now,
+      });
+      yield* repository.markRunSucceeded({
+        id: run.id,
+        turnId: null,
+        result: {
+          outcome: "no-findings",
+          summary: "Completed result",
+          unread: false,
+          archivedAt: null,
+        },
+        finishedAt: now,
+        accountedAt: now,
+      });
+      const input = {
+        id: run.id,
+        result: {
+          outcome: "unknown" as const,
+          summary: "Cancellation pending",
+          cancellationRequestedAt: now,
+          unread: true,
+          archivedAt: null,
+        },
+        updatedAt: now,
+        onlyActive: true,
+      };
+      const saved = yield* repository.markRunResult(input);
+      assert.strictEqual(saved.status, "succeeded");
+      assert.strictEqual(saved.result?.summary, "Completed result");
+    }),
+  );
 });

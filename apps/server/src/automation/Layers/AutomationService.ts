@@ -3194,6 +3194,7 @@ export const AutomationServiceLive = Layer.effect(
         const requested = yield* automationRepository
           .markRunResult({
             id: input.runId,
+            onlyActive: true,
             updatedAt: now,
             result: {
               ...current.value.result,
@@ -3206,6 +3207,7 @@ export const AutomationServiceLive = Layer.effect(
             },
           })
           .pipe(Effect.mapError(toServiceError("Failed to request automation cancellation.")));
+        if (isTerminalRunStatus(requested.status)) return requested;
         yield* publish({ type: "run-upserted", run: requested });
         yield* stopRun(requested, now);
         const run = yield* automationRepository
