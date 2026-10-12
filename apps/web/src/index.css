@@ -1928,18 +1928,22 @@ label:has(> select#reasoning-effort) select {
   border-radius: 0.85rem;
   overflow: hidden;
   background: color-mix(in srgb, var(--muted) 55%, transparent);
-  cursor: zoom-in;
+  cursor: inherit;
   outline: none;
   transition:
     box-shadow 140ms ease,
     transform 140ms ease;
 }
 
+button.chat-generated-image__frame {
+  cursor: zoom-in;
+}
+
 .chat-generated-image__frame:focus-visible {
   box-shadow: 0 0 0 2px var(--ring);
 }
 
-.chat-generated-image__frame:hover {
+button.chat-generated-image__frame:hover {
   box-shadow: 0 1px 18px -8px color-mix(in srgb, var(--foreground) 40%, transparent);
 }
 
