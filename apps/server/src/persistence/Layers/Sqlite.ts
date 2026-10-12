@@ -3,6 +3,8 @@ import { totalmem } from "node:os";
 import { Effect, Layer, FileSystem, Path } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
+import { prepareStableHubs } from "../StableHubActivation.ts";
+
 import { runMigrations } from "../Migrations.ts";
 import { MigrationSchemaTooNewError } from "../Errors.ts";
 import {
@@ -154,6 +156,7 @@ const makeSetup = ({
             : Effect.fail(cause),
         ),
       );
+      if (dbPath) yield* prepareStableHubs();
     }),
   );
 
