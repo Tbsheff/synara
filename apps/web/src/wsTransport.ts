@@ -40,6 +40,7 @@ import {
   WsCompatibilityError,
   WsFeatureRpcGroup,
   WsProjectAgentRpcGroup,
+  WsCloudAgentsRpcGroup,
   type AutomationStreamEvent,
   type TodoStreamEvent,
   type GitActionProgressEvent,
@@ -67,6 +68,10 @@ import {
   type WsPushChannel,
   type WsPushMessage,
   TASKS_UNAVAILABLE_ERROR_CODE,
+  CLOUD_AGENTS_UNAVAILABLE_ERROR_CODE,
+  CLOUD_AGENTS_WS_METHODS,
+  type CloudTaskRefInput,
+  type CloudWatchTaskEvent,
   ThreadId,
 } from "@synara/contracts";
 import {
@@ -237,7 +242,10 @@ function awaitWithAbort<A>(promise: Promise<A>, signal: AbortSignal | undefined)
 // real RPC error (or an `unsupported-platform` availability) to render its
 // blocked state. Merging here keeps one socket and one client.
 const makeRpcClient = RpcClient.make(
-  WsFeatureRpcGroup.merge(WsDeviceRpcGroup).merge(WsComputerRpcGroup).merge(WsProjectAgentRpcGroup),
+  WsFeatureRpcGroup.merge(WsDeviceRpcGroup)
+    .merge(WsComputerRpcGroup)
+    .merge(WsProjectAgentRpcGroup)
+    .merge(WsCloudAgentsRpcGroup),
 );
 const makeBootstrapRpcClient = RpcClient.make(WsBootstrapRpcGroup);
 const REQUEST_TIMEOUT_MS = 60_000;
@@ -517,6 +525,7 @@ const STREAM_ADMISSION_ERROR_CODES = new Set([
   // A server that does not offer Tasks refuses its stream for good;
   // reconnecting the socket would only be refused again.
   TASKS_UNAVAILABLE_ERROR_CODE,
+  CLOUD_AGENTS_UNAVAILABLE_ERROR_CODE,
 ]);
 
 const RESNAPSHOT_REQUIRED_ERROR_CODE = "ORCHESTRATION_RESNAPSHOT_REQUIRED";
@@ -933,6 +942,7 @@ export class WsTransport {
   private shellSnapshotDelivered = false;
   private readonly threadSubscriptions = new Map<string, unknown>();
   private readonly projectFileSubscriptions = new Map<string, ProjectFileChangeSubscription>();
+  private cloudTaskWatchSequence = 0;
   private readonly projectAgentSubscriptions = new Map<string, unknown>();
   private compatibility: WsBootstrapNegotiateResult | null = null;
   private compatibilityIssue: WsCompatibilityError | null = null;
@@ -1244,6 +1254,30 @@ export class WsTransport {
         return;
       }
       this.projectFileSubscriptions.delete(key);
+      void this.stopStream(key);
+    };
+  }
+
+  watchCloudTask(
+    input: CloudTaskRefInput,
+    listener: (event: CloudWatchTaskEvent) => void,
+  ): () => void {
+    this.cloudTaskWatchSequence += 1;
+    const key = `cloud.watchTask:${input.provider}:${input.taskId}:${this.cloudTaskWatchSequence}`;
+    let active = true;
+    void this.getClient()
+      .then((client) => {
+        if (!active || this.disposed) return;
+        this.startStream<CloudWatchTaskEvent>(
+          client,
+          key,
+          client[CLOUD_AGENTS_WS_METHODS.watchTask](input),
+          listener,
+        );
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
       void this.stopStream(key);
     };
   }

@@ -105,6 +105,7 @@ function RailFixture({
     activeItem: "home",
     studioAvailable: flavor === "beta",
     inboxAvailable: flavor === "beta",
+    cloudAvailable: flavor === "beta",
   });
   // Stable has two fewer fixed destinations. Three Stable shortcuts and one
   // Beta shortcut exercise the same nearly-full real rail before an update.

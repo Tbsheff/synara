@@ -30,6 +30,7 @@ describe("rail item order", () => {
       "kanban",
       "tasks",
       "pullRequests",
+      "cloud",
       "studio",
     ]);
   });
@@ -42,6 +43,7 @@ describe("rail item order", () => {
       "spaces",
       "tasks",
       "pullRequests",
+      "cloud",
       "automations",
       "studio",
     ]);
@@ -65,6 +67,7 @@ describe("rail item order", () => {
         activeItem: "automations",
         studioAvailable: false,
         inboxAvailable: false,
+        cloudAvailable: false,
       }),
     ).toEqual(["home", "kanban", "tasks", "pullRequests", "automations"]);
     expect(
@@ -74,12 +77,13 @@ describe("rail item order", () => {
         activeItem: "home",
         studioAvailable: true,
         inboxAvailable: true,
+        cloudAvailable: true,
       }),
     ).toEqual(order);
   });
 
   it("offers Inbox and Studio in Customize only where they exist", () => {
-    const stable = { studioAvailable: false, inboxAvailable: false };
+    const stable = { studioAvailable: false, inboxAvailable: false, cloudAvailable: false };
     expect(RAIL_ORDERABLE_ITEM_IDS.filter((id) => isRailItemAvailable(id, stable))).toEqual([
       "home",
       "spaces",
@@ -88,9 +92,25 @@ describe("rail item order", () => {
       "pullRequests",
       "automations",
     ]);
-    expect(isRailItemAvailable("inbox", { studioAvailable: false, inboxAvailable: true })).toBe(
-      true,
-    );
+    expect(
+      isRailItemAvailable("inbox", {
+        studioAvailable: false,
+        inboxAvailable: true,
+        cloudAvailable: false,
+      }),
+    ).toBe(true);
+  });
+
+  it("slots Cloud after Code review in saved orders and offers it only on Beta", () => {
+    expect(
+      normalizeRailItemOrder(["home", "pullRequests", "automations", "inbox"]).slice(0, 4),
+    ).toEqual(["home", "pullRequests", "cloud", "automations"]);
+    expect(normalizeRailItemOrder(["cloud", "home"]).slice(0, 2)).toEqual(["cloud", "home"]);
+    const availability = { studioAvailable: false, inboxAvailable: true };
+    expect(isRailItemAvailable("cloud", { ...availability, cloudAvailable: false })).toBe(false);
+    expect(isRailItemAvailable("cloud", { ...availability, cloudAvailable: true })).toBe(true);
+    expect(railItemForPathname("/cloud")).toBe("cloud");
+    expect(railItemShowsPanel("cloud")).toBe(false);
   });
 });
 

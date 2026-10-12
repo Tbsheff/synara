@@ -10,6 +10,7 @@ import {
   BotIcon,
   CircleQuestionIcon,
   ClockIcon,
+  CloudIcon,
   CodeReviewIcon,
   CopyIcon,
   CustomizeIcon,
@@ -312,7 +313,7 @@ import { RenameThreadDialog } from "./RenameThreadDialog";
 import { SnoozeUntilDialog } from "./SnoozeUntilDialog";
 import { SNOOZE_PRESETS } from "../lib/threadSnooze";
 import ReleaseHistoryDialog from "./ReleaseHistoryDialog";
-import { GROUPS_ON, INBOX_ON, isBetaFeatureOn } from "../betaFeatures";
+import { CLOUD_ON, GROUPS_ON, INBOX_ON, isBetaFeatureOn } from "../betaFeatures";
 import { WHATS_NEW_ENTRIES } from "../whatsNew/entries";
 import { sortEntriesByVersionDesc } from "../whatsNew/logic";
 import { SidebarSearchPalette, type SidebarSearchPaletteMode } from "./SidebarSearchPalette";
@@ -1358,6 +1359,7 @@ export default function Sidebar() {
   const isOnTasks = pathname.startsWith("/tasks");
   const isOnAutomations = pathname.startsWith("/automations");
   const isOnPullRequests = pathname.startsWith("/pull-requests");
+  const isOnCloud = pathname.startsWith("/cloud");
   const isOnInbox = pathname.startsWith("/inbox");
   // Lightweight read of automations to drive the sidebar attention badge. Shares the
   // ["automations"] query cache with the Automations route (and its live stream updates).
@@ -1742,6 +1744,7 @@ export default function Sidebar() {
   );
   // Inbox is available in both Stable and Beta.
   const inboxAvailable = INBOX_ON;
+  const cloudAvailable = CLOUD_ON;
   const inboxBadge = useMemo(() => {
     if (!inboxAvailable) return null;
     const count = countNeedsYouActions(
@@ -4321,6 +4324,15 @@ export default function Sidebar() {
           void navigate({ to: "/pull-requests" });
         },
       },
+      cloud: {
+        icon: CloudIcon,
+        label: "Cloud",
+        active: isOnCloud,
+        badge: null,
+        onClick: () => {
+          void navigate({ to: "/cloud" });
+        },
+      },
       automations: {
         icon: ClockIcon,
         label: "Automations",
@@ -4336,6 +4348,7 @@ export default function Sidebar() {
       handlePrimaryNewThread,
       inboxBadge,
       isOnAutomations,
+      isOnCloud,
       isOnInbox,
       isOnKanban,
       isOnPullRequests,
@@ -6730,7 +6743,11 @@ export default function Sidebar() {
       onFocus: item.onFocus,
     };
   };
-  const railAvailability = { studioAvailable: openRailStudio !== null, inboxAvailable };
+  const railAvailability = {
+    studioAvailable: openRailStudio !== null,
+    inboxAvailable,
+    cloudAvailable,
+  };
   const railVisibleItemIds = buildRailItemOrder({
     order: railItemOrder,
     hidden: hiddenRailItems,
@@ -6840,7 +6857,9 @@ export default function Sidebar() {
   const handleRailItemReorder = (activeId: string, overId: string) => {
     // Same rule as the nav: an unshipped item (Inbox on Stable) stays out of the saved order.
     // Groups keeps its slot, since it is only switched off, not missing from the build.
-    const order = railItemOrder.filter((id) => id !== "inbox" || inboxAvailable);
+    const order = railItemOrder.filter(
+      (id) => (id !== "inbox" || inboxAvailable) && (id !== "cloud" || cloudAvailable),
+    );
     const fromIndex = order.indexOf(activeId as RailOrderableItemId);
     const toIndex = order.indexOf(overId as RailOrderableItemId);
     if (fromIndex < 0 || toIndex < 0) return;

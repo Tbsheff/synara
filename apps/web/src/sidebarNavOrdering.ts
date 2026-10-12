@@ -10,6 +10,7 @@ export const SIDEBAR_NAV_ITEM_IDS = [
   "kanban",
   "tasks",
   "pullRequests",
+  "cloud",
   "automations",
 ] as const;
 

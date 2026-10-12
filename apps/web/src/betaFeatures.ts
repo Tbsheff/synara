@@ -8,6 +8,7 @@ import {
   GROUPS_BETA_FEATURE,
   INBOX_BETA_FEATURE,
   isBetaFeatureEnabled,
+  PROVIDER_CLOUD_BETA_FEATURE,
   PULL_REQUEST_AUTO_FIX_BETA_FEATURE,
 } from "@synara/shared/betaFeatures";
 import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
@@ -41,6 +42,8 @@ export const INBOX_ON = isBetaFeatureOn(INBOX_BETA_FEATURE);
  * Auto-fix CI is available in Stable and Beta; watching a PR remains opt-in.
  */
 export const PULL_REQUEST_AUTO_FIX_ON = isBetaFeatureOn(PULL_REQUEST_AUTO_FIX_BETA_FEATURE);
+
+export const CLOUD_ON = isBetaFeatureOn(PROVIDER_CLOUD_BETA_FEATURE);
 
 /**
  * Provider descriptors with Beta-only providers removed on Stable. A

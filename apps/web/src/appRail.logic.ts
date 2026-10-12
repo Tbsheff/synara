@@ -44,6 +44,7 @@ export const RAIL_ORDERABLE_ITEM_IDS = [
   "kanban",
   "tasks",
   "pullRequests",
+  "cloud",
   "automations",
   "studio",
 ] as const;
@@ -64,7 +65,8 @@ export function railItemCanHide(id: RailOrderableItemId): boolean {
 export function normalizeRailItemOrder(order: readonly string[]): RailOrderableItemId[] {
   const normalized = normalizeIdOrder(order, RAIL_ORDERABLE_ITEM_IDS, isRailOrderableItemId);
   // Inbox shipped after users saved an order: it joins next to Home, as by default.
-  return placeNewIdAfter(normalized, order, "inbox", "home");
+  const withInbox = placeNewIdAfter(normalized, order, "inbox", "home");
+  return placeNewIdAfter(withInbox, order, "cloud", "pullRequests");
 }
 
 export function normalizeHiddenRailItems(hidden: readonly string[]): RailOrderableItemId[] {
@@ -76,12 +78,14 @@ export interface RailAvailability {
   readonly studioAvailable: boolean;
   /** Whether this host offers Inbox. */
   readonly inboxAvailable: boolean;
+  readonly cloudAvailable: boolean;
 }
 
 /** Whether an item exists on this host at all: the rail and its Customize list agree. */
 export function isRailItemAvailable(id: RailOrderableItemId, availability: RailAvailability) {
   if (id === "studio") return availability.studioAvailable;
   if (id === "inbox") return availability.inboxAvailable;
+  if (id === "cloud") return availability.cloudAvailable;
   return true;
 }
 
@@ -187,7 +191,9 @@ export function resolveActiveRailShortcutKey(input: {
  * their page layout.
  */
 export function railItemShowsPanel(id: RailItemId): boolean {
-  return id !== "kanban" && id !== "tasks" && id !== "pullRequests" && id !== "inbox";
+  return (
+    id !== "kanban" && id !== "tasks" && id !== "pullRequests" && id !== "inbox" && id !== "cloud"
+  );
 }
 
 function matchesRoute(pathname: string, route: string): boolean {
@@ -200,6 +206,7 @@ export function railItemForPathname(pathname: string): RailRouteItemId | null {
   if (matchesRoute(pathname, "/kanban")) return "kanban";
   if (matchesRoute(pathname, "/tasks")) return "tasks";
   if (matchesRoute(pathname, "/pull-requests")) return "pullRequests";
+  if (matchesRoute(pathname, "/cloud")) return "cloud";
   if (matchesRoute(pathname, "/automations")) return "automations";
   // The rail item keeps its stored id "studio"; Hubs live at /hubs with legacy redirects.
   if (
