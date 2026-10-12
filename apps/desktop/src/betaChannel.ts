@@ -74,7 +74,7 @@ interface BetaChannelDeps {
   /** Install target for the macOS bundle; defaults to /Applications. */
   readonly installDirOverride?: string | undefined;
   /** Team id the downloaded beta must be signed by; null when unsigned. */
-  readonly expectedTeamId?: ExpectedTeamId | undefined;
+  readonly expectedTeamId?: ExpectedTeamId | (() => Promise<ExpectedTeamId>) | undefined;
   /** Electron userData handed to the launched beta when set. */
   readonly betaUserDataDir?: string | undefined;
   /** Stable's own executable and data home, handed to beta for the way back. */
@@ -517,7 +517,7 @@ export class DesktopBetaChannel {
       const install =
         this.deps.install ??
         ((onProgress: (progress: DesktopBetaInstallProgress) => void) =>
-          installBetaFromFeed(this.installDeps(), onProgress));
+          this.installDeps().then((deps) => installBetaFromFeed(deps, onProgress)));
       try {
         await install((progress) => {
           this.installProgress = progress;
@@ -542,12 +542,14 @@ export class DesktopBetaChannel {
     return action(true);
   }
 
-  private installDeps(): BetaInstallDeps {
+  private async installDeps(): Promise<BetaInstallDeps> {
+    const expectedTeamId = this.deps.expectedTeamId;
     return {
       arch: process.arch,
       installDir: this.deps.installDirOverride ?? "/Applications",
       feedUrlOverride: this.deps.feedUrlOverride,
-      expectedTeamId: this.deps.expectedTeamId ?? null,
+      expectedTeamId:
+        typeof expectedTeamId === "function" ? await expectedTeamId() : (expectedTeamId ?? null),
     };
   }
 

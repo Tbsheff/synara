@@ -111,14 +111,10 @@ import {
   monitorBackendStartupHealth,
   waitForBackendStartupReady,
 } from "./backendStartupReadiness";
+import { createAppTeamIdLookup, readCodesignDetails } from "./appTeamId";
 import { DesktopBetaChannel, readBetaImportResult, resolveBetaHomeDir } from "./betaChannel";
-import type { ExpectedTeamId } from "./betaInstaller";
-import {
-  BetaDiagnostics,
-  readLogTail,
-  resolveBetaDiagnosticsEndpoint,
-  type BetaDiagnosticsEventName,
-} from "./betaDiagnostics";
+import { betaCrashReporterOptions } from "./betaCrashReporter";
+import { BetaDiagnostics, readLogTail, type BetaDiagnosticsEventName } from "./betaDiagnostics";
 import { attachBetaRendererDiagnostics } from "./betaRendererDiagnostics";
 import { guardDesktopWindowClose, showDesktopConfirmDialog } from "./confirmDialog";
 import {
@@ -468,18 +464,13 @@ const betaDiagnostics =
     : null;
 
 if (betaDiagnostics) {
-  crashReporter.start({
-    productName: APP_DISPLAY_NAME,
-    companyName: "Synara",
-    submitURL: `${resolveBetaDiagnosticsEndpoint(process.env)}/v1/crash`,
-    uploadToServer: true,
-    compress: true,
-    globalExtra: {
+  crashReporter.start(
+    betaCrashReporterOptions({
+      productName: APP_DISPLAY_NAME,
       installId: betaDiagnostics.installId,
-      flavor: "beta",
       appVersion: app.getVersion(),
-    },
-  });
+    }),
+  );
 }
 
 const trackBetaDiagnostics = (
@@ -521,6 +512,7 @@ const AUTO_UPDATE_DIAGNOSTICS_TIMEOUT_MS = 2_800;
 // keychain, signature change, wedged SecurityAgent). Startup must not wait on
 // it: session cookies are disposable, a bricked launch is not.
 const BROWSER_SESSION_RESTORE_TIMEOUT_MS = 5_000;
+const OWN_APP_TEAM_ID_DEADLINE_MS = 10_000;
 // User-driven like the menu and renderer reasons, so it must not be filtered
 // out by the automatic-activity suppression a previous install failure arms.
 const UPDATE_CHECK_REASON_MIGRATION_RECOVERY = "migration recovery";
@@ -4878,6 +4870,21 @@ function isMainRendererAvailable(): boolean {
   );
 }
 
+function confirmQuitWithNativeDialog(): Promise<boolean> {
+  nativeQuitConfirmationPromise ??= showDesktopConfirmDialog(
+    `Quit ${APP_DISPLAY_NAME}? Any running chats will stop.`,
+    null,
+  )
+    .catch((error) => {
+      console.warn("[desktop] Failed to confirm app quit", error);
+      return false;
+    })
+    .finally(() => {
+      nativeQuitConfirmationPromise = null;
+    });
+  return nativeQuitConfirmationPromise;
+}
+
 async function confirmRunningChatsThenQuit(reason: string): Promise<void> {
   if (
     !shouldPromptForRunningChatsBeforeQuit(reason) ||
@@ -4892,15 +4899,7 @@ async function confirmRunningChatsThenQuit(reason: string): Promise<void> {
 
   const window = mainWindow;
   if (!isMainRendererAvailable()) {
-    nativeQuitConfirmationPromise ??= showDesktopConfirmDialog(`Quit ${APP_DISPLAY_NAME}?`, null)
-      .catch((error) => {
-        console.warn("[desktop] Failed to confirm app quit", error);
-        return false;
-      })
-      .finally(() => {
-        nativeQuitConfirmationPromise = null;
-      });
-    if (await nativeQuitConfirmationPromise) requestGracefulAppQuit(reason);
+    if (await confirmQuitWithNativeDialog()) requestGracefulAppQuit(reason);
     return;
   }
   const presentation = quitConfirmationPresentationForPlatform();
@@ -4918,6 +4917,7 @@ async function confirmRunningChatsThenQuit(reason: string): Promise<void> {
     },
     isRendererAvailable: isMainRendererAvailable,
     presentation,
+    confirmWithoutRenderer: confirmQuitWithNativeDialog,
   });
   if (!allowed) {
     writeDesktopLogHeader(`${reason} stayed because chats are still running`);
@@ -4930,33 +4930,11 @@ function ownMacAppBundlePath(): string {
   return Path.resolve(process.execPath, "..", "..", "..");
 }
 
-/**
- * Team id of the running app's signature, used to verify a downloaded beta
- * bundle before it is installed. Unsigned builds (dev, local, demo) yield
- * "not set" or a "not signed" exit — the install then skips the check. Any
- * other lookup failure on a packaged app resolves to "unavailable" so the
- * installer fails closed instead of silently skipping verification; a lookup
- * failure must never break startup.
- */
-function ownAppTeamId(): ExpectedTeamId {
-  if (process.platform !== "darwin" || !app.isPackaged) return null;
-  try {
-    const result = ChildProcess.spawnSync(
-      "codesign",
-      ["-dv", "--verbose=4", ownMacAppBundlePath()],
-      { encoding: "utf8" },
-    );
-    if (result.status !== 0) {
-      const output = `${result.stderr ?? ""}\n${result.stdout ?? ""}`;
-      return /not signed|unsigned/i.test(output) ? null : "unavailable";
-    }
-    const teamId = /^TeamIdentifier=(\S+)$/m.exec(result.stderr ?? "")?.[1];
-    if (teamId === undefined) return "unavailable";
-    return teamId === "not set" ? null : teamId;
-  } catch {
-    return "unavailable";
-  }
-}
+const ownAppTeamIdLookup = createAppTeamIdLookup({
+  signedBundle: process.platform === "darwin" && app.isPackaged,
+  readDetails: () => readCodesignDetails(ownMacAppBundlePath(), OWN_APP_TEAM_ID_DEADLINE_MS),
+  deadlineMs: OWN_APP_TEAM_ID_DEADLINE_MS,
+});
 
 /** Only ever trash the packaged beta bundle this process runs from. */
 function isTrashableBetaBundle(): boolean {
@@ -5373,7 +5351,7 @@ function registerIpcHandlers(): void {
             : "production",
     feedUrlOverride: process.env.SYNARA_BETA_FEED_URL,
     installDirOverride: process.env.SYNARA_BETA_INSTALL_DIR,
-    expectedTeamId: ownAppTeamId(),
+    expectedTeamId: ownAppTeamIdLookup.resolve,
     betaUserDataDir: process.env.SYNARA_BETA_USER_DATA,
     stableExecutablePath: desktopFlavor === "production" ? process.execPath : undefined,
     stableHomeDir: desktopFlavor === "production" ? BASE_DIR : undefined,
@@ -5739,6 +5717,7 @@ function createWindow(): BrowserWindow {
       void applyPersistedDesktopAppIcon(window);
     }
     emitDesktopWindowState(window);
+    ownAppTeamIdLookup.prefetch();
   });
 
   window.on("maximize", () => emitDesktopWindowState(window));
@@ -6079,14 +6058,17 @@ async function bootstrap(): Promise<void> {
   );
   try {
     let restoreTimer: NodeJS.Timeout | undefined;
+    const restoreDeadline = new AbortController();
     try {
       await Promise.race([
-        browserSessionRestore.initialize().finally(() => clearTimeout(restoreTimer)),
+        browserSessionRestore
+          .initialize(restoreDeadline.signal)
+          .finally(() => clearTimeout(restoreTimer)),
         new Promise<never>((_, reject) => {
-          restoreTimer = setTimeout(
-            () => reject(new Error("Browser session restoration timed out.")),
-            BROWSER_SESSION_RESTORE_TIMEOUT_MS,
-          );
+          restoreTimer = setTimeout(() => {
+            restoreDeadline.abort();
+            reject(new Error("Browser session restoration timed out."));
+          }, BROWSER_SESSION_RESTORE_TIMEOUT_MS);
         }),
       ]);
     } finally {

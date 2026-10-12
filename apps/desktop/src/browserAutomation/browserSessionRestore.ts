@@ -134,7 +134,7 @@ export class BrowserSessionRestore {
     this.clean = false;
   }
 
-  async initialize(): Promise<void> {
+  async initialize(signal?: AbortSignal): Promise<void> {
     mkdirSync(this.directory, { recursive: true, mode: 0o700 });
     const interrupted = existsSync(this.dirtyPath);
     this.invalidate();
@@ -142,6 +142,12 @@ export class BrowserSessionRestore {
       this.revision++;
       if (this.clean) this.invalidate();
     });
+    const startRevision = this.revision;
+    const ensureRestoreStillWanted = (): void => {
+      if (signal?.aborted) this.available = false;
+      if (signal?.aborted || this.revision !== startRevision)
+        throw new Error("Browser session restoration is unavailable.");
+    };
     // Fresh installs have no sessions to decrypt. Defer OS key creation until an import.
     if (!existsSync(this.snapshotPath)) {
       this.available = true;
@@ -149,6 +155,7 @@ export class BrowserSessionRestore {
     }
     const key = await this.keys.provide();
     key.fill(0);
+    if (signal?.aborted) throw new Error("Browser session restoration is unavailable.");
     this.available = true;
     if (interrupted) {
       await unlink(this.snapshotPath).catch(() => {});
@@ -181,6 +188,7 @@ export class BrowserSessionRestore {
         const cookies = snapshot.cookies.map(sessionCookieParameters);
         if (cookies.some((cookie) => cookie === null))
           throw new Error("Unsupported session snapshot.");
+        ensureRestoreStillWanted();
         await this.backend.restore(cookies as Record<string, unknown>[]);
       } finally {
         dataKey.fill(0);

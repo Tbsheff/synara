@@ -23,9 +23,9 @@ shares stable's data directory or update feed.
   `BETA_ONLY_FEATURES` in `packages/shared/src/betaFeatures.ts`. The code ships in
   both apps; Stable just switches listed features off. Remove the entry to promote
   a feature to Stable. See [Beta-only features](#beta-only-features).
-- **Diagnostics are Beta-only.** Beta sends redacted error events, raw crash
-  dumps, and anonymous usage counts to a private dashboard. Stable sends nothing. See
-  [Diagnostics](#diagnostics).
+- **Diagnostics are Beta-only.** Beta sends redacted error and crash events
+  and anonymous usage counts to a private dashboard. Raw crash dumps stay
+  local. Stable sends nothing. See [Diagnostics](#diagnostics).
 
 ### Release order
 
@@ -324,7 +324,7 @@ visible trail no longer subscribes. First use can request macOS audio access.
 
 ## Diagnostics
 
-Beta builds ship always-on diagnostics — crash reports plus anonymous usage
+Beta builds ship always-on diagnostics — redacted crash events plus anonymous usage
 counts (which providers are used, how many chats and turns) — while stable
 builds contain no sender code at all. See [diagnostics.md](docs/diagnostics.md) for
 exactly what is collected, what usage counters exclude, and how the Cloudflare

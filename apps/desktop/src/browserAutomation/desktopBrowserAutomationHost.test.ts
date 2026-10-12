@@ -181,6 +181,38 @@ const createManager = () => {
   return { manager: manager as unknown as DesktopBrowserManager, raw: manager, webContents };
 };
 
+const commandCount = (webContents: WebContents, method: string) =>
+  (webContents.debugger.sendCommand as ReturnType<typeof vi.fn>).mock.calls.filter(
+    ([called]) => called === method,
+  ).length;
+const cachedEntries = (host: DesktopBrowserAutomationHost) =>
+  (host as unknown as { idempotency: Map<string, unknown> }).idempotency.size;
+
+const screenshotPng = (byteLength: number) => {
+  const png = Buffer.alloc(byteLength);
+  Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).copy(png, 0);
+  png.writeUInt32BE(13, 8);
+  png.write("IHDR", 12, "ascii");
+  png.writeUInt32BE(1024, 16);
+  png.writeUInt32BE(768, 20);
+  return png;
+};
+const withCapturePage = (webContents: WebContents, png: Buffer) => {
+  const capturePage = vi.fn(async () => ({
+    getSize: () => ({ width: 1024, height: 768 }),
+    toPNG: () => png,
+  }));
+  Object.assign(webContents, { capturePage });
+  return capturePage;
+};
+const screenshotRequest = (key: string) => ({
+  sessionId: "session-replay-budget-screenshot",
+  provider: "codex",
+  threadId: THREAD_ID,
+  name: "browser_screenshot" as const,
+  arguments: { idempotencyKey: key },
+});
+
 describe("DesktopBrowserAutomationHost", () => {
   it.each([45000, 60000])(
     "rejects invalid timeout before running the browser (%s)",
@@ -1271,5 +1303,67 @@ describe("DesktopBrowserAutomationHost", () => {
       }),
     ).resolves.toMatchObject({ activeTabId: TAB_ID });
     panelReveal.resolve();
+  });
+
+  describe("idempotent replay cache", () => {
+    const statusRequest = {
+      sessionId: "session-replay-budget",
+      provider: "codex",
+      threadId: THREAD_ID,
+      name: "browser_status" as const,
+      arguments: { idempotencyKey: "status-replay" },
+    };
+    it("evicts the oldest screenshot once retained payloads exceed the byte budget", async () => {
+      const { manager, webContents } = createManager();
+      const capturePage = withCapturePage(webContents, screenshotPng(64 * 1024));
+      const host = new DesktopBrowserAutomationHost(manager, {
+        idempotencyRetainedByteBudget: 128 * 1024,
+      });
+      await host.executeTool(screenshotRequest("shot-1"));
+      await host.executeTool(screenshotRequest("shot-2"));
+      expect(capturePage).toHaveBeenCalledTimes(2);
+
+      await host.executeTool(screenshotRequest("shot-2"));
+      expect(capturePage).toHaveBeenCalledTimes(2);
+      await host.executeTool(screenshotRequest("shot-1"));
+      expect(capturePage).toHaveBeenCalledTimes(3);
+      await host.dispose();
+    });
+
+    it("keeps a tombstone for an evicted page-changing result instead of repeating it", async () => {
+      const { manager, webContents } = createManager();
+      const host = new DesktopBrowserAutomationHost(manager, { idempotencyRetainedByteBudget: 1 });
+      const request = {
+        sessionId: "session-replay-budget-effect",
+        provider: "codex",
+        threadId: THREAD_ID,
+        name: "browser_resize" as const,
+        arguments: { idempotencyKey: "resize-budget", width: 800, height: 600 },
+      };
+      await host.executeTool(request);
+
+      await expect(host.executeTool(request)).rejects.toMatchObject({
+        browserError: { code: "BrowserAmbiguousResult" },
+      });
+      expect(commandCount(webContents, "Emulation.setDeviceMetricsOverride")).toBe(1);
+      await host.dispose();
+    });
+
+    it("drops expired results while automation is idle", async () => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+      try {
+        const { manager } = createManager();
+        const host = new DesktopBrowserAutomationHost(manager);
+        await host.executeTool(statusRequest);
+        expect(cachedEntries(host)).toBe(1);
+
+        await vi.advanceTimersByTimeAsync(15 * 60_000 + 1_000);
+
+        expect(cachedEntries(host)).toBe(0);
+        await host.dispose();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 });
