@@ -569,6 +569,8 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("Compacting context");
     expect(markup).toContain("/central-icons-reversed/arrows-hide.svg");
     expect(markup).toContain("Working for");
+    expect(markup).toMatch(/class="[^"]*grid-rows-\[1fr\][^"]* -mx-1"/);
+    expect(markup).toMatch(/class="[^"]*translate-y-0[^"]* px-1"/);
     expect(markup).not.toContain("h-px flex-1 bg-border");
   });
 

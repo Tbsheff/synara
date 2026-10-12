@@ -438,6 +438,19 @@ describe("MessagesTimeline smooth streaming", () => {
         .toMatch(/^Working for \d+s$/);
       const header = findTurnHeaderLabel()!;
       const numericStyle = getComputedStyle(header).fontVariantNumeric;
+      const liveHeaderLeft = header.getBoundingClientRect().left;
+      const liveHeaderRow = header.closest('[data-timeline-row-kind="working-header"]')!;
+      const dividerLeft = liveHeaderRow.querySelector(".h-px")!.getBoundingClientRect().left;
+      const workIconLeft = host
+        .querySelector('[data-work-entry-icon="true"]')!
+        .getBoundingClientRect().left;
+      expect(dividerLeft - liveHeaderLeft).toBeCloseTo(2, 1);
+      expect(workIconLeft).toBeCloseTo(dividerLeft, 1);
+      for (let ancestor = header.parentElement; ancestor; ancestor = ancestor.parentElement) {
+        if (["hidden", "clip", "auto", "scroll"].includes(getComputedStyle(ancestor).overflowX)) {
+          expect(liveHeaderLeft).toBeGreaterThanOrEqual(ancestor.getBoundingClientRect().left);
+        }
+      }
 
       const sampler = startFrameSampler(() => {
         const label = findTurnHeaderLabel();
@@ -490,6 +503,7 @@ describe("MessagesTimeline smooth streaming", () => {
       }));
       await expect.poll(() => findTurnHeaderLabel()?.textContent ?? "").toMatch(/^Worked for /);
       const settledText = findTurnHeaderLabel()!.textContent!.replace(/\s+/g, " ").trim();
+      expect(findTurnHeaderLabel()!.getBoundingClientRect().left).toBeCloseTo(liveHeaderLeft, 1);
 
       logMetric("timer", {
         numericStyle,

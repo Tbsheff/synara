@@ -2853,7 +2853,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       )}
 
       {row.kind === "working-header" && !conversationOnly && (
-        <DisclosureRegion open={row.closing !== true}>
+        <DisclosureRegion open={row.closing !== true} className="-mx-1" contentClassName="px-1">
           {/* Non-collapsible twin of the settled "Worked for" header: same label
               tone, size, and full-width divider, but counting up live. */}
           <div
