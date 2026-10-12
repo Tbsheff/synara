@@ -249,6 +249,7 @@ interface CodexSessionContext {
   terminalFailure?: SessionTerminalCause;
   /** Transport/process failure initiated teardown, so a later exit remains observable. */
   failureStopping?: boolean;
+  exitReported?: boolean;
   transportError?: Error;
   stopPromise?: Promise<void>;
   teardownError?: Error;
@@ -288,6 +289,14 @@ type CodexDiscoveryOptions = NonNullable<ProviderStartOptions["codex"]>;
 export interface CodexSessionInspection {
   readonly session: ProviderSession;
   readonly codexOptions?: CodexDiscoveryOptions;
+}
+
+export interface CodexSessionExitPayload {
+  readonly exitCode: number | null;
+  readonly signal: NodeJS.Signals | null;
+  readonly exitKind: "graceful" | "error";
+  readonly turnId?: TurnId;
+  readonly causeAlreadyReported?: true;
 }
 
 interface JsonRpcError {
@@ -451,6 +460,7 @@ const CODEX_SPARK_DISABLED_PLAN_TYPES = new Set<CodexPlanType>(["free", "go", "p
 const CODEX_DISCOVERY_SESSION_IDLE_MS = 15_000;
 const CODEX_VOICE_AUTH_CACHE_TTL_MS = 60_000;
 const CODEX_PENDING_SETTLE_DEADLINE_MS = 2_000;
+const CODEX_MAX_PENDING_HUMAN_REQUESTS_PER_SESSION = 64;
 
 // Bounds the best-effort answers written to parked server requests: a child that
 // stopped draining stdin must never hold session teardown hostage.
@@ -1254,6 +1264,30 @@ function codexProcessEnvInputForOptions(
     ...(options?.shadowHomePath ? { shadowHomePath: options.shadowHomePath } : {}),
     ...(options?.accountId ? { accountId: options.accountId } : {}),
   };
+}
+
+type CodexAuthReadMemo = Map<
+  string,
+  { readonly fingerprint: string } | { readonly error: unknown }
+>;
+
+function readCurrentCodexAuthFingerprint(
+  options: CodexDiscoveryOptions | undefined,
+  authReads: CodexAuthReadMemo | undefined,
+): string {
+  if (!authReads) return codexAuthFingerprintForOptions(options);
+  const authKey = codexDiscoveryOptionsCacheKey(options);
+  const earlierRead = authReads.get(authKey);
+  if (earlierRead && "error" in earlierRead) throw earlierRead.error;
+  if (earlierRead) return earlierRead.fingerprint;
+  try {
+    const fingerprint = codexAuthFingerprintForOptions(options);
+    authReads.set(authKey, { fingerprint });
+    return fingerprint;
+  } catch (error) {
+    authReads.set(authKey, { error });
+    throw error;
+  }
 }
 
 function codexAuthFingerprintForOptions(options: CodexDiscoveryOptions | undefined): string {
@@ -3342,8 +3376,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
    */
   inspectSessions(): CodexSessionInspection[] {
     const inspections: CodexSessionInspection[] = [];
+    const authReads: CodexAuthReadMemo = new Map();
     for (const context of this.sessions.values()) {
-      if (!this.isContextAuthCurrent(context)) {
+      if (!this.isContextAuthCurrent(context, authReads)) {
         continue;
       }
 
@@ -3774,15 +3809,15 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     }
   }
 
-  private contextAuthStalenessMessage(context: CodexSessionContext): string | undefined {
+  private contextAuthStalenessMessage(
+    context: CodexSessionContext,
+    authReads?: CodexAuthReadMemo,
+  ): string | undefined {
     if (context.authInvalidation) return context.authInvalidation;
     if (!context.authTracking || context.authFingerprint === undefined) return undefined;
     try {
-      const codexOptions = context.codexOptions;
-      const currentTracking = prepareCodexAuthTracking(
-        codexProcessEnvInputForOptions(codexOptions),
-      );
-      return readCodexPreparedAuthTrackingFingerprint(currentTracking) === context.authFingerprint
+      return readCurrentCodexAuthFingerprint(context.codexOptions, authReads) ===
+        context.authFingerprint
         ? undefined
         : "Codex authentication changed on disk; the stale app-server session was stopped and must be restarted.";
     } catch (error) {
@@ -3794,8 +3829,11 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     }
   }
 
-  private isContextAuthCurrent(context: CodexSessionContext): boolean {
-    return this.contextAuthStalenessMessage(context) === undefined;
+  private isContextAuthCurrent(
+    context: CodexSessionContext,
+    authReads?: CodexAuthReadMemo,
+  ): boolean {
+    return this.contextAuthStalenessMessage(context, authReads) === undefined;
   }
 
   private assertContextAuthCurrent(context: CodexSessionContext): void {
@@ -3829,8 +3867,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   }
 
   private pruneStaleAuthSessions(): void {
+    const authReads: CodexAuthReadMemo = new Map();
     for (const context of this.sessions.values()) {
-      const stalenessMessage = this.contextAuthStalenessMessage(context);
+      const stalenessMessage = this.contextAuthStalenessMessage(context, authReads);
       if (stalenessMessage) this.invalidateContextAuth(context, stalenessMessage);
     }
   }
@@ -3889,9 +3928,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     if (normalizedCwd) {
       for (const activeSession of this.sessions.values()) {
         if (
-          this.isContextInitializedAndRoutable(activeSession) &&
           activeSession.session.cwd === normalizedCwd &&
-          isCompatibleContext(activeSession)
+          isCompatibleContext(activeSession) &&
+          this.isContextInitializedAndRoutable(activeSession)
         ) {
           return activeSession;
         }
@@ -3899,7 +3938,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       return this.getOrCreateDiscoverySession(normalizedCwd, codexOptions, expectedAuthFingerprint);
     }
     const firstActive = Array.from(this.sessions.values()).find(
-      (context) => this.isContextInitializedAndRoutable(context) && isCompatibleContext(context),
+      (context) => isCompatibleContext(context) && this.isContextInitializedAndRoutable(context),
     );
     if (firstActive) {
       return firstActive;
@@ -4010,10 +4049,12 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       account: codexDiscoveryOptionsCacheKey(normalizedCodexOptions),
       auth: authFingerprint,
     });
-    for (const [existingKey, context] of this.discoverySessions) {
-      if (!this.isContextAuthCurrent(context)) {
-        await this.stopDiscoverySession(existingKey);
-      }
+    const authReads: CodexAuthReadMemo = new Map();
+    const staleDiscoveryKeys = Array.from(this.discoverySessions)
+      .filter(([, context]) => !this.isContextAuthCurrent(context, authReads))
+      .map(([existingKey]) => existingKey);
+    for (const existingKey of staleDiscoveryKeys) {
+      await this.stopDiscoverySession(existingKey);
     }
     const startup = this.discoverySessionStartups.get(discoveryKey);
     if (startup) {
@@ -4298,7 +4339,17 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       if (context.stopping && context.failureStopping !== true) {
         return;
       }
+      if (context.exitReported) {
+        return;
+      }
+      context.exitReported = true;
 
+      const activeTurnId = context.session.activeTurnId;
+      const failureReported = context.terminalFailure !== undefined;
+      const exitKind =
+        code !== 0 || signal !== null || activeTurnId !== undefined || failureReported
+          ? "error"
+          : "graceful";
       const message = `codex app-server exited (code=${code ?? "null"}, signal=${signal ?? "null"}).`;
       const exitError = new Error(message);
       const ownedContext = context.discovery
@@ -4315,7 +4366,14 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         lastError: code === 0 ? context.session.lastError : message,
       });
       if (ownedContext) {
-        this.emitLifecycleEvent(context, "session/exited", message);
+        const exit: CodexSessionExitPayload = {
+          exitCode: code,
+          signal,
+          exitKind,
+          ...(activeTurnId !== undefined ? { turnId: activeTurnId } : {}),
+          ...(failureReported ? { causeAlreadyReported: true } : {}),
+        };
+        this.emitLifecycleEvent(context, "session/exited", message, exit);
       }
       // Retire resources promptly while retaining the replacement barrier until
       // teardown settles. Post-exit capture keeps startup failures uncertain.
@@ -4715,6 +4773,32 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     }
   }
 
+  private pendingHumanRequestRefusal(
+    context: CodexSessionContext,
+    jsonRpcId: string | number,
+  ):
+    | { readonly kind: "duplicate" }
+    | { readonly kind: "refuse"; readonly message: string }
+    | undefined {
+    if (context.discovery) {
+      return {
+        kind: "refuse",
+        message: "Synara discovery sessions cannot answer approvals or questions.",
+      };
+    }
+    const pending = [...context.pendingApprovals.values(), ...context.pendingUserInputs.values()];
+    if (pending.some((entry) => entry.jsonRpcId === jsonRpcId)) {
+      return { kind: "duplicate" };
+    }
+    if (pending.length >= CODEX_MAX_PENDING_HUMAN_REQUESTS_PER_SESSION) {
+      return {
+        kind: "refuse",
+        message: `Synara already has ${CODEX_MAX_PENDING_HUMAN_REQUESTS_PER_SESSION} unanswered approvals or questions for this session.`,
+      };
+    }
+    return undefined;
+  }
+
   private async handleServerRequest(
     context: CodexSessionContext,
     request: JsonRpcRequest,
@@ -4781,6 +4865,28 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       return;
     }
     const requestKind = isMcpToolCallApproval ? "tool" : this.requestKindForMethod(request.method);
+    if (requestKind || request.method === "item/tool/requestUserInput") {
+      const refusal = this.pendingHumanRequestRefusal(context, request.id);
+      if (refusal?.kind === "duplicate") {
+        log.warn("ignoring a repeated Codex human-response request id", {
+          threadId: context.session.threadId,
+          method: request.method,
+        });
+        return;
+      }
+      if (refusal) {
+        log.warn("refusing a Codex human-response request", {
+          threadId: context.session.threadId,
+          method: request.method,
+          reason: refusal.message,
+        });
+        await this.writeMessage(context, {
+          id: request.id,
+          error: { code: -32000, message: refusal.message },
+        });
+        return;
+      }
+    }
     let requestId: ApprovalRequestId | undefined;
     const mcpSessionPersistenceAdvertised = isMcpToolCallApproval
       ? [this.readObject(request.params, "_meta")?.persist].flat().includes("session")
@@ -5042,7 +5148,12 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     );
   }
 
-  private emitLifecycleEvent(context: CodexSessionContext, method: string, message: string): void {
+  private emitLifecycleEvent(
+    context: CodexSessionContext,
+    method: string,
+    message: string,
+    payload?: unknown,
+  ): void {
     if (context.discovery) {
       return;
     }
@@ -5060,6 +5171,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         : {}),
       method,
       message,
+      ...(payload !== undefined ? { payload } : {}),
     });
   }
 

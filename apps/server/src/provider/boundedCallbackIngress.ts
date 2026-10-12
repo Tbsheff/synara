@@ -46,6 +46,7 @@ export interface BoundedCallbackIngressOptions<A, P = never> {
   readonly prepareConcurrency?: number;
   /** Coalesce pending metadata checks by origin. A running check never validates later arrivals. */
   readonly prepareKey?: (item: A) => object | undefined;
+  readonly laneKey?: (item: A) => unknown;
 }
 
 type BufferedItem<A, P> = {
@@ -55,6 +56,8 @@ type BufferedItem<A, P> = {
   prepared?: Promise<{ readonly metadata: P } | { readonly cause: unknown }> | undefined;
   preparation?: Preparation<A, P> | undefined;
   discarded?: boolean;
+  readonly laneKey?: unknown;
+  settled?: boolean;
 };
 
 type Preparation<A, P> = {
@@ -93,6 +96,7 @@ export const makeBoundedCallbackIngress = <A, E, R, P = never>(
     const pendingByKey = new Map<object, Preparation<A, P>>();
     const activeKeys = new Set<object>();
     const prepareConcurrency = normalizedPositiveInt(options.prepareConcurrency ?? 1, 1);
+    const hasLanes = options.laneKey !== undefined;
     const pumpPreparation = () => {
       if (!options.prepare || aborted) return;
       for (const group of waitingPreparation) {
@@ -124,7 +128,10 @@ export const makeBoundedCallbackIngress = <A, E, R, P = never>(
       }
     };
     const prepare = (buffered: BufferedItem<A, P>) => {
-      if (!options.prepare) return;
+      if (!options.prepare) {
+        buffered.settled = true;
+        return;
+      }
       const key = options.prepareKey?.(buffered.item!);
       let group = key ? pendingByKey.get(key) : undefined;
       if (!group) {
@@ -139,7 +146,42 @@ export const makeBoundedCallbackIngress = <A, E, R, P = never>(
       group.items.add(buffered);
       buffered.preparation = group;
       buffered.prepared = group.prepared;
+      if (hasLanes) {
+        void group.prepared.then(() => {
+          buffered.settled = true;
+          resumeWaiterWithReadyItem();
+        });
+      }
       pumpPreparation();
+    };
+
+    const takeReadyItem = (): BufferedItem<A, P> | undefined => {
+      const blockedKeys = new Set<unknown>();
+      for (let index = 0; index < buffer.length; index += 1) {
+        const candidate = buffer[index]!;
+        if (blockedKeys.has(candidate.laneKey)) continue;
+        if (candidate.settled) {
+          buffer.splice(index, 1);
+          queuedBytes = Math.max(0, queuedBytes - candidate.bytes);
+          return candidate;
+        }
+        blockedKeys.add(candidate.laneKey);
+      }
+      return undefined;
+    };
+
+    const resumeWaiterWithReadyItem = () => {
+      if (!hasLanes || waiter === undefined) return;
+      const ready = takeReadyItem();
+      if (ready !== undefined) {
+        const resume = waiter;
+        waiter = undefined;
+        resume(Effect.succeed(Option.some(ready)));
+      } else if (!accepting && buffer.length === 0) {
+        const resume = waiter;
+        waiter = undefined;
+        resume(Effect.succeed(Option.none()));
+      }
     };
 
     const discard = (buffered: BufferedItem<A, P>) => {
@@ -156,13 +198,13 @@ export const makeBoundedCallbackIngress = <A, E, R, P = never>(
     };
 
     const take = Effect.callback<Option.Option<BufferedItem<A, P>>>((resume) => {
-      const buffered = buffer.shift();
+      const buffered = hasLanes ? takeReadyItem() : buffer.shift();
       if (buffered !== undefined) {
-        queuedBytes = Math.max(0, queuedBytes - buffered.bytes);
+        if (!hasLanes) queuedBytes = Math.max(0, queuedBytes - buffered.bytes);
         resume(Effect.succeed(Option.some(buffered)));
         return;
       }
-      if (!accepting) {
+      if (!accepting && buffer.length === 0) {
         resume(Effect.succeed(Option.none()));
         return;
       }
@@ -222,8 +264,13 @@ export const makeBoundedCallbackIngress = <A, E, R, P = never>(
         dropped += 1;
         return "dropped";
       }
-      const buffered: BufferedItem<A, P> = { item, bytes, terminal };
-      if (waiter !== undefined) {
+      const buffered: BufferedItem<A, P> = {
+        item,
+        bytes,
+        terminal,
+        ...(hasLanes ? { laneKey: options.laneKey!(item) } : {}),
+      };
+      if (waiter !== undefined && !hasLanes) {
         const resume = waiter;
         waiter = undefined;
         accepted += 1;
@@ -242,6 +289,7 @@ export const makeBoundedCallbackIngress = <A, E, R, P = never>(
         queuedBytes += bytes;
         accepted += 1;
         prepare(buffered);
+        resumeWaiterWithReadyItem();
         return "accepted";
       }
 
@@ -266,6 +314,7 @@ export const makeBoundedCallbackIngress = <A, E, R, P = never>(
       queuedBytes += bytes;
       accepted += 1;
       prepare(buffered);
+      resumeWaiterWithReadyItem();
       return evicted ? "evicted-for-terminal" : "accepted";
     };
 

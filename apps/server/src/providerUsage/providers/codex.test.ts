@@ -3,7 +3,7 @@
 // rotated pair (single-use rotating refresh tokens must never be redeemed without persisting),
 // adoption of out-of-band rotations on `refresh_token_reused`, and the dead-token taxonomy.
 
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import nodePath from "node:path";
 
@@ -326,5 +326,71 @@ describe("codexUsageFetcher", () => {
     const tokens = readAuthFile(authPath).tokens as Record<string, unknown>;
     expect(tokens.access_token).toBe(freshJwt);
     expect(tokens.refresh_token).toBe("rotated-refresh-token");
+  });
+
+  it("does not recreate auth.json when the user logs out before the refresh", async () => {
+    const currentJwt = makeJwt(NOW_MS + 60 * 60 * 1000);
+    const { codexHome, authPath } = makeCodexHome({
+      tokens: { access_token: currentJwt, refresh_token: "refresh-before-logout" },
+    });
+
+    const fetchMock = vi.fn(async (url: string | URL | Request) => {
+      if (String(url).includes("auth.openai.com/oauth/token")) {
+        return jsonResponse({ access_token: makeJwt(NOW_MS + 86_400_000), refresh_token: "x" });
+      }
+      rmSync(authPath);
+      return jsonResponse({ detail: "Unauthorized" }, 401);
+    });
+    stubOutboundFetch(fetchMock);
+
+    const snapshot = await codexUsageFetcher.fetch(makeCtx(codexHome));
+
+    expect(snapshot.status).toBe("needs-auth");
+    expect(existsSync(authPath)).toBe(false);
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("oauth/token"))).toBe(false);
+  });
+
+  it("keeps a new login that replaced auth.json while the refresh was in flight", async () => {
+    const newLoginJwt = makeJwt(NOW_MS + 8 * 24 * 60 * 60 * 1000);
+    const { codexHome, authPath } = makeCodexHome({
+      tokens: {
+        access_token: makeJwt(NOW_MS - 60_000),
+        refresh_token: "old-account-refresh",
+        account_id: "acct-old",
+      },
+    });
+
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      if (String(url).includes("auth.openai.com/oauth/token")) {
+        writeFileSync(
+          authPath,
+          JSON.stringify({
+            tokens: {
+              access_token: newLoginJwt,
+              refresh_token: "new-account-refresh",
+              account_id: "acct-new",
+            },
+          }),
+          "utf8",
+        );
+        return jsonResponse({
+          access_token: makeJwt(NOW_MS + 86_400_000),
+          refresh_token: "old-account-rotated",
+        });
+      }
+      const headers = init?.headers as Record<string, string>;
+      expect(headers.Authorization).toBe(`Bearer ${newLoginJwt}`);
+      expect(headers["ChatGPT-Account-Id"]).toBe("acct-new");
+      return jsonResponse(USAGE_BODY);
+    });
+    stubOutboundFetch(fetchMock);
+
+    const snapshot = await codexUsageFetcher.fetch(makeCtx(codexHome));
+
+    expect(snapshot.status).toBe("ok");
+    const tokens = readAuthFile(authPath).tokens as Record<string, unknown>;
+    expect(tokens.account_id).toBe("acct-new");
+    expect(tokens.refresh_token).toBe("new-account-refresh");
+    expect(tokens.access_token).toBe(newLoginJwt);
   });
 });
