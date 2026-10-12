@@ -49,7 +49,14 @@ export function parsePluginUserInputAnswers(
       throw new Error(`Plugin answer ${questionId} does not match a pending question.`);
     }
     if (typeof answer === "string") {
-      drafts[questionId] = { customAnswer: answer };
+      const label = answer.trim();
+      if (question.options.some((option) => option.label === label)) {
+        drafts[questionId] = { selectedOptionLabels: [label] };
+      } else {
+        if (question.isOther === false && question.options.length > 0)
+          throw new Error(`Plugin answer ${questionId} must only select listed options.`);
+        drafts[questionId] = { customAnswer: answer };
+      }
       continue;
     }
     if (!question.multiSelect || !Array.isArray(answer)) {

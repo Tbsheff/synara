@@ -12,6 +12,7 @@ import type {
   ClaudeCacheObservation,
   ProviderComposerCapabilities,
   ProviderApprovalDecision,
+  ProviderApprovalRule,
   ProviderForkThreadInput,
   ProviderForkThreadResult,
   ProviderKind,
@@ -222,6 +223,7 @@ export interface ProviderAdapterShape<TError> {
     threadId: ThreadId,
     requestId: ApprovalRequestId,
     decision: ProviderApprovalDecision,
+    approvalRule?: ProviderApprovalRule,
   ) => Effect.Effect<void, TError>;
 
   /**

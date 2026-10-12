@@ -2375,3 +2375,33 @@ describe("bounded text edges", () => {
     expect(payloadOf(activity).reasoning).toMatchObject({ heading: "Provider heading" });
   });
 });
+
+it("preserves provider-offered approval scopes in the durable activity", () => {
+  const rule = { type: "command-prefix", prefix: ["git", "status"] };
+  const [activity] = projectProviderRuntimeActivities(
+    runtimeEvent({
+      type: "request.opened",
+      eventId: "scoped-approval",
+      requestId: ApprovalRequestId.makeUnsafe("request-1"),
+      payload: { requestType: "command_execution_approval", args: { approvalRuleOptions: [rule] } },
+    }),
+  );
+  expect(activity?.payload).toMatchObject({ approvalRuleOptions: [rule] });
+});
+
+it("ignores malformed provider approval scopes", () => {
+  const [activity] = projectProviderRuntimeActivities(
+    runtimeEvent({
+      type: "request.opened",
+      eventId: "scoped-approval",
+      requestId: ApprovalRequestId.makeUnsafe("request-1"),
+      payload: {
+        requestType: "command_execution_approval",
+        args: {
+          approvalRuleOptions: [{ type: "network-host", host: "example.com", action: "deny" }],
+        },
+      },
+    }),
+  );
+  expect(activity?.payload).not.toHaveProperty("approvalRuleOptions");
+});

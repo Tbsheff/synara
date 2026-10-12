@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 
 import {
   ApprovalRequestId,
+  ProviderApprovalRule,
   type CommandExecutionDetails,
   type CommandParsedAction,
   EventId,
@@ -26,7 +27,7 @@ import {
   type WebSearchDetails,
 } from "@synara/contracts";
 import { nonEmptyTrimmed, splitsSurrogatePair, unicodeSafeEndOffset } from "@synara/shared/text";
-import { Schema } from "effect";
+import { Option, Schema } from "effect";
 
 import { deriveReasoningHeading } from "./reasoningHeading.ts";
 import {
@@ -1740,6 +1741,12 @@ export function projectProviderRuntimeActivities(
         event.type === "request.opened" ? requestedMcpToolCallPresentation(event) : {};
       const promptFields =
         event.type === "request.opened" ? requestedApprovalPromptFields(event) : {};
+      const approvalRuleOptions =
+        event.type === "request.opened"
+          ? Schema.decodeUnknownOption(Schema.Array(ProviderApprovalRule))(
+              asObject(event.payload.args)?.approvalRuleOptions ?? [],
+            ).pipe(Option.getOrElse(() => []))
+          : [];
       const requestId = nonEmptyTrimmed(event.requestId);
       return [
         {
@@ -1775,6 +1782,7 @@ export function projectProviderRuntimeActivities(
               ...(permissionProfile ? { permissionProfile } : {}),
               ...toolCallPresentation,
               ...promptFields,
+              ...(approvalRuleOptions.length > 0 ? { approvalRuleOptions } : {}),
               ...(canApproveForSession !== undefined
                 ? { sessionApprovalAvailable: canApproveForSession }
                 : {}),

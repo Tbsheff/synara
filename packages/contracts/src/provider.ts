@@ -14,6 +14,7 @@ import {
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   ProviderApprovalDecision,
+  ProviderApprovalRule,
   ProviderApprovalPolicy,
   ProviderInteractionMode,
   ProviderRequestKind,
@@ -195,6 +196,7 @@ export const ProviderRespondToRequestInput = Schema.Struct({
   requestId: ApprovalRequestId,
   lifecycleGeneration: Schema.optional(TrimmedNonEmptyString),
   decision: ProviderApprovalDecision,
+  approvalRule: Schema.optional(ProviderApprovalRule),
 });
 export type ProviderRespondToRequestInput = typeof ProviderRespondToRequestInput.Type;
 

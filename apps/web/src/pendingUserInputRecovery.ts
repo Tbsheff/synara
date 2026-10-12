@@ -29,6 +29,7 @@ const StoredDraft = Schema.Struct({
     Schema.Struct({
       customAnswer: Schema.optionalKey(Schema.String),
       selectedOptionLabels: Schema.optionalKey(Schema.Array(Schema.String)),
+      answerMode: Schema.optionalKey(Schema.Literals(["options", "custom"])),
     }),
   ),
 });
@@ -55,6 +56,7 @@ export function normalizePendingUserInputDrafts(
             ...(answer.selectedOptionLabels
               ? { selectedOptionLabels: [...answer.selectedOptionLabels] }
               : {}),
+            ...(answer.answerMode !== undefined ? { answerMode: answer.answerMode } : {}),
           },
         ]),
       );

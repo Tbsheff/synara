@@ -1272,3 +1272,15 @@ describe("derivePendingUserInputs option previews", () => {
     ]);
   });
 });
+
+it("keeps provider-offered persistent approval scopes after replay", () => {
+  const rule = { type: "network-host", host: "example.com", action: "allow" };
+  const [approval] = derivePendingApprovals([
+    makeActivity({
+      kind: "approval.requested",
+      tone: "approval",
+      payload: { requestId: "request-1", requestKind: "command", approvalRuleOptions: [rule] },
+    }),
+  ]);
+  expect(approval?.approvalRuleOptions).toEqual([rule]);
+});

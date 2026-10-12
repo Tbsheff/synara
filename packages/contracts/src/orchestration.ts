@@ -533,6 +533,19 @@ export const ProviderReviewTarget = Schema.Union([
   }),
 ]);
 export type ProviderReviewTarget = typeof ProviderReviewTarget.Type;
+export const ProviderApprovalRule = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("command-prefix"),
+    prefix: Schema.Array(TrimmedNonEmptyString).check(Schema.isMinLength(1)),
+  }),
+  Schema.Struct({
+    type: Schema.Literal("network-host"),
+    host: TrimmedNonEmptyString,
+    action: Schema.Literal("allow"),
+  }),
+]);
+export type ProviderApprovalRule = typeof ProviderApprovalRule.Type;
+
 export const ProviderApprovalDecision = Schema.Literals([
   "accept",
   "acceptForSession",
@@ -1793,6 +1806,7 @@ const ThreadApprovalRespondCommand = Schema.Struct({
   requestId: ApprovalRequestId,
   lifecycleGeneration: Schema.optional(TrimmedNonEmptyString),
   decision: ProviderApprovalDecision,
+  approvalRule: Schema.optional(ProviderApprovalRule),
   createdAt: IsoDateTime,
 });
 
@@ -2461,6 +2475,7 @@ export const ThreadApprovalResponseRequestedPayload = Schema.Struct({
   requestId: ApprovalRequestId,
   lifecycleGeneration: Schema.optional(TrimmedNonEmptyString),
   decision: ProviderApprovalDecision,
+  approvalRule: Schema.optional(ProviderApprovalRule),
   createdAt: IsoDateTime,
 });
 

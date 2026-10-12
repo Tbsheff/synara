@@ -166,6 +166,34 @@ describe("ComposerPendingApprovalPanel", () => {
     }
   });
 
+  it("announces each new request once in a polite status region and labels the card", async () => {
+    const mounted = await mountApprovalPanel();
+    try {
+      const card = page.getByRole("group", { name: /Approve this command\?/ });
+      await expect.element(card).toBeInTheDocument();
+      expect(card.element().getAttribute("tabindex")).toBe("-1");
+      const status = page.getByRole("status");
+      await expect.element(status).toHaveAttribute("aria-live", "polite");
+      await expect.element(status).toHaveTextContent("Approval needed: Approve this command? Bash");
+      expect(status.element().textContent).not.toContain("bun run test");
+
+      await mounted.rerender({ isResponding: true });
+      await expect.element(status).toHaveTextContent("Approval needed: Approve this command? Bash");
+
+      await mounted.rerender({
+        approval: makeApproval({
+          requestId: ApprovalRequestId.makeUnsafe("approval-test-2"),
+          requestKind: "file-change",
+          detail: 'Write: {"file_path":"notes.md"}',
+        }),
+        isResponding: false,
+      });
+      await expect.element(status).toHaveTextContent("Approval needed: Approve this file change?");
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("renders the request kind prompt and parsed command detail", async () => {
     const requestKind: ProviderRequestKind = "command";
     const mounted = await mountApprovalPanel({

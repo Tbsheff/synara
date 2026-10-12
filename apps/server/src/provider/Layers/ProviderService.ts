@@ -4381,10 +4381,17 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             });
           }
           if (response.kind === "approval") {
+            if (response.input.approvalRule && routed.adapter.provider !== "codex") {
+              return yield* toValidationError(
+                operation,
+                "This provider does not support persistent approval rules.",
+              );
+            }
             yield* routed.adapter.respondToRequest(
               input.threadId,
               input.requestId,
               response.input.decision,
+              ...(response.input.approvalRule ? ([response.input.approvalRule] as const) : []),
             );
             return;
           }

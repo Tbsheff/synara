@@ -47,41 +47,64 @@ export function UserInputQuestionForm({
       (option) => option.preview && selectedOptionLabelSet.has(option.label),
     ) ?? activeQuestion?.options.find((option) => option.preview);
   const autoAdvanceTimerRef = useRef<number | null>(null);
+  const autoAdvanceDraftRef = useRef<PendingUserInputDraftAnswer | null>(null);
   const onAdvanceRef = useRef(onAdvance);
   useEffect(() => {
     onAdvanceRef.current = onAdvance;
   }, [onAdvance]);
 
+  const cancelAutoAdvance = () => {
+    if (autoAdvanceTimerRef.current !== null) {
+      window.clearTimeout(autoAdvanceTimerRef.current);
+      autoAdvanceTimerRef.current = null;
+    }
+    autoAdvanceDraftRef.current = null;
+  };
+  const cancelEffectAutoAdvance = useEffectEvent(cancelAutoAdvance);
+
   // Cancel a pending auto-advance on unmount, and whenever the active question
   // changes or a response is attempted. The version also catches immediate
   // failures whose true/false loading state React batches into a single render.
   useEffect(() => {
-    return () => {
-      if (autoAdvanceTimerRef.current !== null) {
-        window.clearTimeout(autoAdvanceTimerRef.current);
-        autoAdvanceTimerRef.current = null;
+    return () => cancelEffectAutoAdvance();
+  }, [activeQuestion?.id, isResponding, submissionVersion]);
+
+  const activeDraft = progress.activeDraft;
+  useEffect(() => {
+    if (autoAdvanceTimerRef.current !== null && activeDraft !== autoAdvanceDraftRef.current) {
+      cancelEffectAutoAdvance();
+    }
+  }, [activeDraft]);
+  useEffect(() => {
+    const handleFocusIn = (event: FocusEvent) => {
+      if (autoAdvanceTimerRef.current === null) return;
+      const target = event.target;
+      if (
+        target instanceof HTMLElement &&
+        target.closest('input, textarea, [contenteditable]:not([contenteditable="false"])')
+      ) {
+        cancelEffectAutoAdvance();
       }
     };
-  }, [activeQuestion?.id, isResponding, submissionVersion]);
+    document.addEventListener("focusin", handleFocusIn);
+    return () => document.removeEventListener("focusin", handleFocusIn);
+  }, []);
 
   const handleOptionSelection = (questionId: string, optionLabel: string) => {
     const nextDraftAnswer = onToggleOption(questionId, optionLabel);
-    if (!autoAdvance || activeQuestion?.multiSelect) {
+    cancelAutoAdvance();
+    if (!autoAdvance || activeQuestion?.multiSelect || progress.isLastQuestion) {
       return;
     }
-    if (autoAdvanceTimerRef.current !== null) {
-      window.clearTimeout(autoAdvanceTimerRef.current);
-    }
+    autoAdvanceDraftRef.current = nextDraftAnswer;
     autoAdvanceTimerRef.current = window.setTimeout(() => {
       autoAdvanceTimerRef.current = null;
+      autoAdvanceDraftRef.current = null;
       onAdvanceRef.current(nextDraftAnswer ? { [questionId]: nextDraftAnswer } : undefined);
     }, 200);
   };
   const handleCancel = () => {
-    if (autoAdvanceTimerRef.current !== null) {
-      window.clearTimeout(autoAdvanceTimerRef.current);
-      autoAdvanceTimerRef.current = null;
-    }
+    cancelAutoAdvance();
     onCancel?.();
   };
   const handleShortcut = (

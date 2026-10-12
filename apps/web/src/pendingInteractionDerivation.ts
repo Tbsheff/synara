@@ -1,5 +1,6 @@
 import {
   ApprovalRequestId,
+  ProviderApprovalRule,
   CommandParsedAction,
   FileChangeDetails,
   type OrchestrationPendingInteraction,
@@ -7,7 +8,7 @@ import {
   type TurnId,
   type UserInputQuestion,
 } from "@synara/contracts";
-import { Schema } from "effect";
+import { Option, Schema } from "effect";
 import {
   createStalePendingInteractionMatcher,
   isPendingInteractionResponseClaimable,
@@ -29,6 +30,7 @@ export interface PendingApproval {
   detail?: string;
   permissionProfile?: Record<string, unknown>;
   sessionApprovalAvailable?: boolean;
+  approvalRuleOptions?: ReadonlyArray<ProviderApprovalRule>;
   approvalScope?: "computer-task" | "computer-foreground" | "device-task";
   toolName?: string;
   toolParamsDisplay?: ReadonlyArray<PendingToolParamDisplay>;
@@ -300,6 +302,9 @@ export function derivePendingApprovals(
           typeof payload?.sessionApprovalAvailable === "boolean"
             ? payload.sessionApprovalAvailable
             : undefined;
+        const approvalRuleOptions = Schema.decodeUnknownOption(Schema.Array(ProviderApprovalRule))(
+          payload?.approvalRuleOptions ?? [],
+        ).pipe(Option.getOrElse(() => []));
         const toolName = typeof payload?.toolName === "string" ? payload.toolName : undefined;
         const toolParamsDisplay = parseToolParamsDisplay(payload?.toolParamsDisplay);
         const presentation = parseApprovalPresentation(payload);
@@ -319,6 +324,7 @@ export function derivePendingApprovals(
           createdAt: activity.createdAt,
           ...(detail ? { detail } : {}),
           ...(permissionProfile ? { permissionProfile } : {}),
+          ...(approvalRuleOptions.length > 0 ? { approvalRuleOptions } : {}),
           ...(sessionApprovalAvailable !== undefined ? { sessionApprovalAvailable } : {}),
           ...(payload?.approvalScope === "computer-task" || payload?.approvalScope === "device-task"
             ? { approvalScope: payload.approvalScope as "computer-task" | "device-task" }

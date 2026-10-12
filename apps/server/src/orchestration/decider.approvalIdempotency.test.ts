@@ -169,6 +169,32 @@ describe("decider approval idempotency", () => {
     expect(event.type).toBe("thread.approval-response-requested");
   });
 
+  it("keeps the selected persistent rule in the durable response request", async () => {
+    const now = new Date().toISOString();
+    const readModel = await createThreadReadModel(now);
+    const approvalRule = {
+      type: "network-host" as const,
+      host: "example.com",
+      action: "allow" as const,
+    };
+    const result = await Effect.runPromise(
+      decideOrchestrationCommand({
+        command: {
+          type: "thread.approval.respond",
+          commandId: CommandId.makeUnsafe("scoped-response"),
+          threadId: THREAD_ID,
+          requestId: REQUEST_ID,
+          decision: "accept",
+          approvalRule,
+          createdAt: now,
+        },
+        readModel,
+      }),
+    );
+    const event = Array.isArray(result) ? result[0] : result;
+    expect(event.payload).toMatchObject({ approvalRule });
+  });
+
   it("rejects a duplicate response for an already answered request", async () => {
     const now = new Date().toISOString();
     const withThread = await createThreadReadModel(now);

@@ -11,6 +11,7 @@ import { createHash } from "node:crypto";
 import type {
   ModelSelection,
   ProviderApprovalDecision,
+  ProviderApprovalRule,
   ProviderForkThreadResult,
   ProviderRuntimeEvent,
   ProviderSendTurnInput,
@@ -388,6 +389,7 @@ function makeFakeCodexAdapter(
       _threadId: ThreadId,
       _requestId: string,
       _decision: ProviderApprovalDecision,
+      _approvalRule?: ProviderApprovalRule,
     ): Effect.Effect<void, ProviderAdapterError> => Effect.void,
   );
 
@@ -3000,6 +3002,54 @@ routing.layer("ProviderServiceLive routing", (it) => {
       assert.deepEqual(recoveryCall?.resumeCursor, initial.resumeCursor);
 
       yield* provider.stopSession({ threadId });
+    }),
+  );
+
+  it.effect("routes persistent approval rules only to a supported provider", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const approvalRule = { type: "command-prefix" as const, prefix: ["git", "status"] };
+      for (const kind of ["codex", "claudeAgent"] as const) {
+        const threadId = asThreadId(`scoped-rule-${kind}`);
+        yield* provider.startSession(threadId, {
+          provider: kind,
+          threadId,
+          cwd: "/tmp/project",
+          runtimeMode: "approval-required",
+        });
+        const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+        const input = {
+          threadId,
+          requestId: asRequestId("request-rule"),
+          decision: "accept" as const,
+          approvalRule,
+          ...(binding?.lifecycleGeneration
+            ? { lifecycleGeneration: binding.lifecycleGeneration }
+            : {}),
+        };
+        if (kind === "codex") {
+          yield* provider.respondToRequest(input);
+          assert.deepEqual(routing.codex.respondToRequest.mock.calls.at(-1), [
+            threadId,
+            "request-rule",
+            "accept",
+            approvalRule,
+          ]);
+        } else {
+          const count = routing.claude.respondToRequest.mock.calls.length;
+          const result = yield* Effect.result(provider.respondToRequest(input));
+          assertFailure(
+            result,
+            new ProviderValidationError({
+              operation: "ProviderService.respondToRequest",
+              issue: "This provider does not support persistent approval rules.",
+            }),
+          );
+          assert.equal(routing.claude.respondToRequest.mock.calls.length, count);
+        }
+        yield* provider.stopSession({ threadId });
+      }
     }),
   );
 

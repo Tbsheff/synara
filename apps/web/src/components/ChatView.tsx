@@ -1835,7 +1835,11 @@ export default function ChatView({
   const isComposerApprovalState = activePendingApproval !== null;
   const isSidechatExpired = Boolean(activeThread?.sidechatExpiredAt);
   const isComposerEditorDisabled =
-    isConnecting || isComposerApprovalState || pluginOwnsPendingUserInput || isSidechatExpired;
+    isConnecting ||
+    isComposerApprovalState ||
+    pluginOwnsPendingUserInput ||
+    isSidechatExpired ||
+    composerPendingProgress?.activeQuestion?.isOther === false;
   const canCollapsePastedTextToDraft = shouldEnableComposerPastedTextCollapse({
     isComposerApprovalState,
     hasPendingUserInput: pendingUserInputs.length > 0,
@@ -6297,9 +6301,11 @@ export default function ChatView({
                       : pluginOwnsPendingUserInput
                         ? "Answer the question above to continue"
                         : composerPendingProgress
-                          ? composerPendingProgress.activeQuestion?.options.length === 0
-                            ? "Type your answer to continue"
-                            : "Type your own answer, or leave this blank to use the selected option"
+                          ? composerPendingProgress.activeQuestion?.isOther === false
+                            ? "Choose a listed option above"
+                            : composerPendingProgress.activeQuestion?.options.length === 0
+                              ? "Type your answer to continue"
+                              : "Type your own answer, or leave this blank to use the selected option"
                           : showPlanFollowUpPrompt && activeProposedPlan
                             ? "Add feedback to refine the plan, or leave this blank to implement it"
                             : activeThread?.parentThreadId

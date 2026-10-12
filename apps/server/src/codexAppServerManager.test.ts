@@ -5559,6 +5559,35 @@ describe("MCP tool call elicitation approvals", () => {
 });
 
 describe("respondToUserInput", () => {
+  it("rejects unlisted answers without consuming an options-only request", async () => {
+    const { manager, context, writeMessage } = createCollabNotificationHarness();
+    await handleServerRequestForTest(manager, context, {
+      id: 43,
+      method: "item/tool/requestUserInput",
+      params: {
+        threadId: "provider_parent",
+        questions: [
+          {
+            id: "scope",
+            header: "Scope",
+            question: "Choose",
+            isOther: false,
+            options: [{ label: "CLI", description: "CLI" }],
+          },
+        ],
+      },
+    });
+    const pending = [...context.pendingUserInputs.values()][0];
+    expect(pending).toBeDefined();
+    await expect(
+      manager.respondToUserInput(asThreadId("thread_1"), pending.requestId, { scope: "unlisted" }),
+    ).rejects.toThrow("requires a listed option");
+    expect(context.pendingUserInputs.has(pending.requestId)).toBe(true);
+    expect(writeMessage).not.toHaveBeenCalled();
+    await manager.respondToUserInput(asThreadId("thread_1"), pending.requestId, { scope: "CLI" });
+    expect(context.pendingUserInputs.has(pending.requestId)).toBe(false);
+  });
+
   it("serializes canonical answers to Codex native answer objects", async () => {
     const { manager, context, requireSession, writeMessage, emitEvent } =
       createPendingUserInputHarness();
@@ -6998,4 +7027,64 @@ describe.skipIf(!process.env.CODEX_BINARY_PATH)("startSession live Codex resume"
       rmSync(workspaceDir, { recursive: true, force: true });
     }
   }, 300_000);
+});
+
+describe("scoped persistent approval rules", () => {
+  it.each([
+    {
+      rule: { type: "command-prefix" as const, prefix: ["git", "status"] },
+      proposed: { proposedExecpolicyAmendment: ["git", "status"] },
+      native: { acceptWithExecpolicyAmendment: { execpolicy_amendment: ["git", "status"] } },
+    },
+    {
+      rule: { type: "network-host" as const, host: "example.com", action: "allow" as const },
+      proposed: { proposedNetworkPolicyAmendments: [{ host: "example.com", action: "allow" }] },
+      native: {
+        applyNetworkPolicyAmendment: {
+          network_policy_amendment: { host: "example.com", action: "allow" },
+        },
+      },
+    },
+  ])(
+    "sends the provider-offered $rule.type without widening the session",
+    async ({ rule, proposed, native }) => {
+      const { manager, context, writeMessage, emitEvent } = createCollabNotificationHarness();
+      await handleServerRequestForTest(manager, context, {
+        id: 81,
+        method: "item/commandExecution/requestApproval",
+        params: { threadId: "provider_parent", command: "git status", ...proposed },
+      });
+      expect(emitEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          payload: expect.objectContaining({ approvalRuleOptions: [rule] }),
+        }),
+      );
+      const pending = [...context.pendingApprovals.values()][0]!;
+      await manager.respondToRequest(asThreadId("thread_1"), pending.requestId, "accept", rule);
+      expect(writeMessage).toHaveBeenCalledWith(context, { id: 81, result: { decision: native } });
+      expect(context.sessionApprovalOverride).toBeUndefined();
+    },
+  );
+
+  it("rejects a forged rule without consuming the request", async () => {
+    const { manager, context, writeMessage } = createCollabNotificationHarness();
+    await handleServerRequestForTest(manager, context, {
+      id: 81,
+      method: "item/commandExecution/requestApproval",
+      params: {
+        threadId: "provider_parent",
+        command: "git status",
+        proposedExecpolicyAmendment: ["git", "status"],
+      },
+    });
+    const pending = [...context.pendingApprovals.values()][0]!;
+    await expect(
+      manager.respondToRequest(asThreadId("thread_1"), pending.requestId, "accept", {
+        type: "command-prefix",
+        prefix: ["git"],
+      }),
+    ).rejects.toThrow("not offered");
+    expect(context.pendingApprovals.has(pending.requestId)).toBe(true);
+    expect(writeMessage).not.toHaveBeenCalled();
+  });
 });

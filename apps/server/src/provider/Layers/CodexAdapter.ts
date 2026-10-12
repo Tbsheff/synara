@@ -3708,9 +3708,16 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
       threadId,
       requestId,
       decision,
+      approvalRule,
     ) =>
       Effect.tryPromise({
-        try: () => manager.respondToRequest(threadId, requestId, decision),
+        try: () =>
+          manager.respondToRequest(
+            threadId,
+            requestId,
+            decision,
+            ...(approvalRule ? ([approvalRule] as const) : []),
+          ),
         catch: (cause) => toRequestError(threadId, "item/requestApproval/decision", cause),
       });
 

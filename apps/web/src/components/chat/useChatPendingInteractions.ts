@@ -3,6 +3,7 @@ import {
   ThreadId,
   type ApprovalRequestId,
   type ProviderApprovalDecision,
+  type ProviderApprovalRule,
   type ProviderRequestKind,
   type ProviderUserInputAnswers,
 } from "@synara/contracts";
@@ -237,6 +238,7 @@ export function useChatPendingInteractions({
       decision: ProviderApprovalDecision,
       lifecycleGeneration?: string,
       requestKind?: ProviderRequestKind,
+      approvalRule?: ProviderApprovalRule,
     ) => {
       const api = readNativeApi();
       if (!api || !activeThreadId) return;
@@ -249,6 +251,7 @@ export function useChatPendingInteractions({
         threadId: activeThreadId,
         requestId,
         decision,
+        ...(approvalRule ? { approvalRule } : {}),
         lifecycleGeneration,
         requestKind,
         runtimeMode,

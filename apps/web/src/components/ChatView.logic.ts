@@ -13,10 +13,8 @@ import {
   type ModelSlug,
   type OrchestrationThreadActivity,
   type ProviderInstanceId,
-  type ProviderApprovalDecision,
   type ProviderInteractionMode,
   type ProviderKind,
-  type ProviderRequestKind,
   type ProviderStartOptions,
   type RuntimeMode,
   type ServerProviderAuthStatus,
@@ -24,7 +22,6 @@ import {
   type TurnId,
 } from "@synara/contracts";
 import { getDefaultModel, normalizeModelSlug } from "@synara/shared/model";
-import { approvalSessionGrantWidensSessionPolicy } from "@synara/shared/approvalSessionGrant";
 import { buildSynaraBranchName } from "@synara/shared/git";
 import { isGenericChatThreadTitle } from "@synara/shared/chatThreads";
 import { isGenericTerminalThreadTitle } from "@synara/shared/terminalThreads";
@@ -129,33 +126,6 @@ export function hasFileUndoSettled(input: {
     }
     return targetTurnCounts.has(activity.payload.turnCount);
   });
-}
-
-/**
- * "Always allow" (acceptForSession) only auto-approves the live provider turn.
- * Because the client is the source of truth for runtime mode (it sends it with
- * every turn), a supervised thread must also flip to full-access so the choice
- * survives idle-stop and runtime restarts. Auto is different: its AI reviewer
- * remains the durable policy, while acceptForSession applies only to the current
- * live provider session. Returns the runtime mode to persist, or null when
- * nothing changes.
- */
-export function resolveRuntimeModeAfterApprovalDecision(
-  currentRuntimeMode: RuntimeMode,
-  decision: ProviderApprovalDecision,
-  requestKind?: ProviderRequestKind,
-): RuntimeMode | null {
-  // Permission-profile and tool grants are narrower than a runtime-mode
-  // override: the provider remembers that exact permission set or tool, and
-  // widening them here would un-supervise commands and file changes the user
-  // never saw.
-  if (!approvalSessionGrantWidensSessionPolicy(requestKind)) {
-    return null;
-  }
-  if (decision === "acceptForSession" && currentRuntimeMode === "approval-required") {
-    return "full-access";
-  }
-  return null;
 }
 
 export async function commitAfterRuntimeModePersistence(input: {

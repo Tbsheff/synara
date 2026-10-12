@@ -6182,6 +6182,7 @@ const make = Effect.gen(function* () {
           ? { lifecycleGeneration: event.payload.lifecycleGeneration }
           : {}),
         decision: event.payload.decision,
+        ...(event.payload.approvalRule ? { approvalRule: event.payload.approvalRule } : {}),
       })
       .pipe(
         Effect.asVoid,

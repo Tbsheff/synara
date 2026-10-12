@@ -5,6 +5,7 @@ import { userEvent } from "vitest/browser";
 import { render } from "vitest-browser-react";
 import { ComposerPendingUserInputPanel } from "./ComposerPendingUserInputPanel";
 import { AsyncUserInputCard } from "./AsyncUserInputCard";
+import { UserInputQuestionForm } from "./UserInputQuestionForm";
 
 const prompt = {
   requestId: ApprovalRequestId.makeUnsafe("blocking-question"),
@@ -22,6 +23,16 @@ const prompt = {
     },
   ],
 };
+
+const twoQuestionPrompt = {
+  ...prompt,
+  questions: [
+    prompt.questions[0]!,
+    { ...prompt.questions[0]!, id: "followUp", question: "Which follow-up?" },
+  ],
+};
+
+const waitPastAutoAdvance = () => new Promise((resolve) => setTimeout(resolve, 300));
 
 const props = () => ({
   pendingUserInputs: [prompt],
@@ -63,7 +74,9 @@ describe("shared question form with blocking prompts", () => {
 
   it("preserves global digit shortcuts and advances with the newly selected answer", async () => {
     const callbacks = props();
-    await render(<ComposerPendingUserInputPanel {...callbacks} />);
+    await render(
+      <ComposerPendingUserInputPanel {...callbacks} pendingUserInputs={[twoQuestionPrompt]} />,
+    );
     await userEvent.keyboard("2");
     expect(callbacks.onToggleOption).toHaveBeenCalledExactlyOnceWith("question", "Second");
     await expect
@@ -99,6 +112,70 @@ describe("shared question form with blocking prompts", () => {
     await screen.getByRole("button", { name: /Only choice/ }).click();
     await userEvent.keyboard("2");
     expect(callbacks.onToggleOption).not.toHaveBeenCalled();
+  });
+});
+
+describe("auto-advance", () => {
+  it("waits for an explicit submit after choosing the only question's answer", async () => {
+    const callbacks = props();
+    const screen = await render(<ComposerPendingUserInputPanel {...callbacks} />);
+    await screen.getByRole("button", { name: /Second/ }).click();
+    expect(callbacks.onToggleOption).toHaveBeenCalledExactlyOnceWith("question", "Second");
+    await waitPastAutoAdvance();
+    expect(callbacks.onAdvance).not.toHaveBeenCalled();
+  });
+
+  it("advances between questions but waits for submit on the last question", async () => {
+    const callbacks = props();
+    const screen = await render(
+      <ComposerPendingUserInputPanel {...callbacks} pendingUserInputs={[twoQuestionPrompt]} />,
+    );
+    await screen.getByRole("button", { name: /Second/ }).click();
+    await expect
+      .poll(() => callbacks.onAdvance.mock.calls)
+      .toEqual([[{ question: { selectedOptionLabels: ["Second"] } }]]);
+    await screen.rerender(
+      <ComposerPendingUserInputPanel
+        {...callbacks}
+        pendingUserInputs={[twoQuestionPrompt]}
+        questionIndex={1}
+      />,
+    );
+    await screen.getByRole("button", { name: /First/ }).click();
+    expect(callbacks.onToggleOption).toHaveBeenLastCalledWith("followUp", "First");
+    await waitPastAutoAdvance();
+    expect(callbacks.onAdvance).toHaveBeenCalledOnce();
+  });
+
+  it("cancels a pending advance when the answer changes before it fires", async () => {
+    const callbacks = props();
+    const screen = await render(
+      <ComposerPendingUserInputPanel {...callbacks} pendingUserInputs={[twoQuestionPrompt]} />,
+    );
+    await screen.getByRole("button", { name: /Second/ }).click();
+    await screen.rerender(
+      <ComposerPendingUserInputPanel
+        {...callbacks}
+        pendingUserInputs={[twoQuestionPrompt]}
+        answers={{ question: { customAnswer: "Typed instead", answerMode: "custom" } }}
+      />,
+    );
+    await waitPastAutoAdvance();
+    expect(callbacks.onAdvance).not.toHaveBeenCalled();
+  });
+
+  it("cancels a pending advance when a text input receives focus", async () => {
+    const callbacks = props();
+    const screen = await render(
+      <>
+        <UserInputQuestionForm {...callbacks} questions={twoQuestionPrompt.questions} />
+        <textarea aria-label="Composer" />
+      </>,
+    );
+    await screen.getByRole("button", { name: /Second/ }).click();
+    (screen.getByRole("textbox", { name: "Composer" }).element() as HTMLTextAreaElement).focus();
+    await waitPastAutoAdvance();
+    expect(callbacks.onAdvance).not.toHaveBeenCalled();
   });
 });
 

@@ -26,6 +26,7 @@ import {
   ThreadId,
   TurnId,
   type ProviderApprovalDecision,
+  ProviderApprovalRule,
   type ProviderEvent,
   type ProviderSession,
   type ProviderSessionStartInput,
@@ -49,7 +50,7 @@ import {
 } from "@synara/shared/jsonrpc-stdio";
 import { decodeSubagentReceiverThreadIds } from "@synara/shared/subagents";
 import { spawnProcess } from "@synara/shared/processRuntime";
-import { Effect, Semaphore, ServiceMap } from "effect";
+import { Effect, Option, Schema, Semaphore, ServiceMap } from "effect";
 
 import {
   CODEX_CLI_UNPARSEABLE_VERSION_MESSAGE,
@@ -132,6 +133,7 @@ type PendingRequestKey = string;
 type PendingRequest = JsonRpcPendingRequest;
 
 interface PendingApprovalRequest {
+  approvalRules?: ReadonlyArray<ProviderApprovalRule>;
   requestId: ApprovalRequestId;
   jsonRpcId: string | number;
   method:
@@ -156,6 +158,7 @@ function isPermissionApprovalRequest(request: PendingApprovalRequest): boolean {
 }
 
 interface PendingUserInputRequest {
+  questions?: ReadonlyArray<UserInputQuestion>;
   requestId: ApprovalRequestId;
   jsonRpcId: string | number;
   threadId: ThreadId;
@@ -1013,6 +1016,26 @@ function toCodexUserInputAnswers(
  * codex sends none (the UI hides a description identical to the label), and a
  * question with no options is kept as a free-text prompt.
  */
+export function parseCodexApprovalRules(
+  payload: Record<string, unknown> | undefined,
+): ProviderApprovalRule[] {
+  const candidates: unknown[] = [];
+  if (Array.isArray(payload?.proposedExecpolicyAmendment)) {
+    candidates.push({ type: "command-prefix", prefix: payload.proposedExecpolicyAmendment });
+  }
+  if (Array.isArray(payload?.proposedNetworkPolicyAmendments)) {
+    for (const entry of payload.proposedNetworkPolicyAmendments) {
+      const amendment = asObject(entry);
+      if (amendment?.action === "allow")
+        candidates.push({ type: "network-host", host: amendment.host, action: "allow" });
+    }
+  }
+  return candidates.flatMap((candidate) => {
+    const decoded = Schema.decodeUnknownOption(ProviderApprovalRule)(candidate);
+    return Option.isSome(decoded) ? [decoded.value] : [];
+  });
+}
+
 export function parseCodexUserInputQuestions(
   payload: Record<string, unknown> | undefined,
 ): UserInputQuestion[] | undefined {
@@ -1049,6 +1072,7 @@ export function parseCodexUserInputQuestions(
         header,
         question: prompt,
         options,
+        ...(typeof question.isOther === "boolean" ? { isOther: question.isOther } : {}),
         ...(question.multiSelect === true ? { multiSelect: true } : {}),
       },
     ];
@@ -2866,6 +2890,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     context: CodexSessionContext,
     pendingRequest: PendingApprovalRequest,
     decision: ProviderApprovalDecision,
+    approvalRule?: ProviderApprovalRule,
   ): Promise<void> {
     const requestedPermissions = pendingRequest.requestedPermissions ?? {};
     const grantedPermissions = {
@@ -2896,9 +2921,24 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
               scope: decision === "acceptForSession" ? ("session" as const) : ("turn" as const),
             }
           : { decision };
+    const nativeResult = approvalRule
+      ? {
+          decision:
+            approvalRule.type === "command-prefix"
+              ? { acceptWithExecpolicyAmendment: { execpolicy_amendment: approvalRule.prefix } }
+              : {
+                  applyNetworkPolicyAmendment: {
+                    network_policy_amendment: {
+                      host: approvalRule.host,
+                      action: approvalRule.action,
+                    },
+                  },
+                },
+        }
+      : result;
     await this.writeMessage(context, {
       id: pendingRequest.jsonRpcId,
-      result,
+      result: nativeResult,
     });
 
     this.emitEvent({
@@ -2942,6 +2982,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     threadId: ThreadId,
     requestId: ApprovalRequestId,
     decision: ProviderApprovalDecision,
+    approvalRule?: ProviderApprovalRule,
   ): Promise<void> {
     const context = this.requireSession(threadId);
     const pendingRequest = context.pendingApprovals.get(requestId);
@@ -2949,6 +2990,16 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       throw new Error(`Unknown pending approval request: ${requestId}`);
     }
 
+    if (
+      approvalRule &&
+      (decision !== "accept" ||
+        pendingRequest.method !== "item/commandExecution/requestApproval" ||
+        !(pendingRequest.approvalRules ?? []).some(
+          (rule) => JSON.stringify(rule) === JSON.stringify(approvalRule),
+        ))
+    ) {
+      throw new Error("This persistent approval rule was not offered by the provider.");
+    }
     context.pendingApprovals.delete(requestId);
     const isPermissionRequest = isPermissionApprovalRequest(pendingRequest);
     // The session override widens every later approval — commands and file
@@ -2962,7 +3013,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     if (overridesSessionPolicy) {
       context.sessionApprovalOverride = CODEX_ALWAYS_ALLOW_SESSION_TURN_OVERRIDES;
     }
-    await this.resolveApprovalRequest(context, pendingRequest, decision);
+    await this.resolveApprovalRequest(context, pendingRequest, decision, approvalRule);
     if (decision === "cancel" && (isPermissionRequest || pendingRequest.requestKind === "tool")) {
       await this.interruptTurn(threadId, pendingRequest.turnId, pendingRequest.providerThreadId);
     }
@@ -2990,6 +3041,16 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     pendingRequest: PendingUserInputRequest,
     answers: ProviderUserInputAnswers,
   ): Promise<void> {
+    for (const question of pendingRequest.questions ?? []) {
+      if (question.isOther !== false || question.options.length === 0) continue;
+      const answer = answers[question.id];
+      if (answer == null) continue;
+      const values = Array.isArray(answer) ? answer : [answer];
+      const labels = new Set(question.options.map((option) => option.label));
+      if (values.some((value) => !labels.has(value))) {
+        throw new Error(`Question '${question.id}' requires a listed option.`);
+      }
+    }
     const codexAnswers = toCodexUserInputAnswers(answers);
     // The pending entry survives a failed write so the request stays answerable;
     // dropping it first would strand codex on an id nobody can respond to.
@@ -4768,6 +4829,10 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
           ? this.readObject(request.params, "permissions")
           : undefined;
       const pendingRequest: PendingApprovalRequest = {
+        approvalRules:
+          request.method === "item/commandExecution/requestApproval"
+            ? parseCodexApprovalRules(asObject(request.params))
+            : [],
         requestId,
         jsonRpcId: request.id,
         method: request.method as PendingApprovalRequest["method"],
@@ -4796,6 +4861,10 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       context.pendingApprovals.set(requestId, pendingRequest);
     }
 
+    const approvalRuleOptions =
+      request.method === "item/commandExecution/requestApproval"
+        ? parseCodexApprovalRules(asObject(request.params))
+        : [];
     const isUserInputRequest = request.method === "item/tool/requestUserInput";
     // Parsed up front: a request whose questions cannot be rendered must never
     // become a pending entry, because nothing would ever answer its JSON-RPC id.
@@ -4806,6 +4875,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       requestId = ApprovalRequestId.makeUnsafe(randomUUID());
       context.pendingUserInputs.set(requestId, {
         requestId,
+        questions: userInputQuestions,
         jsonRpcId: request.id,
         threadId: context.session.threadId,
         ...(rawRoute.turnId ? { turnId: rawRoute.turnId } : {}),
@@ -4847,9 +4917,11 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       // The composer offers "Always allow this session" unless told otherwise;
       // an MCP approval that did not advertise session persistence cannot honor it.
       payload:
-        isMcpToolCallApproval && mcpSessionPersistenceAdvertised !== true
-          ? { ...asObject(request.params), sessionApprovalAvailable: false }
-          : request.params,
+        approvalRuleOptions.length > 0
+          ? { ...asObject(request.params), approvalRuleOptions }
+          : isMcpToolCallApproval && mcpSessionPersistenceAdvertised !== true
+            ? { ...asObject(request.params), sessionApprovalAvailable: false }
+            : request.params,
     });
 
     if (requestKind) {

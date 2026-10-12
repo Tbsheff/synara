@@ -258,6 +258,22 @@ describe("plugin pending interaction response parsing", () => {
     expect(() => parsePluginApprovalDecision("always", {})).toThrow("approval responses");
   });
 
+  it("accepts listed options and rejects custom text for an options-only question", () => {
+    const optionsOnly = [
+      {
+        id: "scope",
+        header: "Scope",
+        question: "Choose",
+        isOther: false,
+        options: [{ label: "Web", description: "Web" }],
+      },
+    ];
+    expect(parsePluginUserInputAnswers({ scope: "Web" }, optionsOnly)).toEqual({ scope: "Web" });
+    expect(() => parsePluginUserInputAnswers({ scope: "anything" }, optionsOnly)).toThrow(
+      "listed options",
+    );
+  });
+
   it("accepts complete answers for the pending questions", () => {
     expect(
       parsePluginUserInputAnswers({ scope: " Web ", checks: ["Lint", "Tests"] }, questions),
