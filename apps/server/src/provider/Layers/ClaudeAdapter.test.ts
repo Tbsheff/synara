@@ -1319,7 +1319,7 @@ describe("ClaudeAdapterLive", () => {
 
       const createInput = harness.getLastCreateQueryInput();
       assert.deepEqual(createInput?.options.settingSources, ["user", "project", "local"]);
-      assert.equal(createInput?.options.permissionMode, undefined);
+      assert.equal(createInput?.options.permissionMode, "default");
       assert.equal(createInput?.options.allowDangerouslySkipPermissions, undefined);
       const systemPrompt = createInput?.options.systemPrompt;
       if (
@@ -1344,7 +1344,7 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
-  it.effect("keeps explicit claude permission mode over runtime-derived defaults", () => {
+  it.effect("derives the claude permission mode only from the thread runtime mode", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
@@ -1360,8 +1360,47 @@ describe("ClaudeAdapterLive", () => {
       });
 
       const createInput = harness.getLastCreateQueryInput();
-      assert.equal(createInput?.options.permissionMode, "plan");
+      assert.equal(createInput?.options.permissionMode, "bypassPermissions");
+      assert.equal(createInput?.options.allowDangerouslySkipPermissions, true);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("keeps an approval-required thread supervised despite a bypass provider option", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "approval-required",
+        providerOptions: {
+          claudeAgent: {
+            permissionMode: "bypassPermissions",
+          },
+        },
+      });
+
+      const createInput = harness.getLastCreateQueryInput();
+      assert.equal(createInput?.options.permissionMode, "default");
       assert.equal(createInput?.options.allowDangerouslySkipPermissions, undefined);
+
+      for (const input of ["First turn", "Second turn"]) {
+        yield* adapter.sendTurn({ threadId: session.threadId, input, attachments: [] });
+        harness.query.emit({
+          type: "result",
+          subtype: "success",
+          is_error: false,
+          errors: [],
+          session_id: "sdk-session-supervised",
+          uuid: `result-${input}`,
+        } as unknown as SDKMessage);
+        yield* Effect.yieldNow;
+      }
+      assert.notInclude(harness.query.setPermissionModeCalls, "bypassPermissions");
+      assert.include(harness.query.setPermissionModeCalls, "default");
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),

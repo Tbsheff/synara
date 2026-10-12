@@ -52,6 +52,7 @@ import {
   type ThreadTokenUsageSnapshot,
   type ProviderUserInputAnswers,
   type RuntimeContentStreamKind,
+  type RuntimeMode,
   type RuntimeSessionState,
   RuntimeItemId,
   RuntimeRequestId,
@@ -1235,16 +1236,14 @@ function asRuntimeRequestId(value: ApprovalRequestId): RuntimeRequestId {
   return RuntimeRequestId.makeUnsafe(value);
 }
 
-function toPermissionMode(value: unknown): PermissionMode | undefined {
-  switch (value) {
-    case "default":
-    case "acceptEdits":
-    case "bypassPermissions":
-    case "plan":
-    case "dontAsk":
-      return value;
-    default:
-      return undefined;
+function permissionModeForRuntimeMode(runtimeMode: RuntimeMode): PermissionMode {
+  switch (runtimeMode) {
+    case "auto":
+      return "auto";
+    case "full-access":
+      return "bypassPermissions";
+    case "approval-required":
+      return "default";
   }
 }
 
@@ -7049,7 +7048,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
                 } satisfies PermissionResult;
               }
 
-              const runtimeMode = input.runtimeMode ?? "full-access";
+              const runtimeMode = input.runtimeMode;
               const interactionTurnId =
                 context.turnState?.turnId ??
                 (callbackOptions.agentID !== undefined ? context.lastTurnId : undefined);
@@ -7260,11 +7259,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         );
         const effectiveEffort = getEffectiveClaudeCodeEffort(effort);
         const ultracode = effort === "ultracode" && hasEffortLevel(caps, "xhigh");
-        const permissionMode =
-          input.runtimeMode === "auto"
-            ? "auto"
-            : (toPermissionMode(providerOptions?.permissionMode) ??
-              (input.runtimeMode === "full-access" ? "bypassPermissions" : undefined));
+        const permissionMode = permissionModeForRuntimeMode(input.runtimeMode);
         const settings = {
           // Pin only explicit non-native overrides. Otherwise Claude Code owns
           // resolution via server tuning, settings.json, and
