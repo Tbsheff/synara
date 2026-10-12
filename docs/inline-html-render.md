@@ -49,10 +49,14 @@ change does not install or run a screenshot service.
 ```sh
 bun run --cwd packages/shared test src/htmlRender.test.ts src/betaFeatures.test.ts
 bun run --cwd apps/server test src/agentGateway/htmlTools.test.ts src/agentGateway/Layers/AgentGateway.test.ts src/orchestration/Layers/ProjectionSnapshotQuery.test.ts src/agentGateway/computerToolPermission.test.ts
-bun run --cwd apps/web test src/components/chat/MessagesTimeline.logic.test.ts src/workLog.test.ts src/components/ChatMarkdown.test.tsx src/components/chat/MessagesTimeline.test.tsx src/uiFontSize.test.ts
+bun run --cwd apps/web test src/components/chat/MessagesTimeline.logic.test.ts src/workLog.test.ts src/components/ChatMarkdown.test.tsx src/components/HtmlRenderFrame.stable.test.tsx src/components/chat/MessagesTimeline.test.tsx src/uiFontSize.test.ts
 cd apps/web
-VITEST_BROWSER_API_PORT=51227 ../../node_modules/.bin/vitest run --config vitest.browser.config.ts --root . src/components/HtmlRenderFrame.browser.tsx
+VITEST_BROWSER_API_PORT=51227 ../../node_modules/.bin/vitest run --config vitest.browser.config.ts --root . src/components/HtmlRenderFrame.browser.tsx src/components/HtmlRenderFrame.stable.browser.tsx
 ```
 
 Choose an unused browser-test port. Browser checks need a host that can launch
 Chromium; a successful typecheck does not prove the browser sandbox behavior.
+The Stable browser test uses a separate file with a fixed production flavor.
+Vitest snapshots primitive mock exports when it imports browser modules, so a
+getter changed after import cannot switch the desktop flavor. Both browser files
+load the app stylesheet to check the frame size and shared dialog with app styles.

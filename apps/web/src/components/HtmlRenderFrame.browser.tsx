@@ -1,24 +1,11 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import "../index.css";
+
+import { describe, expect, it } from "vitest";
+import { page } from "vitest/browser";
 import { render } from "vitest-browser-react";
 
 import ChatMarkdown from "./ChatMarkdown";
 import { HtmlRenderFrame } from "./HtmlRenderFrame";
-
-const gate = vi.hoisted(() => ({ enabled: true }));
-vi.mock("../betaFeatures", async (importOriginal) => {
-  const original = await importOriginal<typeof import("../betaFeatures")>();
-  return {
-    ...original,
-    get INLINE_HTML_RENDER_ON() {
-      return gate.enabled;
-    },
-  };
-});
-
-afterEach(() => {
-  gate.enabled = true;
-  vi.restoreAllMocks();
-});
 
 describe("inline HTML", () => {
   it("adds Preview after a block settles, defaults to Code, and isolates its scripts", async () => {
@@ -70,6 +57,8 @@ describe("inline HTML", () => {
     );
     try {
       const frame = document.querySelector<HTMLIFrameElement>("iframe")!;
+      expect(getComputedStyle(frame).borderTopWidth).toBe("0px");
+      expect(getComputedStyle(frame).borderBottomWidth).toBe("0px");
       await expect.poll(() => frame.getBoundingClientRect().height).toBe(120);
       const scroller = document.querySelector<HTMLElement>("[data-test-scroller]")!;
       scroller.scrollTop = 100;
@@ -118,11 +107,18 @@ describe("inline HTML", () => {
       <HtmlRenderFrame document={{ title: "Chart", html: "<p>Chart</p>", height: 480 }} />,
     );
     try {
-      await screen.getByRole("button", { name: "Open in panel" }).click();
+      await page.getByTitle("Chart", { exact: true }).hover();
+      const open = screen.getByRole("button", { name: "Open in panel" });
+      await expect.element(open).toBeVisible();
+      await open.click();
+      const dialog = page.getByRole("dialog", { name: "Chart", exact: true });
+      await expect.element(dialog).toBeVisible();
       await expect
         .poll(() => document.querySelector('[role="dialog"] iframe')?.getAttribute("sandbox"))
         .toBe("allow-scripts allow-forms");
-      await screen.getByRole("button", { name: "Close", exact: true }).click();
+      await dialog.getByRole("button", { name: "Close", exact: true }).click();
+      await expect.element(dialog).not.toBeInTheDocument();
+      expect(document.querySelectorAll("iframe")).toHaveLength(1);
     } finally {
       await screen.unmount();
     }
@@ -160,25 +156,6 @@ describe("inline HTML", () => {
       root.classList.toggle("dark", wasDark);
       if (previousStyle === null) root.removeAttribute("style");
       else root.setAttribute("style", previousStyle);
-    }
-  });
-
-  it("keeps saved renders and code previews inert on Stable", async () => {
-    gate.enabled = false;
-    const screen = await render(
-      <>
-        <HtmlRenderFrame document={{ title: "Saved", html: "<p>Saved</p>", height: 480 }} />
-        <ChatMarkdown text={"```html\n<p>Saved</p>\n```"} cwd={undefined} />
-      </>,
-    );
-    try {
-      expect(document.querySelector("iframe")).toBeNull();
-      expect(document.querySelector("[data-html-render-frame]")).toBeNull();
-      expect(
-        document.querySelector(".chat-markdown-codeblock__actions")?.textContent,
-      ).not.toContain("Preview");
-    } finally {
-      await screen.unmount();
     }
   });
 
