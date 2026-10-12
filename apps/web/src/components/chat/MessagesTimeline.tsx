@@ -53,6 +53,8 @@ import {
 import { HubWorkItemCards } from "./group/HubWorkItemCard";
 import { AsyncUserInputCard } from "./AsyncUserInputCard";
 import ChatMarkdown from "../ChatMarkdown";
+import { HtmlRenderFrame } from "../HtmlRenderFrame";
+import { INLINE_HTML_RENDER_ON } from "../../betaFeatures";
 import type { WorkingLabel } from "../ChatView.logic";
 import { InlineLinkChip } from "../InlineLinkChip";
 import {
@@ -2794,6 +2796,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           );
         })()}
 
+      {row.kind === "html-render" && INLINE_HTML_RENDER_ON && (
+        <HtmlRenderFrame document={row.document} />
+      )}
       {row.kind === "proposed-plan" && (
         <div className="min-w-0 py-0.5">
           <ProposedPlanCard
