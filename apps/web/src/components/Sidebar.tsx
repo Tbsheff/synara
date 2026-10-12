@@ -164,7 +164,7 @@ import {
 import {
   createAllThreadsSelector,
   createProjectLastActivityAtSelector,
-  createSidebarDisplayThreadsSelector,
+  createSidebarThreadSummariesSelector,
   createSidebarTreeThreadsSelector,
   isSidebarThreadVisible,
 } from "../storeSelectors";
@@ -3849,6 +3849,7 @@ export default function Sidebar() {
     prewarmThreadDetailForIntent,
     rememberLastThreadRouteNow,
     routeSplitViewId: routeSearch.splitViewId,
+    routeFindQuery: routeSearch.findQuery,
     routeThreadId,
     selectedThreadCount: selectedThreadIds.size,
     setOptimisticActiveThreadId,
@@ -4505,6 +4506,7 @@ export default function Sidebar() {
       renderedChatEntries: visibleEntries,
     };
   }, [activeChatPreviewEntry?.rowId, chatThreadListExtraPages, visibleChatPreviewEntries]);
+  const renderedChatThreadIds = renderedChatEntries.map((entry) => entry.row.thread.id);
   const allStandardProjectsBase = useMemo(
     () =>
       sortedProjects.filter((project) =>
@@ -5594,17 +5596,13 @@ export default function Sidebar() {
     project: (typeof sortedProjects)[number],
     projectSidebarData: SidebarDerivedProjectData,
   ) {
-    const {
-      orderedProjectThreadIds,
-      visibleEntries,
-      threadListExtraPages,
-      canShowMoreThreads,
-      canShowLessThreads,
-    } = projectSidebarData;
+    const { visibleEntries, threadListExtraPages, canShowMoreThreads, canShowLessThreads } =
+      projectSidebarData;
+    const renderedProjectThreadIds = visibleEntries.map((entry) => entry.thread.id);
     return (
       <>
         {visibleEntries.map((entry) =>
-          renderThreadRow(entry.thread, orderedProjectThreadIds, entry.depth),
+          renderThreadRow(entry.thread, renderedProjectThreadIds, entry.depth),
         )}
 
         {(canShowMoreThreads || canShowLessThreads) && (
@@ -7482,7 +7480,7 @@ export default function Sidebar() {
                                     renderedChatEntries.map((entry) =>
                                       renderThreadRow(
                                         entry.row.thread,
-                                        visibleChatThreadIds,
+                                        renderedChatThreadIds,
                                         entry.row.depth,
                                         true,
                                       ),
@@ -8125,8 +8123,8 @@ export default function Sidebar() {
           onOpenProject={handleOpenProjectFromSearch}
           providerInstances={sidebarProviderInstances}
           onImportThread={handleImportThread}
-          onOpenThread={(threadId) => {
-            activateThreadFromSidebarIntent(ThreadId.makeUnsafe(threadId));
+          onOpenThread={(threadId, findQuery) => {
+            activateThreadFromSidebarIntent(ThreadId.makeUnsafe(threadId), findQuery);
           }}
         />
       ) : null}
@@ -8169,15 +8167,13 @@ function SidebarSearchPaletteController(props: {
   onOpenProject: (projectId: string) => void;
   providerInstances: readonly ProviderInstanceOption[];
   onImportThread: (target: ThreadImportTarget, externalId: string) => Promise<void>;
-  onOpenThread: (threadId: string) => void;
+  onOpenThread: (threadId: string, findQuery?: string) => void;
 }) {
   const selectAllThreads = useMemo(() => createAllThreadsSelector(), []);
+  const selectSearchSummaries = useMemo(() => createSidebarThreadSummariesSelector(), []);
   // Search keeps automation-run threads as an intent-driven escape hatch, while
   // structurally nested side chats stay out of standalone thread results.
-  const selectSidebarDisplayThreads = useMemo(
-    () => createSidebarDisplayThreadsSelector({ includeSnoozed: true }),
-    [],
-  );
+
   const importCandidates = useMemo(
     () => buildThreadImportCandidates(props.providerInstances),
     [props.providerInstances],
@@ -8188,7 +8184,8 @@ function SidebarSearchPaletteController(props: {
     ),
   });
   const threads = useStore(selectAllThreads);
-  const sidebarDisplayThreads = useStore(selectSidebarDisplayThreads);
+  const searchSummaries = useStore(selectSearchSummaries);
+
   const importTargets = filterThreadImportTargetsByCapabilities(
     importCandidates,
     importProviderCapabilityQueries.map((query) => query.data),
@@ -8202,7 +8199,12 @@ function SidebarSearchPaletteController(props: {
     const searchProjectById = new Map(
       props.projects.map((project) => [project.id, project] as const),
     );
-    return sidebarDisplayThreads.flatMap((threadSummary) => {
+    return searchSummaries.flatMap((threadSummary) => {
+      if (
+        threadSummary.parentThreadId ||
+        !isSidebarThreadVisible(threadSummary, { includeSnoozed: true })
+      )
+        return [];
       const thread = threadById.get(threadSummary.id);
       if (!thread) {
         return [];
@@ -8220,11 +8222,12 @@ function SidebarSearchPaletteController(props: {
           provider: thread.modelSelection.provider,
           createdAt: thread.createdAt,
           updatedAt: thread.updatedAt,
+          archivedAt: thread.archivedAt,
           messages: searchPaletteMessagesFor(thread),
         },
       ];
     });
-  }, [props.projectById, props.projects, sidebarDisplayThreads, threads]);
+  }, [props.projectById, props.projects, searchSummaries, threads]);
   const searchPaletteThreads = useStableValue(
     rebuiltSearchPaletteThreads,
     areSidebarSearchThreadListsEqual,

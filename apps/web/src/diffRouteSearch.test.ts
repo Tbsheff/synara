@@ -94,3 +94,7 @@ describe("parseDiffRouteSearch", () => {
     });
   });
 });
+
+it("preserves a bounded chat find query from search navigation", () => {
+  expect(parseDiffRouteSearch({ findQuery: "  needle  " })).toEqual({ findQuery: "needle" });
+});

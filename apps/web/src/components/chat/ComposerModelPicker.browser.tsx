@@ -745,7 +745,7 @@ describe("ComposerModelPicker with several accounts", () => {
       // Walking the tabs with the keyboard brings each newly opened one into view.
       strip.scrollLeft = 0;
       for (let step = 0; step < 9; step += 1) {
-        await userEvent.keyboard("{Tab}");
+        await userEvent.keyboard("{Control>}{Tab}{/Control}");
       }
       const openTab = strip.querySelector('[aria-selected="true"]')!;
       await vi.waitFor(() => expect(isInView(openTab)).toBe(true));
@@ -886,4 +886,18 @@ describe("Claude composer budget suffix", () => {
       await screen.unmount();
     },
   );
+});
+
+it("lets plain Tab leave model search without switching providers", async () => {
+  const screen = await mountPicker();
+  try {
+    const input = page.getByRole("searchbox", { name: "Search models" });
+    input.element().focus();
+    const selected = document.querySelector('[role="tab"][aria-selected="true"]');
+    await userEvent.keyboard("{Tab}");
+    expect(document.activeElement).not.toBe(input.element());
+    expect(document.querySelector('[role="tab"][aria-selected="true"]')).toBe(selected);
+  } finally {
+    await screen.unmount();
+  }
 });

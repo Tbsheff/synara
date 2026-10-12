@@ -148,6 +148,8 @@ export function useTodoList(enabled = true) {
   return {
     todos: (query.data ?? EMPTY_TODO_LIST).todos,
     isLoading: query.isLoading,
+    isPending: query.isPending,
+    error: query.error,
     isError: query.isError,
     refetch: query.refetch,
   };

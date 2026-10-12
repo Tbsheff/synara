@@ -36,6 +36,7 @@ export type ThreadActivationControllerInput = {
   prewarmThreadDetailForIntent: (threadId: ThreadId) => void;
   rememberLastThreadRouteNow: (nextLastThreadRoute: LastThreadRoute) => void;
   routeSplitViewId: string | null | undefined;
+  routeFindQuery?: string | undefined;
   routeThreadId: ThreadId | null | undefined;
   selectedThreadCount: number;
   setOptimisticActiveThreadId: (threadId: ThreadId) => void;
@@ -50,6 +51,7 @@ export type ThreadActivationControllerInput = {
 export function activateThreadFromSidebarIntent(
   input: ThreadActivationControllerInput,
   threadId: ThreadId,
+  findQuery?: string,
 ): void {
   const {
     activeSplitView,
@@ -105,15 +107,27 @@ export function activateThreadFromSidebarIntent(
   });
 
   if (activation.kind === "ignore") {
+    if (targetThread && routeThreadId === threadId && (findQuery || input.routeFindQuery)) {
+      void navigate({
+        to: "/$threadId",
+        params: { threadId },
+        search: (previous) => withThreadFindQuery(previous, findQuery),
+      });
+    }
     return;
   }
 
   if (activation.kind === "single") {
-    activateThreadSingle(input, activation.threadId);
+    activateThreadSingle(input, activation.threadId, findQuery);
     return;
   }
 
-  if (routeThreadId === activation.threadId && routeSplitViewId === activation.splitViewId) {
+  if (
+    routeThreadId === activation.threadId &&
+    routeSplitViewId === activation.splitViewId &&
+    !findQuery &&
+    !input.routeFindQuery
+  ) {
     return;
   }
 
@@ -132,7 +146,7 @@ export function activateThreadFromSidebarIntent(
     to: "/$threadId",
     params: { threadId: activation.threadId },
     search: (previous) => ({
-      ...previous,
+      ...withThreadFindQuery(previous, findQuery),
       splitViewId: activation.splitViewId,
     }),
   });
@@ -189,14 +203,18 @@ function activateSidechatDock(
     to: "/$threadId",
     params: { threadId: activation.sourceThreadId },
     search: (previous) => ({
-      ...previous,
+      ...withThreadFindQuery(previous),
       splitViewId: undefined,
     }),
   });
 }
 
 // Opens the target as a single chat while preserving chat-vs-terminal entry point.
-function activateThreadSingle(input: ThreadActivationControllerInput, threadId: ThreadId): void {
+function activateThreadSingle(
+  input: ThreadActivationControllerInput,
+  threadId: ThreadId,
+  findQuery?: string,
+): void {
   if (!input.sidebarThreadSummaryById[threadId]) return;
 
   input.prewarmThreadDetailForIntent(threadId);
@@ -220,14 +238,14 @@ function activateThreadSingle(input: ThreadActivationControllerInput, threadId: 
     to: "/$threadId",
     params: { threadId },
     search: (previous) => ({
-      ...previous,
+      ...withThreadFindQuery(previous, findQuery),
       splitViewId: undefined,
     }),
   });
 }
 
 export function useThreadActivationController(input: ThreadActivationControllerInput): {
-  activateThreadFromSidebarIntent: (threadId: ThreadId) => void;
+  activateThreadFromSidebarIntent: (threadId: ThreadId, findQuery?: string) => void;
 } {
   const {
     activeSplitView,
@@ -239,6 +257,7 @@ export function useThreadActivationController(input: ThreadActivationControllerI
     prewarmThreadDetailForIntent,
     rememberLastThreadRouteNow,
     routeSplitViewId,
+    routeFindQuery,
     routeThreadId,
     selectedThreadCount,
     setOptimisticActiveThreadId,
@@ -249,7 +268,7 @@ export function useThreadActivationController(input: ThreadActivationControllerI
     terminalStateByThreadId,
   } = input;
 
-  const activateThread = (threadId: ThreadId) => {
+  const activateThread = (threadId: ThreadId, findQuery?: string) => {
     activateThreadFromSidebarIntent(
       {
         activeSplitView,
@@ -261,6 +280,7 @@ export function useThreadActivationController(input: ThreadActivationControllerI
         prewarmThreadDetailForIntent,
         rememberLastThreadRouteNow,
         routeSplitViewId,
+        routeFindQuery,
         routeThreadId,
         selectedThreadCount,
         setOptimisticActiveThreadId,
@@ -271,8 +291,19 @@ export function useThreadActivationController(input: ThreadActivationControllerI
         terminalStateByThreadId,
       },
       threadId,
+      findQuery,
     );
   };
 
   return { activateThreadFromSidebarIntent: activateThread };
+}
+
+function withThreadFindQuery<T extends { findQuery?: string | undefined }>(
+  previous: T,
+  findQuery?: string,
+): T {
+  const next = { ...previous };
+  delete next.findQuery;
+  if (findQuery) next.findQuery = findQuery;
+  return next;
 }

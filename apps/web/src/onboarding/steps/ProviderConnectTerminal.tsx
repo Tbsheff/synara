@@ -5,7 +5,9 @@
 // Layer: Web UI component
 
 import type { ProviderKind } from "@synara/contracts";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
+
+import { Button } from "~/components/ui/button";
 
 import ThreadTerminalDrawer from "~/components/ThreadTerminalDrawer";
 import { disposeAndCloseTerminalSession } from "~/components/terminal/terminalSession";
@@ -46,6 +48,8 @@ export function ProviderConnectTerminal(props: {
   }, [openTerminalThreadPage, scopeId, terminalState.terminalOpen]);
 
   const commandStartedRef = useRef(false);
+  const [commandError, setCommandError] = useState<string | null>(null);
+  const [commandAttempt, setCommandAttempt] = useState(0);
   const activeTerminalId = terminalState.activeTerminalId || terminalState.terminalIds[0];
   useEffect(() => {
     if (commandStartedRef.current || !terminalState.terminalOpen || !activeTerminalId) {
@@ -63,13 +67,38 @@ export function ProviderConnectTerminal(props: {
       project: { cwd: props.cwd },
       cwd: props.cwd,
       command: props.signInCommand,
-    }).catch(() => {
-      commandStartedRef.current = false;
+    }).catch((error: unknown) => {
+      setCommandError(
+        error instanceof Error ? error.message : "Could not run the sign-in command.",
+      );
     });
-  }, [activeTerminalId, props.cwd, props.signInCommand, scopeId, terminalState.terminalOpen]);
+  }, [
+    activeTerminalId,
+    commandAttempt,
+    props.cwd,
+    props.signInCommand,
+    scopeId,
+    terminalState.terminalOpen,
+  ]);
 
   return (
     <div className="h-70 overflow-hidden rounded-lg border border-border/70">
+      {commandError ? (
+        <div role="alert" className="flex items-center gap-2 p-2 text-ui-sm text-warning">
+          <span>{commandError}</span>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => {
+              commandStartedRef.current = false;
+              setCommandError(null);
+              setCommandAttempt((attempt) => attempt + 1);
+            }}
+          >
+            Retry
+          </Button>
+        </div>
+      ) : null}
       <ThreadTerminalDrawer
         key={scopeId}
         threadId={scopeId}

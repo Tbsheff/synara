@@ -18,6 +18,7 @@ interface KanbanTaskProjectOption {
 interface KanbanTaskProjectPickerProps {
   readonly projectOptions: ReadonlyArray<KanbanTaskProjectOption>;
   readonly selectedProjectId: ProjectId | null;
+  readonly disabled?: boolean;
   readonly onProjectIdChange: (projectId: ProjectId) => void;
 }
 
@@ -25,6 +26,7 @@ export function KanbanTaskProjectPicker({
   projectOptions,
   selectedProjectId,
   onProjectIdChange,
+  disabled = false,
 }: KanbanTaskProjectPickerProps) {
   const selectedProjectOption =
     projectOptions.find((option) => option.id === selectedProjectId) ?? null;
@@ -33,12 +35,14 @@ export function KanbanTaskProjectPicker({
     <ProjectMenuPicker
       projectOptions={projectOptions}
       selectedProjectId={selectedProjectId}
-      onProjectIdChange={onProjectIdChange}
+      onProjectIdChange={(projectId) => {
+        if (!disabled) onProjectIdChange(projectId);
+      }}
       trigger={
         <Button
           size="xs"
           variant="chrome-outline"
-          disabled={projectOptions.length === 0}
+          disabled={disabled || projectOptions.length === 0}
           aria-label="Choose the project for this task"
           // Override the xs size variant's sm:10px so the project name matches
           // the 12px "New task" title instead of reading smaller.

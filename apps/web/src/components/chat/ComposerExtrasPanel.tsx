@@ -1,3 +1,5 @@
+import { providerSupportsPlanMode } from "~/lib/runtimeMode";
+import type { ProviderKind } from "@synara/contracts";
 // FILE: ComposerExtrasPanel.tsx
 // Purpose: Composer `+` panel — one flat "Add" list (files, frontmost app window, goal, and the
 //   plan / debug / fast toggles) rendered with the shared command-menu panel chrome above the
@@ -63,6 +65,7 @@ function windowGlyph(entry: DesktopAppSnapWindowEntry): ReactNode {
 
 export function ComposerExtrasPanel(props: {
   interactionMode: ProviderInteractionMode;
+  provider?: ProviderKind;
   supportsFastMode: boolean;
   fastModeEnabled: boolean;
   threadId?: ThreadId;
@@ -167,13 +170,17 @@ export function ComposerExtrasPanel(props: {
                 title: "Goal",
                 secondary: "Set a goal to keep pursuing",
               },
-              {
-                id: ROW_PLAN,
-                icon: <ListTodoIcon className={GLYPH} />,
-                title: "Plan mode",
-                secondary: toggleSecondary("plan mode", props.interactionMode === "plan"),
-                trailing: props.interactionMode === "plan" ? CHECK : null,
-              },
+              ...(providerSupportsPlanMode(props.provider ?? "codex")
+                ? [
+                    {
+                      id: ROW_PLAN,
+                      icon: <ListTodoIcon className={GLYPH} />,
+                      title: "Plan mode",
+                      secondary: toggleSecondary("plan mode", props.interactionMode === "plan"),
+                      trailing: props.interactionMode === "plan" ? CHECK : null,
+                    },
+                  ]
+                : []),
               {
                 id: ROW_DEBUG,
                 icon: <BugIcon className={GLYPH} />,

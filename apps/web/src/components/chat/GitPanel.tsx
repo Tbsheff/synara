@@ -101,7 +101,7 @@ function GitFileRow(props: {
       <IconButton
         size="icon-xs"
         variant="ghost"
-        className="shrink-0 opacity-0 group-hover:opacity-100 data-[disabled]:opacity-40"
+        className="shrink-0 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 data-[disabled]:opacity-40"
         label={props.actionLabel}
         tooltip={props.actionLabel}
         disabled={props.actionDisabled}

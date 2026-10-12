@@ -553,8 +553,7 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
         className="w-[min(18.5rem,92vw)] bg-popover/55 [--picker-option-min-h:1.75rem] before:backdrop-blur-3xl before:backdrop-saturate-200"
         {...{ [MODEL_PICKER_POPUP_ATTRIBUTE]: "" }}
         onKeyDownCapture={(event) => {
-          // Tab walks the provider tabs instead of leaving (and closing) the menu.
-          if (event.key !== "Tab") return;
+          if (event.key !== "Tab" || !event.ctrlKey) return;
           event.preventDefault();
           event.stopPropagation();
           cycleTab(event.shiftKey ? -1 : 1);

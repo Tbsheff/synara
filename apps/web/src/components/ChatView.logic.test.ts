@@ -18,6 +18,7 @@ import { deriveLatestTurnErrorContext, type WorkLogEntry } from "../session-logi
 
 import {
   appendVoiceTranscriptToPrompt,
+  describeVoiceRecordingStartError,
   buildCollapsedCursorModelOptionsReset,
   buildTranscriptAutoFollowSignal,
   buildTranscriptTailKey,
@@ -3510,5 +3511,15 @@ describe("resolveTranscriptLiveTurn", () => {
         latestTurnStartedAt: "2026-03-17T19:12:28.000Z",
       }),
     ).toEqual({ showsLiveTurn: false, turnStartedAt: null });
+  });
+});
+
+describe("microphone permission errors", () => {
+  it("gives platform-neutral permission steps", () => {
+    const error = new Error("Permission denied");
+    error.name = "NotAllowedError";
+    expect(describeVoiceRecordingStartError(error)).toBe(
+      "Microphone access was denied. Allow microphone access in your browser or system settings, then try again.",
+    );
   });
 });

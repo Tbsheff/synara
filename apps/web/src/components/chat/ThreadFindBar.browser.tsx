@@ -98,3 +98,21 @@ describe("ThreadFindBar interactions", () => {
     });
   });
 });
+
+it("jumps to the query passed from global chat search", async () => {
+  const onJump = vi.fn();
+  await render(
+    <ThreadFindBar
+      open
+      focusNonce={1}
+      initialQuery="Error"
+      timelineEntries={TIMELINE_ENTRIES}
+      onClose={() => {}}
+      onJump={onJump}
+      onHighlightChange={() => {}}
+      onActiveMatchChange={() => {}}
+    />,
+  );
+  await expect.element(page.getByRole("textbox", { name: "Find in thread" })).toHaveValue("Error");
+  await expect.poll(() => onJump.mock.calls[0]?.[0]?.messageId).toBe("assistant-1");
+});

@@ -26,6 +26,7 @@ import {
 interface ThreadFindBarProps {
   open: boolean;
   focusNonce: number;
+  initialQuery?: string | undefined;
   timelineEntries: readonly TimelineEntry[];
   onClose: () => void;
   onJump: (match: ThreadFindMatch) => void;
@@ -41,6 +42,7 @@ const FIND_STEP_BUTTON_CLASS_NAME =
 export function ThreadFindBar({
   open,
   focusNonce,
+  initialQuery,
   timelineEntries,
   onClose,
   onJump,
@@ -49,6 +51,7 @@ export function ThreadFindBar({
 }: ThreadFindBarProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const matchesRef = useRef<ThreadFindMatch[]>([]);
+  const initialQueryJumped = useRef(false);
   const activeIndexRef = useRef(0);
   const onJumpRef = useRef(onJump);
   const onHighlightChangeRef = useRef(onHighlightChange);
@@ -56,7 +59,7 @@ export function ThreadFindBar({
   onJumpRef.current = onJump;
   onHighlightChangeRef.current = onHighlightChange;
   onActiveMatchChangeRef.current = onActiveMatchChange;
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(initialQuery ?? "");
   const deferredQuery = useDeferredValue(query);
   const [activeIndex, setActiveIndex] = useState(0);
   const [documentTextCache] = useState(createThreadFindDocumentTextCache);
@@ -72,6 +75,12 @@ export function ThreadFindBar({
   const matchCount = matches.length;
   const safeIndex = matchCount === 0 ? -1 : Math.min(Math.max(activeIndex, 0), matchCount - 1);
   const hasQuery = normalizeFindQuery(deferredQuery).length > 0;
+
+  useEffect(() => {
+    if (!open || !initialQuery || initialQueryJumped.current || matches.length === 0) return;
+    initialQueryJumped.current = true;
+    onJumpRef.current(matches[0]!);
+  }, [initialQuery, matches, open]);
 
   useEffect(() => {
     if (!open) {
@@ -94,7 +103,7 @@ export function ThreadFindBar({
   // Query changes jump after their deferred match pass. Streaming transcript
   // rewrites only refresh matches and never yank the viewport mid-read.
   useEffect(() => {
-    if (!open) {
+    if (!open || (initialQuery && deferredQuery === initialQuery)) {
       return;
     }
     const currentMatches = matchesRef.current;
@@ -107,7 +116,7 @@ export function ThreadFindBar({
     if (match) {
       onJumpRef.current(match);
     }
-  }, [deferredQuery, open]);
+  }, [deferredQuery, initialQuery, open]);
 
   useEffect(() => {
     if (!open) {
@@ -242,6 +251,7 @@ export function ThreadFindBar({
 export function ChatThreadFindHost({
   open,
   focusNonce,
+  initialQuery,
   timelineEntries,
   threadId,
   className,
@@ -264,9 +274,10 @@ export function ChatThreadFindHost({
           and keeps the card off the pane borders. */}
       <DisclosureRegion open={open} contentClassName="pointer-events-auto p-3">
         <ThreadFindBar
-          key={threadId}
+          key={`${threadId}:${initialQuery ?? ""}`}
           open={open}
           focusNonce={focusNonce}
+          initialQuery={initialQuery}
           timelineEntries={timelineEntries}
           onClose={onClose}
           onJump={onJump}

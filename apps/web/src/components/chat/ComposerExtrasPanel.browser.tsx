@@ -119,6 +119,7 @@ function appSnapBridge(overrides: {
 }
 
 async function mountMenu(props?: {
+  provider?: "pi" | "antigravity" | "omp";
   fastModeEnabled?: boolean;
   interactionMode?: ProviderInteractionMode;
   supportsFastMode?: boolean;
@@ -133,6 +134,7 @@ async function mountMenu(props?: {
   document.body.append(host);
   const screen = await render(
     <ComposerExtrasPanel
+      provider={props?.provider ?? "codex"}
       panelId="composer-extras-panel"
       interactionMode={props?.interactionMode ?? "default"}
       supportsFastMode={props?.supportsFastMode ?? true}
@@ -479,4 +481,16 @@ describe("ComposerExtrasPanel", () => {
     expect(listWindows).toHaveBeenCalledTimes(2);
     await expect.element(page.getByText("Could not list windows.")).toBeVisible();
   });
+});
+
+it.each(["pi", "antigravity"] as const)("hides Plan for %s", async (provider) => {
+  await using menu = await mountMenu({ provider });
+  expect(document.body.textContent).not.toContain("Plan mode");
+  expect(menu.onInteractionModeChange).not.toHaveBeenCalled();
+});
+
+it("keeps Plan for Oh My Pi", async () => {
+  await using menu = await mountMenu({ provider: "omp" });
+  await page.getByText("Plan mode", { exact: true }).click();
+  expect(menu.onInteractionModeChange).toHaveBeenCalledWith("plan");
 });

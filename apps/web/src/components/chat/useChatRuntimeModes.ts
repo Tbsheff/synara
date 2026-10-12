@@ -10,7 +10,11 @@ import { useCallback, useEffect, useRef } from "react";
 import { newCommandId } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
 import { useComposerDraftStore } from "../../composerDraftStore";
-import { providerModelSupportsAutoRuntimeMode } from "../../lib/runtimeMode";
+import {
+  providerModelSupportsAutoRuntimeMode,
+  providerSupportsPlanMode,
+  providerSupportsApprovalRequiredMode,
+} from "../../lib/runtimeMode";
 import { type Thread } from "../../types";
 import {
   createRuntimeModePersistenceQueue,
@@ -137,9 +141,11 @@ export function useChatRuntimeModes({
   );
   const handleRuntimeModeChange = useCallback(
     (mode: RuntimeMode) => {
+      if (mode === "approval-required" && !providerSupportsApprovalRequiredMode(selectedProvider))
+        return;
       void persistRuntimeModeChange(mode);
     },
-    [persistRuntimeModeChange],
+    [persistRuntimeModeChange, selectedProvider],
   );
 
   useEffect(() => {
@@ -165,6 +171,7 @@ export function useChatRuntimeModes({
 
   const handleInteractionModeChange = useCallback(
     (mode: ProviderInteractionMode) => {
+      if (mode === "plan" && !providerSupportsPlanMode(selectedProvider)) return;
       if (mode === interactionMode) return;
       setComposerDraftInteractionMode(threadId, mode);
       if (isLocalDraftThread) {
@@ -195,6 +202,7 @@ export function useChatRuntimeModes({
     },
     [
       interactionMode,
+      selectedProvider,
       isLocalDraftThread,
       scheduleComposerFocus,
       serverThread,

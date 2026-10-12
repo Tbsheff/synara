@@ -1,9 +1,10 @@
+import { providerSupportsPlanMode } from "~/lib/runtimeMode";
 // FILE: KanbanTaskExtrasMenu.tsx
 // Purpose: Compact plus-menu for kanban task mode/environment toggles.
 // Layer: Kanban UI component
 // Exports: KanbanTaskExtrasMenu
 
-import type { ProviderInteractionMode } from "@synara/contracts";
+import type { ProviderInteractionMode, ProviderKind } from "@synara/contracts";
 
 import {
   ComposerPickerMenuPopup,
@@ -24,9 +25,11 @@ import { BugIcon, ListTodoIcon, MessageCircleIcon, PlusIcon, WorktreeIcon } from
 import type { DraftThreadEnvMode } from "../../composerDraftStore";
 
 interface KanbanTaskExtrasMenuProps {
+  readonly provider: ProviderKind;
   readonly interactionMode: ProviderInteractionMode;
   readonly onInteractionModeChange: (mode: ProviderInteractionMode) => void;
   readonly envMode: DraftThreadEnvMode;
+  readonly environmentDisabled?: boolean;
   readonly onEnvModeChange: (mode: DraftThreadEnvMode) => void;
 }
 
@@ -36,10 +39,12 @@ interface KanbanTaskExtrasMenuProps {
  * composer's ComposerExtrasMenu collapses mode switches behind one `+`.
  */
 export function KanbanTaskExtrasMenu({
+  provider,
   interactionMode,
   onInteractionModeChange,
   envMode,
   onEnvModeChange,
+  environmentDisabled = false,
 }: KanbanTaskExtrasMenuProps) {
   return (
     <Menu>
@@ -62,6 +67,7 @@ export function KanbanTaskExtrasMenu({
             <MenuRadioGroup
               value={interactionMode}
               onValueChange={(value) => {
+                if (value === "plan" && !providerSupportsPlanMode(provider)) return;
                 if (value === "default" || value === "plan" || value === "debug") {
                   onInteractionModeChange(value);
                 }
@@ -73,12 +79,14 @@ export function KanbanTaskExtrasMenu({
                   Default
                 </span>
               </MenuRadioItem>
-              <MenuRadioItem value="plan">
-                <span className="inline-flex items-center gap-2">
-                  <ListTodoIcon className="size-4 shrink-0" />
-                  Plan
-                </span>
-              </MenuRadioItem>
+              {providerSupportsPlanMode(provider) ? (
+                <MenuRadioItem value="plan">
+                  <span className="inline-flex items-center gap-2">
+                    <ListTodoIcon className="size-4 shrink-0" />
+                    Plan
+                  </span>
+                </MenuRadioItem>
+              ) : null}
               <MenuRadioItem value="debug">
                 <span className="inline-flex items-center gap-2">
                   <BugIcon className="size-4 shrink-0" />
@@ -92,18 +100,18 @@ export function KanbanTaskExtrasMenu({
         <MenuRadioGroup
           value={envMode}
           onValueChange={(value) => {
-            if (value === "local" || value === "worktree") {
+            if (!environmentDisabled && (value === "local" || value === "worktree")) {
               onEnvModeChange(value);
             }
           }}
         >
-          <MenuRadioItem value="local">
+          <MenuRadioItem value="local" disabled={environmentDisabled}>
             <span className="inline-flex items-center gap-2">
               <CentralIcon name="macbook-air" className="size-4 shrink-0" />
               Local
             </span>
           </MenuRadioItem>
-          <MenuRadioItem value="worktree">
+          <MenuRadioItem value="worktree" disabled={environmentDisabled}>
             <span className="inline-flex items-center gap-2">
               <WorktreeIcon className="size-4 shrink-0" aria-hidden />
               Worktree

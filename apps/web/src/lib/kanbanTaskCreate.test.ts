@@ -1,4 +1,4 @@
-import { ProjectId } from "@synara/contracts";
+import { ProjectId, ThreadId } from "@synara/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useComposerDraftStore } from "../composerDraftStore";
@@ -68,4 +68,41 @@ describe("Kanban task Debug mode", () => {
       }),
     );
   });
+});
+
+it("updates the same saved draft with edited prompt and attachments", () => {
+  resetComposerDraftStore();
+  const projectId = ProjectId.makeUnsafe("edited-draft-project");
+  const scratchThreadId = ThreadId.makeUnsafe("edited-draft-scratch");
+  const input = {
+    projectId,
+    prompt: "Original",
+    modelSelection: { provider: "codex", model: "gpt-5.4" },
+    runtimeMode: "approval-required",
+    interactionMode: "default",
+    envMode: "local",
+  } as const;
+  const threadId = createKanbanDraftTask(input);
+  const store = useComposerDraftStore.getState();
+  store.setPrompt(scratchThreadId, "Edited prompt");
+  const file = {
+    type: "file" as const,
+    id: "edited-file",
+    name: "note.txt",
+    mimeType: "text/plain",
+    sizeBytes: 4,
+    file: new File(["note"], "note.txt", { type: "text/plain" }),
+  };
+  store.addFiles(scratchThreadId, [file]);
+  expect(
+    createKanbanDraftTask({
+      ...input,
+      threadId,
+      sourceComposerThreadId: scratchThreadId,
+      prompt: "Edited prompt",
+    }),
+  ).toBe(threadId);
+  const saved = useComposerDraftStore.getState().draftsByThreadId[threadId];
+  expect(saved?.prompt).toBe("Edited prompt");
+  expect(saved?.files).toEqual([file]);
 });

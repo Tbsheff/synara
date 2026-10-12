@@ -1,3 +1,4 @@
+import { providerSupportsPlanMode } from "./lib/runtimeMode";
 import {
   PROVIDER_DISPLAY_NAMES,
   THREAD_GOAL_MAX_CHARS,
@@ -506,7 +507,7 @@ export function getAvailableComposerSlashCommands(input: {
           ...(input.canOfferCompactCommand ? (["compact"] as const) : []),
           "model",
           ...(input.supportsFastSlashCommand ? (["fast"] as const) : []),
-          "plan",
+          ...(providerSupportsPlanMode(input.provider) ? (["plan"] as const) : []),
           "debug",
           "default",
           ...(input.canOfferReviewCommand ? (["review"] as const) : []),

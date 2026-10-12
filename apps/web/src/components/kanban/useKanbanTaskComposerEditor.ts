@@ -1,3 +1,4 @@
+import { providerSupportsPlanMode } from "~/lib/runtimeMode";
 // FILE: useKanbanTaskComposerEditor.ts
 // Purpose: Handles kanban task composer insertion, cursor, and menu key behavior.
 // Layer: Kanban UI hook
@@ -305,6 +306,7 @@ export function useKanbanTaskComposerEditor(input: UseKanbanTaskComposerEditorIn
         return;
       }
       if (item.command === "plan" || item.command === "debug" || item.command === "default") {
+        if (item.command === "plan" && !providerSupportsPlanMode(selectedProvider)) return;
         setInteractionMode(item.command);
         applyComposerTriggerReplacement({ snapshot, trigger, base: "" });
       }
@@ -352,7 +354,7 @@ export function useKanbanTaskComposerEditor(input: UseKanbanTaskComposerEditorIn
     key: "ArrowDown" | "ArrowUp" | "Enter" | "Tab" | "Slash",
     event: KeyboardEvent,
   ) => {
-    if (key === "Tab" && event.shiftKey) {
+    if (key === "Tab" && event.shiftKey && providerSupportsPlanMode(selectedProvider)) {
       setInteractionMode((current) => (current === "plan" ? "default" : "plan"));
       return true;
     }

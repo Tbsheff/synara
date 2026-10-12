@@ -2,6 +2,9 @@ import { assert, describe, it } from "vitest";
 
 import {
   areSidebarSearchThreadListsEqual,
+  sidebarImportPlaceholder,
+  canCreateSidebarBrowseFolder,
+  shouldShowSidebarThreadMatchContext,
   buildSidebarSearchServerThreadMatches,
   matchSidebarSearchActions,
   matchSidebarSearchProjects,
@@ -400,4 +403,94 @@ describe("areSidebarSearchThreadListsEqual", () => {
     );
     assert.isFalse(areSidebarSearchThreadListsEqual([thread()], [thread(), thread()]));
   });
+});
+
+it("keeps more than eight matching threads available", () => {
+  const matches = matchSidebarSearchThreads(
+    Array.from({ length: 12 }, (_, i) => ({ ...threads[0]!, id: `many-${i}`, title: "needle" })),
+    "needle",
+  );
+  assert.equal(matches.length, 12);
+});
+
+it("reuses normalized loaded message text across queries", () => {
+  let reads = 0;
+  const message = {
+    get text() {
+      reads += 1;
+      return "needle and thread";
+    },
+  };
+  const input = [{ ...threads[0]!, title: "Other", messages: [message] }];
+  matchSidebarSearchThreads(input, "needle");
+  reads = 0;
+  matchSidebarSearchThreads(input, "thread");
+  assert.equal(reads, 0);
+});
+
+it("names Pi and Oh My Pi import sessions", () => {
+  assert.equal(sidebarImportPlaceholder("pi"), "Paste a Pi session id");
+  assert.equal(sidebarImportPlaceholder("omp"), "Paste an Oh My Pi session id");
+});
+
+it("requires a successful folder listing before offering create", () => {
+  const input = {
+    canBrowse: true,
+    hasHighlightedFolder: false,
+    query: "/existing/folder",
+    hasTrailingSeparator: false,
+    hasExactEntry: false,
+    fetching: false,
+    resolved: false,
+    failed: true,
+  };
+  assert.equal(canCreateSidebarBrowseFolder(input), false);
+  assert.equal(canCreateSidebarBrowseFolder({ ...input, failed: false }), false);
+  assert.equal(canCreateSidebarBrowseFolder({ ...input, resolved: true, failed: false }), true);
+});
+
+it("shows title matches before reading loaded message bodies", () => {
+  const input = [
+    {
+      ...threads[0]!,
+      title: "Needle title",
+      messages: [
+        {
+          get text(): string {
+            throw new Error("Body scan ran during title matching");
+          },
+        },
+      ],
+    },
+  ];
+  assert.equal(
+    matchSidebarSearchThreads(input, "needle", undefined, undefined, "")[0]?.matchKind,
+    "title",
+  );
+});
+
+it("finds archived titles while excluding them from idle recent chats", () => {
+  const input = [{ ...threads[0]!, title: "Needle", archivedAt: "2026-10-01" }];
+  assert.lengthOf(matchSidebarSearchThreads(input, "needle"), 1);
+  assert.lengthOf(matchSidebarSearchThreads(input, ""), 0);
+});
+
+it("keeps the full local body score when merging delayed matches", () => {
+  const input = [
+    { ...threads[0]!, id: "local", title: "Other", messages: [] },
+    { ...threads[0]!, id: "remote", title: "Other", messages: [] },
+  ];
+  const matches = new Map([
+    ["local", { excerpt: "…needle…", matchCount: 1, localScore: 165 }],
+    ["remote", { excerpt: "needle suffix", matchCount: 1 }],
+  ]);
+  assert.equal(
+    matchSidebarSearchThreads(input, "needle", undefined, matches, "")[0]?.thread.id,
+    "local",
+  );
+});
+
+it("shows Archived on a title hit without message context", () => {
+  assert.equal(shouldShowSidebarThreadMatchContext(null, "2026-10-01"), true);
+  assert.equal(shouldShowSidebarThreadMatchContext(null, null), false);
 });

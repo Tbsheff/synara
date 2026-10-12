@@ -27,8 +27,9 @@ export type KanbanDraftDispatchResult =
   /** The board cannot dispatch this card faithfully — open the chat instead. */
   | { kind: "open-thread"; reason: KanbanDraftOpenThreadReason }
   | { kind: "unavailable" }
-  | { kind: "error"; message: string };
+  | { kind: "error"; message: string; outcomeUnknown?: boolean };
 
+export { hasUncertainDraftThreadDispatch } from "./draftThreadDispatch";
 export { resolveDraftThreadDispatchTarget as resolveKanbanDraftDispatchTarget } from "./draftThreadDispatch";
 export type { DraftThreadDispatchTarget as KanbanDraftDispatchTarget } from "./draftThreadDispatch";
 

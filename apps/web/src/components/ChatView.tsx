@@ -35,7 +35,7 @@ import { threadExportBlockedReason } from "@synara/shared/threadExport";
 import { pendingRequestInstanceKey } from "@synara/shared/threadSummary";
 import { deriveAssociatedWorktreeMetadata } from "@synara/shared/threadWorkspace";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useNavigate } from "@tanstack/react-router";
+import { useNavigate, useParams, useSearch } from "@tanstack/react-router";
 import {
   Suspense,
   lazy,
@@ -646,6 +646,9 @@ export default function ChatView({
   } = useComposerOverlayHeight();
   const composerTranscriptInsetPx = composerTranscriptBottomInsetPx(composerOverlayHeightPx);
   const navigate = useNavigate();
+  const routeFindQuery = useSearch({ strict: false, select: (search) => search.findQuery });
+  const routeFindThreadId = useParams({ strict: false, select: (params) => params.threadId });
+  const findQuery = routeFindThreadId === threadId ? routeFindQuery : undefined;
   const { handleNewThread } = useHandleNewThread();
   const { handleNewChat } = useHandleNewChat();
   const { continueThreadHandoff, createThreadHandoff } = useThreadHandoff();
@@ -6184,6 +6187,7 @@ export default function ChatView({
                   <div className={COMPOSER_COMMAND_MENU_FLOATING_WRAPPER_CLASS_NAME}>
                     {composerExtrasPanelOpen ? (
                       <ComposerExtrasPanel
+                        provider={selectedProvider}
                         panelId={COMPOSER_EXTRAS_PANEL_ID}
                         interactionMode={interactionMode}
                         supportsFastMode={composerTraitSelection.caps.supportsFastMode}
@@ -6542,7 +6546,8 @@ export default function ChatView({
           header and the docked Environment panel at the pane's top-right. */}
       {shouldRenderChatPaneContent ? (
         <ChatThreadFindHost
-          open={threadFindOpen}
+          open={threadFindOpen || Boolean(findQuery)}
+          initialQuery={findQuery}
           focusNonce={threadFindFocusNonce}
           timelineEntries={timelineEntries}
           threadId={threadId}
@@ -6550,7 +6555,16 @@ export default function ChatView({
             terminalWorkspaceTerminalTabActive && "invisible",
             !isEditorRail && desktopTopBarWindowControlsGutterClassName,
           )}
-          onClose={() => setThreadFindOpen(false)}
+          onClose={() => {
+            setThreadFindOpen(false);
+            if (findQuery)
+              void navigate({
+                to: "/$threadId",
+                params: { threadId },
+                search: (previous) => ({ ...previous, findQuery: undefined }),
+                replace: true,
+              });
+          }}
           onJump={handleThreadFindJump}
           onHighlightChange={threadFindHighlightStore.set}
           onActiveMatchChange={handleThreadFindActiveMatchChange}

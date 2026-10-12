@@ -103,7 +103,7 @@ export function AutomationPromptField({
       }}
       className={cn(
         HEADING_FIELD_CLASS,
-        "field-sizing-content resize-none whitespace-pre-wrap py-1.5 text-[0.9375rem] leading-relaxed text-muted-foreground placeholder:text-muted-foreground/50 focus-visible:text-foreground",
+        "field-sizing-content resize-none whitespace-pre-wrap py-1.5 text-ui leading-relaxed text-muted-foreground placeholder:text-muted-foreground/50 focus-visible:text-foreground",
       )}
     />
   );

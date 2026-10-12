@@ -60,6 +60,9 @@ import {
   type SidebarSearchTheme,
   type SidebarSearchThread,
   buildSidebarSearchServerThreadMatches,
+  sidebarImportPlaceholder,
+  canCreateSidebarBrowseFolder,
+  shouldShowSidebarThreadMatchContext,
   matchSidebarSearchActions,
   matchSidebarSearchProjects,
   matchSidebarSearchThemes,
@@ -126,7 +129,7 @@ interface SidebarSearchPaletteProps {
   onOpenFeedback: () => void;
   onOpenUsageSettings: () => void;
   onOpenProject: (projectId: string) => void;
-  onOpenThread: (threadId: string) => void;
+  onOpenThread: (threadId: string, findQuery?: string) => void;
   importTargets: readonly ThreadImportTarget[];
   onImportThread: (target: ThreadImportTarget, externalId: string) => Promise<void>;
   onImportProjects: (providers: readonly ProjectImportProvider[]) => void;
@@ -440,18 +443,23 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
     canBrowse && !hasTrailingPathSeparator(query) ? getBrowseLeafPathSegment(query) : "";
   const expandedBrowsePath = canBrowse ? expandHomeInPath(browseDirectoryPath, props.homeDir) : "";
 
-  const { data: browseResult, isFetching: isBrowseFetching } =
-    useQuery<FilesystemBrowseResult | null>({
-      queryKey: ["sidebar-palette-browse", expandedBrowsePath],
-      queryFn: async () => {
-        if (!canBrowse || expandedBrowsePath.length === 0) return null;
-        const api = readNativeApi();
-        if (!api) return null;
-        return await api.filesystem.browse({ partialPath: expandedBrowsePath });
-      },
-      enabled: canBrowse && expandedBrowsePath.length > 0,
-      staleTime: BROWSE_STALE_TIME_MS,
-    });
+  const {
+    data: browseResult,
+    isFetching: isBrowseFetching,
+    error: browseError,
+    refetch: retryBrowse,
+  } = useQuery<FilesystemBrowseResult | null>({
+    queryKey: ["sidebar-palette-browse", expandedBrowsePath],
+    queryFn: async () => {
+      if (!canBrowse || expandedBrowsePath.length === 0) return null;
+      const api = readNativeApi();
+      if (!api) throw new Error("Connection unavailable");
+      return await api.filesystem.browse({ partialPath: expandedBrowsePath });
+    },
+    enabled: canBrowse && expandedBrowsePath.length > 0,
+    retry: false,
+    staleTime: BROWSE_STALE_TIME_MS,
+  });
 
   const browseEntries = browseResult?.entries ?? EMPTY_BROWSE_ENTRIES;
   const lowerFilter = leafSegment.toLowerCase();
@@ -523,6 +531,7 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
     },
     enabled:
       props.open &&
+      props.mode === "search" &&
       !isBrowsing &&
       debouncedThreadQuery.length >= ORCHESTRATION_SEARCH_THREADS_MIN_QUERY_LENGTH,
     staleTime: THREAD_SEARCH_STALE_TIME_MS,
@@ -539,13 +548,53 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
   // Scoring normalizes and scans every message of every thread; keep it keyed
   // on the thread set and query so highlight/keyboard/state re-renders and
   // unrelated store flushes do not rescore the whole workspace.
-  const matchedThreads = useMemo(
-    () =>
-      isBrowsing
-        ? []
-        : matchSidebarSearchThreads(props.threads, query, undefined, serverThreadMatches),
-    [isBrowsing, props.threads, query, serverThreadMatches],
-  );
+  const [localThreadSearch, setLocalThreadSearch] = useState<{
+    query: string;
+    matches: { threadId: string; excerpt: string; matchCount: number; localScore: number }[];
+  } | null>(null);
+  useEffect(() => {
+    if (!props.open || props.mode !== "search" || isBrowsing || !debouncedThreadQuery) return;
+    const scan = () => {
+      const matches = matchSidebarSearchThreads(props.threads, debouncedThreadQuery)
+        .filter((match) => match.matchKind === "message" && match.snippet)
+        .map((match) => ({
+          threadId: match.thread.id,
+          excerpt: match.snippet!,
+          matchCount: match.messageMatchCount,
+          localScore: match.messageScore ?? 132,
+        }));
+      setLocalThreadSearch({ query: debouncedThreadQuery, matches });
+    };
+    if (typeof window.requestIdleCallback === "function") {
+      const idleId = window.requestIdleCallback(scan);
+      return () => window.cancelIdleCallback(idleId);
+    }
+    const timer = window.setTimeout(scan, THREAD_SEARCH_DEBOUNCE_MS);
+    return () => window.clearTimeout(timer);
+  }, [props.open, props.mode, props.threads, isBrowsing, debouncedThreadQuery]);
+  const matchedThreads = useMemo(() => {
+    if (isBrowsing || props.mode !== "search") return [];
+    const combined = new Map(serverThreadMatches);
+    if (localThreadSearch?.query === trimmedQuery) {
+      for (const [id, match] of buildSidebarSearchServerThreadMatches(
+        localThreadSearch,
+        trimmedQuery,
+      )) {
+        combined.set(id, match);
+      }
+    }
+    return matchSidebarSearchThreads(props.threads, query, undefined, combined, "");
+  }, [
+    isBrowsing,
+    props.mode,
+    props.threads,
+    query,
+    trimmedQuery,
+    serverThreadMatches,
+    localThreadSearch,
+  ]);
+  const [threadPage, setThreadPage] = useState({ query: "", limit: 20 });
+  const threadResultLimit = threadPage.query === query ? threadPage.limit : 20;
   const hasSearchResults =
     matchedActions.length > 0 ||
     themeCommandItems.length > 0 ||
@@ -554,16 +603,7 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
     matchedProjects.length > 0 ||
     matchedThreads.length > 0;
   const importFieldLabel = importProvider === "codex" ? "Thread ID" : "Session ID";
-  const importPlaceholder =
-    importProvider === "claudeAgent"
-      ? "Paste a Claude session id"
-      : importProvider === "cursor"
-        ? "Paste a Cursor session id"
-        : importProvider === "droid"
-          ? "Paste a Droid session id"
-          : importProvider === "opencode"
-            ? "Paste an OpenCode session id"
-            : "Paste a Codex thread id";
+  const importPlaceholder = sidebarImportPlaceholder(importProvider);
 
   const hasHighlightedFolderItem =
     highlightedItemValue !== null && highlightedItemValue.startsWith("folder:");
@@ -574,13 +614,16 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
     ? (highlightedItemValue?.slice("folder:".length) ?? null)
     : null;
 
-  const willCreateMissingFolder =
-    canBrowse &&
-    !hasHighlightedFolderItem &&
-    trimmedQuery.length > 0 &&
-    !hasTrailingPathSeparator(query) &&
-    exactBrowseEntry === null &&
-    !isBrowseFetching;
+  const willCreateMissingFolder = canCreateSidebarBrowseFolder({
+    canBrowse,
+    hasHighlightedFolder: hasHighlightedFolderItem,
+    query,
+    hasTrailingSeparator: hasTrailingPathSeparator(query),
+    hasExactEntry: exactBrowseEntry !== null,
+    fetching: isBrowseFetching,
+    resolved: browseResult != null,
+    failed: Boolean(browseError),
+  });
 
   const browseSubmitLabel = willCreateMissingFolder ? "Create & Add" : "Add";
 
@@ -596,6 +639,10 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
 
   const submitBrowsePath = async () => {
     if (isAddingProject) return;
+    if (canBrowse && (browseError || !browseResult || isBrowseFetching)) {
+      setAddProjectError("Wait for the folder listing or retry it.");
+      return;
+    }
     if (trimmedQuery.length === 0 && !highlightedFolderPath) {
       setAddProjectError("Enter a folder path.");
       return;
@@ -1017,77 +1064,99 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                     <CommandGroupLabel className={PALETTE_GROUP_LABEL_CLASS}>
                       <span>{query ? "Threads" : "Recent chats"}</span>
                     </CommandGroupLabel>
-                    {matchedThreads.map(({ id, matchKind, messageMatchCount, snippet, thread }) => {
-                      const matchLabel = threadMatchLabel({ matchKind, messageMatchCount });
-                      const normalizedQuery = trimmedQuery.replaceAll(/\s+/g, " ").toLowerCase();
-                      const matchContext =
-                        snippet ??
-                        (matchKind === "project"
-                          ? [
-                              ...new Set([
-                                thread.projectName,
-                                thread.projectRemoteName,
-                                thread.spaceName,
-                              ]),
-                            ]
-                              .filter((name) =>
-                                name
-                                  .trim()
-                                  .replaceAll(/\s+/g, " ")
-                                  .toLowerCase()
-                                  .includes(normalizedQuery),
-                              )
-                              .join(" · ")
-                          : null);
-                      return (
-                        <CommandItem
-                          key={id}
-                          value={id}
-                          className={cn(PALETTE_ITEM_CLASS, matchContext ? "py-1" : undefined)}
-                          onMouseDown={(event) => {
-                            event.preventDefault();
-                          }}
-                          onClick={() => {
-                            props.onOpenChange(false);
-                            props.onOpenThread(thread.id);
-                          }}
-                        >
-                          <span className="flex size-3.5 shrink-0 items-center justify-center">
-                            {isGenericChatThreadTitle(thread.title) ? null : (
-                              <SharedProviderIcon
-                                provider={thread.provider}
-                                className={PALETTE_ICON_CLASS}
-                              />
-                            )}
-                          </span>
-                          <div className="min-w-0 flex-1">
-                            <div className="flex items-baseline gap-3">
-                              <div className={PALETTE_TEXT_CLASS}>
-                                <HighlightedText
-                                  text={thread.title || "Untitled thread"}
-                                  query={query}
+                    {matchedThreads
+                      .slice(0, threadResultLimit)
+                      .map(({ id, matchKind, messageMatchCount, snippet, thread }) => {
+                        const matchLabel = [
+                          thread.archivedAt ? "Archived" : null,
+                          threadMatchLabel({ matchKind, messageMatchCount }),
+                        ]
+                          .filter(Boolean)
+                          .join(" · ");
+                        const normalizedQuery = trimmedQuery.replaceAll(/\s+/g, " ").toLowerCase();
+                        const matchContext =
+                          snippet ??
+                          (matchKind === "project"
+                            ? [
+                                ...new Set([
+                                  thread.projectName,
+                                  thread.projectRemoteName,
+                                  thread.spaceName,
+                                ]),
+                              ]
+                                .filter((name) =>
+                                  name
+                                    .trim()
+                                    .replaceAll(/\s+/g, " ")
+                                    .toLowerCase()
+                                    .includes(normalizedQuery),
+                                )
+                                .join(" · ")
+                            : null);
+                        return (
+                          <CommandItem
+                            key={id}
+                            value={id}
+                            className={cn(PALETTE_ITEM_CLASS, matchContext ? "py-1" : undefined)}
+                            onMouseDown={(event) => {
+                              event.preventDefault();
+                            }}
+                            onClick={() => {
+                              props.onOpenChange(false);
+                              if (matchKind === "message")
+                                props.onOpenThread(thread.id, trimmedQuery);
+                              else props.onOpenThread(thread.id);
+                            }}
+                          >
+                            <span className="flex size-3.5 shrink-0 items-center justify-center">
+                              {isGenericChatThreadTitle(thread.title) ? null : (
+                                <SharedProviderIcon
+                                  provider={thread.provider}
+                                  className={PALETTE_ICON_CLASS}
                                 />
-                              </div>
-                              {/* Keep the idle row compact; metadata search context appears below. */}
-                              <span className={PALETTE_META_CLASS}>{thread.projectName}</span>
-                            </div>
-                            {matchContext ? (
-                              <div className="flex items-start gap-3">
-                                <div className="min-w-0 flex-1 line-clamp-1 text-ui-meta leading-4 text-muted-foreground/78">
-                                  <HighlightedText text={matchContext} query={query} />
+                              )}
+                            </span>
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-baseline gap-3">
+                                <div className={PALETTE_TEXT_CLASS}>
+                                  <HighlightedText
+                                    text={thread.title || "Untitled thread"}
+                                    query={query}
+                                  />
                                 </div>
-                                {matchLabel ? (
-                                  <span className="shrink-0 text-ui-meta leading-4 text-muted-foreground/58">
-                                    {matchLabel}
-                                  </span>
-                                ) : null}
+                                <span className={PALETTE_META_CLASS}>{thread.projectName}</span>
                               </div>
-                            ) : null}
-                          </div>
-                        </CommandItem>
-                      );
-                    })}
+                              {shouldShowSidebarThreadMatchContext(
+                                matchContext,
+                                thread.archivedAt,
+                              ) ? (
+                                <div className="flex items-start gap-3">
+                                  <div className="min-w-0 flex-1 line-clamp-1 text-ui-meta leading-4 text-muted-foreground/78">
+                                    {matchContext ? (
+                                      <HighlightedText text={matchContext} query={query} />
+                                    ) : null}
+                                  </div>
+                                  {matchLabel ? (
+                                    <span className="shrink-0 text-ui-meta leading-4 text-muted-foreground/58">
+                                      {matchLabel}
+                                    </span>
+                                  ) : null}
+                                </div>
+                              ) : null}
+                            </div>
+                          </CommandItem>
+                        );
+                      })}
                   </CommandGroup>
+                ) : null}
+
+                {!isBrowsing && matchedThreads.length > threadResultLimit ? (
+                  <CommandItem
+                    value="more-thread-results"
+                    onClick={() => setThreadPage({ query, limit: threadResultLimit + 20 })}
+                  >
+                    Show more chats
+                  </CommandItem>
                 ) : null}
 
                 {!isBrowsing && quickActions.length > 0 ? (
@@ -1276,8 +1345,19 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                     </div>
                   ) : (
                     <>
-                      {!canBrowseUp && filteredBrowseEntries.length === 0 && !isBrowseFetching ? (
+                      {!canBrowseUp &&
+                      filteredBrowseEntries.length === 0 &&
+                      !isBrowseFetching &&
+                      !browseError ? (
                         <div className={PALETTE_STATUS_CLASS}>No matching folders.</div>
+                      ) : null}
+                      {browseError ? (
+                        <div className={PALETTE_STATUS_CLASS}>
+                          Could not read this folder.{" "}
+                          <button type="button" onClick={() => void retryBrowse()}>
+                            Retry
+                          </button>
+                        </div>
                       ) : null}
                       {willCreateMissingFolder ? (
                         <div className="palette-row squircle mx-3 mb-2 rounded-lg border border-dashed border-[color:var(--color-border)] px-3 py-2 text-ui text-muted-foreground">

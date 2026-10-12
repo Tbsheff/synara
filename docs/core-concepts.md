@@ -33,8 +33,11 @@ is cancelled, the task and its prompt remain available for retry.
   the tab strip until they become saved threads on the first send. Saved tabs remain
   available to return to while an unsent draft is on screen, including in the editor view.
   The command palette searches titles, project metadata, and settled user/assistant messages
-  across saved chats, including chats not recently opened. Archived, deleted, and subagent
-  chats stay out of message results. Every search word must match the message body;
+  across saved chats, including chats not recently opened. Archived chats appear in title
+  and loaded-message results with an Archived label; persisted message search still excludes them.
+  Deleted and subagent chats stay out of results. Results show 20 chats per page, with Show more
+  for further matches. A message result opens Find in thread with the search query and jumps
+  to the first loaded match. Every search word must match the message body;
   the server returns at most 50 hits with short excerpts. Message matching ignores ASCII letter case.
   Archiving the open thread or marking it **Done** opens the most recently used unfinished chat
   across projects, ordered by its last human message (or creation time). If none remains, New

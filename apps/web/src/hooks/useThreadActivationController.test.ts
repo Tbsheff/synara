@@ -104,9 +104,10 @@ function getFirstNavigateArgs(input: { navigate: ReturnType<typeof vi.fn> }) {
   }
   return args as {
     params: { threadId: ThreadId };
-    search: (previous: { splitViewId?: string; keep?: boolean }) => {
+    search: (previous: { splitViewId?: string; keep?: boolean; findQuery?: string }) => {
       splitViewId?: string | undefined;
       keep?: boolean;
+      findQuery?: string;
     };
   };
 }
@@ -375,5 +376,52 @@ describe("activateThreadFromSidebarIntent", () => {
     expect(getFirstNavigateArgs(input).search({ splitViewId: splitView.id })).toEqual({
       splitViewId: undefined,
     });
+  });
+});
+
+it("clears a prior find query on ordinary thread activation", () => {
+  const input = makeControllerInput();
+  activateThreadFromSidebarIntent(input, THREAD_B);
+  expect(getFirstNavigateArgs(input).search({ keep: true, findQuery: "old" })).toEqual({
+    keep: true,
+    splitViewId: undefined,
+  });
+});
+
+it("sets a message query in one navigation while keeping its split", () => {
+  const activeSplitView = makeSplitViewFixture({
+    id: "split-active",
+    sourceThreadId: THREAD_A,
+    firstThreadId: THREAD_A,
+    secondThreadId: THREAD_B,
+    focusOn: "first",
+  });
+  const input = makeControllerInput({ activeSplitView, routeSplitViewId: "split-active" });
+  activateThreadFromSidebarIntent(input, THREAD_B, "needle");
+  expect(input.navigate).toHaveBeenCalledOnce();
+  expect(getFirstNavigateArgs(input).params.threadId).toBe(THREAD_B);
+  expect(getFirstNavigateArgs(input).search({ findQuery: "old" })).toEqual({
+    splitViewId: "split-active",
+    findQuery: "needle",
+  });
+});
+
+it("updates find query on the same split pane", () => {
+  const activeSplitView = makeSplitViewFixture({
+    id: "split-active",
+    sourceThreadId: THREAD_A,
+    firstThreadId: THREAD_A,
+    secondThreadId: THREAD_B,
+    focusOn: "second",
+  });
+  const input = makeControllerInput({
+    activeSplitView,
+    routeSplitViewId: "split-active",
+    routeThreadId: THREAD_B,
+    routeFindQuery: "old",
+  });
+  activateThreadFromSidebarIntent(input, THREAD_B);
+  expect(getFirstNavigateArgs(input).search({ findQuery: "old" })).toEqual({
+    splitViewId: "split-active",
   });
 });

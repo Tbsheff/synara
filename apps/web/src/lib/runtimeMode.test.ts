@@ -78,3 +78,20 @@ describe("runtime mode provider support", () => {
     ).toBe(false);
   });
 });
+
+describe("provider mode choices", () => {
+  it("hides unsupported choices only for Pi and Antigravity", async () => {
+    const modes = await import("./runtimeMode");
+    for (const provider of ["pi", "antigravity"] as const) {
+      expect(modes.providerSupportsPlanMode(provider)).toBe(false);
+      expect(modes.providerSupportsApprovalRequiredMode(provider)).toBe(false);
+      expect(normalizeRuntimeModeForProvider("approval-required", provider)).toBe(
+        "approval-required",
+      );
+    }
+    for (const provider of ["omp", "codex", "claudeAgent", "opencode"] as const) {
+      expect(modes.providerSupportsPlanMode(provider)).toBe(true);
+      expect(modes.providerSupportsApprovalRequiredMode(provider)).toBe(true);
+    }
+  });
+});

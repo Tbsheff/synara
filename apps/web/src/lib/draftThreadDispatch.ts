@@ -8,6 +8,7 @@
 
 import type {
   AssistantDeliveryMode,
+  ClientOrchestrationCommand,
   ModelSelection,
   ProjectId,
   ProviderInstanceId,
@@ -198,6 +199,17 @@ function buildDraftPromptFileAttachment(input: {
 // duplicate thread.turn.start commands while the session is still starting. Same
 // pattern as threadCreatePromotion's inFlightThreadCreateById.
 const inFlightDispatchByThreadId = new Map<ThreadId, Promise<DraftThreadDispatchResult>>();
+const uncertainDispatchByThreadId = new Map<
+  ThreadId,
+  {
+    command: Extract<ClientOrchestrationCommand, { type: "thread.turn.start" }>;
+    finish: () => DraftThreadDispatchResult;
+  }
+>();
+
+export function hasUncertainDraftThreadDispatch(threadId: ThreadId): boolean {
+  return uncertainDispatchByThreadId.has(threadId);
+}
 
 export function waitForDraftThreadDispatchToSettle(
   threadId: ThreadId,
@@ -237,6 +249,43 @@ async function dispatchDraftThreadOnce(
   const api = readNativeApi();
   if (!api) {
     return { kind: "unavailable" };
+  }
+
+  const uncertain = uncertainDispatchByThreadId.get(threadId);
+  if (uncertain) {
+    let accepted = false;
+    try {
+      const snapshot = await api.orchestration.getThreadDetailSnapshot({ threadId });
+      accepted =
+        snapshot?.thread.messages.some(
+          (message) => message.id === uncertain.command.message.messageId,
+        ) ?? false;
+    } catch (error) {
+      return {
+        kind: "error",
+        message:
+          error instanceof Error ? error.message : "Could not confirm the task send. Try again.",
+        outcomeUnknown: true,
+      };
+    }
+    try {
+      if (accepted) {
+        return uncertain.finish();
+      }
+      await api.orchestration.dispatchCommand(uncertain.command);
+      return uncertain.finish();
+    } catch (error) {
+      if (!isRequestOutcomeUnknown(error)) {
+        uncertainDispatchByThreadId.delete(threadId);
+        clearPendingTurnDispatch(threadId);
+      }
+      return {
+        kind: "error",
+        message:
+          error instanceof Error ? error.message : "Could not confirm the task send. Try again.",
+        ...(isRequestOutcomeUnknown(error) ? { outcomeUnknown: true } : {}),
+      };
+    }
   }
 
   // Re-read the composer at send time: edits made in an open chat must win over
@@ -391,6 +440,17 @@ async function dispatchDraftThreadOnce(
   });
 
   let goalWarning: string | undefined;
+  const finish = (): DraftThreadDispatchResult => {
+    uncertainDispatchByThreadId.delete(threadId);
+    const currentStore = useComposerDraftStore.getState();
+    if (
+      composerDraftsMatchForCleanup(currentStore.draftsByThreadId[threadId], draftComposerState)
+    ) {
+      currentStore.clearComposerContent(threadId);
+    }
+    markPendingTurnDispatch(threadId);
+    return { kind: "dispatched", ...(goalWarning ? { warning: goalWarning } : {}) };
+  };
   markPendingTurnDispatch(threadId);
   try {
     if (thread === null) {
@@ -473,8 +533,8 @@ async function dispatchDraftThreadOnce(
     }
 
     const stagedTurnAttachments = await turnAttachmentsPromise;
-    await stagedTurnAttachments.runWithDispatch((turnAttachments) =>
-      api.orchestration.dispatchCommand({
+    await stagedTurnAttachments.runWithDispatch(async (turnAttachments) => {
+      const command = {
         type: "thread.turn.start",
         commandId: newCommandId(),
         threadId,
@@ -493,8 +553,17 @@ async function dispatchDraftThreadOnce(
         runtimeMode,
         interactionMode,
         createdAt,
-      }),
-    );
+      } satisfies Extract<ClientOrchestrationCommand, { type: "thread.turn.start" }>;
+      try {
+        await api.orchestration.dispatchCommand(command);
+      } catch (error) {
+        if (isRequestOutcomeUnknown(error)) {
+          stagedTurnAttachments.commit();
+          uncertainDispatchByThreadId.set(threadId, { command, finish });
+        }
+        throw error;
+      }
+    });
   } catch (error) {
     await turnAttachmentsPromise.then(
       (staged) => staged.cleanup(),
@@ -509,12 +578,5 @@ async function dispatchDraftThreadOnce(
     };
   }
 
-  // Clear the consumed draft only while we still own it. An open composer may
-  // have received new text or attachments while the dispatch reply was pending.
-  const currentStore = useComposerDraftStore.getState();
-  if (composerDraftsMatchForCleanup(currentStore.draftsByThreadId[threadId], draftComposerState)) {
-    currentStore.clearComposerContent(threadId);
-  }
-  markPendingTurnDispatch(threadId);
-  return { kind: "dispatched", ...(goalWarning ? { warning: goalWarning } : {}) };
+  return finish();
 }

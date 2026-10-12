@@ -23,6 +23,7 @@ import { resolveThreadEnvironmentPresentation } from "../lib/threadEnvironment";
 import {
   RUNTIME_MODE_PRESENTATION,
   providerModelSupportsAutoRuntimeMode,
+  providerSupportsApprovalRequiredMode,
 } from "../lib/runtimeMode";
 import { useStore } from "../store";
 import {
@@ -220,6 +221,8 @@ export function RuntimeUsageControls({
                   !value ||
                   (value !== "full-access" && value !== "auto" && value !== "approval-required") ||
                   (value === "auto" && !autoModeAvailable) ||
+                  (value === "approval-required" &&
+                    !providerSupportsApprovalRequiredMode(provider ?? "codex")) ||
                   value === runtimeMode
                 ) {
                   return;
@@ -227,10 +230,12 @@ export function RuntimeUsageControls({
                 onRuntimeModeChange(value);
               }}
             >
-              <RuntimeModeMenuItem
-                mode="approval-required"
-                icon={<HiOutlineHandRaised className="size-4 shrink-0" />}
-              />
+              {providerSupportsApprovalRequiredMode(provider ?? "codex") ? (
+                <RuntimeModeMenuItem
+                  mode="approval-required"
+                  icon={<HiOutlineHandRaised className="size-4 shrink-0" />}
+                />
+              ) : null}
               {autoModeAvailable ? (
                 <RuntimeModeMenuItem
                   mode="auto"

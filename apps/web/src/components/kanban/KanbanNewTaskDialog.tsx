@@ -211,7 +211,7 @@ export function KanbanNewTaskDialog({
     firstImageName: composerImages[0]?.name,
     assistantSelectionCount: composerAssistantSelections.length,
   });
-  const { canCreate, isCreating, handleCreate } = useKanbanTaskSubmit({
+  const { canCreate, isCreating, savedTaskTarget, handleCreate } = useKanbanTaskSubmit({
     selectedProjectId,
     hasSendableContent,
     selectedProvider,
@@ -235,6 +235,11 @@ export function KanbanNewTaskDialog({
     waitForPendingImages,
     onOpenChange,
   });
+  useEffect(() => {
+    if (savedTaskTarget === null) return;
+    setSelectedProjectId(savedTaskTarget.projectId);
+    setEnvMode(savedTaskTarget.envMode);
+  }, [savedTaskTarget]);
   const handleCreateRequest = useCallback(() => {
     void handleCreate();
   }, [handleCreate]);
@@ -378,6 +383,7 @@ export function KanbanNewTaskDialog({
               projectOptions={projectOptions}
               selectedProjectId={selectedProjectId}
               onProjectIdChange={setSelectedProjectId}
+              disabled={savedTaskTarget !== null || isCreating}
             />
             <ChevronRightIcon className="size-3.5 shrink-0 text-muted-foreground/50" aria-hidden />
             <DialogTitle className="font-system-ui truncate font-medium text-ui leading-none">
@@ -388,6 +394,11 @@ export function KanbanNewTaskDialog({
             Draft a prompt and place it in the board&apos;s Draft column. Drag it to In Progress to
             send it.
           </DialogDescription>
+          {savedTaskTarget !== null ? (
+            <p role="status" className="text-ui-sm text-muted-foreground">
+              Task saved. Project and workspace stay fixed when you retry.
+            </p>
+          ) : null}
         </DialogHeader>
         {/* Flush, borderless composer body: same Lexical prompt editor and attachment row as chat. */}
         <DialogPanel
@@ -491,10 +502,12 @@ export function KanbanNewTaskDialog({
               <div className="flex w-full items-center justify-between gap-2">
                 <div className="flex min-w-0 items-center gap-1">
                   <KanbanTaskExtrasMenu
+                    provider={draft.selectedProvider}
                     interactionMode={interactionMode}
                     onInteractionModeChange={setInteractionMode}
                     envMode={envMode}
                     onEnvModeChange={setEnvMode}
+                    environmentDisabled={savedTaskTarget !== null || isCreating}
                   />
                   <ScratchRuntimeControls draft={draft} catalog={catalog} />
                 </div>

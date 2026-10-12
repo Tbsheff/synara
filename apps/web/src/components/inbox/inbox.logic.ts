@@ -409,3 +409,11 @@ export function selectInboxTasks(
     overdue: open.filter(({ todo }) => todo.dueDate !== null && todo.dueDate < today).length,
   };
 }
+
+export function inboxAttentionReadState(
+  reads: readonly { enabled: boolean; isPending: boolean; isError: boolean }[],
+): "pending" | "error" | "ready" {
+  const enabled = reads.filter((read) => read.enabled);
+  if (enabled.some((read) => read.isError)) return "error";
+  return enabled.some((read) => read.isPending) ? "pending" : "ready";
+}

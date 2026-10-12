@@ -21,6 +21,8 @@ import { dispatchKanbanDraftThread, dispatchKanbanDraftThreadAsGoal } from "./ka
 const nativeApiMocks = vi.hoisted(() => ({
   dispatchCommand: vi.fn(async (..._args: unknown[]) => undefined),
   cleanup: vi.fn(),
+  commit: vi.fn(),
+  getThreadDetailSnapshot: vi.fn(),
   stagedUploads: [] as Array<{
     files?: ReadonlyArray<unknown> | undefined;
     images?: ReadonlyArray<unknown> | undefined;
@@ -34,6 +36,7 @@ vi.mock("../nativeApi", () => ({
   readNativeApi: () => ({
     orchestration: {
       dispatchCommand: nativeApiMocks.dispatchCommand,
+      getThreadDetailSnapshot: nativeApiMocks.getThreadDetailSnapshot,
     },
   }),
 }));
@@ -80,6 +83,7 @@ vi.mock("./composerSend", async () => {
         return {
           runWithDispatch: nativeApiMocks.runWithDispatch,
           cleanup: nativeApiMocks.cleanup,
+          commit: nativeApiMocks.commit,
         };
       },
     ),
@@ -507,4 +511,129 @@ describe("kanbanDispatch oversized prompts and pasted text", () => {
     expect(turnStart?.message.text).toBe("short prompt");
     expect(lastStagedFile()).toBeUndefined();
   });
+});
+
+describe("Kanban uncertain send retry", () => {
+  beforeEach(() => {
+    resetComposerDraftStore();
+    nativeApiMocks.dispatchCommand.mockReset();
+    nativeApiMocks.getThreadDetailSnapshot.mockReset();
+    nativeApiMocks.getThreadDetailSnapshot.mockResolvedValue(null);
+    nativeApiMocks.commit.mockClear();
+  });
+  it("reuses the exact turn command after a lost reply", async () => {
+    const threadId = ThreadId.makeUnsafe("unknown-retry");
+    const projectId = ProjectId.makeUnsafe("project-retry");
+    useComposerDraftStore.getState().setPrompt(threadId, "Original task");
+    const input = {
+      threadId,
+      projectId,
+      thread: { id: threadId, projectId } as unknown as SidebarThreadSummary,
+      defaultProvider: "codex",
+      assistantDeliveryMode: "buffered",
+    } as const;
+    nativeApiMocks.dispatchCommand.mockRejectedValueOnce({
+      _tag: "WsTransportRequestInterruptedError",
+      code: "WS_REQUEST_TIMEOUT",
+    });
+    expect(await dispatchKanbanDraftThread(input)).toEqual(
+      expect.objectContaining({ kind: "error", outcomeUnknown: true }),
+    );
+    const firstCommand = nativeApiMocks.dispatchCommand.mock.calls[0]?.[0];
+    useComposerDraftStore.getState().setPrompt(threadId, "Edited while uncertain");
+    nativeApiMocks.dispatchCommand.mockResolvedValueOnce(undefined);
+    expect(await dispatchKanbanDraftThread(input)).toEqual({ kind: "dispatched" });
+    expect(nativeApiMocks.dispatchCommand.mock.calls[1]?.[0]).toEqual(firstCommand);
+    expect(nativeApiMocks.commit).toHaveBeenCalled();
+    expect(useComposerDraftStore.getState().draftsByThreadId[threadId]?.prompt).toBe(
+      "Edited while uncertain",
+    );
+  });
+  it("confirms an accepted message before sending again", async () => {
+    const threadId = ThreadId.makeUnsafe("unknown-reconcile");
+    const projectId = ProjectId.makeUnsafe("project-reconcile");
+    useComposerDraftStore.getState().setPrompt(threadId, "Reconcile task");
+    const input = {
+      threadId,
+      projectId,
+      thread: { id: threadId, projectId } as unknown as SidebarThreadSummary,
+      defaultProvider: "codex",
+      assistantDeliveryMode: "buffered",
+    } as const;
+    nativeApiMocks.dispatchCommand.mockRejectedValueOnce({
+      _tag: "WsTransportRequestInterruptedError",
+      code: "WS_REQUEST_TIMEOUT",
+    });
+    await dispatchKanbanDraftThread(input);
+    const command = nativeApiMocks.dispatchCommand.mock.calls[0]?.[0] as {
+      message: { messageId: string };
+    };
+    nativeApiMocks.getThreadDetailSnapshot.mockResolvedValue({
+      thread: { messages: [{ id: command.message.messageId }] },
+    });
+    expect(await dispatchKanbanDraftThread(input)).toEqual({ kind: "dispatched" });
+    expect(nativeApiMocks.dispatchCommand).toHaveBeenCalledTimes(1);
+    expect(useComposerDraftStore.getState().draftsByThreadId[threadId]?.prompt ?? "").toBe("");
+  });
+});
+
+it("keeps the uncertain command when the confirmation check fails", async () => {
+  resetComposerDraftStore();
+  nativeApiMocks.dispatchCommand.mockReset();
+  nativeApiMocks.getThreadDetailSnapshot.mockReset();
+  const threadId = ThreadId.makeUnsafe("unknown-check-failure");
+  const projectId = ProjectId.makeUnsafe("project-check-failure");
+  useComposerDraftStore.getState().setPrompt(threadId, "Original task");
+  const input = {
+    threadId,
+    projectId,
+    thread: { id: threadId, projectId } as unknown as SidebarThreadSummary,
+    defaultProvider: "codex",
+    assistantDeliveryMode: "buffered",
+  } as const;
+  nativeApiMocks.dispatchCommand.mockRejectedValueOnce({
+    _tag: "WsTransportRequestInterruptedError",
+    code: "WS_REQUEST_TIMEOUT",
+  });
+  await dispatchKanbanDraftThread(input);
+  const original = nativeApiMocks.dispatchCommand.mock.calls[0]?.[0];
+  nativeApiMocks.getThreadDetailSnapshot.mockRejectedValueOnce(new Error("Connection not ready"));
+  expect(await dispatchKanbanDraftThread(input)).toEqual(
+    expect.objectContaining({ kind: "error", outcomeUnknown: true }),
+  );
+  expect(nativeApiMocks.dispatchCommand).toHaveBeenCalledTimes(1);
+  nativeApiMocks.getThreadDetailSnapshot.mockResolvedValueOnce(null);
+  nativeApiMocks.dispatchCommand.mockResolvedValueOnce(undefined);
+  expect(await dispatchKanbanDraftThread(input)).toEqual({ kind: "dispatched" });
+  expect(nativeApiMocks.dispatchCommand.mock.calls[1]?.[0]).toEqual(original);
+});
+
+it("sends edited content after a known refusal", async () => {
+  resetComposerDraftStore();
+  nativeApiMocks.dispatchCommand.mockReset();
+  const threadId = ThreadId.makeUnsafe("known-refusal-retry");
+  const projectId = ProjectId.makeUnsafe("project-known-refusal");
+  useComposerDraftStore.getState().setPrompt(threadId, "Refused task");
+  const input = {
+    threadId,
+    projectId,
+    thread: { id: threadId, projectId } as unknown as SidebarThreadSummary,
+    defaultProvider: "codex",
+    assistantDeliveryMode: "buffered",
+  } as const;
+  nativeApiMocks.dispatchCommand.mockRejectedValueOnce(new Error("Request refused"));
+  expect(await dispatchKanbanDraftThread(input)).toEqual({
+    kind: "error",
+    message: "Request refused",
+  });
+  const original = nativeApiMocks.dispatchCommand.mock.calls[0]?.[0] as { commandId: string };
+  useComposerDraftStore.getState().setPrompt(threadId, "Corrected task");
+  nativeApiMocks.dispatchCommand.mockResolvedValueOnce(undefined);
+  expect(await dispatchKanbanDraftThread(input)).toEqual({ kind: "dispatched" });
+  const retried = nativeApiMocks.dispatchCommand.mock.calls[1]?.[0] as {
+    commandId: string;
+    message: { text: string };
+  };
+  expect(retried.commandId).not.toBe(original.commandId);
+  expect(retried.message.text).toBe("Corrected task");
 });
