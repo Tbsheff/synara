@@ -14,6 +14,7 @@ import {
   type CloudTask,
   type CloudTaskId,
   type CloudTaskPage,
+  type CloudUnavailableKind,
 } from "@synara/contracts";
 import type { Effect } from "effect";
 
@@ -156,6 +157,7 @@ export function unavailableCapabilities(
   provider: CloudProvider,
   executablePath: string | null,
   cliVersion: string | null,
+  unavailableKind: CloudUnavailableKind,
   unavailableReason: string,
 ): CloudCapabilities {
   return {
@@ -163,6 +165,7 @@ export function unavailableCapabilities(
     executablePath,
     cliVersion,
     available: false,
+    unavailableKind,
     unavailableReason,
     canSubmit: false,
     canList: false,

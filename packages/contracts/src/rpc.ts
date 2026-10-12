@@ -361,6 +361,28 @@ import {
   StatsGetRecapInput,
   StatsGetRecapResult,
 } from "./stats";
+import {
+  CloudApplyResult,
+  CLOUD_AGENTS_WS_METHODS,
+  CloudApplyToWorktreeInput,
+  CloudCapabilities,
+  CloudFollowUpReceipt,
+  CloudGetCapabilitiesInput,
+  CloudGetDiffInput,
+  CloudGetDiffResult,
+  CloudListEnvironmentsResult,
+  CloudListSubmissionsInput,
+  CloudListSubmissionsResult,
+  CloudListTasksRpcInput,
+  CloudProviderInput,
+  CloudSendFollowUpInput,
+  CloudSubmission,
+  CloudSubmitRpcInput,
+  CloudTask,
+  CloudTaskPage,
+  CloudTaskRefInput,
+  CloudWatchTaskEvent,
+} from "./cloudAgents";
 import { WS_METHODS } from "./ws";
 import {
   WS_BOOTSTRAP_METHOD,
@@ -1456,6 +1478,67 @@ export const WsStatsGetRecapRpc = Rpc.make(WS_METHODS.statsGetRecap, {
   error: WsRpcError,
 });
 
+export const WsCloudGetCapabilitiesRpc = Rpc.make(CLOUD_AGENTS_WS_METHODS.getCapabilities, {
+  payload: CloudGetCapabilitiesInput,
+  success: CloudCapabilities,
+  error: WsRpcError,
+});
+
+export const WsCloudListEnvironmentsRpc = Rpc.make(CLOUD_AGENTS_WS_METHODS.listEnvironments, {
+  payload: CloudProviderInput,
+  success: CloudListEnvironmentsResult,
+  error: WsRpcError,
+});
+
+export const WsCloudListTasksRpc = Rpc.make(CLOUD_AGENTS_WS_METHODS.listTasks, {
+  payload: CloudListTasksRpcInput,
+  success: CloudTaskPage,
+  error: WsRpcError,
+});
+
+export const WsCloudGetTaskRpc = Rpc.make(CLOUD_AGENTS_WS_METHODS.getTask, {
+  payload: CloudTaskRefInput,
+  success: CloudTask,
+  error: WsRpcError,
+});
+
+export const WsCloudSubmitRpc = Rpc.make(CLOUD_AGENTS_WS_METHODS.submit, {
+  payload: CloudSubmitRpcInput,
+  success: CloudSubmission,
+  error: WsRpcError,
+});
+
+export const WsCloudListSubmissionsRpc = Rpc.make(CLOUD_AGENTS_WS_METHODS.listSubmissions, {
+  payload: CloudListSubmissionsInput,
+  success: CloudListSubmissionsResult,
+  error: WsRpcError,
+});
+
+export const WsCloudGetDiffRpc = Rpc.make(CLOUD_AGENTS_WS_METHODS.getDiff, {
+  payload: CloudGetDiffInput,
+  success: CloudGetDiffResult,
+  error: WsRpcError,
+});
+
+export const WsCloudApplyToWorktreeRpc = Rpc.make(CLOUD_AGENTS_WS_METHODS.applyToWorktree, {
+  payload: CloudApplyToWorktreeInput,
+  success: CloudApplyResult,
+  error: WsRpcError,
+});
+
+export const WsCloudSendFollowUpRpc = Rpc.make(CLOUD_AGENTS_WS_METHODS.sendFollowUp, {
+  payload: CloudSendFollowUpInput,
+  success: CloudFollowUpReceipt,
+  error: WsRpcError,
+});
+
+export const WsCloudWatchTaskRpc = Rpc.make(CLOUD_AGENTS_WS_METHODS.watchTask, {
+  payload: CloudTaskRefInput,
+  success: CloudWatchTaskEvent,
+  error: WsRpcError,
+  stream: true,
+});
+
 export const WsServerGetDiagnosticsRpc = Rpc.make(WS_METHODS.serverGetDiagnostics, {
   payload: Schema.Struct({}),
   success: ServerDiagnosticsResult,
@@ -2090,4 +2173,17 @@ export const WsProjectAgentRpcGroup = RpcGroup.make(
   WsProjectAgentLibraryStatusRpc,
   WsProjectAgentResolveWorkerRpc,
   WsSubscribeProjectAgentEventsRpc,
+);
+
+export const WsCloudAgentsRpcGroup = RpcGroup.make(
+  WsCloudGetCapabilitiesRpc,
+  WsCloudListEnvironmentsRpc,
+  WsCloudListTasksRpc,
+  WsCloudGetTaskRpc,
+  WsCloudSubmitRpc,
+  WsCloudListSubmissionsRpc,
+  WsCloudGetDiffRpc,
+  WsCloudApplyToWorktreeRpc,
+  WsCloudSendFollowUpRpc,
+  WsCloudWatchTaskRpc,
 );

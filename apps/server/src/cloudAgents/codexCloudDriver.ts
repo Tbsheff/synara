@@ -1,6 +1,7 @@
 import nodePath from "node:path";
 
 import {
+  CODEX_CLOUD_MINIMUM_CLI_VERSION,
   CloudInvalidInputError,
   CloudNoDiffError,
   CloudOutputParseError,
@@ -50,7 +51,7 @@ import {
   parseCodexVersion,
 } from "./codexCloudCli.ts";
 
-export const MINIMUM_TESTED_CODEX_CLOUD_VERSION = "0.162.0";
+export const MINIMUM_TESTED_CODEX_CLOUD_VERSION = CODEX_CLOUD_MINIMUM_CLI_VERSION;
 export const CODEX_TASK_LOOKUP_MAX_PAGES = 3;
 export const CODEX_LIST_ALL_DEFAULT_MAX_PAGES = 5;
 
@@ -162,6 +163,7 @@ export function makeCodexCloudDriver(
         PROVIDER,
         null,
         null,
+        "not-found",
         `Codex CLI was not found (${options.binaryPath}).`,
       );
     }
@@ -172,6 +174,7 @@ export function makeCodexCloudDriver(
         PROVIDER,
         executable,
         null,
+        "unreadable-version",
         "Codex CLI version is unreadable.",
       );
     }
@@ -180,6 +183,7 @@ export function makeCodexCloudDriver(
         PROVIDER,
         executable,
         version,
+        "too-old",
         `Codex CLI ${version} is older than the tested ${MINIMUM_TESTED_CODEX_CLOUD_VERSION}.`,
       );
     }
@@ -197,6 +201,7 @@ export function makeCodexCloudDriver(
         PROVIDER,
         executable,
         version,
+        "missing-cloud-command",
         "Codex CLI has no `cloud` command.",
       );
     }
@@ -207,6 +212,7 @@ export function makeCodexCloudDriver(
       executablePath: executable,
       cliVersion: version,
       available: true,
+      unavailableKind: null,
       unavailableReason: null,
       canSubmit,
       canList: subcommands.has("list") && helpListsFlag(listHelp?.stdout ?? "", "--json"),

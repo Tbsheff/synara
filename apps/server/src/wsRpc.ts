@@ -23,6 +23,8 @@ import {
   WsDeviceRpcGroup,
   WsFeatureRpcGroup,
   WsProjectAgentRpcGroup,
+  WsCloudAgentsRpcGroup,
+  CLOUD_AGENTS_WS_METHODS,
   WsRpcError,
   PullRequestsUnavailableError,
   type DeviceEvent,
@@ -53,7 +55,10 @@ import { RpcMiddleware, RpcSchema, RpcSerialization, RpcServer } from "effect/un
 
 import { AutomationService } from "./automation/Services/AutomationService";
 import { TodoService } from "./todo/Services/TodoService";
+import { PROVIDER_CLOUD_BETA_FEATURE } from "@synara/shared/betaFeatures";
 import { isServerBetaFeatureEnabled } from "./betaFeatureGate";
+import { CloudAgentsGateway } from "./cloudAgents/CloudAgentsGateway";
+import { makeCloudWatchTaskStream, makeWsCloudHandlers } from "./cloudAgents/wsCloudHandlers";
 import { ProjectAgentService } from "./projectAgent/Services/ProjectAgentService";
 import { isGroupCoordinatorHostProject } from "./projectAgent/groupCoordinatorHost";
 import {
@@ -270,6 +275,7 @@ class WsRequestAdmissionMiddleware extends RpcMiddleware.Service<WsRequestAdmiss
 const AdmittedWsFeatureRpcGroup = WsFeatureRpcGroup.merge(WsDeviceRpcGroup)
   .merge(WsComputerRpcGroup)
   .merge(WsProjectAgentRpcGroup)
+  .merge(WsCloudAgentsRpcGroup)
   .middleware(WsRequestAdmissionMiddleware);
 
 const wsRequestAdmissionMiddlewareLayer = Layer.effect(
@@ -553,6 +559,10 @@ const makeWsRpcHandlersLayer = () =>
       // with the same unsupported-platform answer the backend would give.
       const deviceService = Option.getOrUndefined(yield* Effect.serviceOption(DeviceService));
       const computerService = Option.getOrUndefined(yield* Effect.serviceOption(ComputerService));
+      const cloudHandlerDependencies = {
+        enabled: isServerBetaFeatureEnabled(PROVIDER_CLOUD_BETA_FEATURE),
+        gateway: Option.getOrUndefined(yield* Effect.serviceOption(CloudAgentsGateway)),
+      };
       const connectionSessions = yield* WsConnectionSessions;
       const computerInterests = new ComputerEventInterests(connectionSessions.onClose);
       const computerHandlers = makeWsComputerHandlers(
@@ -3065,6 +3075,13 @@ const makeWsRpcHandlersLayer = () =>
               )
             : Stream.fail(tasksUnavailableError()),
 
+        ...makeWsCloudHandlers(cloudHandlerDependencies),
+        [CLOUD_AGENTS_WS_METHODS.watchTask]: (input, { clientId }) =>
+          streamAdmission.guard(
+            clientId,
+            { key: `cloud.watchTask:${input.provider}:${input.taskId}` },
+            makeCloudWatchTaskStream(cloudHandlerDependencies, input),
+          ),
         ...makeWsDeviceHandlers(deviceService),
         [DEVICE_WS_METHODS.subscribeEvents]: (_, { clientId }) =>
           streamAdmission.guard(

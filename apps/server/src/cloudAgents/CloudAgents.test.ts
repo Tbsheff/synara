@@ -124,6 +124,7 @@ describe("CloudAgents capabilities", () => {
         executablePath: "/fake/bin/codex",
         cliVersion: "0.162.1",
         available: true,
+        unavailableKind: null,
         unavailableReason: null,
         canSubmit: true,
         canList: true,
@@ -162,6 +163,7 @@ describe("CloudAgents capabilities", () => {
       }).pipe(Effect.provideService(CloudCliRunner, fake.runner));
       const capabilities = yield* service.capabilities("codex");
       assert.isFalse(capabilities.available);
+      assert.strictEqual(capabilities.unavailableKind, "too-old");
       assert.include(capabilities.unavailableReason ?? "", "0.150.0");
       const listed = yield* Effect.result(service.listTasks({ provider: "codex" }));
       expectFailureTag(listed, "CloudCliUnavailableError");

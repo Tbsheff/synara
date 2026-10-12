@@ -378,6 +378,27 @@ import type {
   StatsGetRecapInput,
   StatsGetRecapResult,
 } from "./stats";
+import type {
+  CloudApplyResult,
+  CloudApplyToWorktreeInput,
+  CloudCapabilities,
+  CloudFollowUpReceipt,
+  CloudGetCapabilitiesInput,
+  CloudGetDiffInput,
+  CloudGetDiffResult,
+  CloudListEnvironmentsResult,
+  CloudListSubmissionsInput,
+  CloudListSubmissionsResult,
+  CloudListTasksRpcInput,
+  CloudProviderInput,
+  CloudSendFollowUpInput,
+  CloudSubmission,
+  CloudSubmitRpcInput,
+  CloudTask,
+  CloudTaskPage,
+  CloudTaskRefInput,
+  CloudWatchTaskEvent,
+} from "./cloudAgents";
 import type { BrowserAnnotationMethods } from "./browserAnnotations";
 import { type KeybindingCommand, MAX_KEYBINDING_VALUE_LENGTH } from "./keybindings";
 
@@ -1339,6 +1360,21 @@ export interface NativeApi {
       input: StatsGetProfileTokenStatsInput,
     ) => Promise<StatsGetProfileTokenStatsResult>;
     getRecap: (input: StatsGetRecapInput) => Promise<StatsGetRecapResult>;
+  };
+  cloud: {
+    getCapabilities: (input: CloudGetCapabilitiesInput) => Promise<CloudCapabilities>;
+    listEnvironments: (input: CloudProviderInput) => Promise<CloudListEnvironmentsResult>;
+    listTasks: (input: CloudListTasksRpcInput) => Promise<CloudTaskPage>;
+    getTask: (input: CloudTaskRefInput) => Promise<CloudTask>;
+    submit: (input: CloudSubmitRpcInput) => Promise<CloudSubmission>;
+    listSubmissions: (input: CloudListSubmissionsInput) => Promise<CloudListSubmissionsResult>;
+    getDiff: (input: CloudGetDiffInput) => Promise<CloudGetDiffResult>;
+    applyToWorktree: (input: CloudApplyToWorktreeInput) => Promise<CloudApplyResult>;
+    sendFollowUp: (input: CloudSendFollowUpInput) => Promise<CloudFollowUpReceipt>;
+    watchTask: (
+      input: CloudTaskRefInput,
+      listener: (event: CloudWatchTaskEvent) => void,
+    ) => () => void;
   };
   provider: {
     getComposerCapabilities: (

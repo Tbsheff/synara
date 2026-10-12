@@ -55,6 +55,7 @@ export function makeClaudeCloudDriver(
         PROVIDER,
         null,
         null,
+        "not-found",
         `Claude Code CLI was not found (${options.binaryPath}).`,
       );
     }
@@ -68,6 +69,7 @@ export function makeClaudeCloudDriver(
         PROVIDER,
         executable,
         null,
+        "unreadable-version",
         "Claude Code CLI version is unreadable.",
       );
     }
@@ -78,6 +80,7 @@ export function makeClaudeCloudDriver(
         PROVIDER,
         executable,
         version,
+        "missing-cloud-command",
         `Claude Code ${version} has no --cloud option.`,
       );
     }
@@ -86,6 +89,7 @@ export function makeClaudeCloudDriver(
       executablePath: executable,
       cliVersion: version,
       available: true,
+      unavailableKind: null,
       unavailableReason: null,
       canSubmit: false,
       canList: false,
