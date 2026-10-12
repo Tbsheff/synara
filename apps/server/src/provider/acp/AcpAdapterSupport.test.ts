@@ -44,6 +44,16 @@ describe("AcpAdapterSupport", () => {
     expect(selectAcpPermissionOptionId("cancel", options)).toBeUndefined();
   });
 
+  it("never turns a one-time approval into a persistent ACP grant", () => {
+    const persistentOnly = [
+      { kind: "reject_once", optionId: "deny-now" },
+      { kind: "allow_always", optionId: "allow-session" },
+    ] as const;
+
+    expect(selectAcpPermissionOptionId("accept", persistentOnly)).toBeUndefined();
+    expect(selectAcpPermissionOptionId("acceptForSession", persistentOnly)).toBe("allow-session");
+  });
+
   it("prefers request-scoped Full Access approvals and falls back to persistent grants", () => {
     expect(
       selectAcpFullAccessPermissionOptionId([

@@ -2683,6 +2683,7 @@ export function makeGrokAdapter(
       provider: PROVIDER,
       capabilities: {
         sessionModelSwitch: "restart-session",
+        conversationRollback: "restart-session",
       },
       startSession,
       sendTurn,

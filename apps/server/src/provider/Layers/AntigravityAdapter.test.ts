@@ -3814,3 +3814,50 @@ describe("Antigravity background task helpers (#752)", () => {
     }
   });
 });
+
+describe("Antigravity Plan mode", () => {
+  it("refuses Plan turns before spawning a CLI that skips permissions", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "synara-antigravity-plan-test-"));
+    let spawnCount = 0;
+    const spawnProcess = (() => {
+      spawnCount += 1;
+      throw new Error("Plan turn must not spawn Antigravity.");
+    }) as NonNullable<AntigravityAdapterDependencies["spawnProcess"]>;
+    try {
+      const error = await Effect.runPromise(
+        Effect.gen(function* () {
+          const adapter = yield* AntigravityAdapter;
+          const threadId = ThreadId.makeUnsafe("thread-antigravity-plan");
+          yield* adapter.startSession({
+            provider: "antigravity",
+            threadId,
+            runtimeMode: "full-access",
+            cwd: root,
+            providerOptions: { antigravity: { binaryPath: "/fake/agy" } },
+          });
+          const failure = yield* Effect.flip(
+            adapter.sendTurn({ threadId, input: "Plan this", interactionMode: "plan" }),
+          );
+          yield* adapter.stopSession(threadId);
+          return failure;
+        }).pipe(
+          Effect.provide(
+            makeAntigravityAdapterLive({
+              ensurePlugin: async () => undefined,
+              spawnProcess,
+            }).pipe(
+              Layer.provideMerge(
+                ServerConfig.layerTest(root, { prefix: "antigravity-plan-test-" }),
+              ),
+              Layer.provideMerge(NodeServices.layer),
+            ),
+          ),
+        ),
+      );
+      expect(error._tag).toBe("ProviderAdapterValidationError");
+      expect(spawnCount).toBe(0);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+});

@@ -2357,6 +2357,14 @@ const makeAntigravityAdapter = (dependencies: AntigravityAdapterDependencies = {
 
     const sendTurn: AntigravityAdapterShape["sendTurn"] = (input) =>
       Effect.gen(function* () {
+        if (input.interactionMode === "plan") {
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: "sendTurn",
+            issue:
+              "Antigravity CLI print mode cannot keep a turn read-only. Switch off Plan mode to use this provider.",
+          });
+        }
         const context = yield* requireSession(input.threadId);
         // Refresh the stored capability projection at dispatch: a
         // computer-control change between turns must reach this turn's mint,

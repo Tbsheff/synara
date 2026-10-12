@@ -1966,6 +1966,7 @@ export function makeCursorAdapter(
       provider: PROVIDER,
       capabilities: {
         sessionModelSwitch: "in-session",
+        conversationRollback: "restart-session",
         supportsRuntimeModelList: true,
       },
       startSession,

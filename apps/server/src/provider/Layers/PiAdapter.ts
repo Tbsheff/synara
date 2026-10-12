@@ -112,6 +112,8 @@ import {
 } from "../supervisedProcessTeardown.ts";
 
 const PROVIDER = "pi" as const;
+const PI_PLAN_MODE_UNSUPPORTED_ISSUE =
+  "Pi cannot keep a turn read-only. Switch off Plan mode to use this provider.";
 
 export function buildPiTurnPrompt(
   state: SynaraHarnessPolicyDeliveryState,
@@ -3628,6 +3630,16 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       });
 
     const startSession: PiAdapterShape["startSession"] = (input) => {
+      if (input.runtimeMode !== "full-access") {
+        return Effect.fail(
+          new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: "session/start",
+            issue:
+              "Pi runs shell and file tools without Synara approvals. Select Full access to use this provider.",
+          }),
+        );
+      }
       const piEnvironment = input.providerOptions?.pi?.environment;
       const providerInstanceId = resolvePiStartInstanceId(input);
       const isolatedAccount =
@@ -3710,6 +3722,13 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       dispatchLock.withLock(
         input.threadId,
         Effect.gen(function* () {
+          if (input.interactionMode === "plan") {
+            return yield* new ProviderAdapterValidationError({
+              provider: PROVIDER,
+              operation: "sendTurn",
+              issue: PI_PLAN_MODE_UNSUPPORTED_ISSUE,
+            });
+          }
           const context = yield* requireSession(input.threadId);
           // Snapshot the session's computer-control fact for the turn being
           // dispatched. Credential rotation at completion consumes this stashed

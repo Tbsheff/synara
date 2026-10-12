@@ -1335,3 +1335,43 @@ it("separates assistant and reasoning messages across a real SDK tool loop", asy
     }
   });
 });
+
+it("refuses approval-required sessions because Pi tools run without Synara approvals", async () => {
+  vi.stubEnv("PI_OFFLINE", "1");
+  const cwd = mkdtempSync(path.join(tmpdir(), "synara-pi-lifecycle-"));
+  dirs.push(cwd);
+  const layer = makePiAdapterLive().pipe(
+    Layer.provideMerge(ServerConfig.layerTest(cwd, path.join(cwd, "server"))),
+    Layer.provideMerge(NodeServices.layer),
+  );
+  for (const runtimeMode of ["approval-required", "auto"] as const) {
+    const error = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* PiAdapter;
+        return yield* Effect.flip(
+          adapter.startSession({
+            threadId,
+            cwd,
+            runtimeMode,
+            providerOptions: { pi: { agentDir: cwd } },
+            modelSelection: { provider: "pi", model: "openai/gpt-4o" },
+          }),
+        );
+      }).pipe(Effect.provide(layer), Effect.scoped),
+    );
+    expect(error._tag).toBe("ProviderAdapterValidationError");
+    expect(captured.sessions).toHaveLength(0);
+  }
+});
+
+it("refuses Plan turns instead of running them with full tool access", async () => {
+  responses("success");
+  await withAdapter(async (adapter, events) => {
+    const error = await Effect.runPromise(
+      Effect.flip(adapter.sendTurn({ threadId, input: "Plan this", interactionMode: "plan" })),
+    );
+    expect(error._tag).toBe("ProviderAdapterValidationError");
+    expect(captured.modelSystemPrompts).toHaveLength(0);
+    expect(events.some((event) => event.type === "turn.started")).toBe(false);
+  });
+});
