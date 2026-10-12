@@ -534,6 +534,33 @@ describe("command outcome from the exit code", () => {
   });
 });
 
+it("keeps activity-only read rows as direct file actions", () => {
+  const markup = renderToStaticMarkup(
+    <WorkspaceFileOpenerContext.Provider value={{ openFile: () => true }}>
+      <TimelineWorkEntryRow
+        workEntry={entry({
+          label: "Read file",
+          requestKind: "file-read",
+          detail: "src/app.ts",
+          liveActivity: {
+            state: "completed",
+            label: "Read file",
+            lastActivityAt: "2026-03-17T19:12:29.000Z",
+          },
+        })}
+        chatMetaFontSizePx={12}
+        density="compact"
+        markdownCwd={undefined}
+        onImageExpand={() => undefined}
+        timestampFormat="locale"
+      />
+    </WorkspaceFileOpenerContext.Provider>,
+  );
+  expect(markup).not.toContain('data-tool-detail-trigger="true"');
+  expect(markup).toContain("Read file app.ts");
+  expect(markup).toContain("<button");
+});
+
 it("keeps the Read result disclosure when a file opener exists", () => {
   const markup = renderToStaticMarkup(
     <QueryClientProvider client={new QueryClient()}>
