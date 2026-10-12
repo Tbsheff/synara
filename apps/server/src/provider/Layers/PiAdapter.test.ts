@@ -16,7 +16,7 @@ import { describe, expect, it } from "vitest";
 import { SYNARA_COMPUTER_TOOL_NAMES } from "../../agentGateway/computerToolPermission.ts";
 import {
   applyPiRuntimeApiKeysFromEnvironment,
-  createPiModelRuntime,
+  createPiModelRuntime as createPiModelRuntimeImpl,
   ensurePiAnthropicCatalogModels,
   getPiDiscoverableModels,
   findModelInRegistry,
@@ -32,6 +32,17 @@ import {
   resolvePiStartInstanceId,
   resolvePiExtensionMode,
 } from "./PiAdapter";
+
+function createPiModelRuntime(...args: Parameters<typeof createPiModelRuntimeImpl>) {
+  return createPiModelRuntimeImpl(
+    args[0],
+    args[1],
+    args[2],
+    args[3],
+    args[4],
+    args[5] ?? { stateDir: args[0], homeDir: args[0] },
+  );
+}
 
 describe("makePiStoragePaths", () => {
   it("resolves modelSelection-only account identity before Pi storage setup", () => {
