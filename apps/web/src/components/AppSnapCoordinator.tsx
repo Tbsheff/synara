@@ -39,7 +39,10 @@ import {
   readComposerImageBlob,
 } from "../lib/composerImageBlobStore";
 import { playAppSnapCaptureSound } from "../lib/appSnapSound";
-import { isComposerAppSnapCaptureSource } from "../lib/composerImageSource";
+import {
+  isComposerAppSnapCaptureSource,
+  normalizeComposerImageSource,
+} from "../lib/composerImageSource";
 import { resolveRecentThreadSplitActivation } from "../recentViewActivation.logic";
 import { useSplitViewStore } from "../splitViewStore";
 import { useStore } from "../store";
@@ -143,7 +146,6 @@ async function hydratePersistedAppSnaps(
       for (const attachment of target.attachments) {
         if (
           !attachment.blobKey ||
-          attachment.source?.kind !== "appsnap" ||
           (captureId !== undefined &&
             !isComposerAppSnapCaptureSource(attachment.source, captureId)) ||
           existingImageIds.has(attachment.id) ||
@@ -153,9 +155,10 @@ async function hydratePersistedAppSnaps(
         }
         blobHydrationInFlight.add(attachment.blobKey);
         try {
+          const appSnapSource = normalizeComposerImageSource(attachment.source);
           const [file, source] = await Promise.all([
             readComposerImageBlob(attachment.blobKey),
-            sourceWithCachedIcon(attachment.source),
+            appSnapSource ? sourceWithCachedIcon(appSnapSource) : undefined,
           ]);
           if (!file) {
             await target.removeAttachment(attachment.id);
@@ -170,7 +173,7 @@ async function hydratePersistedAppSnaps(
             sizeBytes: attachment.sizeBytes,
             previewUrl: URL.createObjectURL(file),
             file,
-            source,
+            ...(source ? { source } : {}),
           });
           existingImageIds.add(attachment.id);
         } catch (error) {

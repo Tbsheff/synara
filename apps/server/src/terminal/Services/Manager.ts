@@ -58,6 +58,7 @@ export interface TerminalSessionState {
   managedAgentObserved: boolean;
   runtimeEnv: Record<string, string> | null;
   providerAuthInstanceId?: string;
+  providerAuthAction?: "sign-in" | "sign-out";
   /** Buffered shell input used to detect canonical CLI commands at submit time. */
   pendingInputBuffer: string;
   /** Live terminal-mode mirror used to replay input modes after renderer reattach. */

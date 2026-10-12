@@ -87,7 +87,7 @@ const nativeApi = vi.hoisted(() => ({
   available: true,
 }));
 
-const toast = vi.hoisted(() => ({ add: vi.fn(), reportIssue: vi.fn() }));
+const toast = vi.hoisted(() => ({ add: vi.fn(), close: vi.fn(), reportIssue: vi.fn() }));
 const voiceAvailability = vi.hoisted(() => ({
   canStartVoiceNotes: true,
   showVoiceNotesControl: true,
@@ -165,6 +165,10 @@ const AUDIO_PAYLOAD = {
   durationMs: 500,
 };
 
+function flush() {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((resolvePromise) => {
@@ -195,7 +199,8 @@ describe("useComposerVoiceController", () => {
     nativeApi.available = true;
     voiceAvailability.canStartVoiceNotes = true;
     voiceAvailability.showVoiceNotesControl = true;
-    toast.add.mockReset();
+    toast.add.mockReset().mockReturnValue("voice-failure-toast");
+    toast.close.mockReset();
     toast.reportIssue.mockReset();
     options = {
       activeProject: PROJECT,
@@ -337,7 +342,7 @@ describe("useComposerVoiceController", () => {
     await expect(result.submitComposerVoiceRecording()).resolves.toBe(false);
 
     expect(toast.reportIssue).toHaveBeenCalledWith(
-      undefined,
+      "voice-failure-toast",
       expect.objectContaining({
         code: "voice.transcribe.failed",
         reason: "auth",
@@ -419,5 +424,68 @@ describe("useComposerVoiceController", () => {
 
     expect(options.onTranscriptReady).toHaveBeenCalledTimes(1);
     expect(options.onTranscriptReady).toHaveBeenCalledWith("current second transcript");
+  });
+  describe("after a transcription failure", () => {
+    const failOnce = async () => {
+      nativeApi.transcribeVoice
+        .mockRejectedValueOnce(new Error("network down"))
+        .mockResolvedValueOnce({ text: "second try" });
+      await expect(result.submitComposerVoiceRecording()).resolves.toBe(false);
+      recorder.isRecording = false;
+      render();
+      return toast.add.mock.calls.at(-1)?.[0];
+    };
+
+    it("offers Retry that resends the retained audio and Discard", async () => {
+      const failureToast = await failOnce();
+
+      expect(failureToast).toMatchObject({
+        title: "Voice transcription failed",
+        actionProps: { children: "Retry" },
+        data: { secondaryActionProps: { children: "Discard" } },
+      });
+      failureToast.actionProps.onClick();
+      render();
+      expect(result.isVoiceTranscribing).toBe(true);
+      await flush();
+      render();
+
+      expect(nativeApi.transcribeVoice).toHaveBeenCalledTimes(2);
+      expect(nativeApi.transcribeVoice.mock.calls[1]?.[0]).toMatchObject({
+        audioBase64: AUDIO_PAYLOAD.audioBase64,
+        threadId: THREAD_A,
+      });
+      expect(options.onTranscriptReady).toHaveBeenCalledWith("second try");
+      expect(result.isVoiceTranscribing).toBe(false);
+      expect(toast.close).toHaveBeenCalledWith("voice-failure-toast");
+
+      failureToast.actionProps.onClick();
+      await flush();
+      expect(nativeApi.transcribeVoice).toHaveBeenCalledTimes(2);
+    });
+
+    it("releases the retained audio on Discard", async () => {
+      const failureToast = await failOnce();
+
+      failureToast.data.secondaryActionProps.onClick();
+      failureToast.actionProps.onClick();
+      await flush();
+
+      expect(toast.close).toHaveBeenCalledWith("voice-failure-toast");
+      expect(nativeApi.transcribeVoice).toHaveBeenCalledTimes(1);
+      expect(options.onTranscriptReady).not.toHaveBeenCalled();
+    });
+
+    it("releases the retained audio when the thread changes", async () => {
+      const failureToast = await failOnce();
+
+      render({ activeThreadId: THREAD_B, threadId: THREAD_B });
+      failureToast.actionProps.onClick();
+      await flush();
+
+      expect(toast.close).toHaveBeenCalledWith("voice-failure-toast");
+      expect(nativeApi.transcribeVoice).toHaveBeenCalledTimes(1);
+      expect(options.onTranscriptReady).not.toHaveBeenCalled();
+    });
   });
 });

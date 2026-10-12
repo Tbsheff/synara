@@ -48,4 +48,31 @@ describe("ComposerVoiceRecorderBar", () => {
 
     await screen.unmount();
   });
+
+  it("keeps cancel available while the voice note transcribes", async () => {
+    const onDiscard = vi.fn();
+    const onStop = vi.fn();
+    const screen = await render(
+      <ComposerVoiceRecorderBar
+        durationLabel="0:03"
+        isRecording={false}
+        isTranscribing
+        waveformLevels={[0.2, 0.6, 0.4]}
+        onDiscard={onDiscard}
+        onStop={onStop}
+      />,
+    );
+
+    const cancelButton = page.getByRole("button", { name: "Cancel transcription" });
+    await expect.element(cancelButton).toBeEnabled();
+    await expect
+      .element(page.getByRole("button", { name: "Transcribing voice note" }))
+      .toBeDisabled();
+
+    await cancelButton.click();
+    expect(onDiscard).toHaveBeenCalledTimes(1);
+    expect(onStop).not.toHaveBeenCalled();
+
+    await screen.unmount();
+  });
 });

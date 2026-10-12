@@ -5,6 +5,7 @@ import {
   type ProviderKind,
   ProviderListAgentsInput,
   ProviderListCommandsInput,
+  ProviderGetPermissionsInput,
   ProviderListModelsInput,
   type ProviderListModelsResult,
   ProviderListPluginsInput,
@@ -431,6 +432,22 @@ const make = Effect.gen(function* () {
       return yield* adapter.readPlugin(resolved);
     });
 
+  const getPermissions: ProviderDiscoveryServiceShape["getPermissions"] = (input) =>
+    Effect.gen(function* () {
+      const parsed = yield* decodeInputOrValidationError({
+        operation: "ProviderDiscoveryService.getPermissions",
+        schema: ProviderGetPermissionsInput,
+        payload: input,
+      });
+      const resolved = yield* resolveDiscoveryInput(parsed);
+      if (!resolved.enabled)
+        return { supported: false, configPath: null, requirementsRead: false, rows: [] };
+      const adapter = yield* registry.getByProvider(resolved.provider);
+      if (!adapter.getPermissions)
+        return { supported: false, configPath: null, requirementsRead: false, rows: [] };
+      return yield* adapter.getPermissions(resolved);
+    });
+
   const listModels: ProviderDiscoveryServiceShape["listModels"] = (input) =>
     Effect.gen(function* () {
       const parsed = yield* decodeInputOrValidationError({
@@ -514,6 +531,7 @@ const make = Effect.gen(function* () {
     listSkills,
     listPlugins,
     readPlugin,
+    getPermissions,
     listModels,
     listAgents,
   } satisfies ProviderDiscoveryServiceShape;

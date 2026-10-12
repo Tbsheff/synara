@@ -38,6 +38,33 @@ function compareArchivedThreads(left: ArchivedSortableThread, right: ArchivedSor
   return rightKey.localeCompare(leftKey) || right.id.localeCompare(left.id);
 }
 
+const WORKTREE_LOCAL_CHANGES_PATTERN = /contains modified or untracked files/u;
+const LOCAL_CHANGES_PROMPT_FILE_LIMIT = 10;
+
+function isWorktreeLocalChangesError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return WORKTREE_LOCAL_CHANGES_PATTERN.test(message);
+}
+
+function formatLocalChangesPrompt(displayName: string, changedFiles: readonly string[]): string {
+  const listedFiles = changedFiles.slice(0, LOCAL_CHANGES_PROMPT_FILE_LIMIT);
+  const unlistedCount = changedFiles.length - listedFiles.length;
+  return [
+    `Worktree "${displayName}" has local changes.`,
+    ...(listedFiles.length > 0
+      ? [
+          "",
+          ...listedFiles.map((file) => `- ${file}`),
+          ...(unlistedCount > 0
+            ? [`- and ${unlistedCount} more ${pluralize(unlistedCount, "file")}`]
+            : []),
+        ]
+      : []),
+    "",
+    "Deleting the worktree permanently discards these changes. Delete it anyway?",
+  ].join("\n");
+}
+
 function WorktreesStatus(props: { children: string; error?: boolean }) {
   return (
     <SettingsEmptyState layout="status" tone={props.error ? "destructive" : "muted"}>
@@ -117,7 +144,7 @@ export function WorktreesSettingsPanel({ active }: { readonly active: boolean })
               "",
               `${linkedActiveThreadCount} active and ${linkedArchivedThreadIds.length} archived ${pluralize(linkedConversationCount, "conversation is", "conversations are")} linked to this worktree.`,
               linkedArchivedThreadIds.length > 0
-                ? "Archived conversations will be deleted first."
+                ? "Archived conversations will be deleted after the worktree is removed."
                 : "Deleting it can break reopening those chats in the same workspace.",
               "",
               "Delete the worktree anyway?",
@@ -128,33 +155,65 @@ export function WorktreesSettingsPanel({ active }: { readonly active: boolean })
       );
       if (!confirmed) return;
 
-      try {
-        await deleteArchivedThreadsFromClient({
-          api: api.orchestration,
-          threadIds: linkedArchivedThreadIds,
-          removeDeletedThreadFromClientState,
-        });
-        await removeWorktreeMutation.mutateAsync({
+      const removeWorktree = (force: boolean) =>
+        removeWorktreeMutation.mutateAsync({
           cwd: input.workspaceRoot,
           path: input.worktreePath,
-          force: true,
+          force,
         });
-        await queryClient.invalidateQueries({ queryKey: serverQueryKeys.worktrees() });
-        toastManager.add({
-          type: "success",
-          title: "Worktree deleted",
-          description:
-            linkedArchivedThreadIds.length > 0
-              ? `${displayName} was removed and ${linkedArchivedThreadIds.length} archived ${pluralize(linkedArchivedThreadIds.length, "conversation")} were deleted.`
-              : `${displayName} was removed.`,
-        });
+      try {
+        try {
+          await removeWorktree(false);
+        } catch (error) {
+          const status = await api.git.status({ cwd: input.worktreePath }).catch(() => null);
+          const hasLocalChanges =
+            isWorktreeLocalChangesError(error) || status?.hasWorkingTreeChanges === true;
+          if (!hasLocalChanges) throw error;
+          const discardConfirmed = await api.dialogs.confirm(
+            formatLocalChangesPrompt(
+              displayName,
+              status?.workingTree.files.map((file) => file.path) ?? [],
+            ),
+          );
+          if (!discardConfirmed) return;
+          await removeWorktree(true);
+        }
       } catch (error) {
         toastManager.add({
           type: "error",
           title: "Could not delete worktree",
           description: error instanceof Error ? error.message : "Unable to delete the worktree.",
         });
+        return;
       }
+
+      await queryClient
+        .invalidateQueries({ queryKey: serverQueryKeys.worktrees() })
+        .catch(() => undefined);
+      try {
+        await deleteArchivedThreadsFromClient({
+          api: api.orchestration,
+          threadIds: linkedArchivedThreadIds,
+          removeDeletedThreadFromClientState,
+        });
+      } catch (error) {
+        toastManager.add({
+          type: "error",
+          title: "Worktree deleted, archived conversations kept",
+          description: `${displayName} was removed, but its archived conversations could not be deleted: ${
+            error instanceof Error ? error.message : "unknown error"
+          }`,
+        });
+        return;
+      }
+      toastManager.add({
+        type: "success",
+        title: "Worktree deleted",
+        description:
+          linkedArchivedThreadIds.length > 0
+            ? `${displayName} was removed and ${linkedArchivedThreadIds.length} archived ${pluralize(linkedArchivedThreadIds.length, "conversation")} were deleted.`
+            : `${displayName} was removed.`,
+      });
     },
     [queryClient, removeDeletedThreadFromClientState, removeWorktreeMutation],
   );

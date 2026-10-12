@@ -165,7 +165,9 @@ export function useOnboarding(): UseOnboardingResult {
       return;
     }
     reconcileAttemptedRef.current = true;
-    void updateSettingsAndWait({ onboardingCompletedAt: completedAtToReconcile });
+    void updateSettingsAndWait({ onboardingCompletedAt: completedAtToReconcile }).catch(
+      () => undefined,
+    );
   }, [completedAtToReconcile, updateSettingsAndWait]);
 
   const complete = () => {
@@ -185,7 +187,7 @@ export function useOnboarding(): UseOnboardingResult {
     }
     closeStore();
     if (serverCompletedAt === null) {
-      void updateSettingsAndWait({ onboardingCompletedAt: completedAt });
+      void updateSettingsAndWait({ onboardingCompletedAt: completedAt }).catch(() => undefined);
     }
   };
 

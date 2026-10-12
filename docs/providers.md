@@ -443,6 +443,31 @@ appropriate machine. Synara never submits browser credentials or accepts consent
 | Pi            | `pi`, then **Sign-in options**  | Startup prompts followed by model provider selection        |
 | Oh My Pi      | `omp`, then **Sign-in options** | Startup prompts followed by OAuth/key selection             |
 
+**Sign out** uses the selected account environment in the same terminal dialog. Synara offers it
+for Codex (`codex logout`) and Claude (`claude auth logout`). Other providers have no verified
+sign-out command in Synara. Account edits settle before the command starts. The confirmation
+states that tools which share the credential folder can lose access, while API keys and active
+sessions can retain access. **Remove entry** removes Synara's account settings; it does not sign out.
+
+The account editor lists saved conversation permission modes and names their source. For Codex,
+**Load permissions** reads account defaults through `config/read` and administrator limits through
+`configRequirements/read`. It shows approval policy, filesystem mode, writable roots, workspace
+network access, and reported managed constraints. Managed values stay read-only. **Open provider
+config** uses the user config path reported by Codex; **Refresh permissions** reloads changed values.
+Conversation settings can override provider defaults. Unreadable or unsupported values stay unknown.
+Synara does not copy other config fields, prompts, or credentials into the permission response.
+Other providers show that loaded policy discovery is unavailable.
+
+The native fields follow the [Codex config protocol](https://github.com/openai/codex/blob/main/codex-rs/app-server-protocol/src/protocol/v2/config.rs).
+These reads do not change provider permissions or account settings.
+
+Codex approval cards offer a persistent command prefix or network host rule only when the provider
+includes that exact scope in its pending request. The server rejects invented scopes and sends
+accepted rules through Codex's native approval protocol. A session grant never changes the saved
+conversation permission mode. Questions which forbid custom answers accept only listed options;
+questions which permit both modes keep each answer draft when the user switches modes. The final
+answer needs an explicit Submit.
+
 Pi-family **Sign-in options** sends the native `/login` TUI command after you have completed startup
 prompts. It is never passed as a model prompt. OpenCode accounts configured for an external server
 must authenticate on that server; Synara reports this instead of changing a local account.

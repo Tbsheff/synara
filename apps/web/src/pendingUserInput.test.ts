@@ -27,17 +27,19 @@ describe("resolvePendingUserInputAnswer", () => {
     ).toBe("Keep the existing envelope for one release");
   });
 
-  it("clears the preset selection when a custom answer is entered", () => {
-    expect(
-      setPendingUserInputCustomAnswer(
-        {
-          selectedOptionLabels: ["Preserve existing tags"],
-        },
-        "doesn't matter",
-      ),
-    ).toEqual({
-      customAnswer: "doesn't matter",
-    });
+  it("answers with the custom text while keeping the preset selection as a draft", () => {
+    const question = {
+      id: "tags",
+      header: "Tags",
+      question: "What should happen to tags?",
+      options: [{ label: "Preserve existing tags", description: "Keep them" }],
+    };
+    const draft = setPendingUserInputCustomAnswer(
+      { selectedOptionLabels: ["Preserve existing tags"] },
+      "doesn't matter",
+    );
+    expect(resolvePendingUserInputAnswer(question, draft)).toBe("doesn't matter");
+    expect(draft.selectedOptionLabels).toEqual(["Preserve existing tags"]);
   });
 
   it("returns all selected options for multi-select questions", () => {
@@ -71,7 +73,7 @@ describe("togglePendingUserInputOptionSelection", () => {
     expect(
       togglePendingUserInputOptionSelection(question, { selectedOptionLabels: ["CLI"] }, "Desktop"),
     ).toEqual({
-      customAnswer: "",
+      answerMode: "options",
       selectedOptionLabels: ["CLI", "Desktop"],
     });
 
@@ -82,9 +84,65 @@ describe("togglePendingUserInputOptionSelection", () => {
         "CLI",
       ),
     ).toEqual({
-      customAnswer: "",
+      answerMode: "options",
       selectedOptionLabels: ["Desktop"],
     });
+  });
+});
+
+describe("switching between options and custom text", () => {
+  const multiSelectQuestion = {
+    id: "targets",
+    header: "Targets",
+    question: "Which outputs should we ship?",
+    multiSelect: true,
+    options: [
+      { label: "CLI", description: "Command line" },
+      { label: "Desktop", description: "Desktop app" },
+    ],
+  };
+  const singleSelectQuestion = { ...multiSelectQuestion, id: "target", multiSelect: false };
+
+  it("restores the prior selections when the custom text is cleared", () => {
+    let draft = togglePendingUserInputOptionSelection(multiSelectQuestion, undefined, "CLI");
+    draft = togglePendingUserInputOptionSelection(multiSelectQuestion, draft, "Desktop");
+    draft = setPendingUserInputCustomAnswer(draft, "Web only");
+    expect(resolvePendingUserInputAnswer(multiSelectQuestion, draft)).toBe("Web only");
+    draft = setPendingUserInputCustomAnswer(draft, "");
+    expect(resolvePendingUserInputAnswer(multiSelectQuestion, draft)).toEqual(["CLI", "Desktop"]);
+  });
+
+  it("restores the typed text when the options are cleared", () => {
+    let draft = setPendingUserInputCustomAnswer(undefined, "Web only");
+    draft = togglePendingUserInputOptionSelection(multiSelectQuestion, draft, "CLI");
+    expect(resolvePendingUserInputAnswer(multiSelectQuestion, draft)).toEqual(["CLI"]);
+    draft = togglePendingUserInputOptionSelection(multiSelectQuestion, draft, "CLI");
+    expect(resolvePendingUserInputAnswer(multiSelectQuestion, draft)).toBe("Web only");
+    expect(
+      derivePendingUserInputProgress([multiSelectQuestion], { targets: draft }, 0).customAnswer,
+    ).toBe("Web only");
+  });
+
+  it("keeps the typed text when the cleared composer echoes an empty value", () => {
+    let draft = setPendingUserInputCustomAnswer(undefined, "Web only");
+    draft = togglePendingUserInputOptionSelection(multiSelectQuestion, draft, "CLI");
+    const echoed = setPendingUserInputCustomAnswer(draft, "");
+    expect(echoed).toBe(draft);
+    draft = togglePendingUserInputOptionSelection(multiSelectQuestion, echoed, "CLI");
+    expect(resolvePendingUserInputAnswer(multiSelectQuestion, draft)).toBe("Web only");
+  });
+
+  it("answers and shows only the active mode when both values are kept", () => {
+    let draft = setPendingUserInputCustomAnswer(undefined, "Web only");
+    draft = togglePendingUserInputOptionSelection(singleSelectQuestion, draft, "Desktop");
+    expect(draft.customAnswer).toBe("Web only");
+    expect(buildPendingUserInputAnswers([singleSelectQuestion], { target: draft })).toEqual({
+      target: "Desktop",
+    });
+    const progress = derivePendingUserInputProgress([singleSelectQuestion], { target: draft }, 0);
+    expect(progress.customAnswer).toBe("");
+    expect(progress.usingCustomAnswer).toBe(false);
+    expect(progress.selectedOptionLabels).toEqual(["Desktop"]);
   });
 });
 
@@ -221,5 +279,55 @@ describe("pending user input question progress", () => {
       isComplete: false,
       canAdvance: true,
     });
+  });
+});
+
+describe("options-only questions", () => {
+  it("rejects custom text and unlisted choices when the provider disables Other", () => {
+    const question = {
+      id: "q",
+      header: "Target",
+      question: "Choose",
+      isOther: false,
+      options: [{ label: "CLI", description: "CLI" }],
+    };
+    expect(
+      resolvePendingUserInputAnswer(question, { customAnswer: "injected", answerMode: "custom" }),
+    ).toBeNull();
+    expect(
+      resolvePendingUserInputAnswer(question, {
+        selectedOptionLabels: ["unlisted"],
+        answerMode: "options",
+      }),
+    ).toBeNull();
+    expect(
+      resolvePendingUserInputAnswer(question, {
+        selectedOptionLabels: ["CLI"],
+        customAnswer: "kept draft",
+        answerMode: "custom",
+      }),
+    ).toBe("CLI");
+    expect(
+      derivePendingUserInputProgress([question], { q: { customAnswer: "injected" } }, 0)
+        .customAnswer,
+    ).toBe("");
+  });
+});
+
+it("accepts free text when isOther is false but no options exist", () => {
+  const question = {
+    id: "free-text",
+    header: "Answer",
+    question: "What should change?",
+    options: [],
+    isOther: false,
+  };
+  const draft = { customAnswer: "Keep the existing API", answerMode: "custom" as const };
+  expect(resolvePendingUserInputAnswer(question, draft)).toBe("Keep the existing API");
+  expect(derivePendingUserInputProgress([question], { [question.id]: draft }, 0)).toMatchObject({
+    customAnswer: "Keep the existing API",
+    usingCustomAnswer: true,
+    canAdvance: true,
+    isComplete: true,
   });
 });

@@ -72,7 +72,6 @@ import {
   resolveEnvironmentPanelPreferenceUpdate,
   resolveGitRepoUiState,
   resolveQueuedSteerGateTransition,
-  resolveRuntimeModeAfterApprovalDecision,
   resolveSettledThreadBranchMismatch,
   resolveThreadDetailHydration,
   resolveThreadArtifactWorkspaceRoot,
@@ -2474,39 +2473,6 @@ describe("shouldAutoDeleteTerminalThreadOnLastClose", () => {
         },
       }),
     ).toBe(false);
-  });
-});
-
-describe("resolveRuntimeModeAfterApprovalDecision", () => {
-  it("switches approval-required threads to full-access on acceptForSession", () => {
-    expect(resolveRuntimeModeAfterApprovalDecision("approval-required", "acceptForSession")).toBe(
-      "full-access",
-    );
-  });
-
-  it("does not change a thread already in full-access", () => {
-    expect(resolveRuntimeModeAfterApprovalDecision("full-access", "acceptForSession")).toBeNull();
-  });
-
-  it("keeps Auto as the durable policy after a session-scoped approval", () => {
-    expect(resolveRuntimeModeAfterApprovalDecision("auto", "acceptForSession")).toBeNull();
-  });
-
-  it("leaves runtime mode untouched for one-off accept and decline decisions", () => {
-    expect(resolveRuntimeModeAfterApprovalDecision("approval-required", "accept")).toBeNull();
-    expect(resolveRuntimeModeAfterApprovalDecision("approval-required", "decline")).toBeNull();
-  });
-
-  it("does not widen a permission-profile grant to full access", () => {
-    expect(
-      resolveRuntimeModeAfterApprovalDecision("auto", "acceptForSession", "permissions"),
-    ).toBeNull();
-  });
-
-  it("does not widen a tool approval to full access", () => {
-    expect(
-      resolveRuntimeModeAfterApprovalDecision("approval-required", "acceptForSession", "tool"),
-    ).toBeNull();
   });
 });
 

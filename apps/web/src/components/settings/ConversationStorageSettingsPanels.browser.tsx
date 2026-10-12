@@ -4,6 +4,7 @@
 
 import "../../index.css";
 
+import { page } from "vitest/browser";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
@@ -18,9 +19,15 @@ const harness = vi.hoisted(() => ({
   projects: [{ id: "project-1", name: "Project One" }],
   removeDeletedThreadFromClientState: vi.fn(),
   mutateAsync: vi.fn(),
-  invalidateQueries: vi.fn(),
+  invalidateQueries: vi.fn(async () => {}),
   confirm: vi.fn(async (_message: string) => true),
   deleteArchivedThreadsFromClient: vi.fn(async (_input: { threadIds: string[] }) => {}),
+  getShellSnapshot: vi.fn(async () => ({ threads: [] as Array<Record<string, unknown>> })),
+  gitStatus: vi.fn(async (_input: { cwd: string }) => ({
+    hasWorkingTreeChanges: true,
+    workingTree: { files: [] as Array<{ path: string }>, insertions: 0, deletions: 0 },
+  })),
+  events: [] as string[],
 }));
 
 vi.mock("@tanstack/react-query", () => ({
@@ -51,7 +58,11 @@ vi.mock("~/store", () => ({
 }));
 
 vi.mock("~/nativeApi", () => {
-  const api = { dialogs: { confirm: harness.confirm }, orchestration: {} };
+  const api = {
+    dialogs: { confirm: harness.confirm },
+    orchestration: { getShellSnapshot: harness.getShellSnapshot },
+    git: { status: harness.gitStatus },
+  };
   return { readNativeApi: () => api, ensureNativeApi: () => api };
 });
 
@@ -79,8 +90,14 @@ describe("ConversationStorageSettingsPanels", () => {
   afterEach(() => {
     document.body.innerHTML = "";
     harness.threadShells = [];
-    harness.confirm.mockClear();
-    harness.deleteArchivedThreadsFromClient.mockClear();
+    harness.confirm.mockReset().mockImplementation(async () => true);
+    harness.deleteArchivedThreadsFromClient.mockReset().mockImplementation(async () => {});
+    harness.mutateAsync.mockReset();
+    harness.getShellSnapshot.mockReset().mockImplementation(async () => ({ threads: [] }));
+    harness.gitStatus.mockReset().mockImplementation(async () => ({
+      hasWorkingTreeChanges: false,
+      workingTree: { files: [], insertions: 0, deletions: 0 },
+    }));
   });
 
   it("uses one association rule for direct and associated worktree paths", async () => {
@@ -103,6 +120,90 @@ describe("ConversationStorageSettingsPanels", () => {
     expect(document.body.textContent).toContain("Direct link");
     expect(document.body.textContent).toContain("Associated link");
     expect(document.body.textContent).not.toContain("Other worktree");
+  });
+
+  it("asks again before discarding local changes and deletes archived chats only after removal", async () => {
+    const worktreePath = "/repo/.worktrees/feature";
+    harness.getShellSnapshot.mockResolvedValueOnce({
+      threads: [thread({ id: "archived", worktreePath, archivedAt: "2026-01-02T00:00:00.000Z" })],
+    });
+    harness.gitStatus.mockResolvedValueOnce({
+      hasWorkingTreeChanges: true,
+      workingTree: {
+        files: [{ path: "src/edited.ts" }, { path: "notes.txt" }],
+        insertions: 3,
+        deletions: 1,
+      },
+    });
+    harness.events = [];
+    harness.mutateAsync.mockReset();
+    harness.mutateAsync
+      .mockImplementationOnce(async (input: { force?: boolean }) => {
+        harness.events.push(`remove force=${String(input.force)}`);
+        throw new Error(
+          `git worktree remove failed: fatal: '${worktreePath}' contains modified or untracked files, use --force to delete it`,
+        );
+      })
+      .mockImplementationOnce(async (input: { force?: boolean }) => {
+        harness.events.push(`remove force=${String(input.force)}`);
+      });
+    harness.deleteArchivedThreadsFromClient.mockImplementationOnce(async () => {
+      harness.events.push("delete archived chats");
+    });
+
+    await render(<WorktreesSettingsPanel active />);
+    await page.getByRole("button", { name: "Delete", exact: true }).click();
+
+    await vi.waitFor(() => expect(harness.events).toContain("delete archived chats"));
+    expect(harness.events).toEqual([
+      "remove force=false",
+      "remove force=true",
+      "delete archived chats",
+    ]);
+    expect(harness.confirm).toHaveBeenCalledTimes(2);
+    const localChangesPrompt = harness.confirm.mock.calls[1]?.[0] ?? "";
+    expect(localChangesPrompt).toContain("local changes");
+    expect(localChangesPrompt).toContain("src/edited.ts");
+    expect(localChangesPrompt).toContain("notes.txt");
+  });
+
+  it("uses Git status to recognize local changes when the removal error is generic", async () => {
+    harness.gitStatus.mockResolvedValueOnce({
+      hasWorkingTreeChanges: true,
+      workingTree: { files: [{ path: "draft.md" }], insertions: 1, deletions: 0 },
+    });
+    harness.mutateAsync.mockReset();
+    harness.mutateAsync
+      .mockRejectedValueOnce(new Error("git worktree remove failed"))
+      .mockResolvedValueOnce(undefined);
+
+    await render(<WorktreesSettingsPanel active />);
+    await page.getByRole("button", { name: "Delete", exact: true }).click();
+
+    await vi.waitFor(() => expect(harness.mutateAsync).toHaveBeenCalledTimes(2));
+    expect(harness.mutateAsync.mock.calls[1]?.[0]).toMatchObject({ force: true });
+    expect(harness.confirm.mock.calls[1]?.[0]).toContain("draft.md");
+  });
+
+  it("keeps archived chats and the worktree when local changes are not discarded", async () => {
+    const worktreePath = "/repo/.worktrees/feature";
+    harness.getShellSnapshot.mockResolvedValueOnce({
+      threads: [thread({ id: "archived", worktreePath, archivedAt: "2026-01-02T00:00:00.000Z" })],
+    });
+    harness.mutateAsync.mockReset();
+    harness.mutateAsync.mockRejectedValueOnce(
+      new Error(`fatal: '${worktreePath}' contains modified or untracked files, use --force`),
+    );
+    harness.confirm.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+
+    await render(<WorktreesSettingsPanel active />);
+    await page.getByRole("button", { name: "Delete", exact: true }).click();
+
+    await vi.waitFor(() => expect(harness.confirm).toHaveBeenCalledTimes(2));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(harness.mutateAsync).toHaveBeenCalledTimes(1);
+    expect(harness.mutateAsync.mock.calls[0]?.[0]).toMatchObject({ force: false });
+    expect(harness.deleteArchivedThreadsFromClient).not.toHaveBeenCalled();
   });
 
   it("sorts archived threads once and keeps orphaned projects visible", async () => {

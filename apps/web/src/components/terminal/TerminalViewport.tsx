@@ -96,6 +96,7 @@ interface TerminalViewportProps {
   cwd: string;
   runtimeEnv?: Record<string, string>;
   providerAuthInstanceId?: string;
+  providerAuthAction?: "sign-in" | "sign-out";
   onRuntimeStatusChange?: (status: TerminalRuntimeStatus) => void;
   onSessionExited: () => void;
   onTerminalMetadataChange: (
@@ -120,6 +121,7 @@ export default function TerminalViewport({
   cwd,
   runtimeEnv,
   providerAuthInstanceId,
+  providerAuthAction,
   onRuntimeStatusChange,
   onSessionExited,
   onTerminalMetadataChange,
@@ -164,6 +166,7 @@ export default function TerminalViewport({
       terminalCliKind,
       cwd,
       ...(providerAuthInstanceId ? { providerAuthInstanceId } : {}),
+      ...(providerAuthAction ? { providerAuthAction } : {}),
       ...(runtimeEnvPayload ? { runtimeEnv: runtimeEnvPayload } : {}),
       callbacks: {
         onSessionExited,
@@ -182,6 +185,7 @@ export default function TerminalViewport({
       onSessionExited,
       onRuntimeStatusChange,
       providerAuthInstanceId,
+      providerAuthAction,
       onTerminalActivityChange,
       onTerminalMetadataChange,
       runtimeEnvPayload,

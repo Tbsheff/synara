@@ -7,9 +7,13 @@
 // Layer: Chat composer UI
 // Exports: ComposerPendingApprovalPanel
 
-import { type ApprovalRequestId, type ProviderApprovalDecision } from "@synara/contracts";
+import {
+  type ApprovalRequestId,
+  type ProviderApprovalDecision,
+  type ProviderApprovalRule,
+} from "@synara/contracts";
 import { pendingRequestInstanceKey } from "@synara/shared/threadSummary";
-import { type KeyboardEvent, type ReactNode, useRef } from "react";
+import { type KeyboardEvent, type ReactNode, useEffect, useRef, useState } from "react";
 import { type PendingApproval } from "../../session-logic";
 import { cn } from "~/lib/utils";
 import { ComposerChoiceRow, type ComposerChoiceTone } from "./ComposerChoiceRow";
@@ -30,6 +34,7 @@ interface ComposerPendingApprovalPanelProps {
     decision: ProviderApprovalDecision,
     lifecycleGeneration?: string,
     requestKind?: PendingApproval["requestKind"],
+    approvalRule?: ProviderApprovalRule,
   ) => Promise<void>;
 }
 
@@ -46,6 +51,7 @@ type ApprovalAction = {
   label: string;
   description: string;
   tone: ComposerChoiceTone;
+  approvalRule?: ProviderApprovalRule;
 };
 
 // Order is the card-local shortcut order (1-4): recommended action first, stop-everything last.
@@ -160,12 +166,29 @@ function computerScopeFor(
 
 /** The decisions this approval offers; plugin approval cards reuse it to stay in sync. */
 export function availableApprovalActions(
-  approval: Pick<PendingApproval, "approvalScope" | "sessionApprovalAvailable">,
+  approval: Pick<
+    PendingApproval,
+    "approvalScope" | "sessionApprovalAvailable" | "approvalRuleOptions"
+  >,
 ): ReadonlyArray<ApprovalAction> {
-  return (
-    computerScopeFor(approval)?.actions ??
-    (approval.sessionApprovalAvailable === false ? WITHOUT_SESSION_APPROVAL : APPROVAL_ACTIONS)
-  );
+  const computerActions = computerScopeFor(approval)?.actions;
+  if (computerActions) return computerActions;
+  const actions =
+    approval.sessionApprovalAvailable === false ? WITHOUT_SESSION_APPROVAL : APPROVAL_ACTIONS;
+  const rules: ApprovalAction[] = (approval.approvalRuleOptions ?? []).map((approvalRule) => ({
+    decision: "accept",
+    label:
+      approvalRule.type === "command-prefix"
+        ? `Always allow ${approvalRule.prefix.join(" ")}`
+        : `Always allow ${approvalRule.host}`,
+    description:
+      approvalRule.type === "command-prefix"
+        ? "Save this command prefix in the provider's policy"
+        : "Save access to this host in the provider's policy",
+    tone: "neutral",
+    approvalRule,
+  }));
+  return [actions[0]!, ...rules, ...actions.slice(1)];
 }
 
 const KIND_PROMPT: Record<PendingApproval["requestKind"], string> = {
@@ -190,6 +213,24 @@ export const ComposerPendingApprovalPanel = function ComposerPendingApprovalPane
   const computerScope = computerScopeFor(approval);
   const actions = availableApprovalActions(approval);
   const toolLabel = approval.displayName ?? approval.toolTitle ?? approval.toolName ?? parsed.tool;
+  const promptText =
+    computerScope?.prompt ?? approval.promptTitle ?? KIND_PROMPT[approval.requestKind];
+  const cardLabel = !computerScope && toolLabel ? `${promptText} ${toolLabel}` : promptText;
+  const [announcement, setAnnouncement] = useState("");
+  const announcedRequestKeyRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (announcedRequestKeyRef.current === requestKey) return;
+    const clearTimer = window.setTimeout(() => setAnnouncement(""), 0);
+    const announceTimer = window.setTimeout(() => {
+      announcedRequestKeyRef.current = requestKey;
+      setAnnouncement(`Approval needed: ${cardLabel}`);
+    }, 150);
+    return () => {
+      window.clearTimeout(clearTimer);
+      window.clearTimeout(announceTimer);
+    };
+  }, [cardLabel, requestKey]);
 
   const respondOnce = (action: ApprovalAction) => {
     if (isResponding || submittedRequestKeyRef.current === submissionKey) return;
@@ -199,6 +240,7 @@ export const ComposerPendingApprovalPanel = function ComposerPendingApprovalPane
       action.decision,
       approval.lifecycleGeneration,
       approval.requestKind,
+      ...(action.approvalRule ? [action.approvalRule] : []),
     ).catch(() => {
       // Immediate command failures remain retryable. A successful dispatch keeps
       // the claim until the request disappears or a newer durable retry attempt
@@ -231,12 +273,18 @@ export const ComposerPendingApprovalPanel = function ComposerPendingApprovalPane
 
   return (
     <div
+      role="group"
+      aria-label={cardLabel}
+      tabIndex={-1}
       onKeyDown={handleKeyDown}
       className={cn(COMPOSER_INPUT_SURFACE_CLASS_NAME, "overflow-hidden px-3.5 py-3")}
     >
+      <div role="status" aria-live="polite" aria-atomic="true" className="sr-only">
+        {announcement}
+      </div>
       <div className="flex items-start justify-between gap-3">
         <p className="min-w-0 text-ui-lg font-medium leading-snug text-foreground/90">
-          {computerScope?.prompt ?? approval.promptTitle ?? KIND_PROMPT[approval.requestKind]}
+          {promptText}
           {!computerScope && toolLabel ? (
             <span className="ml-1.5 text-ui-sm font-normal text-muted-foreground/50">
               {toolLabel}
@@ -268,7 +316,7 @@ export const ComposerPendingApprovalPanel = function ComposerPendingApprovalPane
       <div className="mt-2.5 space-y-0.5">
         {actions.map((action, index) => (
           <ComposerChoiceRow
-            key={action.decision}
+            key={action.label}
             shortcut={index + 1}
             label={action.label}
             description={action.description}

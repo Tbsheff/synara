@@ -54,6 +54,8 @@ import {
 import { render } from "vitest-browser-react";
 
 import { type ComposerImageAttachment, useComposerDraftStore } from "../composerDraftStore";
+import { persistComposerImageBlob } from "../lib/composerImageBlobStore";
+import { toHydratedThreadDraft } from "../composerDraftPersistence";
 import {
   AUTO_SCROLL_BOTTOM_THRESHOLD_PX,
   getScrollContainerDistanceFromBottom,
@@ -3997,8 +3999,15 @@ describe("ChatView transcript geometry (full app)", () => {
             [1, 2, 3].map((id) => [
               String(id),
               navigation === "custom" && id === 3
-                ? { customAnswer: "Custom answer" }
-                : { customAnswer: "", selectedOptionLabels: [`Choice ${id}`] },
+                ? {
+                    customAnswer: "Custom answer",
+                    selectedOptionLabels: ["Choice 3"],
+                    answerMode: "custom",
+                  }
+                : expect.objectContaining({
+                    selectedOptionLabels: [`Choice ${id}`],
+                    answerMode: "options",
+                  }),
             ]),
           ),
         });
@@ -11187,6 +11196,195 @@ describe("ChatView transcript geometry (full app)", () => {
       }
     },
   );
+
+  it("starts the first chat turn before its cosmetic chat rename and survives a rename failure", async () => {
+    useComposerDraftStore.setState({
+      draftThreadsByThreadId: {
+        [THREAD_ID]: {
+          projectId: HOME_PROJECT_ID,
+          createdAt: NOW_ISO,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          entryPoint: "chat",
+          branch: null,
+          worktreePath: null,
+          envMode: "local",
+        },
+      },
+      projectDraftThreadIdByProjectId: {
+        [HOME_PROJECT_ID]: THREAD_ID,
+      },
+    });
+    const restoreNativeApi = installDeterministicSendNativeApi();
+    const deterministicApi = window.nativeApi!;
+    Object.defineProperty(window, "nativeApi", {
+      configurable: true,
+      value: {
+        ...deterministicApi,
+        orchestration: {
+          ...deterministicApi.orchestration,
+          dispatchCommand: async (
+            command: Parameters<typeof deterministicApi.orchestration.dispatchCommand>[0],
+          ) => {
+            if (command.type === "project.meta.update") {
+              wsRequests.push({ _tag: ORCHESTRATION_WS_METHODS.dispatchCommand, command });
+              throw new Error("Project rename failed for test.");
+            }
+            return deterministicApi.orchestration.dispatchCommand(command);
+          },
+        },
+      },
+    });
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: withHomeChatProject(createDraftOnlySnapshot()),
+      configureFixture: (nextFixture) => {
+        nextFixture.welcome = {
+          ...nextFixture.welcome,
+          homeDir: "/Users/tester",
+          chatWorkspaceRoot: "/Users/tester/Documents/Synara",
+        };
+      },
+    });
+
+    try {
+      useComposerDraftStore.getState().setPrompt(THREAD_ID, "Name this chat after me");
+      (await waitForSendButton()).click();
+      const commandTypes = () =>
+        wsRequests.map((request) => readDispatchedCommand(request)?.type ?? null);
+      await vi.waitFor(() => {
+        expect(commandTypes()).toContain("thread.turn.start");
+        expect(commandTypes()).toContain("project.meta.update");
+      });
+      expect(commandTypes().indexOf("thread.turn.start")).toBeLessThan(
+        commandTypes().indexOf("project.meta.update"),
+      );
+    } finally {
+      await mounted.cleanup();
+      restoreNativeApi();
+    }
+  });
+
+  it("restores a pasted draft image saved as a blob after reload", async () => {
+    const blobKey = await persistComposerImageBlob({
+      threadId: THREAD_ID,
+      imageId: "pasted-blob-image",
+      file: new File([new Uint8Array([137, 80, 78, 71])], "pasted.png", { type: "image/png" }),
+    });
+    useComposerDraftStore.setState({
+      draftsByThreadId: {
+        [THREAD_ID]: toHydratedThreadDraft(THREAD_ID, {
+          prompt: "Draft with a pasted image",
+          attachments: [
+            {
+              id: "pasted-blob-image",
+              name: "pasted.png",
+              mimeType: "image/png",
+              sizeBytes: 4,
+              blobKey,
+            },
+          ],
+        }),
+      },
+    });
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-blob-draft-image" as MessageId,
+        targetText: "blob draft image",
+      }),
+    });
+
+    try {
+      await vi.waitFor(() => {
+        expect(
+          useComposerDraftStore
+            .getState()
+            .draftsByThreadId[THREAD_ID]?.images.map((image) => image.id),
+        ).toEqual(["pasted-blob-image"]);
+      });
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("keeps text typed while a send is still preparing", async () => {
+    useComposerDraftStore.setState({
+      draftThreadsByThreadId: {
+        [THREAD_ID]: {
+          projectId: HOME_PROJECT_ID,
+          createdAt: NOW_ISO,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          entryPoint: "chat",
+          branch: null,
+          worktreePath: null,
+          envMode: "local",
+        },
+      },
+      projectDraftThreadIdByProjectId: {
+        [HOME_PROJECT_ID]: THREAD_ID,
+      },
+    });
+    const restoreNativeApi = installDeterministicSendNativeApi();
+    const deterministicApi = window.nativeApi!;
+    let releaseProjectCreate!: () => void;
+    const projectCreateGate = new Promise<void>((resolve) => {
+      releaseProjectCreate = resolve;
+    });
+    Object.defineProperty(window, "nativeApi", {
+      configurable: true,
+      value: {
+        ...deterministicApi,
+        orchestration: {
+          ...deterministicApi.orchestration,
+          dispatchCommand: async (
+            command: Parameters<typeof deterministicApi.orchestration.dispatchCommand>[0],
+          ) => {
+            const result = deterministicApi.orchestration.dispatchCommand(command);
+            if (command.type === "project.create") await projectCreateGate;
+            return result;
+          },
+        },
+      },
+    });
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: withHomeChatProject(createDraftOnlySnapshot()),
+      configureFixture: (nextFixture) => {
+        nextFixture.welcome = {
+          ...nextFixture.welcome,
+          homeDir: "/Users/tester",
+          chatWorkspaceRoot: "/Users/tester/Documents/Synara",
+        };
+      },
+    });
+
+    try {
+      useComposerDraftStore.getState().setPrompt(THREAD_ID, "Submitted first message");
+      (await waitForSendButton()).click();
+      await vi.waitFor(() => expect(hasDispatchedCommandType("project.create")).toBe(true));
+      useComposerDraftStore.getState().setPrompt(THREAD_ID, "Typed while the send prepared");
+      releaseProjectCreate();
+
+      const startCommand = await vi.waitFor(() => {
+        const command = wsRequests
+          .map(readDispatchedCommand)
+          .find((candidate) => candidate?.type === "thread.turn.start");
+        expect(command).toBeDefined();
+        return command!;
+      });
+      expect((startCommand.message as { text: string }).text).toContain("Submitted first message");
+      await waitForLayout();
+      expect(useComposerDraftStore.getState().draftsByThreadId[THREAD_ID]?.prompt).toBe(
+        "Typed while the send prepared",
+      );
+    } finally {
+      releaseProjectCreate();
+      await mounted.cleanup();
+      restoreNativeApi();
+    }
+  });
 
   it("keeps the first sent message visible throughout draft promotion", async () => {
     const restoreNativeApi = installDeterministicSendNativeApi();

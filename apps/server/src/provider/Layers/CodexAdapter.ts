@@ -3742,9 +3742,16 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
       threadId,
       requestId,
       decision,
+      approvalRule,
     ) =>
       Effect.tryPromise({
-        try: () => manager.respondToRequest(threadId, requestId, decision),
+        try: () =>
+          manager.respondToRequest(
+            threadId,
+            requestId,
+            decision,
+            ...(approvalRule ? ([approvalRule] as const) : []),
+          ),
         catch: (cause) => toRequestError(threadId, "item/requestApproval/decision", cause),
       });
 
@@ -3891,6 +3898,28 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
             cause,
           }),
       }).pipe(Effect.map((result) => result satisfies ProviderReadPluginResult));
+
+    const getPermissions: NonNullable<CodexAdapterShape["getPermissions"]> = (input) =>
+      Effect.tryPromise({
+        try: () =>
+          manager.getPermissions({
+            ...(input.cwd ? { cwd: input.cwd } : {}),
+            codexOptions: {
+              ...(input.binaryPath ? { binaryPath: input.binaryPath } : {}),
+              ...(input.homePath ? { homePath: input.homePath } : {}),
+              ...(input.shadowHomePath ? { shadowHomePath: input.shadowHomePath } : {}),
+              ...(input.accountId ? { accountId: input.accountId } : {}),
+              ...(input.environment ? { environment: input.environment } : {}),
+            },
+          }),
+        catch: (cause) =>
+          new ProviderAdapterRequestError({
+            provider: PROVIDER,
+            method: "config/read",
+            detail: "Could not load provider permissions.",
+            cause,
+          }),
+      });
 
     const listModels: NonNullable<CodexAdapterShape["listModels"]> = (input) =>
       Effect.tryPromise({
@@ -4146,6 +4175,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
       listSkills,
       listPlugins,
       readPlugin,
+      getPermissions,
       listModels,
       prewarmVoice,
       transcribeVoice,

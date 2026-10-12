@@ -16,8 +16,10 @@ import {
   formatVoiceRecordingDuration,
   isVoiceRecordingCancelledError,
   useVoiceRecorder,
+  type VoiceRecordingPayload,
 } from "../../lib/voiceRecorder";
 import { readNativeApi } from "../../nativeApi";
+import type { NativeApi } from "@synara/contracts";
 import type { RefreshProviderStatusesNow } from "../../hooks/useProviderStatusRefresh";
 import { toastManager, reportToastIssue } from "../ui/toast";
 import { diagnosticIssueReason } from "../../lib/rendererErrorDiagnostics";
@@ -34,6 +36,14 @@ export interface ComposerVoiceFailureCopy {
   authExpiredTitle: string;
   authExpiredDescription: string;
   refreshActionLabel: string;
+  retryActionLabel: string;
+  discardActionLabel: string;
+}
+
+interface FailedVoiceNote {
+  readonly payload: VoiceRecordingPayload;
+  readonly threadId: ThreadId;
+  readonly toastId: string;
 }
 
 interface ComposerVoiceGuardDetails {
@@ -79,7 +89,18 @@ const DEFAULT_FAILURE_COPY: ComposerVoiceFailureCopy = {
   authExpiredDescription:
     "Voice transcription uses your ChatGPT session in Codex. That session was rejected, so sign in again there and retry.",
   refreshActionLabel: "Refresh status",
+  retryActionLabel: "Retry",
+  discardActionLabel: "Discard",
 };
+
+function releaseFailedVoiceNote(failedVoiceNoteRef: { current: FailedVoiceNote | null }) {
+  const failedVoiceNote = failedVoiceNoteRef.current;
+  if (!failedVoiceNote) {
+    return;
+  }
+  failedVoiceNoteRef.current = null;
+  toastManager.close(failedVoiceNote.toastId);
+}
 
 // Keeps the async transcription lifecycle out of ChatView so the component can stay UI-focused.
 export function useComposerVoiceController(
@@ -118,6 +139,7 @@ export function useComposerVoiceController(
   const composerProviderInstanceRef = useRef<ProviderInstanceId>(selectedProviderInstanceId);
   const voiceProviderInstanceRef = useRef<ProviderInstanceId>(voiceProviderInstanceId);
   const voiceRecordingStartedAtRef = useRef<number | null>(null);
+  const failedVoiceNoteRef = useRef<FailedVoiceNote | null>(null);
   const failureCopy = {
     ...DEFAULT_FAILURE_COPY,
     ...failureCopyOverrides,
@@ -145,6 +167,7 @@ export function useComposerVoiceController(
     const invalidatedRequestId = voiceTranscriptionRequestIdRef.current + 1;
     voiceTranscriptionRequestIdRef.current = invalidatedRequestId;
     voiceRecordingStartedAtRef.current = null;
+    releaseFailedVoiceNote(failedVoiceNoteRef);
     // The spinner reset rides the cancel promise so no state is written
     // synchronously inside the effect (keeps the hook compiler-eligible).
     void cancelVoiceRecording().finally(() => {
@@ -164,6 +187,7 @@ export function useComposerVoiceController(
     () => () => {
       voiceTranscriptionRequestIdRef.current += 1;
       voiceRecordingStartedAtRef.current = null;
+      releaseFailedVoiceNote(failedVoiceNoteRef);
     },
     [],
   );
@@ -234,6 +258,7 @@ export function useComposerVoiceController(
       return;
     }
 
+    releaseFailedVoiceNote(failedVoiceNoteRef);
     try {
       await startVoiceRecording();
       voiceRecordingStartedAtRef.current = performance.now();
@@ -262,6 +287,148 @@ export function useComposerVoiceController(
     }
   };
 
+  const beginVoiceTranscriptionRequest = () => {
+    setIsVoiceTranscribing(true);
+    const requestId = voiceTranscriptionRequestIdRef.current + 1;
+    voiceTranscriptionRequestIdRef.current = requestId;
+    const requestThreadId = threadId;
+    const requestProvider = selectedProvider;
+    const requestProviderInstanceId = selectedProviderInstanceId;
+    const requestVoiceProviderInstanceId = voiceProviderInstanceId;
+    return () =>
+      voiceTranscriptionRequestIdRef.current === requestId &&
+      voiceThreadIdRef.current === requestThreadId &&
+      voiceProviderRef.current === requestProvider &&
+      composerProviderInstanceRef.current === requestProviderInstanceId &&
+      voiceProviderInstanceRef.current === requestVoiceProviderInstanceId;
+  };
+
+  const transcribeVoicePayload = (
+    api: NativeApi,
+    cwd: string,
+    payload: VoiceRecordingPayload,
+    isCurrentVoiceRequest: () => boolean,
+  ) =>
+    api.server
+      .transcribeVoice({
+        provider: "codex",
+        providerInstanceId: voiceProviderInstanceId,
+        cwd,
+        ...(activeThreadId ? { threadId: activeThreadId } : {}),
+        ...payload,
+      })
+      .then((result) => {
+        if (!isCurrentVoiceRequest()) {
+          return false;
+        }
+        onTranscriptReady(result.text);
+        return true;
+      });
+
+  const settleVoiceTranscriptionRequest = (isCurrentVoiceRequest: () => boolean) => {
+    if (isCurrentVoiceRequest()) {
+      voiceRecordingStartedAtRef.current = null;
+      setIsVoiceTranscribing(false);
+    }
+  };
+
+  const retryFailedVoiceNote = (failedVoiceNote: FailedVoiceNote): Promise<boolean> => {
+    if (failedVoiceNoteRef.current !== failedVoiceNote) {
+      return Promise.resolve(false);
+    }
+    releaseFailedVoiceNote(failedVoiceNoteRef);
+    const api = readNativeApi();
+    if (!activeProject || !api || voiceThreadIdRef.current !== failedVoiceNote.threadId) {
+      return Promise.resolve(false);
+    }
+    const startedAt = performance.now();
+    const isCurrentVoiceRequest = beginVoiceTranscriptionRequest();
+    return transcribeVoicePayload(
+      api,
+      activeProject.cwd,
+      failedVoiceNote.payload,
+      isCurrentVoiceRequest,
+    )
+      .catch((error: unknown) =>
+        reportVoiceTranscriptionFailure(error, {
+          isCurrentVoiceRequest,
+          startedAt,
+          failedPayload: failedVoiceNote.payload,
+        }),
+      )
+      .finally(() => settleVoiceTranscriptionRequest(isCurrentVoiceRequest));
+  };
+
+  const reportVoiceTranscriptionFailure = (
+    error: unknown,
+    request: {
+      isCurrentVoiceRequest: () => boolean;
+      startedAt: number;
+      failedPayload: VoiceRecordingPayload | null;
+    },
+  ): false => {
+    if (!request.isCurrentVoiceRequest()) {
+      return false;
+    }
+
+    const description =
+      error instanceof Error
+        ? sanitizeVoiceErrorMessage(error.message)
+        : failureCopy.fallbackDescription;
+    const authExpired = isVoiceAuthExpiredMessage(description);
+    if (authExpired) {
+      void refreshVoiceStatus();
+    }
+    const failedPayload = request.failedPayload;
+    const failedVoiceNoteHolder: { current: FailedVoiceNote | null } = { current: null };
+    const retryAction = {
+      children: failureCopy.retryActionLabel,
+      onClick: () => {
+        if (failedVoiceNoteHolder.current) {
+          void retryFailedVoiceNote(failedVoiceNoteHolder.current);
+        }
+      },
+    };
+    const discardFailedVoiceNote = () => {
+      if (failedVoiceNoteRef.current === failedVoiceNoteHolder.current) {
+        releaseFailedVoiceNote(failedVoiceNoteRef);
+      }
+    };
+    const refreshAction = {
+      children: failureCopy.refreshActionLabel,
+      onClick: () => {
+        void refreshVoiceStatus();
+      },
+    };
+    const discardAction = {
+      children: failureCopy.discardActionLabel,
+      onClick: discardFailedVoiceNote,
+    };
+    const retryData = {
+      secondaryActionProps: authExpired ? retryAction : discardAction,
+      onClose: discardFailedVoiceNote,
+    };
+    const primaryAction = authExpired ? refreshAction : failedPayload ? retryAction : null;
+    const toastId = toastManager.add({
+      type: "error",
+      title: authExpired ? failureCopy.authExpiredTitle : failureCopy.transcriptionFailedTitle,
+      description: authExpired ? failureCopy.authExpiredDescription : description,
+      ...(primaryAction ? { actionProps: primaryAction } : {}),
+      ...(failedPayload ? { data: retryData } : {}),
+    });
+    if (failedPayload) {
+      releaseFailedVoiceNote(failedVoiceNoteRef);
+      failedVoiceNoteHolder.current = { payload: failedPayload, threadId, toastId };
+      failedVoiceNoteRef.current = failedVoiceNoteHolder.current;
+    }
+    reportToastIssue(toastId, {
+      code: failedPayload ? "voice.transcribe.failed" : "voice.record.failed",
+      reason: authExpired ? "auth" : diagnosticIssueReason(error),
+      durationMs: performance.now() - request.startedAt,
+    });
+    return false;
+  };
+
   const submitComposerVoiceRecording = (): Promise<boolean> => {
     if (!activeProject || !isVoiceRecording) {
       return Promise.resolve(false);
@@ -280,21 +447,10 @@ export function useComposerVoiceController(
       return Promise.resolve(false);
     }
 
-    setIsVoiceTranscribing(true);
+    releaseFailedVoiceNote(failedVoiceNoteRef);
     const startedAt = performance.now();
-    let transcriptionStarted = false;
-    const requestId = voiceTranscriptionRequestIdRef.current + 1;
-    voiceTranscriptionRequestIdRef.current = requestId;
-    const requestThreadId = threadId;
-    const requestProvider = selectedProvider;
-    const requestProviderInstanceId = selectedProviderInstanceId;
-    const requestVoiceProviderInstanceId = voiceProviderInstanceId;
-    const isCurrentVoiceRequest = () =>
-      voiceTranscriptionRequestIdRef.current === requestId &&
-      voiceThreadIdRef.current === requestThreadId &&
-      voiceProviderRef.current === requestProvider &&
-      composerProviderInstanceRef.current === requestProviderInstanceId &&
-      voiceProviderInstanceRef.current === requestVoiceProviderInstanceId;
+    let transcribedPayload: VoiceRecordingPayload | null = null;
+    const isCurrentVoiceRequest = beginVoiceTranscriptionRequest();
 
     // Promise chain instead of async/try-catch-finally: React Compiler does
     // not yet support try/finally, and it would skip optimizing this hook.
@@ -310,64 +466,17 @@ export function useComposerVoiceController(
           });
           return false;
         }
-        transcriptionStarted = true;
-        return api.server
-          .transcribeVoice({
-            provider: "codex",
-            providerInstanceId: requestVoiceProviderInstanceId,
-            cwd: activeProject.cwd,
-            ...(activeThreadId ? { threadId: activeThreadId } : {}),
-            ...payload,
-          })
-          .then((result) => {
-            if (!isCurrentVoiceRequest()) {
-              return false;
-            }
-            onTranscriptReady(result.text);
-            return true;
-          });
+        transcribedPayload = payload;
+        return transcribeVoicePayload(api, activeProject.cwd, payload, isCurrentVoiceRequest);
       })
-      .catch((error: unknown) => {
-        if (!isCurrentVoiceRequest()) {
-          return false;
-        }
-
-        const description =
-          error instanceof Error
-            ? sanitizeVoiceErrorMessage(error.message)
-            : failureCopy.fallbackDescription;
-        const authExpired = isVoiceAuthExpiredMessage(description);
-        if (authExpired) {
-          void refreshVoiceStatus();
-        }
-        const toastId = toastManager.add({
-          type: "error",
-          title: authExpired ? failureCopy.authExpiredTitle : failureCopy.transcriptionFailedTitle,
-          description: authExpired ? failureCopy.authExpiredDescription : description,
-          ...(authExpired
-            ? {
-                actionProps: {
-                  children: failureCopy.refreshActionLabel,
-                  onClick: () => {
-                    void refreshVoiceStatus();
-                  },
-                },
-              }
-            : {}),
-        });
-        reportToastIssue(toastId, {
-          code: transcriptionStarted ? "voice.transcribe.failed" : "voice.record.failed",
-          reason: authExpired ? "auth" : diagnosticIssueReason(error),
-          durationMs: performance.now() - startedAt,
-        });
-        return false;
-      })
-      .finally(() => {
-        if (isCurrentVoiceRequest()) {
-          voiceRecordingStartedAtRef.current = null;
-          setIsVoiceTranscribing(false);
-        }
-      });
+      .catch((error: unknown) =>
+        reportVoiceTranscriptionFailure(error, {
+          isCurrentVoiceRequest,
+          startedAt,
+          failedPayload: transcribedPayload,
+        }),
+      )
+      .finally(() => settleVoiceTranscriptionRequest(isCurrentVoiceRequest));
   };
 
   const cancelComposerVoiceRecording = () => {

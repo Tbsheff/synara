@@ -93,3 +93,24 @@ it("restores all question-answer pairs after the existing normal draft", () => {
     "Existing draft\n\nWhich color?\nBlue\n\nWhich features?\nSearch, Tabs\n\nAnything else?\nKeep it simple",
   );
 });
+
+it("keeps the active answer mode when both draft values survive a reload", () => {
+  const threadId = ThreadId.makeUnsafe("saved-mode-thread");
+  const bothValuesDraft: PendingUserInputRecoveryDraft = {
+    ...draft,
+    answers: {
+      "1": { selectedOptionLabels: ["Blue"], customAnswer: "Teal", answerMode: "options" },
+    },
+  };
+  useComposerDraftStore.getState().setPendingUserInputDrafts(threadId, { [key]: bothValuesDraft });
+  const persisted = partializeComposerDraftStoreState(useComposerDraftStore.getState());
+  const normalized = normalizeCurrentPersistedComposerDraftStoreState(
+    JSON.parse(JSON.stringify(persisted)),
+  );
+  const hydrated = toHydratedThreadDraft(threadId, normalized.draftsByThreadId[threadId]!);
+  expect(hydrated.pendingUserInputDrafts?.[key]?.answers["1"]).toEqual({
+    selectedOptionLabels: ["Blue"],
+    customAnswer: "Teal",
+    answerMode: "options",
+  });
+});

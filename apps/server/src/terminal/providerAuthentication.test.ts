@@ -65,6 +65,7 @@ process.stdin.once('data', () => { fs.mkdirSync(home, { recursive: true }); fs.w
   const baseEnv = {
     PATH: path.dirname(process.execPath),
     HOME: homeDir,
+    CODEX_HOME: path.join(root, "codex-base"),
     USER: "fixture-user",
     LOGNAME: "fixture-user",
     SYNARA_HOME: path.join(root, "synara"),
@@ -253,4 +254,28 @@ it("prepares account roots against current settings without dropping an account 
       ).toContain(input.stateDir);
     }).pipe(Effect.provide(ServerSettingsService.layerTest(input.settings))),
   );
+});
+
+it.each([
+  ["codex", ["logout"]],
+  ["claudeAgent", ["auth", "logout"]],
+] as const)("uses the selected %s account for sign-out", async (provider, args) => {
+  const input = fixture(provider);
+  const baseEnv = { ...input.baseEnv, CODEX_HOME: path.join(input.root, "codex-base") };
+  const login = await resolveProviderAuthenticationLaunch({ ...input, baseEnv });
+  const logout = await resolveProviderAuthenticationLaunch({
+    ...input,
+    baseEnv,
+    action: "sign-out",
+  });
+  expect(logout.args).toEqual(args);
+  expect(logout.env).toEqual(login.env);
+  expect(logout.cwd).toEqual(login.cwd);
+});
+
+it("refuses unsupported sign-out before preparing a provider process", async () => {
+  const input = fixture("pi");
+  await expect(
+    resolveProviderAuthenticationLaunch({ ...input, action: "sign-out" }),
+  ).rejects.toThrow("supported sign-out");
 });

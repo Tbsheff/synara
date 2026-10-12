@@ -6,6 +6,7 @@ import {
   createProviderInstallResetPatch,
   isProviderInstallSettingsDirty,
   providerInstanceLaunchConfigFor,
+  nextImportedProviderInstanceId,
 } from "./ProvidersSettingsPanel";
 
 const defaults = AppSettingsSchema.makeUnsafe({});
@@ -62,17 +63,17 @@ describe("createProviderInstallResetPatch", () => {
 });
 
 describe("providerInstanceLaunchConfigFor", () => {
-  it("maps Pi-family agent directories to agentDir, not binaryPath", () => {
+  it("gives a new Pi-family account the binary path but not the default account's agent directory", () => {
     expect(
       providerInstanceLaunchConfigFor("omp", {
         ...defaults,
         ompBinaryPath: "/usr/local/bin/omp",
         ompAgentDir: "~/.omp-work/agent",
       }),
-    ).toEqual({ binaryPath: "/usr/local/bin/omp", agentDir: "~/.omp-work/agent" });
+    ).toEqual({ binaryPath: "/usr/local/bin/omp" });
     expect(
       providerInstanceLaunchConfigFor("pi", { ...defaults, piAgentDir: "~/.pi-work/agent" }),
-    ).toEqual({ agentDir: "~/.pi-work/agent" });
+    ).toEqual({});
   });
 
   it("keeps the Claude binary path and leaves the provider-wide Artifacts setting out", () => {
@@ -84,4 +85,12 @@ describe("providerInstanceLaunchConfigFor", () => {
       }),
     ).toEqual({ binaryPath: "/opt/homebrew/bin/claude" });
   });
+});
+
+it("keeps imported account IDs clear of entries with an unknown driver", () => {
+  const settings = {
+    ...defaults,
+    providerInstances: { codex_2: { driver: "future-provider", enabled: true, config: {} } },
+  } as unknown as typeof defaults;
+  expect(nextImportedProviderInstanceId("codex", settings)).toBe("codex_3");
 });

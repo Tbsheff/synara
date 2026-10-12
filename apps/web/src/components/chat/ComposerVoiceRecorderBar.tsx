@@ -103,15 +103,11 @@ export function ComposerVoiceRecorderBar(props: ComposerVoiceRecorderBarProps) {
       <button
         type="button"
         className="flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-full bg-zinc-200/80 text-zinc-700 transition-colors hover:bg-zinc-200 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-white/10 dark:text-zinc-100 dark:hover:bg-white/15 sm:h-7 sm:w-7"
-        aria-label={props.isTranscribing ? "Transcribing voice note" : "Cancel voice recording"}
-        disabled={props.disabled || props.isTranscribing}
+        aria-label={props.isTranscribing ? "Cancel transcription" : "Cancel voice recording"}
+        disabled={props.disabled}
         onClick={props.onDiscard}
       >
-        {props.isTranscribing ? (
-          <Loader2Icon aria-hidden="true" className="size-3 animate-spin" />
-        ) : (
-          <XIcon aria-hidden="true" className="size-3.5" />
-        )}
+        <XIcon aria-hidden="true" className="size-3.5" />
       </button>
 
       <Button

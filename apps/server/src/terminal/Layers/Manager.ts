@@ -762,7 +762,10 @@ interface TerminalManagerOptions {
   processKillGraceMs?: number;
   maxRetainedInactiveSessions?: number;
   managedProfileResolver?: () => Promise<ReadonlyArray<ManagedTerminalProfile>>;
-  providerAuthResolver?: (instanceId: string) => Promise<ProviderAuthenticationLaunch>;
+  providerAuthResolver?: (
+    instanceId: string,
+    action?: "sign-in" | "sign-out",
+  ) => Promise<ProviderAuthenticationLaunch>;
 }
 
 interface KillEscalationHandle {
@@ -945,7 +948,12 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
           managedAgentObserved: false,
           runtimeEnv: normalizedRuntimeEnv(input.env),
           ...(input.providerAuthInstanceId
-            ? { providerAuthInstanceId: input.providerAuthInstanceId }
+            ? {
+                providerAuthInstanceId: input.providerAuthInstanceId,
+                ...(input.providerAuthAction
+                  ? { providerAuthAction: input.providerAuthAction }
+                  : {}),
+              }
             : {}),
           pendingInputBuffer: "",
           modeReplayTracker: null,
@@ -969,7 +977,10 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
         return this.snapshot(session);
       }
 
-      if (existing.providerAuthInstanceId !== input.providerAuthInstanceId) {
+      if (
+        existing.providerAuthInstanceId !== input.providerAuthInstanceId ||
+        (existing.providerAuthAction ?? "sign-in") !== (input.providerAuthAction ?? "sign-in")
+      ) {
         throw new Error("A terminal cannot switch its authentication account.");
       }
       existing.lastOpenedAt = new Date().toISOString();
@@ -1398,7 +1409,10 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
       let windowsVerbatimArguments: true | undefined;
       if (session.providerAuthInstanceId) {
         if (!this.providerAuthResolver) throw new Error("Provider authentication is unavailable.");
-        const launch = await this.providerAuthResolver(session.providerAuthInstanceId);
+        const launch = await this.providerAuthResolver(
+          session.providerAuthInstanceId,
+          session.providerAuthAction,
+        );
         const plan = prepareProcess(launch.command, launch.args, {
           env: launch.env,
           cwd: launch.cwd,
@@ -2522,7 +2536,7 @@ export const TerminalManagerLive = Layer.effect(
           new TerminalManagerRuntime({
             logsDir: terminalLogsDir,
             ptyAdapter,
-            providerAuthResolver: async (instanceId) => {
+            providerAuthResolver: async (instanceId, action) => {
               let settings = await Effect.runPromise(serverSettings.getSettings);
               const patch = prepareProviderAuthenticationSettings({
                 settings,
@@ -2544,6 +2558,7 @@ export const TerminalManagerLive = Layer.effect(
                   ),
                 );
               return resolveProviderAuthenticationLaunch({
+                ...(action ? { action } : {}),
                 settings,
                 instanceId,
                 homeDir,

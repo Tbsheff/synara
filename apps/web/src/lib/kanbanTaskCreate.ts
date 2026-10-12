@@ -41,6 +41,8 @@ export function createKanbanDraftTask(input: KanbanDraftTaskInput): ThreadId {
  */
 export async function createAndSendKanbanTask(
   input: KanbanDraftTaskInput & {
+    existingThreadId?: ThreadId | undefined;
+    onThreadCreated?: ((threadId: ThreadId) => void) | undefined;
     defaultProvider: ProviderKind;
     assistantDeliveryMode: AssistantDeliveryMode;
     providerOptions?: ProviderStartOptions | undefined;
@@ -48,7 +50,8 @@ export async function createAndSendKanbanTask(
     providerInstances?: ReadonlyArray<Pick<ProviderInstanceOption, "instanceId" | "provider">>;
   },
 ): Promise<{ threadId: ThreadId; result: KanbanDraftDispatchResult }> {
-  const threadId = createKanbanDraftTask(input);
+  const threadId = input.existingThreadId ?? createKanbanDraftTask(input);
+  input.onThreadCreated?.(threadId);
   const dispatch =
     input.sendAsGoal === true ? dispatchKanbanDraftThreadAsGoal : dispatchKanbanDraftThread;
   const result = await dispatch({

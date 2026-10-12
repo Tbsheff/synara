@@ -5601,6 +5601,22 @@ describe("transcript parity ordering and typed entries", () => {
     expect(entries.map((entry) => entry.id)).toEqual(["command"]);
   });
 
+  it("keeps options-only policy when replaying question activities", () => {
+    expect(
+      parseUserInputQuestions({
+        questions: [
+          {
+            id: "q",
+            header: "Target",
+            question: "Choose",
+            isOther: false,
+            options: [{ label: "CLI", description: "CLI" }],
+          },
+        ],
+      })?.[0]?.isOther,
+    ).toBe(false);
+  });
+
   it("keeps option previews on parsed user input questions", () => {
     expect(
       parseUserInputQuestions({

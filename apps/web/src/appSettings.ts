@@ -3,7 +3,8 @@
 // Layer: Web settings state
 // Exports: app setting schema, normalization helpers, provider option builders
 
-import { useCallback, useEffect, useRef } from "react";
+import { useEffect, useRef } from "react";
+import { toastManager } from "./components/ui/toast";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Option, Schema, SchemaTransformation } from "effect";
 import {
@@ -79,6 +80,7 @@ import {
 } from "./lib/chatWidth";
 
 const APP_SETTINGS_STORAGE_KEY = "synara:app-settings:v1";
+const UNREADABLE_APP_SETTINGS_STORAGE_KEY = `${APP_SETTINGS_STORAGE_KEY}:unreadable`;
 const SERVER_SETTINGS_MIGRATION_STORAGE_KEY = "synara:server-settings-migrated:v1";
 
 function hasCompletedServerSettingsMigration(): boolean {
@@ -625,6 +627,16 @@ export interface AppModelOption extends ProviderModelOption {
 
 const DEFAULT_APP_SETTINGS = AppSettingsSchema.makeUnsafe({});
 let serverSettingsMigrationInFlight = false;
+let serverSettingsMutationQueue: Promise<void> = Promise.resolve();
+
+function enqueueServerSettingsMutation<Result>(mutation: () => Promise<Result>): Promise<Result> {
+  const queued = serverSettingsMutationQueue.then(mutation, mutation);
+  serverSettingsMutationQueue = queued.then(
+    () => undefined,
+    () => undefined,
+  );
+  return queued;
+}
 
 const PROVIDER_CUSTOM_MODEL_CONFIG: Record<ProviderKind, ProviderCustomModelConfig> = {
   codex: {
@@ -2665,7 +2677,140 @@ function resolveAppSettings(
   return settings;
 }
 
+const decodeStoredAppSettings = Schema.decodeUnknownOption(AppSettingsSchema);
+let checkedStoredAppSettingsRaw: string | null | undefined;
+
+function parseStoredAppSettings(raw: string): unknown {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
+}
+
+function withoutStoredInstanceSecrets(instance: unknown): unknown {
+  if (!isRecord(instance)) return instance;
+  const environment = Array.isArray(instance.environment)
+    ? instance.environment.map((entry: unknown) =>
+        isRecord(entry) && entry.sensitive === true ? { ...entry, value: "" } : entry,
+      )
+    : instance.environment;
+  if (!isRecord(instance.config)) return { ...instance, environment };
+  const { serverPassword: _serverPassword, ...config } = instance.config;
+  return { ...instance, environment, config };
+}
+
+function withoutStoredSecrets(stored: Record<string, unknown>): Record<string, unknown> {
+  const { openCodeServerPassword: _openCodeServerPassword, providerInstances, ...rest } = stored;
+  if (!isRecord(providerInstances)) return rest;
+  return {
+    ...rest,
+    providerInstances: Object.fromEntries(
+      Object.entries(providerInstances).map(([instanceId, instance]) => [
+        instanceId,
+        withoutStoredInstanceSecrets(instance),
+      ]),
+    ),
+  };
+}
+
+function readableStoredAppSettingsFields(stored: Record<string, unknown>): Record<string, unknown> {
+  const readable: Record<string, unknown> = {};
+  for (const [key, field] of Object.entries(AppSettingsSchema.fields)) {
+    if (!Object.prototype.hasOwnProperty.call(stored, key)) continue;
+    const decoded = Schema.decodeUnknownOption(Schema.Struct({ [key]: field }))({
+      [key]: stored[key],
+    });
+    if (Option.isSome(decoded)) readable[key] = stored[key];
+  }
+  return readable;
+}
+
+function recoverUnreadableStoredAppSettings(): void {
+  const storage = globalThis.localStorage;
+  if (!storage) return;
+  const raw = storage.getItem(APP_SETTINGS_STORAGE_KEY);
+  if (raw === checkedStoredAppSettingsRaw) return;
+  checkedStoredAppSettingsRaw = raw;
+  if (!raw) return;
+  const stored = parseStoredAppSettings(raw);
+  if (isRecord(stored) && Option.isSome(decodeStoredAppSettings(stored))) return;
+  if (storage.getItem(UNREADABLE_APP_SETTINGS_STORAGE_KEY) === null) {
+    storage.setItem(
+      UNREADABLE_APP_SETTINGS_STORAGE_KEY,
+      isRecord(stored) ? JSON.stringify(withoutStoredSecrets(stored)) : raw,
+    );
+  }
+  if (!isRecord(stored)) return;
+  const repaired = JSON.stringify(readableStoredAppSettingsFields(stored));
+  storage.setItem(APP_SETTINGS_STORAGE_KEY, repaired);
+  checkedStoredAppSettingsRaw = repaired;
+  if (typeof window !== "undefined") {
+    queueMicrotask(() =>
+      window.dispatchEvent(
+        new StorageEvent("storage", { key: APP_SETTINGS_STORAGE_KEY, storageArea: storage }),
+      ),
+    );
+  }
+}
+
+function rebaseConfirmedValue(seen: unknown, next: unknown, confirmed: unknown): unknown {
+  if (Object.is(seen, next)) return confirmed;
+  if (!isRecord(seen) || !isRecord(next) || !isRecord(confirmed)) return next;
+  const rebased: Record<string, unknown> = { ...confirmed };
+  for (const key of new Set([...Object.keys(seen), ...Object.keys(next)])) {
+    if (!Object.prototype.hasOwnProperty.call(next, key)) {
+      delete rebased[key];
+    } else if (!Object.prototype.hasOwnProperty.call(seen, key)) {
+      rebased[key] = next[key];
+    } else {
+      rebased[key] = rebaseConfirmedValue(seen[key], next[key], confirmed[key]);
+    }
+  }
+  return rebased;
+}
+
+export function rebaseProviderInstancesPatch(
+  seen: ProviderInstanceConfigMap,
+  next: ProviderInstanceConfigMap,
+  confirmed: ProviderInstanceConfigMap,
+): ProviderInstanceConfigMap {
+  const rebased: Record<string, unknown> = { ...confirmed };
+  for (const instanceId of new Set([...Object.keys(seen), ...Object.keys(next)])) {
+    const wasSeen = Object.prototype.hasOwnProperty.call(seen, instanceId);
+    const isConfirmed = Object.prototype.hasOwnProperty.call(confirmed, instanceId);
+    if (!Object.prototype.hasOwnProperty.call(next, instanceId)) {
+      delete rebased[instanceId];
+    } else if (!wasSeen) {
+      if (isConfirmed && !Object.is(confirmed[instanceId], next[instanceId])) {
+        throw new Error(`An account with the ID '${instanceId}' already exists.`);
+      }
+      rebased[instanceId] = next[instanceId];
+    } else if (isConfirmed) {
+      rebased[instanceId] = rebaseConfirmedValue(
+        seen[instanceId],
+        next[instanceId],
+        confirmed[instanceId],
+      );
+    }
+  }
+  return rebased as ProviderInstanceConfigMap;
+}
+
+const ACCOUNT_DEFINITION_SETTING_KEYS = [
+  "providerInstances",
+  "codexAccounts",
+  "selectedCodexAccountId",
+] as const satisfies ReadonlyArray<keyof AppSettings>;
+
+function withoutAccountDefinitions(settings: AppSettings): Partial<AppSettings> {
+  const resettable: Partial<AppSettings> = { ...settings };
+  for (const key of ACCOUNT_DEFINITION_SETTING_KEYS) delete resettable[key];
+  return resettable;
+}
+
 export function useAppSettings() {
+  recoverUnreadableStoredAppSettings();
   const queryClient = useQueryClient();
   const serverSettingsQuery = useQuery(serverSettingsQueryOptions());
   const [localSettings, setSettings] = useLocalStorage(
@@ -2674,22 +2819,7 @@ export function useAppSettings() {
     AppSettingsSchema,
   );
   const normalizedStoredSettingsRef = useRef(false);
-  const serverSettingsMutationQueueRef = useRef<Promise<void>>(Promise.resolve());
   const pendingServerSettingsMigrationPatchRef = useRef<ServerSettingsPatch | null>(null);
-  const enqueueServerSettingsMutation = useCallback(
-    <Result>(mutation: () => Promise<Result>): Promise<Result> => {
-      const queued = serverSettingsMutationQueueRef.current.then(
-        () => mutation(),
-        () => mutation(),
-      );
-      serverSettingsMutationQueueRef.current = queued.then(
-        () => undefined,
-        () => undefined,
-      );
-      return queued;
-    },
-    [],
-  );
 
   const defaults = getResolvedDefaultAppSettings();
   const settings = resolveAppSettings(localSettings, serverSettingsQuery.data);
@@ -2750,13 +2880,7 @@ export function useAppSettings() {
       .finally(() => {
         serverSettingsMigrationInFlight = false;
       });
-  }, [
-    enqueueServerSettingsMutation,
-    localSettings,
-    queryClient,
-    serverSettingsQuery.data,
-    setSettings,
-  ]);
+  }, [localSettings, queryClient, serverSettingsQuery.data, setSettings]);
 
   const refreshProvidersAfterEnablementChange = async () => {
     const api = ensureNativeApi();
@@ -2773,6 +2897,8 @@ export function useAppSettings() {
   const updateSettingsAndWait = async (patch: Partial<AppSettings>): Promise<void> => {
     const providerInstancesBeforePatch =
       patch.providerInstances !== undefined ? localSettings.providerInstances : undefined;
+    const providerInstancesSeen =
+      patch.providerInstances !== undefined ? settings.providerInstances : undefined;
     // The pending migration ref retains the one plaintext snapshot that still
     // needs to reach the server; browser state and storage stay redacted.
     setSettings((prev) => applyLocalAppSettingsPatch(prev, patch));
@@ -2780,14 +2906,28 @@ export function useAppSettings() {
       const currentServerSettings =
         queryClient.getQueryData<ServerSettingsView>(serverQueryKeys.settings()) ??
         serverSettingsQuery.data;
-      const serverPatch = appSettingsPatchToServerSettingsPatch(patch, currentServerSettings);
-      if (isServerSettingsPatchEmpty(serverPatch)) {
-        return;
-      }
-
-      const api = ensureNativeApi();
       try {
-        const nextSettings = await api.server.updateSettings(serverPatch);
+        const confirmedPatch =
+          providerInstancesSeen !== undefined &&
+          patch.providerInstances !== undefined &&
+          currentServerSettings?.providerInstances !== undefined
+            ? {
+                ...patch,
+                providerInstances: rebaseProviderInstancesPatch(
+                  providerInstancesSeen,
+                  patch.providerInstances,
+                  currentServerSettings.providerInstances,
+                ),
+              }
+            : patch;
+        const serverPatch = appSettingsPatchToServerSettingsPatch(
+          confirmedPatch,
+          currentServerSettings,
+        );
+        if (isServerSettingsPatchEmpty(serverPatch)) {
+          return;
+        }
+        const nextSettings = await ensureNativeApi().server.updateSettings(serverPatch);
         queryClient.setQueryData(serverQueryKeys.settings(), nextSettings);
         if (hasOwn(patch, "githubInboxIncludeUpstreams")) {
           // The repository set changed, so the inbox lists (and the review badge) are stale.
@@ -2802,7 +2942,7 @@ export function useAppSettings() {
             .invalidateQueries({ queryKey: providerDiscoveryQueryKeys.all })
             .catch(() => undefined);
         }
-      } catch {
+      } catch (error) {
         if (providerInstancesBeforePatch !== undefined) {
           setSettings((prev) => {
             const restored = normalizeAppSettings({
@@ -2820,21 +2960,30 @@ export function useAppSettings() {
             .invalidateQueries({ queryKey: providerDiscoveryQueryKeys.all })
             .catch(() => undefined);
         }
+        throw error;
       }
     });
   };
 
   const updateSettings = (patch: Partial<AppSettings>): void => {
-    void updateSettingsAndWait(patch);
+    void updateSettingsAndWait(patch).catch((error: unknown) => {
+      toastManager.add({
+        type: "error",
+        title: "Could not save settings",
+        description: error instanceof Error ? error.message : "The server did not save the change.",
+      });
+    });
   };
 
   const resetSettings = async (): Promise<void> => {
-    // "Restore defaults" resets preferences, not lifecycle markers: clearing the
-    // onboarding completion timestamp would replay the first-run tour on the next launch.
-    const { onboardingCompletedAt: _keepOnboardingCompletedAt, ...resettableDefaults } = defaults;
+    const { onboardingCompletedAt: _keepOnboardingCompletedAt, ...resettableDefaults } =
+      withoutAccountDefinitions(defaults);
     setSettings((prev) => ({
       ...DEFAULT_APP_SETTINGS,
       onboardingCompletedAt: prev.onboardingCompletedAt,
+      providerInstances: prev.providerInstances,
+      codexAccounts: prev.codexAccounts,
+      selectedCodexAccountId: prev.selectedCodexAccountId,
     }));
     await enqueueServerSettingsMutation(async () => {
       const currentServerSettings =
@@ -2856,7 +3005,7 @@ export function useAppSettings() {
         if (providerSettingsChanged) {
           await refreshProvidersAfterEnablementChange();
         }
-      } catch {
+      } catch (error) {
         await queryClient
           .invalidateQueries({ queryKey: serverQueryKeys.settings() })
           .catch(() => undefined);
@@ -2865,6 +3014,7 @@ export function useAppSettings() {
             .invalidateQueries({ queryKey: providerDiscoveryQueryKeys.all })
             .catch(() => undefined);
         }
+        throw error;
       }
     });
   };

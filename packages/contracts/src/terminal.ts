@@ -44,6 +44,7 @@ export const TerminalOpenInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
   // Runs only the server-selected authentication entry point for this account.
   providerAuthInstanceId: Schema.optional(ProviderInstanceId),
+  providerAuthAction: Schema.optional(Schema.Literals(["sign-in", "sign-out"])),
   cols: Schema.optional(TerminalColsSchema),
   rows: Schema.optional(TerminalRowsSchema),
   env: Schema.optional(TerminalEnvSchema),

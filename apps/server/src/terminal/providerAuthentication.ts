@@ -4,7 +4,10 @@
 
 import path from "node:path";
 import type { ServerSettings, ServerSettingsPatch } from "@synara/contracts";
-import { PROVIDER_AUTHENTICATION } from "@synara/shared/providerCliProfiles";
+import {
+  PROVIDER_AUTHENTICATION,
+  PROVIDER_SIGN_OUT_ARGS,
+} from "@synara/shared/providerCliProfiles";
 import { deriveProviderInstances } from "@synara/shared/providerInstances";
 import {
   buildProviderChildEnvironment,
@@ -98,6 +101,7 @@ export function prepareProviderAuthenticationSettings(input: {
 }
 
 export async function resolveProviderAuthenticationLaunch(input: {
+  readonly action?: "sign-in" | "sign-out";
   readonly settings: ServerSettings;
   readonly instanceId: string;
   readonly homeDir: string;
@@ -108,6 +112,11 @@ export async function resolveProviderAuthenticationLaunch(input: {
     (candidate) => candidate.instanceId === input.instanceId,
   );
   if (!instance?.enabled) throw new Error("This provider account is missing or disabled.");
+  const args =
+    input.action === "sign-out"
+      ? PROVIDER_SIGN_OUT_ARGS[instance.driver]
+      : PROVIDER_AUTHENTICATION[instance.driver].args;
+  if (!args) throw new Error("This provider does not expose a supported sign-out command.");
   const profile = (
     await deriveManagedTerminalProfiles({
       ...input,
@@ -127,7 +136,7 @@ export async function resolveProviderAuthenticationLaunch(input: {
   ensurePrivateDirectorySync(cwd);
   return {
     command: profile.targetPath,
-    args: PROVIDER_AUTHENTICATION[instance.driver].args,
+    args,
     env: buildProviderChildEnvironment({
       provider: instance.driver === "claudeAgent" ? "claude" : instance.driver,
       baseEnv: buildProviderProfileProcessEnv(profile, input.baseEnv),

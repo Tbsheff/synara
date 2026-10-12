@@ -38,10 +38,14 @@ import {
   projectIdFromDraftThreadMappingKey,
   PersistedComposerImageAttachment,
   type ComposerDraftStoreState,
+  type ComposerFileAttachment,
+  type ComposerImageAttachment,
   type ComposerPromptHistorySavedDraft,
   type ComposerThreadDraftState,
   type DraftThreadEnvMode,
   type ModelSelectionByProviderInstance,
+  type PersistedComposerFileAttachment as PersistedComposerFileAttachmentDraft,
+  type QueuedComposerChatTurn,
   type QueuedComposerTurn,
 } from "./composerDraftDomain";
 import {
@@ -212,6 +216,14 @@ const PersistedBrowserAnnotationDraft = Schema.Struct({
   capturedAt: Schema.String,
 });
 
+const PersistedComposerFileAttachment = Schema.Struct({
+  id: Schema.String,
+  name: Schema.String,
+  mimeType: Schema.String,
+  sizeBytes: Schema.Number,
+  blobKey: Schema.optionalKey(Schema.String),
+});
+
 const PersistedQueuedComposerChatTurn = Schema.Struct({
   id: Schema.String,
   kind: Schema.Literal("chat"),
@@ -219,6 +231,7 @@ const PersistedQueuedComposerChatTurn = Schema.Struct({
   previewText: Schema.String,
   prompt: Schema.String,
   images: Schema.Array(PersistedComposerImageAttachment),
+  files: Schema.optionalKey(Schema.Array(PersistedComposerFileAttachment)),
   assistantSelections: Schema.optionalKey(Schema.Array(PersistedAssistantSelectionDraft)),
   browserAnnotations: Schema.optionalKey(Schema.Array(PersistedBrowserAnnotationDraft)),
   terminalContexts: Schema.Array(PersistedQueuedTerminalContextDraft),
@@ -646,6 +659,67 @@ function toPersistedPullRequestContext(
   };
 }
 
+function normalizePersistedAttachmentMetadata(
+  value: unknown,
+): PersistedComposerFileAttachmentDraft | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const candidate = value as Record<string, unknown>;
+  if (
+    typeof candidate.id !== "string" ||
+    candidate.id.length === 0 ||
+    typeof candidate.name !== "string" ||
+    typeof candidate.mimeType !== "string" ||
+    typeof candidate.sizeBytes !== "number" ||
+    !Number.isFinite(candidate.sizeBytes)
+  ) {
+    return null;
+  }
+  return {
+    id: candidate.id,
+    name: candidate.name,
+    mimeType: candidate.mimeType,
+    sizeBytes: candidate.sizeBytes,
+    ...(typeof candidate.blobKey === "string" && candidate.blobKey.length > 0
+      ? { blobKey: candidate.blobKey }
+      : {}),
+  };
+}
+
+function attachmentMetadata(
+  attachment: ComposerImageAttachment | ComposerFileAttachment,
+): PersistedComposerFileAttachmentDraft {
+  return {
+    id: attachment.id,
+    name: attachment.name,
+    mimeType: attachment.mimeType,
+    sizeBytes: attachment.sizeBytes,
+  };
+}
+
+function persistQueuedChatTurnImages(
+  queuedTurn: QueuedComposerChatTurn,
+): PersistedComposerImageAttachment[] {
+  if (queuedTurn.persistedImages) {
+    return queuedTurn.persistedImages.map(toStorageSafePersistedAttachment);
+  }
+  const inlineImageById = new Map(
+    persistQueuedComposerImages(queuedTurn.images).map((image) => [image.id, image]),
+  );
+  return queuedTurn.images.map(
+    (image) => inlineImageById.get(image.id) ?? attachmentMetadata(image),
+  );
+}
+
+function persistQueuedChatTurnFiles(
+  queuedTurn: QueuedComposerChatTurn,
+): PersistedComposerFileAttachmentDraft[] {
+  return queuedTurn.persistedFiles
+    ? queuedTurn.persistedFiles.map((file) => ({ ...file }))
+    : queuedTurn.files.map(attachmentMetadata);
+}
+
 function normalizePersistedQueuedTurns(
   rawQueuedTurns: unknown,
 ): DeepMutable<NonNullable<PersistedComposerThreadDraftState["queuedTurns"]>> | undefined {
@@ -722,7 +796,14 @@ function normalizePersistedQueuedTurns(
       const prompt = typeof candidate.prompt === "string" ? candidate.prompt : "";
       const images = Array.isArray(candidate.images)
         ? candidate.images.flatMap((image) => {
-            const normalized = normalizePersistedAttachment(image);
+            const normalized =
+              normalizePersistedAttachment(image) ?? normalizePersistedAttachmentMetadata(image);
+            return normalized ? [normalized] : [];
+          })
+        : [];
+      const files = Array.isArray(candidate.files)
+        ? candidate.files.flatMap((file) => {
+            const normalized = normalizePersistedAttachmentMetadata(file);
             return normalized ? [normalized] : [];
           })
         : [];
@@ -782,6 +863,7 @@ function normalizePersistedQueuedTurns(
         previewText,
         prompt,
         images,
+        ...(files.length > 0 ? { files } : {}),
         ...(assistantSelections.length > 0 ? { assistantSelections } : {}),
         ...(browserAnnotations.length > 0 ? { browserAnnotations } : {}),
         terminalContexts,
@@ -1207,22 +1289,15 @@ export function partializeComposerDraftStoreState(
     > = [];
     for (const queuedTurn of draft.queuedTurns) {
       if (queuedTurn.kind === "chat") {
-        // File attachments are intentionally in-memory only; persisting the
-        // queued turn without them would make a later send incomplete.
-        if (queuedTurn.files.length > 0) {
-          continue;
-        }
-        const images = persistQueuedComposerImages(queuedTurn.images);
-        if (images.length !== queuedTurn.images.length) {
-          continue;
-        }
+        const files = persistQueuedChatTurnFiles(queuedTurn);
         persistedQueuedTurns.push({
           id: queuedTurn.id,
           kind: "chat",
           createdAt: queuedTurn.createdAt,
           previewText: queuedTurn.previewText,
           prompt: queuedTurn.prompt,
-          images,
+          images: persistQueuedChatTurnImages(queuedTurn),
+          ...(files.length > 0 ? { files } : {}),
           assistantSelections: queuedTurn.assistantSelections.map((selection) => ({
             id: selection.id,
             assistantMessageId: selection.assistantMessageId,
@@ -1601,10 +1676,13 @@ function hydrateQueuedTurnsFromPersisted(
   }
   return queuedTurns.map((queuedTurn) => {
     if (queuedTurn.kind === "chat") {
+      const { files: persistedFiles = [], ...persistedTurn } = queuedTurn;
       return {
-        ...queuedTurn,
+        ...persistedTurn,
         images: hydrateImagesFromPersisted(queuedTurn.images),
         files: [],
+        ...(queuedTurn.images.length > 0 ? { persistedImages: [...queuedTurn.images] } : {}),
+        ...(persistedFiles.length > 0 ? { persistedFiles: [...persistedFiles] } : {}),
         assistantSelections: normalizeAssistantSelections(queuedTurn.assistantSelections ?? []),
         browserAnnotations: normalizeBrowserAnnotations(queuedTurn.browserAnnotations ?? []),
         terminalContexts: normalizeTerminalContextsForThread(threadId, queuedTurn.terminalContexts),

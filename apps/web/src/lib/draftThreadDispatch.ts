@@ -8,6 +8,7 @@
 
 import type {
   AssistantDeliveryMode,
+  ClientOrchestrationCommand,
   ModelSelection,
   ProjectId,
   ProviderInstanceId,
@@ -18,7 +19,7 @@ import type {
   TurnId,
 } from "@synara/contracts";
 import { PROVIDER_SEND_TURN_MAX_ATTACHMENTS } from "@synara/contracts";
-import type { ComposerFileAttachment } from "../composerDraftDomain";
+import type { ComposerFileAttachment, ComposerThreadDraftState } from "../composerDraftDomain";
 import { revokeObjectPreviewUrl } from "../composerDraftAttachments";
 import { hasActiveComposerSend } from "./composerSendOwnership";
 import { clearPendingTurnDispatch, markPendingTurnDispatch } from "../pendingTurnDispatch";
@@ -47,6 +48,7 @@ import {
 } from "./browserAnnotations";
 import {
   stageUploadComposerAttachments,
+  type StagedComposerAttachments,
   findPendingBlobComposerAttachments,
   hydratePendingBlobComposerAttachments,
   formatOutgoingComposerPrompt,
@@ -198,6 +200,15 @@ function buildDraftPromptFileAttachment(input: {
 // duplicate thread.turn.start commands while the session is still starting. Same
 // pattern as threadCreatePromotion's inFlightThreadCreateById.
 const inFlightDispatchByThreadId = new Map<ThreadId, Promise<DraftThreadDispatchResult>>();
+const uncertainDraftTurnByThreadId = new Map<
+  ThreadId,
+  {
+    command: Extract<ClientOrchestrationCommand, { type: "thread.turn.start" }>;
+    staged: StagedComposerAttachments;
+    draft: ComposerThreadDraftState | null;
+    warning: string | undefined;
+  }
+>();
 
 export function waitForDraftThreadDispatchToSettle(
   threadId: ThreadId,
@@ -237,6 +248,32 @@ async function dispatchDraftThreadOnce(
   const api = readNativeApi();
   if (!api) {
     return { kind: "unavailable" };
+  }
+
+  const uncertain = uncertainDraftTurnByThreadId.get(threadId);
+  if (uncertain) {
+    markPendingTurnDispatch(threadId);
+    try {
+      await api.orchestration.dispatchCommand(uncertain.command);
+      uncertain.staged.commit();
+      uncertainDraftTurnByThreadId.delete(threadId);
+      const store = useComposerDraftStore.getState();
+      if (composerDraftsMatchForCleanup(store.draftsByThreadId[threadId], uncertain.draft))
+        store.clearComposerContent(threadId);
+      return { kind: "dispatched", ...(uncertain.warning ? { warning: uncertain.warning } : {}) };
+    } catch (error) {
+      input.hooks?.onDispatchAbandoned?.();
+      if (!isRequestOutcomeUnknown(error)) {
+        uncertainDraftTurnByThreadId.delete(threadId);
+        await uncertain.staged.cleanup();
+        clearPendingTurnDispatch(threadId);
+      }
+      return {
+        kind: "error",
+        message: error instanceof Error ? error.message : "Could not send the drafted prompt.",
+        ...(isRequestOutcomeUnknown(error) ? { outcomeUnknown: true } : {}),
+      };
+    }
   }
 
   // Re-read the composer at send time: edits made in an open chat must win over
@@ -473,33 +510,43 @@ async function dispatchDraftThreadOnce(
     }
 
     const stagedTurnAttachments = await turnAttachmentsPromise;
-    await stagedTurnAttachments.runWithDispatch((turnAttachments) =>
-      api.orchestration.dispatchCommand({
-        type: "thread.turn.start",
-        commandId: newCommandId(),
-        threadId,
-        message: {
-          messageId,
-          role: "user",
-          text: outgoingMessageText,
-          attachments: turnAttachments,
-          ...(mentionedSkills.length > 0 ? { skills: mentionedSkills } : {}),
-          ...(mentionedMentions.length > 0 ? { mentions: mentionedMentions } : {}),
-        },
-        modelSelection,
-        ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
-        assistantDeliveryMode: input.assistantDeliveryMode,
-        dispatchMode: "queue",
-        runtimeMode,
-        interactionMode,
-        createdAt,
-      }),
-    );
+    const turnCommand: Extract<ClientOrchestrationCommand, { type: "thread.turn.start" }> = {
+      type: "thread.turn.start",
+      commandId: newCommandId(),
+      threadId,
+      message: {
+        messageId,
+        role: "user",
+        text: outgoingMessageText,
+        attachments: stagedTurnAttachments.attachments,
+        ...(mentionedSkills.length > 0 ? { skills: mentionedSkills } : {}),
+        ...(mentionedMentions.length > 0 ? { mentions: mentionedMentions } : {}),
+      },
+      modelSelection,
+      ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
+      assistantDeliveryMode: input.assistantDeliveryMode,
+      dispatchMode: "queue",
+      runtimeMode,
+      interactionMode,
+      createdAt,
+    };
+    uncertainDraftTurnByThreadId.set(threadId, {
+      command: turnCommand,
+      staged: stagedTurnAttachments,
+      draft: draftComposerState,
+      warning: goalWarning,
+    });
+    await api.orchestration.dispatchCommand(turnCommand);
+    stagedTurnAttachments.commit();
+    uncertainDraftTurnByThreadId.delete(threadId);
   } catch (error) {
-    await turnAttachmentsPromise.then(
-      (staged) => staged.cleanup(),
-      () => undefined,
-    );
+    if (!isRequestOutcomeUnknown(error) || !uncertainDraftTurnByThreadId.has(threadId)) {
+      uncertainDraftTurnByThreadId.delete(threadId);
+      await turnAttachmentsPromise.then(
+        (staged) => staged.cleanup(),
+        () => undefined,
+      );
+    }
     hooks?.onDispatchAbandoned?.();
     if (!isRequestOutcomeUnknown(error)) clearPendingTurnDispatch(threadId);
     return {

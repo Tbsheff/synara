@@ -1,3 +1,4 @@
+import { allowsPendingUserInputCustomAnswer } from "~/pendingUserInput";
 import { type LegendListRef } from "@legendapp/list/react";
 import {
   parseComputerInvocation,
@@ -1835,7 +1836,11 @@ export default function ChatView({
   const isComposerApprovalState = activePendingApproval !== null;
   const isSidechatExpired = Boolean(activeThread?.sidechatExpiredAt);
   const isComposerEditorDisabled =
-    isConnecting || isComposerApprovalState || pluginOwnsPendingUserInput || isSidechatExpired;
+    isConnecting ||
+    isComposerApprovalState ||
+    pluginOwnsPendingUserInput ||
+    isSidechatExpired ||
+    !allowsPendingUserInputCustomAnswer(composerPendingProgress?.activeQuestion);
   const canCollapsePastedTextToDraft = shouldEnableComposerPastedTextCollapse({
     isComposerApprovalState,
     hasPendingUserInput: pendingUserInputs.length > 0,
@@ -6297,9 +6302,13 @@ export default function ChatView({
                       : pluginOwnsPendingUserInput
                         ? "Answer the question above to continue"
                         : composerPendingProgress
-                          ? composerPendingProgress.activeQuestion?.options.length === 0
-                            ? "Type your answer to continue"
-                            : "Type your own answer, or leave this blank to use the selected option"
+                          ? !allowsPendingUserInputCustomAnswer(
+                              composerPendingProgress.activeQuestion,
+                            )
+                            ? "Choose a listed option above"
+                            : composerPendingProgress.activeQuestion?.options.length === 0
+                              ? "Type your answer to continue"
+                              : "Type your own answer, or leave this blank to use the selected option"
                           : showPlanFollowUpPrompt && activeProposedPlan
                             ? "Add feedback to refine the plan, or leave this blank to implement it"
                             : activeThread?.parentThreadId

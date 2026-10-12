@@ -569,13 +569,8 @@ export function useChatComposerCommands({
     }
 
     if (key === "Enter" && !event.shiftKey) {
-      if (promptHistoryNavigationRef.current !== null) {
-        // Sending commits the recalled text as the prompt; drop the saved
-        // draft here (not just in the send path) so it cannot linger and
-        // resurrect a stale draft if the send is rejected.
-        promptHistoryNavigationRef.current = null;
-        setComposerDraftPromptHistorySavedDraft(threadId, null);
-      }
+      const navigationAtSend = promptHistoryNavigationRef.current;
+      const sendThreadId = threadId;
       expectedPromptHistoryPromptRef.current = null;
       void onSend(
         undefined,
@@ -584,7 +579,19 @@ export function useChatComposerCommands({
           hasLiveTurn,
           useOppositeBehavior: event.metaKey || event.ctrlKey,
         }),
-      );
+      )
+        .then((sent) => {
+          if (
+            !sent ||
+            navigationAtSend === null ||
+            promptHistoryNavigationRef.current !== navigationAtSend
+          ) {
+            return;
+          }
+          promptHistoryNavigationRef.current = null;
+          setComposerDraftPromptHistorySavedDraft(sendThreadId, null);
+        })
+        .catch(() => undefined);
       return true;
     }
     return false;

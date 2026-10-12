@@ -2487,6 +2487,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             ? { lifecycleGeneration: command.lifecycleGeneration }
             : {}),
           decision: command.decision,
+          ...(command.approvalRule ? { approvalRule: command.approvalRule } : {}),
           createdAt: command.createdAt,
         },
       };

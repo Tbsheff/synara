@@ -1205,6 +1205,7 @@ export function parseUserInputQuestions(
         header: question.header,
         question: question.question,
         options,
+        ...(typeof question.isOther === "boolean" ? { isOther: question.isOther } : {}),
         ...(question.multiSelect === true ? { multiSelect: true } : {}),
       };
     })

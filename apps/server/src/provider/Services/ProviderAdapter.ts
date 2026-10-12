@@ -12,6 +12,7 @@ import type {
   ClaudeCacheObservation,
   ProviderComposerCapabilities,
   ProviderApprovalDecision,
+  ProviderApprovalRule,
   ProviderForkThreadInput,
   ProviderForkThreadResult,
   ProviderKind,
@@ -19,6 +20,7 @@ import type {
   ProviderListAgentsResult,
   ProviderListCommandsInput,
   ProviderListCommandsResult,
+  ProviderPermissionsResult,
   ProviderListModelsInput,
   ProviderListModelsResult,
   ProviderListPluginsInput,
@@ -222,6 +224,7 @@ export interface ProviderAdapterShape<TError> {
     threadId: ThreadId,
     requestId: ApprovalRequestId,
     decision: ProviderApprovalDecision,
+    approvalRule?: ProviderApprovalRule,
   ) => Effect.Effect<void, TError>;
 
   /**
@@ -387,6 +390,10 @@ export interface ProviderAdapterShape<TError> {
   readonly readPlugin?: (
     input: ProviderReadPluginInput,
   ) => Effect.Effect<ProviderReadPluginResult, TError>;
+
+  readonly getPermissions?: (
+    input: ProviderListModelsInput,
+  ) => Effect.Effect<ProviderPermissionsResult, TError>;
 
   /**
    * List models directly from the provider runtime when supported.

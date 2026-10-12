@@ -437,7 +437,15 @@ function SettingsRouteView() {
   }, [settings.terminalFontFamily]);
 
   const isGitTextGenerationModelDirty = isGitTextGenerationSettingsDirty(settings, defaults);
-  const isInstallSettingsDirty = isProviderInstallSettingsDirty(settings, defaults);
+  const isInstallSettingsDirty = isProviderInstallSettingsDirty(
+    {
+      ...settings,
+      providerInstances: defaults.providerInstances,
+      codexAccounts: defaults.codexAccounts,
+      selectedCodexAccountId: defaults.selectedCodexAccountId,
+    },
+    defaults,
+  );
   const hiddenProviderCount = new Set(settings.hiddenProviders).size;
   const enabledProviderSelectOptions = PROVIDER_SELECT_OPTIONS.filter(
     (provider) => !settings.disabledProviders.includes(provider),
@@ -606,7 +614,15 @@ function SettingsRouteView() {
 
     setTheme("system");
     resetAllThemes();
-    await resetSettings();
+    try {
+      await resetSettings();
+    } catch (error) {
+      toastManager.add({
+        type: "error",
+        title: "Could not restore default settings",
+        description: error instanceof Error ? error.message : "The server did not save the reset.",
+      });
+    }
     setResetEpoch((current) => current + 1);
   }
 

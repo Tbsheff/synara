@@ -191,6 +191,7 @@ function buildOpenInput(entry: TerminalRuntimeEntry) {
     ...(entry.providerAuthInstanceId
       ? { providerAuthInstanceId: entry.providerAuthInstanceId }
       : {}),
+    ...(entry.providerAuthAction ? { providerAuthAction: entry.providerAuthAction } : {}),
     ...(entry.runtimeEnv ? { env: entry.runtimeEnv } : {}),
   };
 }
@@ -767,6 +768,8 @@ export function syncRuntimeConfig(
   }
   if (config.providerAuthInstanceId === undefined) delete entry.providerAuthInstanceId;
   else entry.providerAuthInstanceId = config.providerAuthInstanceId;
+  if (config.providerAuthAction === undefined) delete entry.providerAuthAction;
+  else entry.providerAuthAction = config.providerAuthAction;
   entry.callbacks = config.callbacks;
 }
 
@@ -821,6 +824,7 @@ export function createRuntimeEntry(config: TerminalRuntimeConfig): TerminalRunti
     terminalLabel: config.terminalLabel,
     terminalCliKind: config.terminalCliKind ?? null,
     cwd: config.cwd,
+    ...(config.providerAuthAction ? { providerAuthAction: config.providerAuthAction } : {}),
     ...(config.providerAuthInstanceId
       ? { providerAuthInstanceId: config.providerAuthInstanceId }
       : {}),

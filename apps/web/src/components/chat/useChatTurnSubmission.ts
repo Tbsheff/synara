@@ -1,3 +1,4 @@
+import type { ThreadId } from "@synara/contracts";
 import { flushWorkspaceEditors } from "~/lib/workspaceEditorSession";
 import { resolveComputerInvocationMode } from "@synara/shared/computerInvocation";
 import { projectFoldersSessionIssue } from "@synara/shared/projectFolders";
@@ -15,7 +16,13 @@ import { resolveProviderSendAvailabilityWithRefresh } from "~/lib/providerAvaila
 import { newMessageId, randomUUID } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
 import { resolveFollowUpDispatchMode } from "../../appSettings";
-import { useComposerDraftStore, type QueuedComposerChatTurn } from "../../composerDraftStore";
+import { collapseExpandedComposerCursor } from "../../composer-logic";
+import {
+  useComposerDraftStore,
+  type ComposerThreadDraftState,
+  type QueuedComposerChatTurn,
+} from "../../composerDraftStore";
+import { composerDraftsMatchForCleanup } from "../../composerDraftDomain";
 import { appendAssistantSelectionsToPrompt } from "../../lib/assistantSelections";
 import { appendBrowserAnnotationsToPrompt } from "../../lib/browserAnnotations";
 import { appendPastedTextsToPrompt } from "../../lib/composerPastedText";
@@ -23,10 +30,14 @@ import {
   findPendingBlobComposerAttachments,
   formatOutgoingComposerPrompt,
   hydratePendingBlobComposerAttachments,
-  readFileAsDataUrl,
   stageUploadComposerAttachments,
 } from "../../lib/composerSend";
 import { appendFileCommentsToPrompt } from "../../lib/fileComments";
+import {
+  notifyQueuedComposerAttachmentsMissing,
+  persistQueuedComposerAttachments,
+  restoreQueuedComposerChatTurnAttachments,
+} from "../../lib/queuedComposerDispatch";
 import { appendPullRequestContextsToPrompt } from "../../lib/pullRequestContext";
 import {
   IMAGE_ONLY_BOOTSTRAP_PROMPT,
@@ -56,6 +67,68 @@ import { resolveChatPromptCaptures } from "./resolveChatPromptCaptures";
 import { useChatTurnExecution } from "./useChatTurnExecution";
 import { useStore } from "../../store";
 import { getThreadFromState } from "../../threadDerivation";
+
+function withoutSubmitted<T extends { id: string }>(
+  items: ReadonlyArray<T>,
+  ...submitted: ReadonlyArray<ReadonlyArray<{ id: string }> | undefined>
+): T[] {
+  const submittedIds = new Set(submitted.flatMap((entries) => (entries ?? []).map((e) => e.id)));
+  return items.filter((item) => !submittedIds.has(item.id));
+}
+
+function restoreComposerEditsAfterSubmit(input: {
+  threadId: ThreadId;
+  captured: ComposerThreadDraftState | null;
+  current: ComposerThreadDraftState | undefined;
+  submittedPrompt: string;
+  submittedImages: ReadonlyArray<{ id: string }>;
+  submittedFiles: ReadonlyArray<{ id: string }>;
+}): string {
+  const { current, captured, threadId } = input;
+  if (!current || composerDraftsMatchForCleanup(current, captured)) {
+    return "";
+  }
+  const store = useComposerDraftStore.getState();
+  const keptPrompt =
+    current.prompt === input.submittedPrompt || current.prompt === captured?.prompt
+      ? ""
+      : current.prompt;
+  if (keptPrompt.length > 0) {
+    store.setPrompt(threadId, keptPrompt);
+    store.setSkills(threadId, current.skills);
+    store.setMentions(threadId, current.mentions);
+  }
+  store.addImages(
+    threadId,
+    withoutSubmitted(current.images, captured?.images, input.submittedImages),
+  );
+  store.addFiles(threadId, withoutSubmitted(current.files, captured?.files, input.submittedFiles));
+  for (const selection of withoutSubmitted(
+    current.assistantSelections,
+    captured?.assistantSelections,
+  )) {
+    store.addAssistantSelection(threadId, selection);
+  }
+  store.addBrowserAnnotations(
+    threadId,
+    withoutSubmitted(current.browserAnnotations, captured?.browserAnnotations),
+  );
+  for (const comment of withoutSubmitted(current.fileComments, captured?.fileComments)) {
+    store.addFileComment(threadId, comment);
+  }
+  store.addTerminalContexts(
+    threadId,
+    withoutSubmitted(current.terminalContexts, captured?.terminalContexts),
+  );
+  store.addPastedTexts(threadId, withoutSubmitted(current.pastedTexts, captured?.pastedTexts));
+  for (const context of withoutSubmitted(
+    current.pullRequestContexts,
+    captured?.pullRequestContexts,
+  )) {
+    store.addPullRequestContext(threadId, context);
+  }
+  return keptPrompt;
+}
 
 export function useChatTurnSubmission({
   threadId,
@@ -330,7 +403,23 @@ export function useChatTurnSubmission({
         }
         return lateSendHandlers.advanceActivePendingUserInput(answerOverrides);
       }
-      const queuedChatTurn = queuedTurn ?? null;
+      let queuedChatTurn = queuedTurn ?? null;
+      if (queuedChatTurn !== null) {
+        sendPreflightInFlightRef.current = true;
+        const restoredQueuedTurn = await restoreQueuedComposerChatTurnAttachments(
+          queuedChatTurn,
+        ).finally(() => {
+          sendPreflightInFlightRef.current = false;
+        });
+        if (restoredQueuedTurn.missingAttachmentNames.length > 0) {
+          notifyQueuedComposerAttachmentsMissing(
+            queuedChatTurn.id,
+            restoredQueuedTurn.missingAttachmentNames,
+          );
+          return false;
+        }
+        queuedChatTurn = restoredQueuedTurn.turn;
+      }
       let dispatchSettings = resolveQueuedTurnDispatchSettings(
         turnDispatchSettings,
         queuedChatTurn,
@@ -340,6 +429,10 @@ export function useChatTurnSubmission({
         queuedChatTurn === null ? (composerEditorRef.current?.readSnapshot() ?? null) : null;
       let promptForSend =
         queuedChatTurn?.prompt ?? liveComposerSnapshot?.value ?? promptRef.current;
+      const capturedLiveDraft =
+        queuedChatTurn === null
+          ? (useComposerDraftStore.getState().draftsByThreadId[activeThread.id] ?? null)
+          : null;
       if (queuedChatTurn === null) {
         // Read the live editor snapshot, not an earlier React render. A queued
         // command already froze its mode and generation and must not be inferred again.
@@ -635,22 +728,37 @@ export function useChatTurnSubmission({
       if (hasPendingCacheReview()) return false;
 
       if (hasQueueableLiveTurn && dispatchMode === "queue" && queuedChatTurn === null) {
-        clearComposerInput(activeThread.id);
+        const draftBeforeQueueClear =
+          useComposerDraftStore.getState().draftsByThreadId[activeThread.id];
+        if (
+          !draftBeforeQueueClear ||
+          composerDraftsMatchForCleanup(draftBeforeQueueClear, capturedLiveDraft)
+        ) {
+          clearComposerInput(activeThread.id);
+        } else {
+          clearComposerDraftContent(activeThread.id, { preservePreviewUrls: true });
+          const keptPrompt = restoreComposerEditsAfterSubmit({
+            threadId: activeThread.id,
+            captured: capturedLiveDraft,
+            current: draftBeforeQueueClear,
+            submittedPrompt: promptForSend,
+            submittedImages: composerImagesForSend,
+            submittedFiles: composerFilesForSend,
+          });
+          promptRef.current = keptPrompt;
+          setRestoredQueuedSourceProposedPlan(activeThread.id, null);
+        }
         scheduleComposerFocus();
-        const queuedImagesForPersistence = await Promise.all(
-          composerImagesForSend.map(async (image) => {
-            try {
-              return {
-                ...image,
-                previewUrl: await readFileAsDataUrl(image.file),
-              };
-            } catch {
-              return image;
-            }
-          }),
-        );
+        const queuedTurnId = randomUUID();
+        const queuedImagesForPersistence = composerImagesForSend;
+        const queuedAttachmentRefs = await persistQueuedComposerAttachments({
+          threadId: activeThread.id,
+          queuedTurnId,
+          images: queuedImagesForPersistence,
+          files: composerFilesForSend,
+        });
         enqueueQueuedComposerTurn(activeThread.id, {
-          id: randomUUID(),
+          id: queuedTurnId,
           kind: "chat",
           createdAt: new Date().toISOString(),
           previewText: buildQueuedComposerPreviewText({
@@ -667,6 +775,7 @@ export function useChatTurnSubmission({
           prompt: promptForSend,
           images: queuedImagesForPersistence,
           files: composerFilesForSend,
+          ...queuedAttachmentRefs,
           assistantSelections: composerAssistantSelectionsForSend,
           browserAnnotations: composerBrowserAnnotationsForSend,
           fileComments: composerFileCommentsForSend,
@@ -898,13 +1007,23 @@ export function useChatTurnSubmission({
         promptHistoryNavigationRef.current = null;
         applyingPromptHistoryNavigationRef.current = false;
         expectedPromptHistoryPromptRef.current = null;
-        promptRef.current = "";
+        const draftBeforeSendClear =
+          useComposerDraftStore.getState().draftsByThreadId[threadIdForSend];
         clearComposerDraftContent(threadIdForSend, { preservePreviewUrls: true });
+        const keptPrompt = restoreComposerEditsAfterSubmit({
+          threadId: threadIdForSend,
+          captured: capturedLiveDraft,
+          current: draftBeforeSendClear,
+          submittedPrompt: promptForSend,
+          submittedImages: composerImagesSnapshot,
+          submittedFiles: composerFilesSnapshot,
+        });
+        promptRef.current = keptPrompt;
         if (isLivePlanFollowUpSubmission) {
           setComposerDraftInteractionMode(threadIdForSend, interactionModeForSend);
         }
         setComposerHighlightedItemId(null);
-        setComposerCursor(0);
+        setComposerCursor(collapseExpandedComposerCursor(keptPrompt, keptPrompt.length));
         setComposerTrigger(null);
         // A clicked submit button steals focus; return it after the controlled
         // draft reset so rapid follow-up typing lands in the composer.
@@ -1023,6 +1142,7 @@ export function useChatTurnSubmission({
       composerPastedTexts,
       composerPullRequestContexts,
       restoredQueuedSourceProposedPlanRef,
+      setRestoredQueuedSourceProposedPlan,
       enqueueQueuedComposerTurn,
       setComposerDraftPrompt,
       setComposerTrigger,

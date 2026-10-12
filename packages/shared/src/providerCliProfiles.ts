@@ -113,3 +113,8 @@ export const PROVIDER_AUTHENTICATION = {
     readonly interactiveCommand?: string;
   }
 >;
+
+export const PROVIDER_SIGN_OUT_ARGS: Partial<Record<ProviderKind, readonly string[]>> = {
+  codex: ["logout"],
+  claudeAgent: ["auth", "logout"],
+};

@@ -794,3 +794,22 @@ it.effect("ThreadHandoff decodes legacy provider names instead of failing the ro
     assert.equal(current.sourceProvider, "codex");
   }),
 );
+
+it.effect("keeps a scoped approval rule through the command JSON codec", () =>
+  Effect.gen(function* () {
+    const approvalRule = { type: "command-prefix", prefix: ["git", "status"] };
+    const decoded = yield* decodeClientOrchestrationCommand({
+      type: "thread.approval.respond",
+      commandId: "command-1",
+      threadId: "thread-1",
+      requestId: "request-1",
+      decision: "accept",
+      approvalRule,
+      createdAt: "2026-10-12T12:00:00.000Z",
+    });
+    assert.deepStrictEqual(
+      "approvalRule" in decoded ? decoded.approvalRule : undefined,
+      approvalRule,
+    );
+  }),
+);

@@ -111,9 +111,11 @@ function useDisabledProvidersDraft(): {
     draftRef.current = next;
     setDraft(next);
     setPendingWrites((count) => count + 1);
-    void updateSettingsAndWait({ disabledProviders: [...next] }).finally(() => {
-      setPendingWrites((count) => count - 1);
-    });
+    void updateSettingsAndWait({ disabledProviders: [...next] })
+      .catch(() => undefined)
+      .finally(() => {
+        setPendingWrites((count) => count - 1);
+      });
   };
 
   return { disabled: draft, setProviderDisabled };
