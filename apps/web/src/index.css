@@ -412,6 +412,26 @@
   }
 }
 
+@keyframes chat-fade-enter {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+.chat-fade-enter {
+  animation: chat-fade-enter 160ms ease-out backwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-fade-enter {
+    animation: none;
+  }
+}
+
 /* Suppress all transitions during theme changes */
 .no-transitions,
 .no-transitions *,
@@ -1079,6 +1099,10 @@ label:has(> select#reasoning-effort) select {
   padding: 0.1rem 0 0.35rem;
   scrollbar-width: thin;
   -webkit-overflow-scrolling: touch;
+}
+
+.chat-markdown .chat-markdown-pending-math {
+  display: contents;
 }
 
 .chat-markdown .katex-display > .katex {

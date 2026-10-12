@@ -12,6 +12,7 @@ import {
   wrapFindQueryInHtml,
   type ThreadFindRange,
 } from "./chat/threadFind.logic";
+import { StableShikiHtml } from "./StableShikiHtml";
 
 interface ChatFindRenderState {
   query: string;
@@ -125,11 +126,27 @@ export function FindAwareCodeFallback(props: {
   );
 }
 
-export function FindAwareShikiHtml(props: { html: string; sourceOffset: number }) {
+export function FindAwareShikiHtml(props: {
+  html: string;
+  sourceOffset: number;
+  highlightedHtml?: string | undefined;
+  plainTail?: string | undefined;
+}) {
   const highlight = React.useContext(ChatFindRenderContext);
-  const html =
-    normalizeFindQuery(highlight.query).length > 0
-      ? wrapFindQueryInHtml(props.html, highlight.query, props.sourceOffset, highlight.activeRange)
-      : props.html;
+  if (normalizeFindQuery(highlight.query).length === 0) {
+    return (
+      <StableShikiHtml
+        html={props.highlightedHtml ?? props.html}
+        plainTail={props.plainTail ?? ""}
+        combinedHtml={props.html}
+      />
+    );
+  }
+  const html = wrapFindQueryInHtml(
+    props.html,
+    highlight.query,
+    props.sourceOffset,
+    highlight.activeRange,
+  );
   return <div className="chat-markdown-shiki" dangerouslySetInnerHTML={{ __html: html }} />;
 }

@@ -24,6 +24,7 @@ const highlightedCodeCache = new LRUCache<string>(
   MAX_HIGHLIGHT_CACHE_MEMORY_BYTES,
 );
 const highlighterPromiseCache = new Map<string, Promise<DiffsHighlighter>>();
+const failedSyntaxLanguages = new Set<string>();
 
 export function getSyntaxLanguageForPath(pathValue: string): string {
   return getFiletypeFromFileName(basenameOfPath(pathValue));
@@ -66,10 +67,11 @@ export function getSyntaxHighlighterPromise(language: string): Promise<DiffsHigh
     langs: [language as SupportedLanguages],
     preferredHighlighter: "shiki-js",
   }).catch((err) => {
-    highlighterPromiseCache.delete(language);
     if (language === "text") {
+      highlighterPromiseCache.delete(language);
       throw err;
     }
+    failedSyntaxLanguages.add(language);
     return getSyntaxHighlighterPromise("text");
   });
   highlighterPromiseCache.set(language, promise);
@@ -82,13 +84,28 @@ export function highlightCodeToHtmlWithFallback(
   language: string,
   themeName: DiffThemeName,
 ): string {
+  if (failedSyntaxLanguages.has(language)) {
+    return highlighter.codeToHtml(code, { lang: "text", theme: themeName });
+  }
   try {
     return highlighter.codeToHtml(code, { lang: language, theme: themeName });
   } catch (error) {
+    failedSyntaxLanguages.add(language);
     console.warn(
       `Code highlighting failed for language "${language}", falling back to plain text.`,
       error instanceof Error ? error.message : error,
     );
     return highlighter.codeToHtml(code, { lang: "text", theme: themeName });
   }
+}
+
+function escapeHtmlText(value: string): string {
+  return value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+}
+
+export function appendPlainTextToHighlightedHtml(html: string, plainText: string): string {
+  if (plainText.length === 0) return html;
+  const insertAt = html.lastIndexOf("</code>");
+  if (insertAt === -1) return html;
+  return `${html.slice(0, insertAt)}${escapeHtmlText(plainText)}${html.slice(insertAt)}`;
 }

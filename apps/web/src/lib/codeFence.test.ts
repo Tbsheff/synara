@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { dedentCode, parseCodeFenceInfo } from "./codeFence";
+import { classifyStreamingCodeBlock, dedentCode, parseCodeFenceInfo } from "./codeFence";
 
 describe("parseCodeFenceInfo", () => {
   it("parses a Cursor-style file reference with a line range", () => {
@@ -64,6 +64,13 @@ describe("parseCodeFenceInfo", () => {
     expect(parseCodeFenceInfo("   ").language).toBe("text");
     expect(parseCodeFenceInfo("gitignore").language).toBe("ini");
   });
+
+  it.each(["txt", "plaintext", "plain"])(
+    "maps the unbundled plain-text name %s to text",
+    (info) => {
+      expect(parseCodeFenceInfo(info).language).toBe("text");
+    },
+  );
 });
 
 describe("dedentCode", () => {
@@ -85,5 +92,28 @@ describe("dedentCode", () => {
   it("handles tab indentation", () => {
     const input = ["\t\talpha();", "\t\tbeta();"].join("\n");
     expect(dedentCode(input)).toBe(["alpha();", "beta();"].join("\n"));
+  });
+});
+
+describe("classifyStreamingCodeBlock", () => {
+  it.each([
+    ["a closed fence at the end", "Intro\n\n```ts\nconst a = 1;\n```", "settled"],
+    ["a closed tilde fence", "~~~\nx\n~~~~", "settled"],
+    ["an open fence at the end", "Intro\n\n```ts\nconst a = 1;", "open"],
+    ["an open fence with a partial closing run", "```ts\nconst a = 1;\n``", "open"],
+    ["a fence still on its info line", "Intro\n\n```pyt", "awaiting-info-line"],
+    ["an indented code block at the end", "Intro\n\n    code", "open"],
+  ] as const)("classifies %s", (_label, markdown, expected) => {
+    const start = Math.max(
+      markdown.indexOf("```"),
+      markdown.indexOf("~~~"),
+      markdown.indexOf("    "),
+    );
+    expect(classifyStreamingCodeBlock(markdown, start, markdown.length)).toBe(expected);
+  });
+
+  it("treats a block followed by more content as settled", () => {
+    const markdown = "```ts\nconst a = 1;\n```\n\nMore prose";
+    expect(classifyStreamingCodeBlock(markdown, 0, markdown.indexOf("\n\nMore"))).toBe("settled");
   });
 });

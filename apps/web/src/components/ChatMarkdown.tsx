@@ -23,6 +23,7 @@ import { remarkHtmlBreaks } from "../lib/remarkHtmlBreaks";
 import React, {
   Children,
   createContext,
+  Fragment,
   useContext,
   type CSSProperties,
   Suspense,
@@ -49,10 +50,24 @@ import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import { copyTextToClipboard } from "../hooks/useCopyToClipboard";
 import { resolveDiffThemeName, type DiffThemeName } from "../lib/diffRendering";
-import { dedentCode, parseCodeFenceInfo, type CodeFenceInfo } from "../lib/codeFence";
+import {
+  classifyStreamingCodeBlock,
+  dedentCode,
+  parseCodeFenceInfo,
+  type CodeFenceInfo,
+} from "../lib/codeFence";
 import { getFileIconName, pathLooksLikeKnownFile } from "../file-icons";
 import { CentralIcon } from "~/lib/central-icons";
 import { isLocalImageMarkdownSrc } from "../lib/localImageUrls";
+import {
+  PENDING_DISPLAY_MATH_LANGUAGE,
+  repairStreamingMarkdown,
+} from "../lib/markdownStreamingRepair";
+import {
+  remarkMarkdownBlockOrigin,
+  splitMarkdownBlocks,
+  type MarkdownBlock,
+} from "../lib/markdownBlocks";
 import { repairMarkdownTableDelimiters } from "../lib/markdownTableRepair";
 import { showFileReferenceContextMenu } from "../lib/fileReferenceContextMenu";
 import {
@@ -62,6 +77,9 @@ import {
 } from "../lib/linkContextMenu";
 import { useTheme } from "../hooks/useTheme";
 import { useSmoothStreamedText } from "../hooks/useSmoothStreamedText";
+import { useStableCallback } from "../hooks/useStableCallback";
+import { useStableValue } from "../hooks/useStableValue";
+import { useStreamingTextReveal } from "../hooks/useStreamingTextReveal";
 import { useThrottledStreamingValue } from "../hooks/useThrottledStreamingValue";
 import { openWorkspaceFileReference, useWorkspaceFileOpener } from "../lib/workspaceFileOpener";
 import { useQuery } from "@tanstack/react-query";
@@ -74,6 +92,7 @@ import {
 } from "../markdown-links";
 import type { ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { GeneratedMarkdownImage } from "./chat/GeneratedMarkdownImage";
+import { PendingDisplayMath } from "./chat/PendingDisplayMath";
 import { TerminalContextInlineChip } from "./chat/TerminalContextInlineChip";
 import type { ParsedTerminalContextEntry } from "../lib/terminalContext";
 import { formatInlineTerminalContextLabel } from "./chat/userMessageTerminalContexts";
@@ -154,6 +173,7 @@ interface ChatMarkdownProps {
   cwd: string | undefined;
   wikiLinkRoot?: string | undefined;
   isStreaming?: boolean;
+  revealKey?: string | undefined;
   className?: string | undefined;
   style?: CSSProperties | undefined;
   onImageExpand?:
@@ -908,10 +928,12 @@ function CodeBlockHeaderTitle({ fence }: { fence: CodeFenceInfo }) {
 function MarkdownCodeBlock({
   code,
   fence,
+  isOpen,
   children,
 }: {
   code: string;
   fence: CodeFenceInfo;
+  isOpen: boolean;
   children: ReactNode;
 }) {
   const [copied, setCopied] = useState(false);
@@ -960,16 +982,18 @@ function MarkdownCodeBlock({
           >
             <TextWrapIcon className="size-3" />
           </IconButton>
-          <IconButton
-            className="chat-markdown-codeblock__action"
-            onClick={handleCopy}
-            title={copied ? "Copied" : "Copy code"}
-            label={copied ? "Copied" : "Copy code"}
-            size="icon-xs"
-            variant="ghost"
-          >
-            {copied ? <CheckIcon className="size-3" /> : <CopyIcon className="size-3" />}
-          </IconButton>
+          {isOpen ? null : (
+            <IconButton
+              className="chat-markdown-codeblock__action"
+              onClick={handleCopy}
+              title={copied ? "Copied" : "Copy code"}
+              label={copied ? "Copied" : "Copy code"}
+              size="icon-xs"
+              variant="ghost"
+            >
+              {copied ? <CheckIcon className="size-3" /> : <CopyIcon className="size-3" />}
+            </IconButton>
+          )}
         </div>
       </div>
       <div className="chat-markdown-codeblock__body">{children}</div>
@@ -993,11 +1017,6 @@ function getSyntaxHighlightingModulePromise(): Promise<SyntaxHighlightingModule>
   return syntaxHighlightingModulePromise;
 }
 
-// While a message streams, its open code block grows on every reveal commit (~25/s) and
-// each commit re-tokenizes the whole block — quadratic in block length and the single
-// largest renderer cost of a code-heavy turn. Highlight at most this often while
-// streaming; the prefix already on screen stays put and the trailing value always lands,
-// so the block converges to exactly the settled highlight.
 // Each highlight costs roughly linearly in block length, so the cadence also stretches
 // with size: small blocks stay at the base interval, a block at
 // `STREAMING_CODE_HIGHLIGHT_SLOW_CHARS` is highlighted at most once per
@@ -1029,83 +1048,67 @@ function SuspenseShikiCodeBlock({
   isStreaming,
   sourceOffset,
 }: SuspenseShikiCodeBlockProps) {
-  const code = useThrottledStreamingValue(
+  const throttledCode = useThrottledStreamingValue(
     liveCode,
     isStreaming,
     streamingCodeHighlightIntervalMs(liveCode.length),
   );
+  const throttledCodeIsPrefix = liveCode.startsWith(throttledCode);
   const syntaxHighlighting = use(getSyntaxHighlightingModulePromise());
   return (
     <LoadedShikiCodeBlock
       syntaxHighlighting={syntaxHighlighting}
       language={language}
-      code={code}
+      code={throttledCodeIsPrefix ? throttledCode : liveCode}
+      plainTail={throttledCodeIsPrefix ? liveCode.slice(throttledCode.length) : ""}
       themeName={themeName}
       isStreaming={isStreaming}
       sourceOffset={sourceOffset}
     />
   );
+}
+
+interface HighlightedCodeBlockProps extends SuspenseShikiCodeBlockProps {
+  syntaxHighlighting: SyntaxHighlightingModule;
+  plainTail: string;
 }
 
 function LoadedShikiCodeBlock({
   syntaxHighlighting,
   language,
   code,
+  plainTail,
   themeName,
   isStreaming,
   sourceOffset,
-}: SuspenseShikiCodeBlockProps & { syntaxHighlighting: SyntaxHighlightingModule }) {
+}: HighlightedCodeBlockProps) {
   const cacheKey = syntaxHighlighting.createSyntaxHighlightCacheKey(code, language, themeName);
-  const cachedHighlightedHtml = !isStreaming
-    ? syntaxHighlighting.getCachedSyntaxHighlightedHtml(cacheKey)
-    : null;
+  const cachedHighlightedHtml = isStreaming
+    ? null
+    : syntaxHighlighting.getCachedSyntaxHighlightedHtml(cacheKey);
+  const highlighter =
+    cachedHighlightedHtml == null
+      ? use(syntaxHighlighting.getSyntaxHighlighterPromise(language))
+      : null;
+  const highlightedHtml =
+    cachedHighlightedHtml ??
+    syntaxHighlighting.highlightCodeToHtmlWithFallback(highlighter!, code, language, themeName);
+  const needsCaching = !isStreaming && cachedHighlightedHtml == null;
 
-  if (cachedHighlightedHtml != null) {
-    return <FindAwareShikiHtml html={cachedHighlightedHtml} sourceOffset={sourceOffset} />;
-  }
+  useEffect(() => {
+    if (needsCaching) {
+      syntaxHighlighting.cacheSyntaxHighlightedHtml(cacheKey, highlightedHtml, code);
+    }
+  }, [cacheKey, code, highlightedHtml, needsCaching, syntaxHighlighting]);
 
-  // The uncached path lives in its own component: an early return above must
-  // not change this component's hook order once the cache fills.
   return (
-    <UncachedShikiCodeBlock
-      syntaxHighlighting={syntaxHighlighting}
-      cacheKey={cacheKey}
-      language={language}
-      code={code}
-      themeName={themeName}
-      isStreaming={isStreaming}
+    <FindAwareShikiHtml
+      html={syntaxHighlighting.appendPlainTextToHighlightedHtml(highlightedHtml, plainTail)}
+      highlightedHtml={highlightedHtml}
+      plainTail={plainTail}
       sourceOffset={sourceOffset}
     />
   );
-}
-
-function UncachedShikiCodeBlock({
-  syntaxHighlighting,
-  cacheKey,
-  language,
-  code,
-  themeName,
-  isStreaming,
-  sourceOffset,
-}: SuspenseShikiCodeBlockProps & {
-  syntaxHighlighting: SyntaxHighlightingModule;
-  cacheKey: string;
-}) {
-  const highlighter = use(syntaxHighlighting.getSyntaxHighlighterPromise(language));
-  const highlightedHtml = syntaxHighlighting.highlightCodeToHtmlWithFallback(
-    highlighter,
-    code,
-    language,
-    themeName,
-  );
-
-  useEffect(() => {
-    if (!isStreaming) {
-      syntaxHighlighting.cacheSyntaxHighlightedHtml(cacheKey, highlightedHtml, code);
-    }
-  }, [cacheKey, code, highlightedHtml, isStreaming, syntaxHighlighting]);
-
-  return <FindAwareShikiHtml html={highlightedHtml} sourceOffset={sourceOffset} />;
 }
 
 interface MarkdownRenderContextValue {
@@ -1122,8 +1125,24 @@ interface MarkdownRenderContextValue {
   resolvedTheme: ReturnType<typeof useTheme>["resolvedTheme"];
   terminalContexts: ChatMarkdownProps["terminalContexts"];
   sourceText: string;
+  sourceBase: number;
+  parsedText: string;
   pluginContext: SynaraPluginAppContext | undefined;
   pluginDirectiveRegistry: PluginMessageDirectiveRegistry;
+}
+
+type MarkdownBaseRenderContextValue = Omit<
+  MarkdownRenderContextValue,
+  "isStreaming" | "sourceText" | "sourceBase" | "parsedText"
+>;
+
+function locateInSource(
+  context: Pick<MarkdownRenderContextValue, "sourceText" | "sourceBase">,
+  needle: string,
+  fromOffset: number,
+): number {
+  const localOffset = context.sourceText.indexOf(needle, fromOffset - context.sourceBase);
+  return localOffset < 0 ? fromOffset : localOffset + context.sourceBase;
 }
 
 const MarkdownRenderContext = createContext<MarkdownRenderContextValue | null>(null);
@@ -1251,17 +1270,24 @@ const MARKDOWN_COMPONENTS: Components = {
     );
   },
   pre: function MarkdownPre({ node, children, ...props }) {
-    const { sourceText, diffThemeName, isStreaming } = useContext(MarkdownRenderContext)!;
+    const context = useContext(MarkdownRenderContext)!;
+    const { parsedText, diffThemeName, isStreaming } = context;
     const codeBlock = extractCodeBlock(children);
     if (!codeBlock) {
       return <pre {...props}>{children}</pre>;
     }
 
-    const fence = parseCodeFenceInfo(extractRawFenceInfo(codeBlock.className));
+    const rawFenceInfo = extractRawFenceInfo(codeBlock.className);
     const code = dedentCode(codeBlock.code);
+    if (rawFenceInfo === PENDING_DISPLAY_MATH_LANGUAGE) {
+      return <PendingDisplayMath tex={code} />;
+    }
+    const fence = parseCodeFenceInfo(rawFenceInfo);
     const blockStart = node?.position?.start?.offset ?? 0;
-    const codeOffsetInSource = sourceText.indexOf(code, blockStart);
-    const sourceOffset = codeOffsetInSource < 0 ? blockStart : codeOffsetInSource;
+    const blockState = isStreaming
+      ? classifyStreamingCodeBlock(parsedText, blockStart, node?.position?.end?.offset)
+      : "settled";
+    const sourceOffset = locateInSource(context, code, blockStart);
     const highlightedFallback = (
       <pre {...props}>
         <FindAwareCodeFallback code={code} sourceOffset={sourceOffset}>
@@ -1271,14 +1297,14 @@ const MARKDOWN_COMPONENTS: Components = {
     );
 
     return (
-      <MarkdownCodeBlock code={code} fence={fence}>
+      <MarkdownCodeBlock code={code} fence={fence} isOpen={blockState !== "settled"}>
         <CodeHighlightErrorBoundary fallback={highlightedFallback}>
           <Suspense fallback={highlightedFallback}>
             <SuspenseShikiCodeBlock
-              language={fence.language}
+              language={blockState === "awaiting-info-line" ? "text" : fence.language}
               code={code}
               themeName={diffThemeName}
-              isStreaming={isStreaming}
+              isStreaming={blockState !== "settled"}
               sourceOffset={sourceOffset}
             />
           </Suspense>
@@ -1287,8 +1313,8 @@ const MARKDOWN_COMPONENTS: Components = {
     );
   },
   code: function MarkdownInlineCode({ node, className, children, ...props }) {
-    const { sourceText, knownAbsoluteFilePaths, cwd, resolvedTheme } =
-      useContext(MarkdownRenderContext)!;
+    const context = useContext(MarkdownRenderContext)!;
+    const { knownAbsoluteFilePaths, cwd, resolvedTheme } = context;
     // Fenced blocks carry a `language-*` class and are rendered by `pre`;
     // only inline code (no class) that names a file becomes an openable
     // mention chip. Absolute local paths chip immediately. Relative names
@@ -1297,8 +1323,7 @@ const MARKDOWN_COMPONENTS: Components = {
       const filePath = inlineCodeFilePath(nodeToPlainText(children));
       if (filePath) {
         const nodeStart = node?.position?.start?.offset ?? 0;
-        const filePathOffset = sourceText.indexOf(filePath, nodeStart);
-        const sourceOffset = filePathOffset < 0 ? nodeStart : filePathOffset;
+        const sourceOffset = locateInSource(context, filePath, nodeStart);
         const findLabelProps = {
           label: <FindAwareMarkdownText text={filePath} sourceOffset={sourceOffset} />,
         };
@@ -1464,11 +1489,74 @@ const MARKDOWN_COMPONENTS: Components = {
   } as unknown as Components),
 };
 
+function areOptionalStringArraysEqual(
+  previous: readonly string[] | undefined,
+  next: readonly string[] | undefined,
+): boolean {
+  if (previous === undefined || next === undefined) return previous === next;
+  return previous.length === next.length && previous.every((value, index) => value === next[index]);
+}
+
+function singleMarkdownBlock(markdown: string): MarkdownBlock[] {
+  return [{ start: 0, end: markdown.length, line: 0 }];
+}
+
+interface MarkdownBlockViewProps {
+  text: string;
+  origin: number;
+  line: number;
+  sourceText: string;
+  parsedText: string;
+  isStreaming: boolean;
+  baseContext: MarkdownBaseRenderContextValue;
+  remarkPlugins: MarkdownRemarkPlugins;
+  rehypePlugins: MarkdownRehypePlugins;
+}
+
+const MarkdownBlockView = memo(function MarkdownBlockView({
+  text,
+  origin,
+  line,
+  sourceText,
+  parsedText,
+  isStreaming,
+  baseContext,
+  remarkPlugins,
+  rehypePlugins,
+}: MarkdownBlockViewProps) {
+  const blockRemarkPlugins = useMemo<MarkdownRemarkPlugins>(
+    () =>
+      origin === 0
+        ? [...remarkPlugins, remarkFindableText]
+        : [
+            ...remarkPlugins,
+            [remarkMarkdownBlockOrigin, { offset: origin, line }],
+            remarkFindableText,
+          ],
+    [line, origin, remarkPlugins],
+  );
+  const renderContext = useMemo<MarkdownRenderContextValue>(
+    () => ({ ...baseContext, isStreaming, sourceText, sourceBase: origin, parsedText }),
+    [baseContext, isStreaming, origin, parsedText, sourceText],
+  );
+  return (
+    <MarkdownRenderContext.Provider value={renderContext}>
+      <ParsedMarkdown
+        text={text}
+        remarkPlugins={blockRemarkPlugins}
+        rehypePlugins={rehypePlugins}
+        components={MARKDOWN_COMPONENTS}
+      />
+    </MarkdownRenderContext.Provider>
+  );
+});
+
 function ChatMarkdown({
   text,
   cwd,
   wikiLinkRoot,
   isStreaming: isStreamingProp,
+  revealKey,
   className: classNameProp,
   style,
   onImageExpand,
@@ -1496,7 +1584,7 @@ function ChatMarkdown({
   const diffThemeName = resolveDiffThemeName(resolvedTheme);
   const isUserVariant = variant === "user";
   const extractedAbsoluteFilePaths = useMemo(() => extractAbsoluteFilesystemPaths(text), [text]);
-  const knownAbsoluteFilePaths = useMemo(() => {
+  const mergedAbsoluteFilePaths = useMemo(() => {
     if (
       (knownAbsoluteFilePathsProp === undefined || knownAbsoluteFilePathsProp.length === 0) &&
       extractedAbsoluteFilePaths.length === 0
@@ -1505,11 +1593,27 @@ function ChatMarkdown({
     }
     return [...new Set([...(knownAbsoluteFilePathsProp ?? []), ...extractedAbsoluteFilePaths])];
   }, [extractedAbsoluteFilePaths, knownAbsoluteFilePathsProp]);
+  const knownAbsoluteFilePaths = useStableValue(
+    mergedAbsoluteFilePaths,
+    areOptionalStringArraysEqual,
+  );
+  const latestImageExpand = useStableCallback(
+    (...args: Parameters<NonNullable<ChatMarkdownProps["onImageExpand"]>>) =>
+      onImageExpand?.(...args),
+  );
+  const latestOpenThread = useStableCallback((threadId: ThreadId) => onOpenThread?.(threadId));
+  const latestTaskToggle = useStableCallback((input: { sourceLine: number; checked: boolean }) =>
+    onTaskToggle?.(input),
+  );
+  const imageExpandHandler = onImageExpand ? latestImageExpand : undefined;
+  const openThreadHandler = onOpenThread ? latestOpenThread : undefined;
+  const taskToggleHandler = onTaskToggle ? latestTaskToggle : undefined;
   // Reveal streamed text at a steady, adaptive cadence so tokens appear fluidly instead of
   // in the ~100ms network clumps that land in the store. No-ops (returns `text`) when not
   // streaming or under reduced motion. Governs cadence only; the deferred value below still
   // bounds the markdown re-parse cost.
-  const smoothedText = useSmoothStreamedText(text, isStreaming);
+  const { text: smoothedText, isRevealing } = useSmoothStreamedText(text, isStreaming, revealKey);
+  const isLive = isStreaming || isRevealing;
   // The dollar rewrite exists to disambiguate math from currency; the user
   // variant has no math, so its text must stay byte-for-byte what was typed.
   // Table repair runs first so find offsets use the same normalized text.
@@ -1517,18 +1621,30 @@ function ChatMarkdown({
     () =>
       isUserVariant
         ? smoothedText
-        : protectLiteralMarkdownDollars(repairMarkdownTableDelimiters(smoothedText)),
-    [isUserVariant, smoothedText],
+        : protectLiteralMarkdownDollars(
+            repairMarkdownTableDelimiters(
+              isLive ? repairStreamingMarkdown(smoothedText) : smoothedText,
+            ),
+          ),
+    [isLive, isUserVariant, smoothedText],
   );
   // While streaming, let React deprioritize and coalesce the markdown re-parse so a
   // fast token stream (one flush per ~100ms) doesn't re-render the full ReactMarkdown
   // tree on every flush. The deferred value always converges to the latest text, and
   // completed messages render the exact current text immediately (no visual change).
   const deferredNormalizedText = useDeferredValue(normalizedText);
-  const renderedText = isStreaming ? deferredNormalizedText : normalizedText;
+  const renderedText = isLive ? deferredNormalizedText : normalizedText;
   const sourceText = useMemo(
     () => (isUserVariant ? text : repairMarkdownTableDelimiters(text)),
     [isUserVariant, text],
+  );
+  const [hasStreamed, setHasStreamed] = useState(isLive);
+  if (isLive && !hasStreamed) setHasStreamed(true);
+  const splitsIntoBlocks = hasStreamed && !isUserVariant && !parseHtml;
+  const blocks = useMemo(
+    () =>
+      splitsIntoBlocks ? splitMarkdownBlocks(renderedText) : singleMarkdownBlock(renderedText),
+    [renderedText, splitsIntoBlocks],
   );
   const composerChipsRemarkPlugin = useMemo(
     () =>
@@ -1557,7 +1673,7 @@ function ChatMarkdown({
   );
   const remarkPlugins = useMemo<MarkdownRemarkPlugins>(() => {
     if (composerChipsRemarkPlugin) {
-      return [...USER_MARKDOWN_REMARK_PLUGINS, composerChipsRemarkPlugin, remarkFindableText];
+      return [...USER_MARKDOWN_REMARK_PLUGINS, composerChipsRemarkPlugin];
     }
     const assistantPlugins: MarkdownRemarkPlugins = [
       ...MARKDOWN_REMARK_PLUGINS,
@@ -1566,7 +1682,6 @@ function ChatMarkdown({
     if (pluginMessageDirectiveRemarkPlugin) {
       assistantPlugins.push(pluginMessageDirectiveRemarkPlugin);
     }
-    assistantPlugins.push(remarkFindableText);
     return assistantPlugins;
   }, [composerChipsRemarkPlugin, wikiLinkRoot, cwd, pluginMessageDirectiveRemarkPlugin]);
   const rehypePlugins = useMemo<MarkdownRehypePlugins>(() => {
@@ -1585,21 +1700,20 @@ function ChatMarkdown({
   useLayoutEffect(() => {
     applyActiveChatFindMatch(rootRef.current, findActiveRange);
   }, [findActiveRange, findQuery, renderedText]);
-  const renderContext = useMemo<MarkdownRenderContextValue>(
+  useStreamingTextReveal(rootRef, isLive, renderedText);
+  const baseContext = useMemo<MarkdownBaseRenderContextValue>(
     () => ({
       isInsideLink: false,
       cwd,
       knownAbsoluteFilePaths,
       diffThemeName,
-      isStreaming,
       isUserVariant,
       mentionReferences,
-      onImageExpand,
-      onOpenThread,
-      onTaskToggle,
+      onImageExpand: imageExpandHandler,
+      onOpenThread: openThreadHandler,
+      onTaskToggle: taskToggleHandler,
       resolvedTheme,
       terminalContexts,
-      sourceText,
       pluginContext,
       pluginDirectiveRegistry,
     }),
@@ -1607,19 +1721,18 @@ function ChatMarkdown({
       cwd,
       knownAbsoluteFilePaths,
       diffThemeName,
-      isStreaming,
       isUserVariant,
       mentionReferences,
-      onImageExpand,
-      onOpenThread,
-      onTaskToggle,
+      imageExpandHandler,
+      openThreadHandler,
+      taskToggleHandler,
       resolvedTheme,
       terminalContexts,
-      sourceText,
       pluginContext,
       pluginDirectiveRegistry,
     ],
   );
+  const lastBlockIndex = blocks.length - 1;
 
   return (
     <div
@@ -1629,17 +1742,29 @@ function ChatMarkdown({
     >
       <ChatFindRenderProvider
         query={findQuery}
-        sourceText={sourceText}
+        sourceText={findQuery ? sourceText : ""}
         activeRange={findActiveRange}
       >
-        <MarkdownRenderContext.Provider value={renderContext}>
-          <ParsedMarkdown
-            text={renderedText}
-            remarkPlugins={remarkPlugins}
-            rehypePlugins={rehypePlugins}
-            components={MARKDOWN_COMPONENTS}
-          />
-        </MarkdownRenderContext.Provider>
+        {blocks.map((block, index) => (
+          <Fragment key={block.start}>
+            {index > 0 ? "\n" : null}
+            <MarkdownBlockView
+              text={renderedText.slice(block.start, block.end)}
+              origin={block.start}
+              line={block.line}
+              sourceText={
+                index === lastBlockIndex
+                  ? sourceText.slice(block.start)
+                  : sourceText.slice(block.start, block.end)
+              }
+              parsedText={index === lastBlockIndex && isLive ? renderedText : ""}
+              isStreaming={index === lastBlockIndex && isLive}
+              baseContext={baseContext}
+              remarkPlugins={remarkPlugins}
+              rehypePlugins={rehypePlugins}
+            />
+          </Fragment>
+        ))}
       </ChatFindRenderProvider>
     </div>
   );

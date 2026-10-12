@@ -8,7 +8,7 @@ describe("smooth reveal lifecycle", () => {
     let emitted = 0;
     let done = false;
     let now = 1_000;
-    for (let frame = 0; frame < hz * 3; frame += 1) {
+    for (let frame = 0; frame < hz * 10; frame += 1) {
       now += 1_000 / hz;
       const step = stepSmoothReveal(state, now, 100, emitted);
       if (step.emitCount !== null) {
@@ -40,6 +40,11 @@ describe("smooth reveal lifecycle", () => {
       velocity: 0.000000000001,
       lastFrameAt: 1_000,
       lastEmitAt: 1_000,
+      drainDeadlineMs: 0,
+      arrivalRate: 0,
+      lastArrivalAt: 0,
+      arrivedLength: 100,
+      arrivalDeadlines: [],
     };
     expect(stepSmoothReveal(state, 1_004, 100, 99)).toEqual({
       emitCount: 100,

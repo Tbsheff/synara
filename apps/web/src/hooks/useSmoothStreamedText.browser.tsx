@@ -1,6 +1,4 @@
 // FILE: useSmoothStreamedText.browser.tsx
-// Purpose: Hook-level regressions for the smooth streamed-text reveal — completion
-//          snap, reduced-motion bypass, non-append reset, and mount-text passthrough.
 // Layer: Web browser tests
 // Depends on: useSmoothStreamedText and a real React/browser rAF loop. The pure
 //             stepper math is pinned separately in useSmoothStreamedText.test.ts;
@@ -9,18 +7,19 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderHook } from "vitest-browser-react";
 
-import { useSmoothStreamedText } from "~/hooks/useSmoothStreamedText";
+import {
+  END_OF_STREAM_DRAIN_MS,
+  MAX_REVEAL_CHARS_PER_COMMIT,
+  useSmoothStreamedText,
+} from "~/hooks/useSmoothStreamedText";
 
 interface SmoothTextProps {
   readonly text: string;
   readonly isStreaming: boolean;
 }
 
-// Large enough that the rAF loop (≤2000 chars/s, ≤100 chars per clamped frame)
-// needs many quantized commits to drain it, so partially-revealed states are
-// reliably observable between polls and a handful of stray frames cannot
-// accidentally finish the reveal before an assertion runs.
-const LONG_DELTA = "x".repeat(1_200);
+const MULTI_COMMIT_DELTA = "word ".repeat(100);
+const BURST_DELTA = "word ".repeat(150);
 
 function renderSmoothText(initialProps: SmoothTextProps) {
   return renderHook(
@@ -28,7 +27,7 @@ function renderSmoothText(initialProps: SmoothTextProps) {
       useSmoothStreamedText(
         props?.text ?? initialProps.text,
         props?.isStreaming ?? initialProps.isStreaming,
-      ),
+      ).text,
     { initialProps },
   );
 }
@@ -43,7 +42,7 @@ describe("useSmoothStreamedText", () => {
     const hook = await renderSmoothText({ text: mountText, isStreaming: true });
     expect(hook.result.current).toBe(mountText);
 
-    const full = mountText + LONG_DELTA;
+    const full = mountText + MULTI_COMMIT_DELTA;
     await hook.rerender({ text: full, isStreaming: true });
     // The append only wakes the rAF loop — the backlog must not snap in at once.
     expect(hook.result.current.length).toBeLessThan(full.length);
@@ -70,18 +69,74 @@ describe("useSmoothStreamedText", () => {
     await hook.unmount();
   });
 
-  it("snaps to the full text the instant streaming ends", async () => {
-    const mountText = "Partial ";
-    const hook = await renderSmoothText({ text: mountText, isStreaming: true });
+  it("shows a mid-word tail once the reveal catches up during a pause", async () => {
+    const hook = await renderSmoothText({ text: "Hello ", isStreaming: true });
+    await hook.rerender({ text: "Hello world", isStreaming: true });
+    await expect.poll(() => hook.result.current, { timeout: 2_000 }).toBe("Hello world");
+    await hook.unmount();
+  });
 
-    const full = mountText + LONG_DELTA;
+  it("reveals a large burst in bounded commits instead of snapping", async () => {
+    const mountText = "Hello ";
+    const hook = await renderSmoothText({ text: mountText, isStreaming: true });
+    const full = mountText + BURST_DELTA;
     await hook.rerender({ text: full, isStreaming: true });
     expect(hook.result.current.length).toBeLessThan(full.length);
 
-    // No trailing typewriter once the agent is done: the flip to settled must
-    // return the complete text synchronously, mid-animation backlog and all.
+    let previousLength = hook.result.current.length;
+    let largestCommit = 0;
+    await expect
+      .poll(
+        () => {
+          const length = hook.result.current.length;
+          largestCommit = Math.max(largestCommit, length - previousLength);
+          previousLength = length;
+          return length;
+        },
+        { interval: 1, timeout: 5_000 },
+      )
+      .toBe(full.length);
+    expect(largestCommit).toBeLessThanOrEqual(MAX_REVEAL_CHARS_PER_COMMIT * 3);
+    await hook.unmount();
+  });
+
+  it("drains the remaining backlog over a short window when streaming ends", async () => {
+    const mountText = "Partial ";
+    const hook = await renderHook(
+      (props?: SmoothTextProps) =>
+        useSmoothStreamedText(props?.text ?? mountText, props?.isStreaming ?? true),
+      { initialProps: { text: mountText, isStreaming: true } },
+    );
+
+    const full = mountText + MULTI_COMMIT_DELTA;
+    await hook.rerender({ text: full, isStreaming: true });
+    expect(hook.result.current.text.length).toBeLessThan(full.length);
+
+    const endedAt = performance.now();
     await hook.rerender({ text: full, isStreaming: false });
-    expect(hook.result.current).toBe(full);
+    const firstSettledFrame = hook.result.current;
+    expect(firstSettledFrame.text.length).toBeLessThan(full.length);
+    expect(firstSettledFrame.isRevealing).toBe(true);
+    expect(full.startsWith(firstSettledFrame.text)).toBe(true);
+
+    let observedIntermediate = false;
+    await expect
+      .poll(
+        () => {
+          const { text } = hook.result.current;
+          if (text.length > firstSettledFrame.text.length && text.length < full.length) {
+            observedIntermediate = true;
+          }
+          return text;
+        },
+        { interval: 5, timeout: 2_000 },
+      )
+      .toBe(full);
+    const drainedAt = performance.now();
+
+    expect(hook.result.current.isRevealing).toBe(false);
+    expect(observedIntermediate).toBe(true);
+    expect(drainedAt - endedAt).toBeLessThan(END_OF_STREAM_DRAIN_MS + 150);
 
     await hook.unmount();
   });
@@ -115,7 +170,7 @@ describe("useSmoothStreamedText", () => {
     const hook = await renderSmoothText({ text: mountText, isStreaming: true });
     expect(hook.result.current).toBe(mountText);
 
-    const full = mountText + LONG_DELTA;
+    const full = mountText + MULTI_COMMIT_DELTA;
     await hook.rerender({ text: full, isStreaming: true });
     expect(hook.result.current).toBe(full);
 

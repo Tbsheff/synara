@@ -41,7 +41,7 @@ function leadingIndentWidth(line: string): number {
 // Splits a table row into cells the way GFM does: any unescaped pipe divides
 // cells (even inside inline code — GFM requires `\|` there too), and the
 // leading/trailing pipes do not delimit extra empty cells.
-function splitRowCells(line: string): string[] | null {
+export function splitMarkdownTableRowCells(line: string): string[] | null {
   const trimmed = line.trim();
   if (!trimmed.includes("|")) {
     return null;
@@ -73,7 +73,7 @@ function splitRowCells(line: string): string[] | null {
 }
 
 function parseDelimiterCells(line: string): string[] | null {
-  const cells = splitRowCells(line);
+  const cells = splitMarkdownTableRowCells(line);
   if (!cells) {
     return null;
   }
@@ -125,7 +125,7 @@ export function repairMarkdownTableDelimiters(value: string): string {
     if (leadingIndentWidth(header) >= 4 || header.trimStart().startsWith(">")) {
       continue;
     }
-    const headerCells = splitRowCells(header);
+    const headerCells = splitMarkdownTableRowCells(header);
     if (
       !headerCells ||
       headerCells.every((cell) => DELIMITER_CELL_REGEX.test(cell.trim())) ||

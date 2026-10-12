@@ -64,6 +64,7 @@ export function dedentCode(code: string): string {
 }
 
 const CODE_REFERENCE_REGEX = /^(\d+):(\d+):(.+)$/;
+const PLAIN_TEXT_ALIASES = new Set(["txt", "plaintext", "plain"]);
 
 // Parses a fence info string. Recognizes Cursor-style file references
 // (`startLine:endLine:path`) and bare file paths, deriving the highlighter
@@ -87,7 +88,8 @@ export function parseCodeFenceInfo(rawInfo: string): CodeFenceInfo {
   }
 
   // Shiki doesn't bundle a gitignore grammar; ini is a close match (#685).
-  const language = info === "gitignore" ? "ini" : info.length > 0 ? info : "text";
+  const language =
+    info === "gitignore" ? "ini" : info.length > 0 && !PLAIN_TEXT_ALIASES.has(info) ? info : "text";
   return {
     language,
     isFileReference: false,
@@ -96,4 +98,29 @@ export function parseCodeFenceInfo(rawInfo: string): CodeFenceInfo {
     directory: null,
     lineRange: null,
   };
+}
+
+const CODE_FENCE_OPENER_REGEX = /^ {0,3}(`{3,}|~{3,})/;
+const CONTAINER_PREFIX_REGEX = /^[ \t>]*/;
+
+export type StreamingCodeBlockState = "settled" | "open" | "awaiting-info-line";
+
+export function classifyStreamingCodeBlock(
+  markdown: string,
+  startOffset: number,
+  endOffset: number | undefined,
+): StreamingCodeBlockState {
+  const end = endOffset ?? markdown.length;
+  if (markdown.slice(end).trim().length > 0) return "settled";
+  const block = markdown.slice(startOffset, end);
+  const opener = CODE_FENCE_OPENER_REGEX.exec(block);
+  if (!opener) return "open";
+  const firstNewline = block.indexOf("\n");
+  if (firstNewline === -1) return "awaiting-info-line";
+  const fenceRun = opener[1] ?? "```";
+  const lastLine = block.slice(block.lastIndexOf("\n") + 1).replace(CONTAINER_PREFIX_REGEX, "");
+  const closingRun = lastLine.trimEnd();
+  const isClosingFence =
+    closingRun.length >= fenceRun.length && [...closingRun].every((char) => char === fenceRun[0]);
+  return isClosingFence ? "settled" : "open";
 }
