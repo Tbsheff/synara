@@ -89,6 +89,10 @@ import { AgentGatewayLive } from "./AgentGateway.ts";
 import { ComputerService } from "../../computer/Services/ComputerService.ts";
 import { makeComputerServiceLayer } from "../../computer/Layers/ComputerService.ts";
 import { FakeComputerBackend } from "../../computer/FakeComputerBackend.ts";
+import { computerApprovalGate } from "../../computer/ComputerApprovalGate.ts";
+import { DeviceManager } from "../../device/DeviceManager.ts";
+import { FakeDeviceBackend } from "../../device/FakeDeviceBackend.ts";
+import { DeviceService } from "../../device/Services/DeviceService.ts";
 import { recordCreatedWorktreeInPlan } from "../operationPlan.ts";
 import { makeAgentGatewayInFlightRequestRegistry } from "../inFlightRequestRegistry.ts";
 import { PluginHostService, type PluginHostShape } from "../../plugins/PluginHost.ts";
@@ -374,6 +378,7 @@ const VALID_TOKENS: Record<string, string> = {
   "token-parent-claude": "thread-parent",
   "token-parent-readonly": "thread-parent",
   "token-parent-computer": "thread-parent",
+  "token-parent-device-computer": "thread-parent",
   "token-ghost": "thread-ghost",
 };
 
@@ -442,6 +447,7 @@ function makeHarnessLayer(
     };
     /** Serves the computer_* family in the tool catalog (denial paths only need the names). */
     readonly computerService?: Layer.Layer<ComputerService>;
+    readonly deviceService?: Layer.Layer<DeviceService>;
   } = {},
 ) {
   const inFlightRequests = makeAgentGatewayInFlightRequestRegistry();
@@ -495,12 +501,14 @@ function makeHarnessLayer(
                 ? new Set(["thread:read"] as const)
                 : token === "token-parent-computer"
                   ? new Set(["thread:read", "computer:control"] as const)
-                  : new Set([
-                      "thread:read",
-                      "thread:write",
-                      "automation:write",
-                      "diagnostics:read",
-                    ] as const),
+                  : token === "token-parent-device-computer"
+                    ? new Set(["thread:read", "computer:control", "device:control"] as const)
+                    : new Set([
+                        "thread:read",
+                        "thread:write",
+                        "automation:write",
+                        "diagnostics:read",
+                      ] as const),
           }
         : null;
     },
@@ -1368,6 +1376,7 @@ function makeHarnessLayer(
     Layer.provide(
       Layer.mergeAll(
         options.computerService ?? Layer.empty,
+        options.deviceService ?? Layer.empty,
         options.commandReceipts
           ? Layer.succeed(OrchestrationCommandReceiptRepository, options.commandReceipts)
           : Layer.empty,
@@ -2108,6 +2117,66 @@ describe("AgentGateway", () => {
         1,
       );
     }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("asks for Computer consent after Device consent in the same turn", () => {
+    const deviceBackend = new FakeDeviceBackend();
+    const deviceManager = new DeviceManager({ backend: deviceBackend });
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads, [], {
+      computerService: makeComputerServiceLayer({
+        backend: new FakeComputerBackend(),
+        supported: true,
+      }),
+      deviceService: Layer.succeed(DeviceService, { supported: true, manager: deviceManager }),
+    });
+    computerApprovalGate.cancelThread("thread-parent");
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      yield* Effect.promise(() => deviceManager.boot("FAKE-0001"));
+      const approvalCards = () =>
+        harness.dispatched.flatMap((command) =>
+          command.type === "thread.activity.append" &&
+          command.activity.kind === "approval.requested"
+            ? [command.activity.payload as { requestId: string; approvalScope?: string }]
+            : [],
+        );
+      const awaitCard = (count: number) =>
+        Effect.promise(async () => {
+          for (let attempt = 0; attempt < 200 && approvalCards().length < count; attempt++) {
+            await new Promise((resolve) => setTimeout(resolve, 5));
+          }
+          return approvalCards()[count - 1];
+        });
+
+      const tapFiber = yield* harness
+        .callTool({
+          token: "token-parent-device-computer",
+          name: "device_tap",
+          args: { udid: "FAKE-0001", x: 10, y: 10 },
+        })
+        .pipe(Effect.forkChild);
+      const deviceCard = yield* awaitCard(1);
+      assert.equal(deviceCard?.approvalScope, "device-task");
+      computerApprovalGate.respond("thread-parent", deviceCard!.requestId, "accept");
+      const tap = yield* Fiber.join(tapFiber);
+      assert.isFalse(isToolError(tap.result), toolErrorText(tap.result));
+
+      const launchFiber = yield* harness
+        .callTool({
+          token: "token-parent-device-computer",
+          name: "computer_launch_app",
+          args: { app: "kcalc", wait_for_window: false },
+        })
+        .pipe(Effect.forkChild);
+      const computerCard = yield* awaitCard(2);
+      assert.equal(computerCard?.approvalScope, "computer-task");
+      computerApprovalGate.respond("thread-parent", computerCard!.requestId, "decline");
+      const launch = yield* Fiber.join(launchFiber);
+      assert.isTrue(isToolError(launch.result));
+    }).pipe(
+      Effect.ensuring(Effect.sync(() => computerApprovalGate.cancelThread("thread-parent"))),
+      Effect.provide(gatewayLayer),
+    );
   });
 
   it.effect("drives a second app on a full-access thread without a second-app card", () => {
@@ -5620,7 +5689,9 @@ describe("AgentGateway", () => {
   );
 
   it.effect("accepts memory writes without automationId and via the content alias", () => {
-    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads, [
+      makeAutomationDefinition(),
+    ]);
     return Effect.gen(function* () {
       const harness = yield* makeHarness;
       const implicit = yield* harness.callTool({
@@ -5732,6 +5803,115 @@ describe("AgentGateway", () => {
       assert.deepEqual(harness.automationUpdates, [
         { id: AutomationId.makeUnsafe("automation-1"), enabled: false },
       ]);
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect(
+    "refuses owner edits to an automation saved with more privilege than the caller now has",
+    () => {
+      const definition = makeAutomationDefinition({
+        mode: "standalone",
+        targetThreadId: null,
+        runtimeMode: "full-access",
+        worktreeMode: "worktree",
+        acknowledgedRisks: ["full-access"],
+      });
+      const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads, [definition]);
+      return Effect.gen(function* () {
+        const harness = yield* makeHarness;
+        const update = yield* harness.callTool({
+          token: "token-parent",
+          name: "synara_update_automation",
+          args: { ...makeFullAutomationUpdate(definition), prompt: "Escalated prompt" },
+        });
+        assert.isTrue(isToolError(update.result));
+        assert.include(toolErrorText(update.result), '"full-access"');
+        const memory = yield* harness.callTool({
+          token: "token-parent",
+          name: "synara_update_automation_memory",
+          args: { automationId: definition.id, memory: "Escalated memory" },
+        });
+        assert.isTrue(isToolError(memory.result));
+        assert.deepEqual(harness.automationUpdates, []);
+        assert.deepEqual(harness.automationMemoryUpdates, []);
+
+        const cancel = yield* harness.callTool({
+          token: "token-parent",
+          name: "synara_cancel_automation",
+          args: { automationId: definition.id },
+        });
+        assert.isFalse(isToolError(cancel.result), toolErrorText(cancel.result));
+        assert.deepEqual(harness.automationUpdates, [{ id: definition.id, enabled: false }]);
+      }).pipe(Effect.provide(gatewayLayer));
+    },
+  );
+
+  it.effect("refuses a demoted automation run's edits but lets it stop itself", () => {
+    const definition = makeAutomationDefinition({
+      id: AutomationId.makeUnsafe("automation-standalone"),
+      mode: "standalone",
+      sourceThreadId: ThreadId.makeUnsafe("thread-creator"),
+      targetThreadId: null,
+      runtimeMode: "full-access",
+      worktreeMode: "worktree",
+    });
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads, [definition], {
+      callerAutomationRun: {
+        callerThreadId: "thread-parent",
+        id: "run-standalone-1",
+        automationId: definition.id,
+      },
+    });
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const update = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_update_automation",
+        args: makeFullAutomationUpdate(definition),
+      });
+      assert.isTrue(isToolError(update.result));
+      assert.include(toolErrorText(update.result), '"full-access"');
+      const implicitMemory = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_update_automation_memory",
+        args: { memory: "Escalated memory" },
+      });
+      assert.isTrue(isToolError(implicitMemory.result));
+      assert.deepEqual(harness.automationMemoryUpdates, []);
+
+      const cancel = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_cancel_automation",
+        args: { automationId: definition.id },
+      });
+      assert.isFalse(isToolError(cancel.result), toolErrorText(cancel.result));
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("refuses owner edits from a worktree caller to a local-capable automation", () => {
+    const definition = makeAutomationDefinition({
+      mode: "standalone",
+      targetThreadId: null,
+      worktreeMode: "auto",
+    });
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(
+      baseThreads.map((thread) =>
+        thread.id === "thread-parent"
+          ? makeThreadShell("thread-parent", { envMode: "worktree" })
+          : thread,
+      ),
+      [definition],
+    );
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const update = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_update_automation",
+        args: makeFullAutomationUpdate(definition),
+      });
+      assert.isTrue(isToolError(update.result));
+      assert.include(toolErrorText(update.result), "worktree");
+      assert.deepEqual(harness.automationUpdates, []);
     }).pipe(Effect.provide(gatewayLayer));
   });
 

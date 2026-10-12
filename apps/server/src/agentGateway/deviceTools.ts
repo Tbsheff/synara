@@ -217,7 +217,11 @@ export function makeAgentGatewayDeviceTools(
    */
   const handle = (
     name: string,
-    run: (args: Record<string, unknown>, context: ToolContext) => Promise<unknown>,
+    run: (
+      args: Record<string, unknown>,
+      context: ToolContext,
+      signal: AbortSignal,
+    ) => Promise<unknown>,
   ) => {
     return (args: Record<string, unknown>, context: ToolContext) =>
       Effect.gen(function* () {
@@ -235,9 +239,10 @@ export function makeAgentGatewayDeviceTools(
                 );
               }
             }
-            const value = await manager.withAgentActivity(context.callerThreadId, () =>
-              run(args, context),
-            );
+            const value = await manager.withAgentActivity(context.callerThreadId, () => {
+              signal.throwIfAborted();
+              return run(args, context, signal);
+            });
             return mcpToolResultJson(value);
           },
           catch: (error) => error,
@@ -277,10 +282,14 @@ export function makeAgentGatewayDeviceTools(
    */
   const handleInteraction = (
     name: string,
-    run: (args: Record<string, unknown>, context: ToolContext) => Promise<unknown>,
+    run: (
+      args: Record<string, unknown>,
+      context: ToolContext,
+      signal: AbortSignal,
+    ) => Promise<unknown>,
   ) =>
-    handle(name, async (args, context) => {
-      const result = await run(args, context);
+    handle(name, async (args, context, signal) => {
+      const result = await run(args, context, signal);
       await surfaceDevice(context, readUdid(args), "agent-tool");
       return result;
     });
@@ -357,11 +366,12 @@ export function makeAgentGatewayDeviceTools(
         },
         annotations: { title: "Install app", ...WRITE_TOOL_ANNOTATIONS, destructiveHint: false },
       },
-      handler: handle("device_install", async (args, context) => {
+      handler: handle("device_install", async (args, context, signal) => {
         const udid = readUdid(args);
         const result = await manager.install(
           udid,
           readStringArg(args, "appPath", { required: true })!,
+          { signal },
         );
         await surfaceDevice(context, udid, "agent-install");
         return result;
@@ -391,12 +401,13 @@ export function makeAgentGatewayDeviceTools(
         },
         annotations: { title: "Launch app", ...WRITE_TOOL_ANNOTATIONS, destructiveHint: false },
       },
-      handler: handle("device_launch", async (args, context) => {
+      handler: handle("device_launch", async (args, context, signal) => {
         const udid = readUdid(args);
         const result = await manager.launch(
           udid,
           readStringArg(args, "bundleId", { required: true })!,
           readStringArrayArg(args, "arguments"),
+          { signal },
         );
         await surfaceDevice(context, udid, "agent-launch");
         return result;
@@ -425,9 +436,9 @@ export function makeAgentGatewayDeviceTools(
       // or React Native app reaches the screen, so it is exactly the moment the
       // user needs to see the device; without this the dock stays shut until a
       // later tap or describe happens to open it.
-      handler: handleInteraction("device_open_url", async (args) => {
+      handler: handleInteraction("device_open_url", async (args, _context, signal) => {
         const udid = readUdid(args);
-        await manager.openUrl(udid, readStringArg(args, "url", { required: true })!);
+        await manager.openUrl(udid, readStringArg(args, "url", { required: true })!, { signal });
         return { udid, opened: true };
       }),
     },
@@ -460,7 +471,7 @@ export function makeAgentGatewayDeviceTools(
         },
         annotations: { title: "Tap", ...WRITE_TOOL_ANNOTATIONS, destructiveHint: false },
       },
-      handler: handleInteraction("device_tap", async (args) => {
+      handler: handleInteraction("device_tap", async (args, _context, signal) => {
         const udid = readUdid(args);
         const request = readTapRequest({
           x: readNumberArg(args, "x"),
@@ -471,10 +482,10 @@ export function makeAgentGatewayDeviceTools(
         if (request.kind === "point") {
           const x = readCoordinate(args, "x");
           const y = readCoordinate(args, "y");
-          await manager.tap(udid, x, y);
+          await manager.tap(udid, x, y, { signal });
           return { udid, x, y };
         }
-        const match = await manager.tapElement(udid, request.target);
+        const match = await manager.tapElement(udid, request.target, { signal });
         // Report the node so the agent sees what it hit and, for a toggle, the
         // state it had before the tap; the follow-up describe shows the change.
         return {
@@ -517,7 +528,7 @@ export function makeAgentGatewayDeviceTools(
         },
         annotations: { title: "Swipe", ...WRITE_TOOL_ANNOTATIONS, destructiveHint: false },
       },
-      handler: handleInteraction("device_swipe", async (args) => {
+      handler: handleInteraction("device_swipe", async (args, _context, signal) => {
         const udid = readUdid(args);
         const gesture = {
           fromX: readCoordinate(args, "fromX"),
@@ -526,7 +537,7 @@ export function makeAgentGatewayDeviceTools(
           toY: readCoordinate(args, "toY"),
           durationMs: readBoundedIntegerArg(args, "durationMs", DEVICE_SWIPE_DURATION_RANGE) ?? 300,
         };
-        await manager.swipe(udid, gesture);
+        await manager.swipe(udid, gesture, { signal });
         return { udid, ...gesture };
       }),
     },
@@ -549,11 +560,11 @@ export function makeAgentGatewayDeviceTools(
         },
         annotations: { title: "Type text", ...WRITE_TOOL_ANNOTATIONS, destructiveHint: false },
       },
-      handler: handleInteraction("device_type", async (args) => {
+      handler: handleInteraction("device_type", async (args, _context, signal) => {
         const udid = readUdid(args);
         const text = args.text;
         if (typeof text !== "string") throw new ToolInputError('Argument "text" must be a string.');
-        await manager.typeText(udid, text);
+        await manager.typeText(udid, text, { signal });
         return { udid, length: text.length };
       }),
     },
@@ -580,7 +591,7 @@ export function makeAgentGatewayDeviceTools(
           destructiveHint: false,
         },
       },
-      handler: handleInteraction("device_press_button", async (args) => {
+      handler: handleInteraction("device_press_button", async (args, _context, signal) => {
         const udid = readUdid(args);
         const button = readStringArg(args, "button", { required: true })!;
         if (!(DEVICE_HARDWARE_BUTTONS as readonly string[]).includes(button)) {
@@ -588,7 +599,7 @@ export function makeAgentGatewayDeviceTools(
             `Argument "button" must be one of: ${DEVICE_HARDWARE_BUTTONS.join(", ")}.`,
           );
         }
-        await manager.pressButton(udid, button as DeviceHardwareButton);
+        await manager.pressButton(udid, button as DeviceHardwareButton, { signal });
         return { udid, button };
       }),
     },
@@ -647,8 +658,8 @@ export function makeAgentGatewayDeviceTools(
         },
         annotations: { title: "Describe device UI", ...READ_ONLY_TOOL_ANNOTATIONS },
       },
-      handler: handleInteraction("device_describe_ui", async (args) =>
-        manager.describeUi(readUdid(args)),
+      handler: handleInteraction("device_describe_ui", async (args, _context, signal) =>
+        manager.describeUi(readUdid(args), { signal }),
       ),
     },
     {
@@ -686,7 +697,7 @@ export function makeAgentGatewayDeviceTools(
           destructiveHint: false,
         },
       },
-      handler: handleInteraction("device_scroll_to_element", async (args) => {
+      handler: handleInteraction("device_scroll_to_element", async (args, _context, signal) => {
         const udid = readUdid(args);
         const match = await manager.scrollToElement(
           udid,
@@ -696,6 +707,7 @@ export function makeAgentGatewayDeviceTools(
           },
           {
             maxScrolls: readBoundedIntegerArg(args, "maxSwipes", DEVICE_SCROLL_BUDGET_RANGE),
+            signal,
           },
         );
         return {

@@ -7,6 +7,8 @@ interface PendingApproval {
   readonly settle: (decision: ProviderApprovalDecision) => void;
 }
 
+export type ComputerTaskConsentFamily = "computer" | "device";
+
 interface TaskApprovalInput {
   readonly threadId: string;
   readonly turnId: string;
@@ -48,9 +50,14 @@ export class ComputerApprovalGate {
   /** Visible-use consent is separate from routine Computer consent: allowing
    * background input never lets a task take the user's screen. */
   private readonly foregroundTasks = new Map<string, TaskApproval>();
+  private readonly deviceTasks = new Map<string, TaskApproval>();
+
+  private taskMaps(): readonly Map<string, TaskApproval>[] {
+    return [this.tasks, this.deviceTasks, this.foregroundTasks];
+  }
 
   cancelThread(threadId: string, turnId?: string): void {
-    for (const tasks of [this.tasks, this.foregroundTasks]) {
+    for (const tasks of this.taskMaps()) {
       const task = tasks.get(threadId);
       if (turnId === undefined || task?.turnId === turnId) tasks.delete(threadId);
     }
@@ -77,14 +84,19 @@ export class ComputerApprovalGate {
    * the re-auth, and cancelling it would just ask the same question twice.
    */
   revokeTaskGrants(): void {
-    for (const task of [...this.tasks.values(), ...this.foregroundTasks.values()]) {
-      if (task.granted === true) delete task.granted;
+    for (const tasks of this.taskMaps()) {
+      for (const task of tasks.values()) {
+        if (task.granted === true) delete task.granted;
+      }
     }
   }
 
   /** One consent for routine actions in the exact active turn, never a provider-wide grant. */
-  requestTask(input: TaskApprovalInput): Promise<boolean> {
-    return this.requestTaskIn(this.tasks, input);
+  requestTask(
+    input: TaskApprovalInput,
+    family: ComputerTaskConsentFamily = "computer",
+  ): Promise<boolean> {
+    return this.requestTaskIn(family === "device" ? this.deviceTasks : this.tasks, input);
   }
 
   /**
@@ -144,7 +156,7 @@ export class ComputerApprovalGate {
   }
 
   private cancelStaleTurns(threadId: string, turnId: string): void {
-    for (const tasks of [this.tasks, this.foregroundTasks]) {
+    for (const tasks of this.taskMaps()) {
       if (tasks.get(threadId)?.turnId !== turnId) tasks.delete(threadId);
     }
     for (const [id, pending] of this.pending) {

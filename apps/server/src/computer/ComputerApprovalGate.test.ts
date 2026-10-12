@@ -331,6 +331,46 @@ describe("ComputerApprovalGate", () => {
     expect(gate.hasForegroundGrant("a", "turn-1")).toBe(false);
   });
 
+  it("keeps Device task consent separate from Computer task consent", async () => {
+    const gate = new ComputerApprovalGate();
+    const prompts: Array<{ id: string; family: string }> = [];
+    const input = (family: string, threadId = "a") => ({
+      threadId,
+      turnId: "turn-1",
+      signal: new AbortController().signal,
+      publish: async (id: string, decision?: string) => {
+        if (decision === undefined) prompts.push({ id, family });
+      },
+    });
+
+    const device = gate.requestTask(input("device"), "device");
+    expect(prompts).toHaveLength(1);
+    gate.respond("a", prompts[0]!.id, "accept");
+    expect(await device).toBe(true);
+
+    const computer = gate.requestTask(input("computer"), "computer");
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1]!.family).toBe("computer");
+    gate.respond("a", prompts[1]!.id, "decline");
+    expect(await computer).toBe(false);
+    expect(await gate.requestTask(input("device"), "device")).toBe(true);
+    expect(prompts).toHaveLength(2);
+
+    const refusedDevice = gate.requestTask(input("device", "b"), "device");
+    gate.respond("b", prompts[2]!.id, "decline");
+    expect(await refusedDevice).toBe(false);
+    const computerAfterRefusal = gate.requestTask(input("computer", "b"), "computer");
+    expect(prompts).toHaveLength(4);
+    gate.respond("b", prompts[3]!.id, "accept");
+    expect(await computerAfterRefusal).toBe(true);
+
+    gate.cancelThread("a", "turn-1");
+    const deviceAfterStop = gate.requestTask(input("device"), "device");
+    expect(prompts).toHaveLength(5);
+    gate.cancelThread("a");
+    expect(await deviceAfterStop).toBe(false);
+  });
+
   it("remembers a visible-use decline for the turn without nagging", async () => {
     const gate = new ComputerApprovalGate();
     let prompts = 0;

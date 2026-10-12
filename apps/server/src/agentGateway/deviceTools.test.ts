@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { Effect } from "effect";
+import { Effect, Fiber } from "effect";
 
 import type { ProviderKind } from "@synara/contracts";
 
@@ -558,5 +558,61 @@ describe("agent gateway device tools surface the pane on any interaction", () =>
     expect(opened).toHaveLength(1);
     // One attach, so no duplicate stream for the pane to reconcile.
     expect((await manager.getThreadState(THREAD)).attachedDeviceUdid).toBe(DEVICE);
+  });
+});
+
+describe("agent gateway device tools after Stop", () => {
+  it("sends no input when the call is stopped while the badge publishes", async () => {
+    const backend = new FakeDeviceBackend();
+    const manager = new DeviceManager({ backend });
+    await manager.boot(DEVICE);
+    let entered!: () => void;
+    const activityEntered = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let release!: () => void;
+    const badgePublished = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const withAgentActivity = manager.withAgentActivity.bind(manager);
+    manager.withAgentActivity = (threadId, action) =>
+      withAgentActivity(threadId, async () => {
+        entered();
+        await badgePublished;
+        return await action();
+      });
+    const tap = makeAgentGatewayDeviceTools({
+      manager,
+      authorizeAction: async () => true,
+    }).find((tool) => tool.definition.name === "device_tap")!;
+
+    const fiber = Effect.runFork(tap.handler({ udid: DEVICE, x: 10, y: 10 }, makeContext()));
+    await activityEntered;
+    await Effect.runPromise(Fiber.interrupt(fiber));
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(backend.callsOfKind("tap")).toEqual([]);
+  });
+
+  it("stops a labelled scroll before the next swipe once the call is stopped", async () => {
+    const backend = new FakeDeviceBackend();
+    const manager = new DeviceManager({ backend });
+    await manager.boot(DEVICE);
+    const controller = new AbortController();
+    const describeUi = manager.describeUi.bind(manager);
+    let describes = 0;
+    manager.describeUi = async (udid, options) => {
+      const tree = await describeUi(udid, options);
+      describes += 1;
+      if (describes === 2) controller.abort();
+      return tree;
+    };
+
+    await expect(
+      manager.scrollToElement(DEVICE, { label: "Deep Row" }, { signal: controller.signal }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(backend.callsOfKind("swipe")).toHaveLength(1);
+    expect(backend.callsOfKind("tap")).toEqual([]);
   });
 });
