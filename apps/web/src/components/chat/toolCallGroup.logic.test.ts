@@ -218,3 +218,30 @@ describe("Codex desktop group header wording", () => {
     expect(multiFileEditLabel(edit("e2", ["a.ts"]))).toBeNull();
   });
 });
+
+it("shows failed and stopped counts in a folded tool summary", () => {
+  const summary = summarizeToolCallGroup([
+    command("ok"),
+    workEntry({ id: "failed", itemType: "command_execution", toolStatus: "failed" }),
+    workEntry({ id: "stopped", itemType: "command_execution", toolStatus: "cancelled" }),
+  ]);
+  expect(summary?.label).toBe("Ran commands · 1 failed, 1 stopped");
+});
+
+it("counts failed exit codes and interrupted commands in settled summaries", () => {
+  const summary = summarizeToolCallGroup([
+    workEntry({
+      id: "failed-exit",
+      itemType: "command_execution",
+      toolStatus: "completed",
+      commandExecution: { exitCode: 1 },
+    }),
+    workEntry({
+      id: "interrupted",
+      itemType: "command_execution",
+      toolStatus: "completed",
+      commandExecution: { interrupted: true },
+    }),
+  ]);
+  expect(summary?.label).toBe("Ran commands · 1 failed, 1 stopped");
+});

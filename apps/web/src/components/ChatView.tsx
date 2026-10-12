@@ -867,6 +867,7 @@ export default function ChatView({
   const handleThreadFindJump = (match: ThreadFindMatch) => {
     timelineControllerRef.current?.scrollToMessage(match.messageId, {
       ...(match.segmentIndex === undefined ? {} : { segmentIndex: match.segmentIndex }),
+      ...(match.workEntryId === undefined ? {} : { workEntryId: match.workEntryId }),
       fineScrollFind: true,
     });
   };

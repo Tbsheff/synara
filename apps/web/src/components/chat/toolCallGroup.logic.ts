@@ -189,8 +189,22 @@ export function summarizeToolCallGroup(
   const countByCategory = new Map<ToolCallSummaryCategory, number>();
   const distinctFilesByCategory = new Map<ToolCallSummaryCategory, Set<string>>();
   let hasRunningEntry = false;
+  let failedCount = 0;
+  let stoppedCount = 0;
 
   for (const entry of summarizable) {
+    const status =
+      entry.toolStatus === "running"
+        ? "running"
+        : entry.commandExecution?.interrupted
+          ? "cancelled"
+          : entry.commandExecution?.exitCode !== undefined && entry.commandExecution.exitCode !== 0
+            ? "failed"
+            : entry.liveActivity?.state === "failed" || entry.liveActivity?.state === "cancelled"
+              ? entry.liveActivity.state
+              : entry.toolStatus;
+    if (status === "failed") failedCount++;
+    if (status === "cancelled") stoppedCount++;
     if (entry.toolStatus === "running") {
       hasRunningEntry = true;
     }
@@ -229,7 +243,17 @@ export function summarizeToolCallGroup(
   });
 
   return {
-    label: formatToolCallGroupLabel(parts),
+    label: [
+      formatToolCallGroupLabel(parts),
+      [
+        failedCount > 0 ? `${failedCount} failed` : "",
+        stoppedCount > 0 ? `${stoppedCount} stopped` : "",
+      ]
+        .filter(Boolean)
+        .join(", "),
+    ]
+      .filter(Boolean)
+      .join(" · "),
     parts,
     entryCount: summarizable.length,
     hasRunningEntry,

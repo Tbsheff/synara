@@ -98,3 +98,41 @@ describe("ThreadFindBar interactions", () => {
     });
   });
 });
+
+it("jumps to a captured command output match", async () => {
+  const onJump = vi.fn();
+  const entries: TimelineEntry[] = [
+    {
+      id: "build",
+      kind: "work",
+      createdAt: "2026-01-01T00:00:00Z",
+      entry: {
+        id: "build",
+        label: "Build",
+        tone: "tool",
+        createdAt: "2026-01-01T00:00:00Z",
+        commandExecution: { command: "make", stderr: "compiler error" },
+      },
+    },
+  ];
+  const screen = await render(
+    <ThreadFindBar
+      open
+      focusNonce={1}
+      timelineEntries={entries}
+      onClose={() => undefined}
+      onJump={onJump}
+      onHighlightChange={() => undefined}
+      onActiveMatchChange={() => undefined}
+    />,
+  );
+  await screen.getByRole("textbox", { name: "Find in thread" }).fill("compiler error");
+  await expect
+    .poll(() => onJump.mock.calls.at(-1)?.[0])
+    .toEqual(
+      expect.objectContaining({
+        workEntryId: "build",
+        messageId: MessageId.makeUnsafe("work:build"),
+      }),
+    );
+});

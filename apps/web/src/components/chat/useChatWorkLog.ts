@@ -95,9 +95,6 @@ export function useChatWorkLog({
         : rawWorkLogEntries,
     [activeThread?.id, hasWorkLogSubagents, rawWorkLogEntries, relevantWorkLogThreads],
   );
-  // Subagents are presented by the composer strip (and their own threads); the
-  // transcript drops the routed fan-out rows entirely. The enriched list above is
-  // still what feeds the strip-adjacent derivations that need receiver metadata.
   const workLogEntries = useMemo(
     () => omitRoutedSubagentWorkEntries(enrichedWorkLogEntries),
     [enrichedWorkLogEntries],

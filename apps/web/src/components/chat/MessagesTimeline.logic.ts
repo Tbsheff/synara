@@ -392,6 +392,7 @@ export interface ThreadFindJumpTarget {
   visibleMessageId: MessageId;
   expandCollapsedWorkMessageId?: MessageId;
   collapsedNarrationMessageId?: MessageId;
+  workEntryId?: string;
 }
 
 /**
@@ -401,9 +402,33 @@ export interface ThreadFindJumpTarget {
  */
 export function resolveThreadFindJumpTarget(
   rows: readonly MessagesTimelineRow[],
-  match: { messageId: MessageId; segmentIndex?: number },
+  match: { messageId: MessageId; segmentIndex?: number; workEntryId?: string },
 ): ThreadFindJumpTarget | null {
-  const { messageId, segmentIndex } = match;
+  const { messageId, segmentIndex, workEntryId } = match;
+  if (workEntryId !== undefined) {
+    for (const [rowIndex, row] of rows.entries()) {
+      if (row.kind === "work" && row.groupedEntries.some((entry) => entry.id === workEntryId))
+        return { rowIndex, visibleMessageId: messageId, workEntryId };
+      if (row.kind !== "message") continue;
+      const collapsed = (row.collapsedTurnItems ?? []).some(
+        (item) => item.kind === "work" && item.entry.id === workEntryId,
+      );
+      if (
+        collapsed ||
+        [...(row.leadingWorkEntries ?? []), ...(row.inlineWorkEntries ?? [])].some(
+          (entry) => entry.id === workEntryId,
+        )
+      ) {
+        return {
+          rowIndex,
+          visibleMessageId: row.message.id,
+          workEntryId,
+          ...(collapsed ? { expandCollapsedWorkMessageId: row.message.id } : {}),
+        };
+      }
+    }
+    return null;
+  }
   if (segmentIndex !== undefined) {
     const segmentRowIndex = rows.findIndex(
       (row) =>

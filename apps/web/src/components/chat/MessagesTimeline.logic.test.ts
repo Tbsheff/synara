@@ -1530,6 +1530,32 @@ describe("deriveMessagesTimelineRows", () => {
     });
   });
 
+  it("opens the settled turn that owns a work find match", () => {
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      timelineEntries: [
+        userEntry("u1", "2026-01-01T00:00:00Z"),
+        workEntry("w1", "2026-01-01T00:00:02Z", "Build error"),
+        assistantEntry("a2", "2026-01-01T00:00:03Z", {
+          turnId: "t1",
+          text: "Done",
+          completedAt: "2026-01-01T00:00:04Z",
+        }),
+      ],
+    });
+    expect(
+      resolveThreadFindJumpTarget(rows, {
+        messageId: MessageId.makeUnsafe("work:w1"),
+        workEntryId: "w1",
+      }),
+    ).toEqual({
+      rowIndex: rows.findIndex((row) => row.kind === "message" && row.message.id === "a2"),
+      visibleMessageId: MessageId.makeUnsafe("a2"),
+      expandCollapsedWorkMessageId: MessageId.makeUnsafe("a2"),
+      workEntryId: "w1",
+    });
+  });
+
   it("times the collapsed disclosure from the turn start, not the last intermediate assistant message", () => {
     // Mirrors a provider failure + retry: the first attempt's assistant message
     // completes 22m20s in, the retry answers 40s later. The disclosure folds

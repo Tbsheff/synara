@@ -3,7 +3,7 @@
 // Layer: Web chat presentation component
 // Exports: TimelineWorkEntryRow, EditedFileRowContent, prefersCompactWorkEntryRow
 
-import type { FileChangeEntry, ModelSelection, TurnId } from "@synara/contracts";
+import type { FileChangeEntry, ModelSelection, ThreadId, TurnId } from "@synara/contracts";
 import { PROVIDER_DESCRIPTORS } from "@synara/shared/providerMetadata";
 import {
   createElement,
@@ -61,6 +61,8 @@ import { AutomationCreatedCard } from "./AutomationCreatedCard";
 import { ConnectedComputerSetupRequiredCard } from "./ComputerSetupRequiredCard";
 import { ComputerControlDeniedCard } from "./ComputerControlDeniedCard";
 import ChatMarkdown from "../ChatMarkdown";
+import { ChatFindRenderProvider, FindAwareMarkdownText } from "../ChatMarkdownFind";
+import { resolveWorkEntryFindText, type ThreadFindHighlight } from "./threadFind.logic";
 import { DiffStat } from "../ui/diff-stat";
 import { type ExpandedImagePreview } from "./ExpandedImagePreview";
 import { LinkChipIcon } from "../LinkChipIcon";
@@ -529,6 +531,7 @@ function subagentLaunchView(workEntry: TimelineWorkEntry): SubagentLaunchView | 
     status: SUBAGENT_STATUS_LABELS[typedToolRowStatus(workEntry)],
     model: action?.model ?? subagent?.model ?? null,
     prompt: action?.prompt ?? subagent?.prompt ?? null,
+    agents: workEntry.subagents,
   };
 }
 
@@ -828,6 +831,7 @@ function LiveActivityMeta({ text, ticking }: { text: string; ticking: boolean })
 
 export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
   workEntry: TimelineWorkEntry;
+  findHighlight?: ThreadFindHighlight | null;
   chatMetaFontSizePx: number;
   textFontSizePx?: number;
   density?: "default" | "compact";
@@ -837,6 +841,7 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
   turnId?: TurnId;
   onOpenTurnDiff?: (turnId: TurnId, filePath?: string) => void;
   onOpenAgentActivity?: (activityId: string) => void;
+  onOpenThread?: (threadId: ThreadId) => void;
   onOpenAutomation?: (automationId: string) => void;
   computerControlEnabled?: boolean;
   onEnableComputerControl?: () => void;
@@ -861,6 +866,28 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
     onEnableComputerControl,
     timestampFormat,
   } = props;
+  const activeFindMatch = props.findHighlight?.activeMatch;
+  const workFindActive = activeFindMatch?.workEntryId === workEntry.id;
+  const findText = workFindActive ? resolveWorkEntryFindText(workEntry) : "";
+  const findStart = workFindActive ? Math.max(0, activeFindMatch.startOffset - 160) : 0;
+  const workFindPreview =
+    workFindActive && props.findHighlight ? (
+      <div data-chat-find-document-id={`work:${workEntry.id}`} className="px-5 py-1">
+        <p className="text-ui-xs text-muted-foreground">Search match</p>
+        <ChatFindRenderProvider
+          query={props.findHighlight.query}
+          sourceText={findText}
+          activeRange={activeFindMatch}
+        >
+          <pre className="whitespace-pre-wrap break-words text-chat-code">
+            <FindAwareMarkdownText
+              text={findText.slice(findStart, activeFindMatch.endOffset + 160)}
+              sourceOffset={findStart}
+            />
+          </pre>
+        </ChatFindRenderProvider>
+      </div>
+    ) : null;
   const textFontSizePx = textFontSizePxProp ?? chatMetaFontSizePx;
   const density = densityProp ?? "default";
   const compact = density === "compact";
@@ -1007,9 +1034,9 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
       subagentLaunch ||
       providerContextLifecycle ||
       providerHandoff ||
-      (hasTypedDetails && !canOpenReadFile) ||
+      hasTypedDetails ||
       workEntry.toolDetails ||
-      (workEntry.liveActivity && !canOpenReadFile),
+      workEntry.liveActivity,
     );
   const openReadFile = readFilePath
     ? () => openWorkspaceFileReference(opener, readFilePath)
@@ -1022,6 +1049,7 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
 
   return (
     <div className={cn(compact ? "py-0.5" : "rounded-lg py-1")} data-work-entry-id={workEntry.id}>
+      {workFindPreview}
       {showTypedFileRows ? (
         <TypedFileChangeRows
           workEntryId={workEntry.id}
@@ -1221,11 +1249,15 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
           if (canOpenToolDetails) {
             return (
               <ToolDetailsDisclosure
+                forceOpen={workFindActive}
                 details={workEntry.toolDetails}
                 activity={workEntry.liveActivity}
                 detailContent={
                   subagentLaunch ? (
-                    <SubagentLaunchDetails view={subagentLaunch} />
+                    <SubagentLaunchDetails
+                      view={subagentLaunch}
+                      onOpenThread={props.onOpenThread}
+                    />
                   ) : providerContextLifecycle ? (
                     <ProviderContextLifecycleDetails info={providerContextLifecycle} />
                   ) : providerHandoff ? (
@@ -1248,6 +1280,10 @@ export const TimelineWorkEntryRow = memo(function TimelineWorkEntryRow(props: {
                       onClick={() => onOpenAgentActivity(workEntry.id)}
                     >
                       Open activity
+                    </DetailFooterLinkButton>
+                  ) : openReadFile ? (
+                    <DetailFooterLinkButton dataAttr="data-open-read-file" onClick={openReadFile}>
+                      Open file
                     </DetailFooterLinkButton>
                   ) : undefined
                 }
@@ -1354,7 +1390,7 @@ function ModelRerouteDivider(props: {
 }
 
 function DetailFooterLinkButton(props: {
-  dataAttr: "data-open-turn-diff" | "data-open-agent-activity";
+  dataAttr: "data-open-turn-diff" | "data-open-agent-activity" | "data-open-read-file";
   onClick: () => void;
   children: string;
 }) {
@@ -1598,6 +1634,7 @@ function ToolDetailsDisclosure(props: {
   timestampFormat: TimestampFormat;
   tooltip?: ReactNode;
   footer?: ReactNode;
+  forceOpen?: boolean;
 }) {
   const summaryClassName =
     props.summaryClassName ??
@@ -1606,9 +1643,9 @@ function ToolDetailsDisclosure(props: {
       props.compact ? "gap-1.5" : "gap-2",
       "cursor-pointer focus-visible:outline-none",
     );
-  const [open, setOpen] = useState(false);
-  const [renderDetails, setRenderDetails] = useState(false);
-  const [motionOpen, setMotionOpen] = useState(false);
+  const [open, setOpen] = useState(props.forceOpen ?? false);
+  const [renderDetails, setRenderDetails] = useState(props.forceOpen ?? false);
+  const [motionOpen, setMotionOpen] = useState(props.forceOpen ?? false);
   const openFrameRef = useRef<number | null>(null);
   const cleanupTimeoutRef = useRef<number | null>(null);
 
@@ -1648,6 +1685,9 @@ function ToolDetailsDisclosure(props: {
   );
 
   useEffect(() => () => clearMotionTimers(), [clearMotionTimers]);
+  useEffect(() => {
+    if (props.forceOpen) setDetailsOpen(true);
+  }, [props.forceOpen, setDetailsOpen]);
 
   const summaryButton = (
     <button
