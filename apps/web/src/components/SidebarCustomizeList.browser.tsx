@@ -18,9 +18,20 @@ it("reorders sidebar entries with the keyboard", async () => {
     />,
   );
   try {
-    page.getByRole("button", { name: "Reorder First" }).element().focus();
-    await userEvent.keyboard("{Space}{ArrowDown}{Space}");
+    const handle = page.getByRole("button", { name: "Reorder First" });
+    const announcement = page.getByRole("status");
+    handle.element().focus();
+    await expect.element(handle).toHaveFocus();
+    await userEvent.keyboard("[Space]");
+    await expect.element(handle).toHaveAttribute("aria-pressed", "true");
+    await expect.element(announcement).toHaveTextContent("droppable area first");
+    await userEvent.keyboard("{ArrowDown}");
+    await expect.element(announcement).toHaveTextContent("droppable area second");
+    expect(onReorder).not.toHaveBeenCalled();
+    await userEvent.keyboard("[Space]");
+    await expect.element(handle).not.toHaveAttribute("aria-pressed", "true");
     expect(onReorder).toHaveBeenCalledWith("first", "second");
+    expect(onReorder).toHaveBeenCalledOnce();
   } finally {
     await screen.unmount();
   }
