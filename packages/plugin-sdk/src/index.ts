@@ -228,7 +228,7 @@ export interface SynaraPluginApi {
   };
 }
 
-export type SynaraPlugin = (api: SynaraPluginApi) => void;
+export type SynaraPlugin = (api: SynaraPluginApi) => void | Promise<void>;
 
 export function definePlugin(plugin: SynaraPlugin): SynaraPlugin {
   return plugin;
@@ -295,6 +295,7 @@ export function createPluginRegistry(input: {
   readonly host: PluginHostApi | ((pluginId: string) => PluginHostApi);
   readonly storage: PluginKvStorage | ((pluginId: string) => PluginKvStorage);
   readonly drainTimeoutMs?: number;
+  readonly setupTimeoutMs?: number;
 }): PluginRegistry {
   const active = new Map<string, ActivePlugin>();
   let nextGeneration = 0;
@@ -357,6 +358,7 @@ export function createPluginRegistry(input: {
       const agentTools = new Map<string, PendingAgentTool>();
       const lifecycle = new AbortController();
       const register: SynaraPluginApi["rpc"]["register"] = (method, contract, handler) => {
+        lifecycle.signal.throwIfAborted();
         if (methods.has(method)) throw new Error(`Duplicate plugin RPC method: ${method}`);
         methods.set(method, {
           contract: contract as PluginRpcContract<unknown, unknown>,
@@ -364,6 +366,7 @@ export function createPluginRegistry(input: {
         });
       };
       const registerTool: SynaraPluginApi["agents"]["registerTool"] = (registration) => {
+        lifecycle.signal.throwIfAborted();
         if (manifest.apiVersion < 2) {
           throw new Error("Plugin agent tools require Synara API version 2.");
         }
@@ -472,7 +475,26 @@ export function createPluginRegistry(input: {
           },
         },
       };
-      plugin({ storage, rpc: { register }, agents: { registerTool } });
+      let setupTimeout: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const setup = plugin({ storage, rpc: { register }, agents: { registerTool } });
+        if (setup !== undefined) {
+          await Promise.race([
+            setup,
+            new Promise<never>((_resolve, reject) => {
+              setupTimeout = setTimeout(
+                () => reject(new Error(`Plugin setup timed out: ${manifest.id}`)),
+                input.setupTimeoutMs ?? 30_000,
+              );
+            }),
+          ]);
+        }
+      } catch (cause) {
+        lifecycle.abort(cause);
+        throw cause;
+      } finally {
+        clearTimeout(setupTimeout);
+      }
       const generation = (nextGeneration += 1);
       const previous = active.get(manifest.id);
       if (previous) {

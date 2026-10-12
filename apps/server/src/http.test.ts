@@ -9,7 +9,7 @@ import zlib from "node:zlib";
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
 import { Effect, Exit, Layer, Option, Scope } from "effect";
 import { HttpRouter } from "effect/unstable/http";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ServerAuth, type ServerAuthShape } from "./auth/Services/ServerAuth";
 import {
@@ -27,8 +27,10 @@ import {
   makeDesktopShutdownEffectRouteLayer,
   makeHealthEffectRouteLayer,
   projectFaviconEffectRouteLayer,
+  pluginAssetEffectRouteLayer,
   staticAndDevEffectRouteLayer,
 } from "./http";
+import { PluginHostService, type PluginHostShape } from "./plugins/PluginHost";
 import {
   ProjectFaviconResolver,
   type ProjectFaviconResolverShape,
@@ -156,7 +158,8 @@ type TestedRoute =
   | {
       readonly kind: "attachments";
       readonly managedBlobs?: ReadonlyArray<ManagedAttachmentBlob>;
-    };
+    }
+  | { readonly kind: "plugin-asset"; readonly pluginHost: PluginHostShape };
 
 async function withEffectServer(
   config: ServerConfigShape,
@@ -192,6 +195,8 @@ async function withEffectServer(
             yield* httpServer.serve(yield* HttpRouter.toHttpEffect(editorIconEffectRouteLayer));
           } else if (route.kind === "attachments") {
             yield* httpServer.serve(yield* HttpRouter.toHttpEffect(attachmentsEffectRouteLayer));
+          } else if (route.kind === "plugin-asset") {
+            yield* httpServer.serve(yield* HttpRouter.toHttpEffect(pluginAssetEffectRouteLayer));
           } else {
             yield* httpServer.serve(
               yield* HttpRouter.toHttpEffect(makeHealthEffectRouteLayer(route.readiness)),
@@ -204,6 +209,9 @@ async function withEffectServer(
               Layer.succeed(ServerAuth, serverAuth),
               Layer.succeed(ProjectFaviconResolver, projectFaviconResolver),
               Layer.succeed(OrchestrationEngineService, healthyOrchestrationEngine),
+              ...(route.kind === "plugin-asset"
+                ? [Layer.succeed(PluginHostService, route.pluginHost)]
+                : []),
               ...(route.kind === "emergency-stop" && route.computerService
                 ? [Layer.succeed(ComputerService, route.computerService)]
                 : []),
@@ -234,6 +242,37 @@ async function withEffectServer(
     await Effect.runPromise(Scope.close(scope, Exit.void));
   }
 }
+
+describe("plugin asset route", () => {
+  it("passes the requested version to asset lookup before immutable caching", async () => {
+    const config = makeConfig();
+    const assetPath = path.join(config.baseDir, "app.js");
+    writeFileSync(assetPath, "matching-build");
+    const resolveAppAsset = vi.fn((_key: string, _file: string, version: string | null) =>
+      Effect.succeed(
+        version === "current build"
+          ? { path: assetPath, contentType: "text/javascript" }
+          : undefined,
+      ),
+    );
+    await withEffectServer(
+      config,
+      { kind: "plugin-asset", pluginHost: { resolveAppAsset } as never },
+      async (origin) => {
+        const current = await fetch(`${origin}/api/plugin-assets/key/app.js?v=current%20build`);
+        expect(current.status).toBe(200);
+        expect(await current.text()).toBe("matching-build");
+        expect(current.headers.get("Cache-Control")).toContain("immutable");
+        expect(resolveAppAsset).toHaveBeenCalledWith("key", "app.js", "current build");
+        for (const query of ["", "?v=stale"]) {
+          const stale = await fetch(`${origin}/api/plugin-assets/key/app.js${query}`);
+          expect(stale.status).toBe(404);
+          expect(stale.headers.get("Cache-Control") ?? "").not.toContain("immutable");
+        }
+      },
+    );
+  });
+});
 
 describe("production Effect HTTP routes", () => {
   it("preserves the loopback-only startup-token policy", () => {

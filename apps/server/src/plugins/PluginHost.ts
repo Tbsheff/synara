@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { existsSync, watch } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -25,6 +25,7 @@ import {
   type SynaraPluginManifest,
 } from "@synara/plugin-sdk";
 import { isBuiltInPluginId } from "./builtInManifests";
+import { WORKTREE_BRANCH_PREFIX } from "@synara/shared/git";
 import { Effect, Layer, Option, ServiceMap } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
@@ -32,6 +33,8 @@ import { OrchestrationEngineService } from "../orchestration/Services/Orchestrat
 import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery";
 import { ServerSettingsService } from "../serverSettings";
 import { ServerConfig } from "../config";
+import { GitCore } from "../git/Services/GitCore";
+import { runWorktreeSetupScript } from "../worktreeSetup";
 import { makeKeyedLock } from "../provider/keyedLock";
 import { ensurePluginAuthoringSkill, makePluginEditPrompt } from "./authoringSkill";
 import { findPluginSource, PLUGIN_CONTROL_FILE, readPluginControl } from "./control";
@@ -59,6 +62,7 @@ export interface PluginHostShape {
   readonly resolveAppAsset: (
     assetKey: string,
     fileName: string,
+    version: string | null,
   ) => Effect.Effect<{ readonly path: string; readonly contentType: string } | undefined, Error>;
 }
 
@@ -104,12 +108,14 @@ interface ActivePluginSource {
   readonly sourceRoot: string;
   readonly skillRoots?: ReadonlyArray<string>;
   readonly assetKey?: string;
+  readonly assetVersion?: string;
   readonly appPath?: string;
   readonly appCssPath?: string;
 }
 
 interface PluginActivationAssets {
   readonly assetKey: string;
+  readonly assetVersion: string;
   readonly appPath?: string;
   readonly appCssPath?: string;
   readonly appUrl?: string;
@@ -127,6 +133,7 @@ function pluginActivationAssets(
   const versionKey = encodeURIComponent(reloadToken || manifest.version);
   return {
     assetKey,
+    assetVersion: reloadToken || manifest.version,
     ...(manifest.appEntry
       ? {
           appPath,
@@ -169,6 +176,7 @@ export const PluginHostLive = Layer.effect(
     const projections = yield* ProjectionSnapshotQuery;
     const settings = yield* ServerSettingsService;
     const config = yield* ServerConfig;
+    const git = yield* GitCore;
     yield* ensurePluginAuthoringSkill(config.baseDir).pipe(
       Effect.catch((cause) =>
         Effect.logWarning("Plugin authoring skill could not be installed; plugins remain usable.", {
@@ -211,6 +219,7 @@ export const PluginHostLive = Layer.effect(
       return cachedControl;
     };
     const storageUpdates = makeKeyedLock<string>();
+    const threadStarts = makeKeyedLock<string>();
 
     const makeStorage = (pluginId: string): PluginKvStorage => {
       const get = (key: string) =>
@@ -243,91 +252,159 @@ export const PluginHostLive = Layer.effect(
           `.pipe(Effect.asVoid),
         );
 
+      const withLock = <Value>(key: string, operation: () => Promise<Value>) =>
+        Effect.runPromise(
+          storageUpdates.withLock(
+            `${pluginId}\0${key}`,
+            Effect.tryPromise(bindPluginInvocationAuthority(operation)),
+          ),
+        );
+
       return {
         get,
-        set: async (key, value) => {
-          await assertPluginWriteAuthority();
-          await setRaw(key, value);
-        },
-        delete: async (key) => {
-          await assertPluginWriteAuthority();
-          await deleteRaw(key);
-        },
+        set: (key, value) =>
+          withLock(key, async () => {
+            await assertPluginWriteAuthority();
+            await setRaw(key, value);
+          }),
+        delete: (key) =>
+          withLock(key, async () => {
+            await assertPluginWriteAuthority();
+            await deleteRaw(key);
+          }),
         update: (key, updateValue) =>
-          bindPluginInvocationAuthority(() =>
-            Effect.runPromise(
-              storageUpdates.withLock(
-                `${pluginId}\0${key}`,
-                Effect.tryPromise(async () => {
-                  const result = await updateValue(await get(key));
-                  await assertPluginWriteAuthority();
-                  if (result === undefined) await deleteRaw(key);
-                  else await setRaw(key, result);
-                  return result;
-                }),
-              ),
-            ),
-          )(),
+          withLock(key, async () => {
+            const result = await updateValue(await get(key));
+            await assertPluginWriteAuthority();
+            if (result === undefined) await deleteRaw(key);
+            else await setRaw(key, result);
+            return result;
+          }),
       };
     };
 
     const startThread = async (pluginId: string, input: PluginThreadStartInput) => {
       const agentInvocation = hasPluginInvocationAuthority();
+      const assertWrite = bindPluginInvocationAuthority(assertPluginWriteAuthority);
       await assertPluginWriteAuthority();
       await assertPluginThreadStartAuthority();
+      const digest = stableId(pluginId, input, "thread");
       return Effect.runPromise(
-        Effect.gen(function* () {
-          const projectId = ProjectId.makeUnsafe(input.projectId);
-          const project = yield* projections.getProjectShellById(projectId).pipe(
-            Effect.flatMap(
-              Option.match({
-                onNone: () => Effect.fail(new Error(`Project not found: ${input.projectId}`)),
-                onSome: Effect.succeed,
-              }),
-            ),
-          );
-          const serverSettings = yield* settings.getSettings;
-          const modelSelection =
-            project.defaultModelSelection ?? serverSettings.textGenerationModelSelection;
-          const digest = stableId(pluginId, input, "thread");
-          const threadId = ThreadId.makeUnsafe(`plugin-${digest}`);
-          yield* Effect.tryPromise(() => assertPluginWriteAuthority());
-          yield* orchestration.dispatch({
-            type: "thread.create",
-            commandId: CommandId.makeUnsafe(`plugin:${digest}:create`),
-            threadId,
-            projectId,
-            title: input.title,
-            modelSelection,
-            runtimeMode: "full-access",
-            interactionMode: "default",
-            envMode: input.environment === "worktree" ? "worktree" : "local",
-            branch: null,
-            worktreePath: null,
-            createdAt: input.createdAt,
-            ...(input.parentThreadId
-              ? { parentThreadId: ThreadId.makeUnsafe(input.parentThreadId) }
-              : {}),
-          });
-          yield* Effect.tryPromise(() => assertPluginWriteAuthority());
-          yield* orchestration.dispatch({
-            type: "thread.turn.start",
-            commandId: CommandId.makeUnsafe(`plugin:${digest}:turn`),
-            threadId,
-            message: {
-              messageId: MessageId.makeUnsafe(`plugin:${digest}:message`),
-              role: "user",
-              text: input.prompt,
-              attachments: [],
-            },
-            dispatchMode: "queue",
-            dispatchOrigin: agentInvocation ? "agent" : "user",
-            runtimeMode: "full-access",
-            interactionMode: "default",
-            createdAt: input.createdAt,
-          });
-          return { threadId };
-        }),
+        threadStarts.withLock(
+          digest,
+          Effect.gen(function* () {
+            const projectId = ProjectId.makeUnsafe(input.projectId);
+            const project = yield* projections.getProjectShellById(projectId).pipe(
+              Effect.flatMap(
+                Option.match({
+                  onNone: () => Effect.fail(new Error(`Project not found: ${input.projectId}`)),
+                  onSome: Effect.succeed,
+                }),
+              ),
+            );
+            const serverSettings = yield* settings.getSettings;
+            const modelSelection =
+              project.defaultModelSelection ?? serverSettings.textGenerationModelSelection;
+            const threadId = ThreadId.makeUnsafe(`plugin-${digest}`);
+            const existing = yield* projections.getThreadShellById(threadId);
+            if (Option.isNone(existing)) {
+              const createThread = (branch: string | null, worktreePath: string | null) =>
+                Effect.tryPromise(assertWrite).pipe(
+                  Effect.andThen(
+                    orchestration.dispatch({
+                      type: "thread.create",
+                      commandId: CommandId.makeUnsafe(`plugin:${digest}:create`),
+                      threadId,
+                      projectId,
+                      title: input.title,
+                      modelSelection,
+                      runtimeMode: "full-access",
+                      interactionMode: "default",
+                      envMode: input.environment === "worktree" ? "worktree" : "local",
+                      branch,
+                      worktreePath,
+                      createdAt: input.createdAt,
+                      ...(input.parentThreadId
+                        ? { parentThreadId: ThreadId.makeUnsafe(input.parentThreadId) }
+                        : {}),
+                    }),
+                  ),
+                );
+              if (input.environment === "worktree") {
+                yield* git.withMutation(
+                  project.workspaceRoot,
+                  Effect.gen(function* () {
+                    yield* Effect.tryPromise(assertWrite);
+                    const created = yield* git.createDetachedWorktree({
+                      cwd: project.workspaceRoot,
+                      ref: "HEAD",
+                      path: null,
+                      newBranch: `${WORKTREE_BRANCH_PREFIX}/${digest.slice(0, 8)}`,
+                      copyChangesFrom: project.workspaceRoot,
+                    });
+                    const { branch, path: worktreePath } = created.worktree;
+                    const proof = yield* git.recordWorktreeOwnership({
+                      path: worktreePath,
+                      branch,
+                      token: randomUUID(),
+                    });
+                    yield* Effect.tryPromise((signal) =>
+                      runWorktreeSetupScript(project.scripts, worktreePath, signal),
+                    ).pipe(
+                      Effect.andThen(createThread(branch, worktreePath)),
+                      Effect.onError(() =>
+                        Effect.gen(function* () {
+                          const persisted = yield* projections.getThreadShellById(threadId);
+                          if (Option.isSome(persisted)) return;
+                          const ownership = yield* git.verifyWorktreeOwnership({
+                            path: worktreePath,
+                            proof,
+                          });
+                          if (!ownership.verified) {
+                            yield* Effect.logWarning("Plugin worktree cleanup refused", {
+                              reason: ownership.reason,
+                            });
+                            return;
+                          }
+                          yield* git.removeWorktree({
+                            cwd: project.workspaceRoot,
+                            path: worktreePath,
+                            force: true,
+                            reclaimTemporaryBranch: true,
+                          });
+                        }).pipe(
+                          Effect.catch((cause) =>
+                            Effect.logWarning("Plugin worktree cleanup failed", { cause }),
+                          ),
+                        ),
+                      ),
+                    );
+                  }),
+                );
+              } else {
+                yield* createThread(null, null);
+              }
+            }
+            yield* Effect.tryPromise(assertWrite);
+            yield* orchestration.dispatch({
+              type: "thread.turn.start",
+              commandId: CommandId.makeUnsafe(`plugin:${digest}:turn`),
+              threadId,
+              message: {
+                messageId: MessageId.makeUnsafe(`plugin:${digest}:message`),
+                role: "user",
+                text: input.prompt,
+                attachments: [],
+              },
+              dispatchMode: "queue",
+              dispatchOrigin: agentInvocation ? "agent" : "user",
+              runtimeMode: "full-access",
+              interactionMode: "default",
+              createdAt: input.createdAt,
+            });
+            return { threadId };
+          }),
+        ),
       ).then(({ threadId }) => ({ threadId }));
     };
 
@@ -472,6 +549,7 @@ export const PluginHostLive = Layer.effect(
                     sourceRoot: manifest.sourceRoot,
                     skillRoots: manifest.skillRoots,
                     assetKey: assets.assetKey,
+                    assetVersion: assets.assetVersion,
                     ...(assets.appPath ? { appPath: assets.appPath } : {}),
                     ...(assets.appCssPath ? { appCssPath: assets.appCssPath } : {}),
                   });
@@ -522,6 +600,7 @@ export const PluginHostLive = Layer.effect(
                   sourceRoot: manifest.sourceRoot,
                   skillRoots: manifest.skillRoots,
                   assetKey: assets.assetKey,
+                  assetVersion: assets.assetVersion,
                   ...(assets.appPath ? { appPath: assets.appPath } : {}),
                   ...(assets.appCssPath ? { appCssPath: assets.appCssPath } : {}),
                 });
@@ -663,12 +742,12 @@ export const PluginHostLive = Layer.effect(
           catch: (cause) =>
             cause instanceof Error ? cause : new Error("Plugin agent tool call failed", { cause }),
         }),
-      resolveAppAsset: (assetKey, fileName) =>
+      resolveAppAsset: (assetKey, fileName, version) =>
         Effect.tryPromise({
           try: async () => {
             await syncControl();
             const source = [...activeSources.values()].find(
-              (candidate) => candidate.assetKey === assetKey,
+              (candidate) => candidate.assetKey === assetKey && candidate.assetVersion === version,
             );
             if (!source) return undefined;
             if (fileName === "app.js" && source.appPath) {

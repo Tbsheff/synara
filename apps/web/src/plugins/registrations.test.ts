@@ -7,6 +7,18 @@ const Component = () => null;
 const run = () => undefined;
 
 describe("collectPluginAppRegistrations", () => {
+  it("rejects async setup and handles its later rejection", async () => {
+    const failed = Promise.reject(new Error("async setup failed"));
+    void failed.catch(() => undefined);
+    expect(() =>
+      collectPluginAppRegistrations(
+        "acme.async",
+        definePluginApp(() => failed),
+      ),
+    ).toThrow("must be synchronous");
+    await Promise.resolve();
+  });
+
   it("collects every frontend extension surface", () => {
     const app = definePluginApp((api) => {
       api.slots.homepageSection({ id: "home", title: "Home", component: Component });
