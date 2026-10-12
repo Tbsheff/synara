@@ -6,10 +6,16 @@
 // Layer: Chat composer UI
 // Exports: ComposerQueuedHeader
 
+import { useId, useState } from "react";
+import { pluralize } from "@synara/shared/text";
+
 import type { QueuedComposerTurn } from "../../composerDraftStore";
 import { SteerIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import ChatMarkdown from "../ChatMarkdown";
+import { DisclosureChevron } from "../ui/DisclosureChevron";
+import { DisclosureRegion } from "../ui/DisclosureRegion";
+import { IconButton } from "../ui/icon-button";
 import {
   ComposerStackedPanelRow,
   ComposerStackedPanelRowMain,
@@ -19,6 +25,7 @@ import {
   ComposerStackedPanel,
 } from "./ComposerStackedPanel";
 import {
+  COMPOSER_STACKED_PANEL_BODY_PADDING_CLASS_NAME,
   COMPOSER_STACKED_PANEL_ICON_CLASS_NAME,
   COMPOSER_STACKED_PANEL_PREVIEW_MARKDOWN_CLASS_NAME,
 } from "./composerStackedPanelStyles";
@@ -55,6 +62,100 @@ export function compactQueuedComposerPreviewMarkdown(value: string): string {
   return normalized.length > 0 ? normalized : "Queued follow-up";
 }
 
+export function queuedComposerTurnAttachmentSummary(queuedTurn: QueuedComposerTurn): string | null {
+  if (queuedTurn.kind !== "chat") {
+    return null;
+  }
+  const counts: ReadonlyArray<readonly [number, string]> = [
+    [queuedTurn.persistedImages?.length ?? queuedTurn.images.length, "image"],
+    [queuedTurn.persistedFiles?.length ?? queuedTurn.files.length, "file"],
+    [queuedTurn.pastedTexts.length, "pasted text"],
+    [queuedTurn.terminalContexts.length, "terminal context"],
+    [queuedTurn.fileComments.length, "file comment"],
+    [queuedTurn.assistantSelections.length, "selection"],
+    [queuedTurn.browserAnnotations.length, "browser annotation"],
+    [queuedTurn.pullRequestContexts.length, "pull request"],
+  ];
+  const parts = counts
+    .filter(([count]) => count > 0)
+    .map(([count, noun]) => `${count} ${pluralize(count, noun)}`);
+  return parts.length > 0 ? parts.join(" · ") : null;
+}
+
+function queuedComposerTurnFullText(queuedTurn: QueuedComposerTurn): string {
+  return queuedTurn.kind === "chat" ? queuedTurn.prompt : queuedTurn.text;
+}
+
+interface QueuedFollowUpRowProps {
+  queuedTurn: QueuedComposerTurn;
+  showDivider: boolean;
+  onSteer: (queuedTurn: QueuedComposerTurn) => void;
+  onRemove: (queuedTurnId: string) => void;
+  onEdit: (queuedTurn: QueuedComposerTurn) => void;
+  cwd: string | undefined;
+}
+
+function QueuedFollowUpRow({
+  queuedTurn,
+  showDivider,
+  onSteer,
+  onRemove,
+  onEdit,
+  cwd,
+}: QueuedFollowUpRowProps) {
+  const [expanded, setExpanded] = useState(false);
+  const previewRegionId = useId();
+  const attachmentSummary = queuedComposerTurnAttachmentSummary(queuedTurn);
+
+  return (
+    <div className={cn(showDivider && COMPOSER_STACKED_PANEL_DIVIDER_CLASS_NAME)}>
+      <ComposerStackedPanelRow compact data-testid="queued-follow-up-row">
+        <ComposerStackedPanelRowMain>
+          <SteerIcon className={COMPOSER_STACKED_PANEL_ICON_CLASS_NAME} />
+          <ChatMarkdown
+            text={compactQueuedComposerPreviewMarkdown(queuedTurn.previewText)}
+            cwd={cwd}
+            isStreaming={false}
+            className={COMPOSER_STACKED_PANEL_PREVIEW_MARKDOWN_CLASS_NAME}
+          />
+        </ComposerStackedPanelRowMain>
+        <IconButton
+          variant="ghost"
+          size="icon-chip"
+          label={expanded ? "Hide full queued follow-up" : "Show full queued follow-up"}
+          aria-expanded={expanded}
+          aria-controls={previewRegionId}
+          onClick={() => setExpanded((current) => !current)}
+        >
+          <DisclosureChevron open={expanded} />
+        </IconButton>
+        <QueuedComposerActions
+          queuedTurn={queuedTurn}
+          onSteer={onSteer}
+          onRemove={onRemove}
+          onEdit={onEdit}
+        />
+      </ComposerStackedPanelRow>
+      <DisclosureRegion open={expanded}>
+        <div
+          id={previewRegionId}
+          className={cn(
+            COMPOSER_STACKED_PANEL_BODY_PADDING_CLASS_NAME,
+            "max-h-48 overflow-y-auto text-ui-sm leading-snug",
+          )}
+        >
+          <p className="whitespace-pre-wrap break-words text-foreground/85">
+            {queuedComposerTurnFullText(queuedTurn)}
+          </p>
+          {attachmentSummary ? (
+            <p className="mt-1 text-muted-foreground/80">{attachmentSummary}</p>
+          ) : null}
+        </div>
+      </DisclosureRegion>
+    </div>
+  );
+}
+
 interface ComposerQueuedHeaderProps {
   queuedTurns: QueuedComposerTurn[];
   onSteer: (queuedTurn: QueuedComposerTurn) => void;
@@ -81,28 +182,15 @@ export const ComposerQueuedHeader = function ComposerQueuedHeader({
   return (
     <ComposerStackedPanel attachedToPrevious={attachedToPrevious} className="flex flex-col">
       {queuedTurns.map((queuedTurn, queuedTurnIndex) => (
-        <ComposerStackedPanelRow
+        <QueuedFollowUpRow
           key={queuedTurn.id}
-          compact
-          data-testid="queued-follow-up-row"
-          className={cn(queuedTurnIndex > 0 && COMPOSER_STACKED_PANEL_DIVIDER_CLASS_NAME)}
-        >
-          <ComposerStackedPanelRowMain>
-            <SteerIcon className={COMPOSER_STACKED_PANEL_ICON_CLASS_NAME} />
-            <ChatMarkdown
-              text={compactQueuedComposerPreviewMarkdown(queuedTurn.previewText)}
-              cwd={cwd}
-              isStreaming={false}
-              className={COMPOSER_STACKED_PANEL_PREVIEW_MARKDOWN_CLASS_NAME}
-            />
-          </ComposerStackedPanelRowMain>
-          <QueuedComposerActions
-            queuedTurn={queuedTurn}
-            onSteer={onSteer}
-            onRemove={onRemove}
-            onEdit={onEdit}
-          />
-        </ComposerStackedPanelRow>
+          queuedTurn={queuedTurn}
+          showDivider={queuedTurnIndex > 0}
+          onSteer={onSteer}
+          onRemove={onRemove}
+          onEdit={onEdit}
+          cwd={cwd}
+        />
       ))}
     </ComposerStackedPanel>
   );

@@ -11,6 +11,7 @@ function mountFooter(input: {
   onInterrupt?: () => void;
   voiceEnabled?: boolean;
   voiceRecording?: boolean;
+  voiceTranscribing?: boolean;
   onVoiceToggle?: () => void;
 }) {
   return render(
@@ -28,7 +29,7 @@ function mountFooter(input: {
         recording: input.voiceRecording ?? false,
         starting: false,
         waitingForAudio: false,
-        transcribing: false,
+        transcribing: input.voiceTranscribing ?? false,
         durationLabel: "",
         waveformLevels: [],
         onCancel: vi.fn(),
@@ -104,6 +105,28 @@ describe("ChatComposerFooter stop control", () => {
         .toBeVisible();
       expect(document.querySelector('button[aria-label="Stop generation"]')).toBeNull();
       expect(document.querySelector('button[aria-label="Record voice note"]')).toBeNull();
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("keeps Stop generation next to the recorder while a mid-turn voice note transcribes", async () => {
+    const onInterrupt = vi.fn();
+    const screen = await mountFooter({
+      phase: "running",
+      connecting: false,
+      voiceEnabled: true,
+      voiceTranscribing: true,
+      onInterrupt,
+    });
+    try {
+      await expect
+        .element(page.getByRole("button", { name: "Cancel transcription" }))
+        .toBeEnabled();
+      const stop = page.getByRole("button", { name: "Stop generation" });
+      await expect.element(stop).toBeVisible();
+      await stop.click();
+      expect(onInterrupt).toHaveBeenCalledOnce();
     } finally {
       await screen.unmount();
     }

@@ -189,10 +189,7 @@ export function ChatComposerFooter({
                 onClick={voice.onToggle}
               />
             ) : null}
-            {/* While dictating, the recorder bar owns this slot (as it does for the
-                send button); two identical stop squares side by side would be
-                ambiguous. Stop generation returns once the voice note is done. */}
-            {!voice.recording && !voice.transcribing ? (
+            {!voice.recording ? (
               <Button
                 type="button"
                 variant="prominent"
