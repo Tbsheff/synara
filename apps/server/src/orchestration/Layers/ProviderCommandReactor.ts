@@ -5955,14 +5955,59 @@ const make = Effect.gen(function* () {
     return yield* Effect.failCause(result.cause);
   });
 
+  const isInterruptTargetSuperseded = Effect.fnUntraced(function* (
+    threadId: ThreadId,
+    targetTurnId: TurnId,
+  ) {
+    const thread = yield* resolveThread(threadId);
+    if (!thread) {
+      return false;
+    }
+    const providerThread = yield* resolveProviderSessionThread(threadId);
+    const liveTurnId =
+      providerThread?.id === thread.id ? yield* resolveLiveProviderTurnId(threadId) : undefined;
+    if (liveTurnId !== undefined) {
+      return liveTurnId !== targetTurnId;
+    }
+    const session = thread.session;
+    const latestTurn = thread.latestTurn;
+    const projectedActiveTurnId = session?.activeTurnId ?? null;
+    if (
+      projectedActiveTurnId === targetTurnId ||
+      (latestTurn?.turnId === targetTurnId && latestTurn.state === "running")
+    ) {
+      return false;
+    }
+    const targetEnded = latestTurn?.turnId === targetTurnId;
+    const otherWorkIsRunning =
+      projectedActiveTurnId !== null ||
+      latestTurn?.state === "running" ||
+      session?.status === "starting" ||
+      session?.status === "running";
+    return targetEnded || otherWorkIsRunning;
+  });
+
   const processTurnInterruptRequested = Effect.fnUntraced(function* (
     event: Extract<ProviderIntentEvent, { type: "thread.turn-interrupt-requested" }>,
   ) {
+    const intentionalQuit = event.commandId?.startsWith("quit-resume-interrupt:") === true;
+    const targetTurnId = event.payload.turnId;
+    if (
+      targetTurnId !== undefined &&
+      !intentionalQuit &&
+      (yield* isInterruptTargetSuperseded(event.payload.threadId, targetTurnId))
+    ) {
+      yield* Effect.logInfo("provider command reactor ignored an interrupt for a superseded turn", {
+        threadId: event.payload.threadId,
+        targetTurnId,
+      });
+      return;
+    }
     yield* interruptProviderTurn({
       threadId: event.payload.threadId,
-      turnId: event.payload.turnId,
+      turnId: targetTurnId,
       createdAt: event.payload.createdAt,
-      intentionalQuit: event.commandId?.startsWith("quit-resume-interrupt:") === true,
+      intentionalQuit,
     });
   });
 
@@ -5982,23 +6027,31 @@ const make = Effect.gen(function* () {
       });
     }
 
-    yield* providerService
-      .stopTask({
+    const result = yield* runBoundedProviderCall({
+      label: "The provider task stop",
+      timeout: Duration.min(
+        PROVIDER_COMMAND_INTERRUPT_TIMEOUT,
+        Duration.millis(Duration.toMillis(commandEventTimeout) / 2),
+      ),
+      call: providerService.stopTask({
         threadId: providerThread.id,
         taskId: event.payload.taskId,
-      })
-      .pipe(
-        Effect.catchCause((cause) =>
-          appendProviderFailureActivity({
-            threadId: event.payload.threadId,
-            kind: "provider.task.stop.failed",
-            summary: "Provider task stop failed",
-            detail: Cause.pretty(cause),
-            turnId: null,
-            createdAt: event.payload.createdAt,
-          }),
-        ),
-      );
+      }),
+    });
+    if (result._tag === "ok") {
+      return;
+    }
+    yield* appendProviderFailureActivity({
+      threadId: event.payload.threadId,
+      kind: "provider.task.stop.failed",
+      summary: "Provider task stop failed",
+      detail: result._tag === "timeout" ? result.detail : Cause.pretty(result.cause),
+      turnId: null,
+      createdAt: event.payload.createdAt,
+      ...(result._tag === "timeout" || result.outcome._tag === "uncertain"
+        ? { settlementStatus: "uncertain" as const }
+        : {}),
+    });
   });
 
   const processTaskBackgroundRequested = Effect.fnUntraced(function* (

@@ -19956,7 +19956,7 @@ describe("ProviderCommandReactor", () => {
     });
   });
 
-  it("targets the live provider turn when an interrupt carries a stale projected turn", async () => {
+  it("targets the live provider turn over a stale projected turn when Stop names no turn", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
 
@@ -19988,7 +19988,6 @@ describe("ProviderCommandReactor", () => {
         type: "thread.turn.interrupt",
         commandId: CommandId.makeUnsafe("cmd-turn-interrupt-stale-projection"),
         threadId: ThreadId.makeUnsafe("thread-1"),
-        turnId: asTurnId("turn-projected-stale"),
         createdAt: now,
       }),
     );
