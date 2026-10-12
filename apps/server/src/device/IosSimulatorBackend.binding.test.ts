@@ -153,7 +153,7 @@ describe("helper binding", () => {
     controller.abort();
     attachA.release();
 
-    await expect(tap).rejects.toThrow();
+    await expect(tap).rejects.toMatchObject({ name: "AbortError" });
     expect(helper.requests).toEqual([]);
   });
 
@@ -173,7 +173,7 @@ describe("helper binding", () => {
         { keyCode: 4, modifiers: ["shift"], direction: "down" },
         { signal: controller.signal },
       ),
-    ).rejects.toThrow();
+    ).rejects.toMatchObject({ name: "AbortError" });
     expect(helper.requests).toHaveLength(1);
   });
 });

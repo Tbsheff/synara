@@ -280,10 +280,10 @@ export function makeAgentGatewayAutomationTools(
       }),
     );
 
-  const callerRunsAutomation = (
-    definition: AutomationDefinition,
-    context: { readonly callerThreadId: string; readonly callerTurnId: string | null },
-  ) =>
+  const resolveCallerAutomationId = (context: {
+    readonly callerThreadId: string;
+    readonly callerTurnId: string | null;
+  }) =>
     automationService
       .resolveCallerRun({
         callerThreadId: ThreadId.makeUnsafe(context.callerThreadId),
@@ -291,14 +291,23 @@ export function makeAgentGatewayAutomationTools(
       })
       .pipe(
         Effect.mapError((error) => new ToolInputError(errorText(error))),
-        Effect.map(
-          (callerRun) => Option.isSome(callerRun) && callerRun.value.automationId === definition.id,
-        ),
+        Effect.map(Option.map((callerRun) => callerRun.automationId)),
       );
+
+  const callerRunsAutomation = (
+    definition: AutomationDefinition,
+    context: { readonly callerThreadId: string; readonly callerTurnId: string | null },
+  ) =>
+    resolveCallerAutomationId(context).pipe(
+      Effect.map((automationId) =>
+        Option.exists(automationId, (callerAutomationId) => callerAutomationId === definition.id),
+      ),
+    );
 
   const assertCallerPrivilegesCoverAutomation = (
     caller: OrchestrationThreadShell,
     definition: AutomationDefinition,
+    access: "source" | "run" | "target",
   ) =>
     Effect.gen(function* () {
       if (runtimeModeEscalatesPrivilege(caller.runtimeMode, definition.runtimeMode)) {
@@ -308,6 +317,7 @@ export function makeAgentGatewayAutomationTools(
           ),
         );
       }
+      if (access === "run") return;
       if (caller.envMode === "worktree" && definition.worktreeMode !== "worktree") {
         return yield* Effect.fail(
           new ToolInputError(
@@ -769,9 +779,7 @@ export function makeAgentGatewayAutomationTools(
         const caller = yield* requireThreadShell(context.callerThreadId);
         const { definition } = yield* requireAutomationDefinition(automationId);
         const access = yield* assertCallerMayManageAutomation(caller, definition, context);
-        if (access !== "run") {
-          yield* assertCallerPrivilegesCoverAutomation(caller, definition);
-        }
+        yield* assertCallerPrivilegesCoverAutomation(caller, definition, access);
         if (definition.proposalState === "pending") {
           throw new ToolInputError(
             "Pending proposals must be accepted or dismissed by the user before they can be updated.",
@@ -923,12 +931,13 @@ export function makeAgentGatewayAutomationTools(
       Effect.gen(function* () {
         const automationIdArg = readStringArg(args, "automationId");
         const content = readMemoryContent(args);
-        if (automationIdArg !== undefined) {
+        const callerAutomationId = yield* resolveCallerAutomationId(context);
+        const memoryAutomationId = automationIdArg ?? Option.getOrUndefined(callerAutomationId);
+        if (memoryAutomationId !== undefined) {
           const caller = yield* requireThreadShell(context.callerThreadId);
-          const { definition } = yield* requireAutomationDefinition(automationIdArg);
-          if (!(yield* callerRunsAutomation(definition, context))) {
-            yield* assertCallerPrivilegesCoverAutomation(caller, definition);
-          }
+          const { definition } = yield* requireAutomationDefinition(memoryAutomationId);
+          const access = Option.contains(callerAutomationId, definition.id) ? "run" : "source";
+          yield* assertCallerPrivilegesCoverAutomation(caller, definition, access);
         }
         const memory = yield* automationService
           .updateMemory({

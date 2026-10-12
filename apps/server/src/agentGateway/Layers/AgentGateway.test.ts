@@ -2129,6 +2129,7 @@ describe("AgentGateway", () => {
       }),
       deviceService: Layer.succeed(DeviceService, { supported: true, manager: deviceManager }),
     });
+    computerApprovalGate.cancelThread("thread-parent");
     return Effect.gen(function* () {
       const harness = yield* makeHarness;
       yield* Effect.promise(() => deviceManager.boot("FAKE-0001"));
@@ -2172,8 +2173,10 @@ describe("AgentGateway", () => {
       computerApprovalGate.respond("thread-parent", computerCard!.requestId, "decline");
       const launch = yield* Fiber.join(launchFiber);
       assert.isTrue(isToolError(launch.result));
-      computerApprovalGate.cancelThread("thread-parent");
-    }).pipe(Effect.provide(gatewayLayer));
+    }).pipe(
+      Effect.ensuring(Effect.sync(() => computerApprovalGate.cancelThread("thread-parent"))),
+      Effect.provide(gatewayLayer),
+    );
   });
 
   it.effect("drives a second app on a full-access thread without a second-app card", () => {
@@ -5842,6 +5845,48 @@ describe("AgentGateway", () => {
       }).pipe(Effect.provide(gatewayLayer));
     },
   );
+
+  it.effect("refuses a demoted automation run's edits but lets it stop itself", () => {
+    const definition = makeAutomationDefinition({
+      id: AutomationId.makeUnsafe("automation-standalone"),
+      mode: "standalone",
+      sourceThreadId: ThreadId.makeUnsafe("thread-creator"),
+      targetThreadId: null,
+      runtimeMode: "full-access",
+      worktreeMode: "worktree",
+    });
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads, [definition], {
+      callerAutomationRun: {
+        callerThreadId: "thread-parent",
+        id: "run-standalone-1",
+        automationId: definition.id,
+      },
+    });
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const update = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_update_automation",
+        args: makeFullAutomationUpdate(definition),
+      });
+      assert.isTrue(isToolError(update.result));
+      assert.include(toolErrorText(update.result), '"full-access"');
+      const implicitMemory = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_update_automation_memory",
+        args: { memory: "Escalated memory" },
+      });
+      assert.isTrue(isToolError(implicitMemory.result));
+      assert.deepEqual(harness.automationMemoryUpdates, []);
+
+      const cancel = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_cancel_automation",
+        args: { automationId: definition.id },
+      });
+      assert.isFalse(isToolError(cancel.result), toolErrorText(cancel.result));
+    }).pipe(Effect.provide(gatewayLayer));
+  });
 
   it.effect("refuses owner edits from a worktree caller to a local-capable automation", () => {
     const definition = makeAutomationDefinition({

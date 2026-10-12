@@ -611,7 +611,7 @@ describe("agent gateway device tools after Stop", () => {
 
     await expect(
       manager.scrollToElement(DEVICE, { label: "Deep Row" }, { signal: controller.signal }),
-    ).rejects.toThrow();
+    ).rejects.toMatchObject({ name: "AbortError" });
     expect(backend.callsOfKind("swipe")).toHaveLength(1);
     expect(backend.callsOfKind("tap")).toEqual([]);
   });
