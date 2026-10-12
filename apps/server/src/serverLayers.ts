@@ -241,6 +241,7 @@ export function makeServerRuntimeServicesLayer(
   const pluginHostLayer = PluginHostLive.pipe(
     Layer.provideMerge(OrchestrationLayerLive),
     Layer.provideMerge(ServerSettingsLive),
+    Layer.provideMerge(GitLayerLive),
   );
   const agentGatewayLayer = AgentGatewayLive.pipe(
     Layer.provideMerge(

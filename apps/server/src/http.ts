@@ -408,7 +408,9 @@ export const pluginAssetEffectRouteLayer = HttpRouter.add(
       return HttpServerResponse.text("Not Found", { status: 404 });
     }
     const pluginHost = yield* PluginHostService;
-    const asset = yield* pluginHost.resolveAppAsset(parts[2]!, parts[3]!).pipe(Effect.orDie);
+    const asset = yield* pluginHost
+      .resolveAppAsset(parts[2]!, parts[3]!, url.searchParams.get("v"))
+      .pipe(Effect.orDie);
     if (!asset) return HttpServerResponse.text("Not Found", { status: 404 });
     const fileSystem = yield* FileSystem.FileSystem;
     const data = yield* fileSystem.readFile(asset.path).pipe(Effect.option);

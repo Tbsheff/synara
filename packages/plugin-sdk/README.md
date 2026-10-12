@@ -68,6 +68,12 @@ export default definePlugin((synara) => {
 
 RPC and chat-tool inputs and outputs are checked at run time. A read tool uses the caller's `thread:read` authority. A write tool uses `thread:write` and rechecks the exact calling turn before each host write. The MCP endpoint uses the current handler for a known tool name, but an active provider session can need a restart to discover a new or renamed tool. Storage is scoped to the package ID. Use `storage.update` for read-modify-write work so calls from the same process cannot overwrite each other.
 
+Storage `set`, `delete`, and `update` share a lock for each plugin and key. An update callback must not write to its own key through another storage call.
+
+Server setup can return a `Promise<void>`. The host waits up to 30 seconds before it publishes the new generation. Failed or timed-out setup keeps the prior generation active and blocks further use of the candidate's host APIs. A timeout cannot stop plugin code from running.
+
+Thread starts with `environment: "worktree"` create a managed worktree from the project's checkout HEAD, copy checkout changes, and run the project's worktree setup script before they save the thread and queue its first turn. Retrying the same idempotency key reuses the saved thread and worktree.
+
 ## App entry
 
 ```tsx
@@ -83,6 +89,8 @@ export default definePluginApp((app) => {
 ```
 
 Panels get public plugin context and RPC hooks. They must not import Synara stores, routes, database types, or server services.
+
+App setup must finish synchronously. The host rejects a returned promise and handles its rejection. Versioned app and CSS URLs serve only the matching active build; stale or missing versions return 404.
 
 Call `usePluginRuntime().editPlugin({ plugin, projectId })` to start an edit chat for the installed source package. The host starts a normal full-access thread, loads the `synara-plugin-authoring` skill, and includes the exact source root in the first message. The agent edits with its usual workspace tools; the SDK does not add another file-write path.
 
