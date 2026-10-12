@@ -2108,99 +2108,91 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
-  it.effect(
-    "retains image metadata in Claude snapshots and runtime events without changing SDK messages",
-    () => {
-      const harness = makeHarness();
-      return Effect.gen(function* () {
-        const adapter = yield* ClaudeAdapter;
-        const eventsFiber = yield* adapter.streamEvents.pipe(
-          Stream.takeUntil((event) => event.type === "turn.completed"),
-          Stream.runCollect,
-          Effect.forkChild,
-        );
-        const session = yield* adapter.startSession({
-          threadId: THREAD_ID,
-          provider: "claudeAgent",
-          runtimeMode: "full-access",
-        });
-        yield* adapter.sendTurn({
-          threadId: session.threadId,
-          input: "Inspect the screenshot",
-          attachments: [],
-        });
-        const data = Buffer.alloc(512 * 1024, 123).toString("base64");
-        const image = { type: "image", source: { type: "base64", media_type: "image/png", data } };
-        const assistant = {
-          type: "assistant",
-          session_id: "sdk-session-images",
-          uuid: "assistant-images",
-          parent_tool_use_id: null,
-          message: {
-            id: "assistant-message-images",
-            content: [
-              {
-                type: "tool_use",
-                id: "tool-images",
-                name: "mcp__computer__screenshot",
-                input: { reference: image },
-              },
-            ],
-          },
-        };
-        const user = {
-          type: "user",
-          session_id: "sdk-session-images",
-          uuid: "user-images",
-          parent_tool_use_id: null,
-          message: {
-            role: "user",
-            content: [{ type: "tool_result", tool_use_id: "tool-images", content: [image] }],
-          },
-        };
-        harness.query.emit({
-          type: "stream_event",
-          session_id: "sdk-session-images",
-          uuid: "stream-images",
-          parent_tool_use_id: null,
-          event: {
-            type: "content_block_start",
-            index: 0,
-            content_block: assistant.message.content[0],
-          },
-        } as unknown as SDKMessage);
-        harness.query.emit(assistant as unknown as SDKMessage);
-        harness.query.emit(user as unknown as SDKMessage);
-        harness.query.emit({
-          type: "result",
-          subtype: "success",
-          is_error: false,
-          errors: [],
-          session_id: "sdk-session-images",
-          uuid: "result-images",
-        } as unknown as SDKMessage);
-        const events = Array.from(yield* Fiber.join(eventsFiber));
-        const snapshot = yield* adapter.readThread(session.threadId);
-        assert.lengthOf(snapshot.turns, 1);
-        assert.lengthOf(snapshot.turns[0]!.items, 2);
-        for (const item of snapshot.turns[0]!.items) {
-          const serialized = JSON.stringify(item);
-          assert.include(serialized, '"synaraImageOmitted":true');
-          assert.isBelow(serialized.length, 1000);
-        }
-        const eventJson = JSON.stringify(events);
-        assert.include(eventJson, '"synaraImageOmitted":true');
-        assert.notInclude(eventJson, data);
-        assert.isBelow(eventJson.length, 30_000);
-        assert.equal(image.source.data, data);
-        assert.strictEqual(assistant.message.content[0]!.input.reference, image);
-        assert.strictEqual(user.message.content[0]!.content[0], image);
-      }).pipe(
-        Effect.provideService(Random.Random, makeDeterministicRandomService()),
-        Effect.provide(harness.layer),
+  it.effect("omits image data from Claude runtime events without changing SDK messages", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const eventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil((event) => event.type === "turn.completed"),
+        Stream.runCollect,
+        Effect.forkChild,
       );
-    },
-  );
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "Inspect the screenshot",
+        attachments: [],
+      });
+      const data = Buffer.alloc(512 * 1024, 123).toString("base64");
+      const image = { type: "image", source: { type: "base64", media_type: "image/png", data } };
+      const assistant = {
+        type: "assistant",
+        session_id: "sdk-session-images",
+        uuid: "assistant-images",
+        parent_tool_use_id: null,
+        message: {
+          id: "assistant-message-images",
+          content: [
+            {
+              type: "tool_use",
+              id: "tool-images",
+              name: "mcp__computer__screenshot",
+              input: { reference: image },
+            },
+          ],
+        },
+      };
+      const user = {
+        type: "user",
+        session_id: "sdk-session-images",
+        uuid: "user-images",
+        parent_tool_use_id: null,
+        message: {
+          role: "user",
+          content: [{ type: "tool_result", tool_use_id: "tool-images", content: [image] }],
+        },
+      };
+      harness.query.emit({
+        type: "stream_event",
+        session_id: "sdk-session-images",
+        uuid: "stream-images",
+        parent_tool_use_id: null,
+        event: {
+          type: "content_block_start",
+          index: 0,
+          content_block: assistant.message.content[0],
+        },
+      } as unknown as SDKMessage);
+      harness.query.emit(assistant as unknown as SDKMessage);
+      harness.query.emit(user as unknown as SDKMessage);
+      harness.query.emit({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        errors: [],
+        session_id: "sdk-session-images",
+        uuid: "result-images",
+      } as unknown as SDKMessage);
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+      const snapshot = yield* adapter.readThread(session.threadId);
+      assert.lengthOf(snapshot.turns, 1);
+      assert.lengthOf(snapshot.turns[0]!.items, 0);
+      const eventJson = JSON.stringify(events);
+      assert.include(eventJson, '"synaraImageOmitted":true');
+      assert.notInclude(eventJson, data);
+      assert.isBelow(eventJson.length, 30_000);
+      assert.equal(image.source.data, data);
+      assert.strictEqual(assistant.message.content[0]!.input.reference, image);
+      assert.strictEqual(user.message.content[0]!.content[0], image);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
 
   it.effect("maps Claude stream/runtime messages to canonical provider runtime events", () => {
     const harness = makeHarness();
@@ -8721,73 +8713,72 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     );
   });
 
-  it.effect(
-    "preserves earlier SDK history and previously returned snapshots after another turn",
-    () => {
-      const harness = makeHarness();
-      return Effect.gen(function* () {
-        const adapter = yield* ClaudeAdapter;
+  it.effect("releases settled turn content and keeps a cumulative turn count", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
 
-        const session = yield* adapter.startSession({
-          threadId: THREAD_ID,
-          provider: "claudeAgent",
-          runtimeMode: "full-access",
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+        resumeCursor: { resume: "sdk-session-retained-items", turnCount: 5 },
+      });
+
+      const runTurn = (suffix: string) =>
+        Effect.gen(function* () {
+          const turn = yield* adapter.sendTurn({
+            threadId: session.threadId,
+            input: suffix,
+            attachments: [],
+          });
+          const completedFiber = yield* Stream.filter(
+            adapter.streamEvents,
+            (event) => event.type === "turn.completed",
+          ).pipe(Stream.runHead, Effect.forkChild);
+          harness.query.emit({
+            type: "assistant",
+            session_id: "sdk-session-retained-items",
+            uuid: `assistant-${suffix}`,
+            parent_tool_use_id: null,
+            message: {
+              id: `assistant-message-${suffix}`,
+              content: [{ type: "text", text: "x".repeat(64 * 1024) }],
+            },
+          } as unknown as SDKMessage);
+          harness.query.emit({
+            type: "result",
+            subtype: "success",
+            is_error: false,
+            errors: [],
+            session_id: "sdk-session-retained-items",
+            uuid: `result-${suffix}`,
+          } as unknown as SDKMessage);
+          const completed = yield* Fiber.join(completedFiber);
+          assert.equal(completed._tag, "Some");
+          return turn.turnId;
         });
 
-        const runTurn = (input: string, suffix: string) =>
-          Effect.gen(function* () {
-            const turn = yield* adapter.sendTurn({
-              threadId: session.threadId,
-              input,
-              attachments: [],
-            });
-            const completedFiber = yield* Stream.filter(
-              adapter.streamEvents,
-              (event) => event.type === "turn.completed",
-            ).pipe(Stream.runHead, Effect.forkChild);
-            harness.query.emit({
-              type: "assistant",
-              session_id: "sdk-session-retained-items",
-              uuid: `assistant-${suffix}`,
-              parent_tool_use_id: null,
-              message: {
-                id: `assistant-message-${suffix}`,
-                content: [{ type: "text", text: "x".repeat(64 * 1024) }],
-              },
-            } as unknown as SDKMessage);
-            harness.query.emit({
-              type: "result",
-              subtype: "success",
-              is_error: false,
-              errors: [],
-              session_id: "sdk-session-retained-items",
-              uuid: `result-${suffix}`,
-            } as unknown as SDKMessage);
-            const completed = yield* Fiber.join(completedFiber);
-            assert.equal(completed._tag, "Some");
-            return turn;
-          });
+      const turnIds: Array<TurnId> = [];
+      for (let index = 0; index < 34; index += 1) {
+        turnIds.push(yield* runTurn(`turn-${index}`));
+      }
 
-        const firstTurn = yield* runTurn("first", "first");
-        const afterFirst = yield* adapter.readThread(session.threadId);
-        assert.equal(afterFirst.turns.length, 1);
-        assert.equal(afterFirst.turns[0]?.items.length, 1);
-
-        const secondTurn = yield* runTurn("second", "second");
-        const afterSecond = yield* adapter.readThread(session.threadId);
-        assert.equal(afterSecond.turns.length, 2);
-        assert.equal(afterSecond.turns[0]?.id, firstTurn.turnId);
-        assert.equal(afterSecond.turns[1]?.id, secondTurn.turnId);
-        assert.deepEqual(afterSecond.turns[0]?.items, afterFirst.turns[0]?.items);
-        assert.equal(afterFirst.turns.length, 1);
-        assert.equal(afterFirst.turns[0]?.items.length, 1);
-        assert.equal(afterSecond.turns[1]?.items.length, 1);
-      }).pipe(
-        Effect.provideService(Random.Random, makeDeterministicRandomService()),
-        Effect.provide(harness.layer),
+      const snapshot = yield* adapter.readThread(session.threadId);
+      assert.deepEqual(
+        snapshot.turns.map((turn) => turn.id),
+        turnIds.slice(-32),
       );
-    },
-  );
+      assert.isTrue(snapshot.turns.every((turn) => turn.items.length === 0));
+      const resumeCursor = (yield* adapter.listSessions())[0]?.resumeCursor as
+        | { readonly turnCount?: number }
+        | undefined;
+      assert.equal(resumeCursor?.turnCount, 39);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
 
   it.effect("rejects unsupported live model switches before changing an Auto session", () => {
     const query = new FakeClaudeQuery();

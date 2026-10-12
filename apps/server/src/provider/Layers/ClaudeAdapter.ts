@@ -268,7 +268,6 @@ interface ClaudeTurnState {
   lastAssistantTextItemId?: string;
   finalTextBlockBoundary?: number;
   toolResultImageBudget?: ClaudeToolResultImageBudget;
-  readonly items: Array<unknown>;
   readonly assistantTextBlocks: Map<number, AssistantTextBlockState>;
   readonly reasoningBlocks: Map<
     string,
@@ -430,10 +429,8 @@ interface ClaudeSessionContext {
   // "ask" outcome through its reviewer/user boundary.
   approvalsAlwaysAllowedForSession: boolean;
   readonly pendingUserInputs: Map<ApprovalRequestId, PendingUserInput>;
-  readonly turns: Array<{
-    id: TurnId;
-    items: Array<unknown>;
-  }>;
+  readonly recentTurnIds: Array<TurnId>;
+  settledTurnCount: number;
   readonly inFlightTools: Map<number, ToolInFlight>;
   readonly trackedTasks: Map<string, ClaudeTrackedTask>;
   turnState: ClaudeTurnState | undefined;
@@ -1701,6 +1698,7 @@ const CLAUDE_CONTEXT_USAGE_TIMEOUT_MS = 1_000;
 // would otherwise stall the caller (and the provider command reactor) forever.
 const CLAUDE_INTERRUPT_TIMEOUT = Duration.seconds(10);
 const CLAUDE_LIVE_CONTROL_TIMEOUT = Duration.seconds(10);
+const CLAUDE_RECENT_TURN_ID_LIMIT = 32;
 const CLAUDE_DISPATCH_CONTROL_TIMEOUT = Duration.seconds(60);
 export const buildEmbeddedClaudeSystemPromptAppend = (
   gatewayControlAvailable: boolean,
@@ -2805,10 +2803,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         }
         return {
           threadId,
-          turns: context.turns.map((turn) => ({
-            id: turn.id,
-            items: [...turn.items],
-          })),
+          turns: context.recentTurnIds.map((id) => ({ id, items: [] })),
         };
       });
 
@@ -2826,7 +2821,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           threadId,
           ...(context.resumeSessionId ? { resume: context.resumeSessionId } : {}),
           ...(context.lastAssistantUuid ? { resumeSessionAt: context.lastAssistantUuid } : {}),
-          turnCount: context.turns.length,
+          turnCount: context.settledTurnCount,
           ...(context.trackedTasks.size > 0
             ? { trackedTasks: Array.from(context.trackedTasks.values()) }
             : {}),
@@ -3985,10 +3980,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           ? (context.turnState ?? turnState).lastAssistantTextItemId
           : undefined;
 
-        context.turns.push({
-          id: turnState.turnId,
-          items: [...turnState.items],
-        });
+        context.settledTurnCount += 1;
+        context.recentTurnIds.push(turnState.turnId);
+        context.recentTurnIds.splice(0, context.recentTurnIds.length - CLAUDE_RECENT_TURN_ID_LIMIT);
 
         if (usageSnapshot) {
           const usageStamp = yield* makeEventStamp();
@@ -4127,7 +4121,8 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           pendingApprovals: new Map(),
           approvalsAlwaysAllowedForSession: false,
           pendingUserInputs: new Map(),
-          turns: [],
+          recentTurnIds: [],
+          settledTurnCount: 0,
           inFlightTools: new Map(),
           trackedTasks: new Map(),
           turnState: undefined,
@@ -4733,10 +4728,6 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
 
         yield* emitSdkOriginatedUserNotice(context, message);
 
-        if (context.turnState) {
-          context.turnState.items.push(stripDiagnosticImages(message.message));
-        }
-
         const toolResults = toolResultBlocksFromUserMessage(message);
         for (const toolResult of toolResults) {
           const toolEntry = findInFlightTool(context, toolResult.toolUseId);
@@ -4944,7 +4935,6 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           startedAt,
           interactionMode: "default",
           synthetic: true,
-          items: [],
           assistantTextBlocks: new Map(),
           reasoningBlocks: new Map(),
           assistantTextBlockOrder: [],
@@ -5149,7 +5139,6 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         }
 
         if (context.turnState) {
-          context.turnState.items.push(stripDiagnosticImages(message.message));
           if (Array.isArray(content)) {
             for (const [index, block] of content.entries()) {
               if (block.type !== "thinking" || typeof block.thinking !== "string") continue;
@@ -7563,7 +7552,8 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             pendingApprovals,
             approvalsAlwaysAllowedForSession: false,
             pendingUserInputs,
-            turns: [],
+            recentTurnIds: [],
+            settledTurnCount: resumeState?.turnCount ?? 0,
             inFlightTools,
             trackedTasks,
             turnState: undefined,
@@ -8031,7 +8021,6 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
                 },
               }
             : {}),
-          items: [],
           assistantTextBlocks: new Map(),
           reasoningBlocks: new Map(),
           assistantTextBlockOrder: [],
@@ -8606,12 +8595,10 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         }
         // The SDK fork remaps every message uuid, so the source's resume pin
         // (`resumeSessionAt`) and tracked tasks must not carry into the fork.
-        // A live context restarts `turns` at [] on resume, so its length can
-        // undercount the cumulative persisted total — keep the larger of the two.
         const resumeCursor = {
           threadId: input.threadId,
           resume: forked.sessionId,
-          turnCount: Math.max(liveSource?.turns.length ?? 0, sourceState?.turnCount ?? 0),
+          turnCount: Math.max(liveSource?.settledTurnCount ?? 0, sourceState?.turnCount ?? 0),
           processedTokenTotal: 0,
           tokenAccountingVersion: 1,
         };
