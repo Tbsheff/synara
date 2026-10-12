@@ -185,6 +185,8 @@ const OPENCODE_ADAPTER_CONFIG: OpenCodeCompatibleAdapterConfig = {
 const OPENCODE_PROMPT_SUBMISSION_INLINE_WAIT_MS = 500;
 const OPENCODE_EVENT_RECONNECT_DELAYS_MS = [250, 1_000, 2_500, 5_000] as const;
 const OPENCODE_PERMISSION_REPLY_ACK_DELAYS_MS = [50, 150, 300, 500] as const;
+const OPENCODE_SESSION_ABORT_TIMEOUT = "5 seconds";
+const OPENCODE_STALE_PART_SNAPSHOT_KEY = "";
 const OPENCODE_MAX_RELATED_SESSIONS = 256;
 export const resolveOpenCodeStartInstanceId = resolveProviderSessionInstanceId;
 
@@ -263,9 +265,11 @@ interface OpenCodeSessionContext extends OpenCodeMessageState<Part> {
   activeAgent: string | undefined;
   activeVariant: string | undefined;
   readonly stopped: Ref.Ref<boolean>;
+  readonly teardownDone: Deferred.Deferred<boolean>;
   readonly eventsAbortController: AbortController;
   readonly eventsReady: Deferred.Deferred<void>;
   nativeTranscriptNeedsReconciliation: boolean;
+  messageBaselineSynced: boolean;
   allowNativeContinuation: boolean;
   readonly sessionScope: Scope.Closeable;
 }
@@ -479,15 +483,57 @@ function mapPermissionDecision(reply: "once" | "always" | "reject"): string {
   }
 }
 
+function isSettledOpenCodeToolPayload(
+  part: Part,
+  rootSessionId: string,
+  retainedCallIds: ReadonlySet<string>,
+): boolean {
+  return (
+    part.type === "tool" &&
+    part.sessionID === rootSessionId &&
+    (part.state.status === "completed" || part.state.status === "error") &&
+    !retainedCallIds.has(part.callID)
+  );
+}
+
+export function evictSettledOpenCodeToolPayloads(
+  state: { readonly partById: Map<string, Part> },
+  rootSessionId: string,
+  retainedCallIds: ReadonlySet<string>,
+): void {
+  for (const [partId, part] of state.partById) {
+    if (isSettledOpenCodeToolPayload(part, rootSessionId, retainedCallIds)) {
+      state.partById.delete(partId);
+    }
+  }
+}
+
+function liveOpenCodeToolCallIds(context: OpenCodeSessionContext): Set<string> {
+  const callIds = new Set<string>();
+  for (const request of context.pendingPermissions.values()) {
+    if (request.tool !== undefined) callIds.add(request.tool.callID);
+  }
+  for (const request of context.pendingQuestions.values()) {
+    if (request.tool !== undefined) callIds.add(request.tool.callID);
+  }
+  for (const task of context.backgroundTasks.values()) {
+    if (!task.settled) callIds.add(task.toolUseId);
+  }
+  return callIds;
+}
+
 function rememberOpenCodeMessageSnapshot(
   context: OpenCodeSessionContext,
   snapshot: OpenCodeMessageSnapshot,
+  retainedCallIds: ReadonlySet<string>,
 ): void {
   context.messageRoleById.set(snapshot.info.id, snapshot.info.role);
   context.messageSnapshotKeyById.set(snapshot.info.id, openCodeSnapshotKey(snapshot.info));
 
   for (const part of snapshot.parts) {
-    context.partById.set(part.id, part);
+    if (!isSettledOpenCodeToolPayload(part, context.openCodeSessionId, retainedCallIds)) {
+      context.partById.set(part.id, part);
+    }
     context.partSnapshotKeyById.set(part.id, openCodeSnapshotKey(part));
 
     const text = textFromPart(part);
@@ -825,6 +871,11 @@ const clearActiveTurnState = Effect.fn("clearOpenCodeActiveTurnState")(function*
       context.messageSnapshotKeyById.delete(part.messageID);
     }
   }
+  evictSettledOpenCodeToolPayloads(
+    context,
+    context.openCodeSessionId,
+    liveOpenCodeToolCallIds(context),
+  );
   context.activeTurnId = undefined;
   context.activeTurnEventSerial = 0;
   context.activeTurnProviderActivitySerial = 0;
@@ -1321,6 +1372,24 @@ function replaceModelContextLimits(
   }
 }
 
+function knownOpenCodePartSnapshotKey(
+  context: OpenCodeSessionContext,
+  partId: string,
+): string | undefined {
+  const knownKey = context.partSnapshotKeyById.get(partId);
+  if (knownKey !== OPENCODE_STALE_PART_SNAPSHOT_KEY) {
+    return knownKey;
+  }
+  const currentPart = context.partById.get(partId);
+  if (currentPart === undefined) {
+    context.partSnapshotKeyById.delete(partId);
+    return undefined;
+  }
+  const currentKey = openCodeSnapshotKey(currentPart);
+  context.partSnapshotKeyById.set(partId, currentKey);
+  return currentKey;
+}
+
 function buildOpenCodeThreadSnapshot(input: {
   readonly threadId: ThreadId;
   readonly messages: ReadonlyArray<OpenCodeMessageSnapshot>;
@@ -1338,14 +1407,10 @@ function buildOpenCodeThreadSnapshot(input: {
 
 const releaseOpenCodeSessionResources = Effect.fn("releaseOpenCodeSessionResources")(function* (
   context: OpenCodeSessionContext,
-  beforeRelease?: Effect.Effect<void>,
 ) {
   // Abort the network reader before closing the scope whose fibers await it.
   context.eventsAbortController.abort();
   yield* Effect.gen(function* () {
-    if (beforeRelease !== undefined) {
-      yield* beforeRelease;
-    }
     yield* clearActiveTurnState(context);
     context.backgroundTasks.clear();
     context.backgroundTaskIdBySessionId.clear();
@@ -1358,20 +1423,62 @@ const releaseOpenCodeSessionResources = Effect.fn("releaseOpenCodeSessionResourc
   );
 });
 
-const stopOpenCodeContext = Effect.fn("stopOpenCodeContext")(function* (
+const abortOpenCodeSessionWithDeadline = (context: OpenCodeSessionContext) =>
+  runOpenCodeSdk("session.abort", (signal) =>
+    context.client.session.abort({ sessionID: context.openCodeSessionId }, { signal }),
+  ).pipe(
+    Effect.interruptible,
+    Effect.timeout(OPENCODE_SESSION_ABORT_TIMEOUT),
+    Effect.as(true),
+    Effect.catch((error) =>
+      Effect.logWarning("OpenCode session abort was not confirmed.", error).pipe(Effect.as(false)),
+    ),
+  );
+
+const teardownOpenCodeContext = (
+  context: OpenCodeSessionContext,
+  options: {
+    readonly awaitExistingTeardown: boolean;
+    readonly beforeAbort?: Effect.Effect<void>;
+    readonly beforeRelease?: Effect.Effect<void>;
+  },
+): Effect.Effect<void> =>
+  Effect.uninterruptibleMask((restore) =>
+    Effect.gen(function* () {
+      if (yield* Ref.getAndSet(context.stopped, true)) {
+        if (options.awaitExistingTeardown) {
+          yield* restore(Deferred.await(context.teardownDone));
+        }
+        return;
+      }
+      let abortConfirmed = false;
+      yield* restore(
+        (options.beforeAbort ?? Effect.void).pipe(
+          Effect.andThen(abortOpenCodeSessionWithDeadline(context)),
+          Effect.tap((confirmed) =>
+            Effect.sync(() => {
+              abortConfirmed = confirmed;
+            }),
+          ),
+          Effect.andThen(options.beforeRelease ?? Effect.void),
+        ),
+      ).pipe(
+        Effect.ensuring(releaseOpenCodeSessionResources(context)),
+        Effect.ensuring(
+          Effect.suspend(() => Deferred.succeed(context.teardownDone, abortConfirmed)),
+        ),
+      );
+    }),
+  ).pipe(Effect.withSpan("teardownOpenCodeContext"));
+
+const stopOpenCodeContext = (
   context: OpenCodeSessionContext,
   beforeRelease?: Effect.Effect<void>,
-) {
-  if (yield* Ref.getAndSet(context.stopped, true)) {
-    return;
-  }
-
-  yield* runOpenCodeSdk("session.abort", () =>
-    context.client.session.abort({ sessionID: context.openCodeSessionId }),
-  ).pipe(Effect.ignore({ log: true }));
-
-  yield* releaseOpenCodeSessionResources(context, beforeRelease);
-});
+): Effect.Effect<void> =>
+  teardownOpenCodeContext(context, {
+    awaitExistingTeardown: true,
+    ...(beforeRelease !== undefined ? { beforeRelease } : {}),
+  });
 
 export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
   const adapterConfig = options?.adapterConfig ?? OPENCODE_ADAPTER_CONFIG;
@@ -1577,37 +1684,31 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         context: OpenCodeSessionContext,
         message: string,
       ) {
-        if (yield* Ref.getAndSet(context.stopped, true)) {
-          return;
-        }
-        const turnId = context.activeTurnId;
-        sessions.delete(context.session.threadId);
-        yield* emit(context, {
-          ...buildEventBase({ threadId: context.session.threadId, turnId }),
-          type: "runtime.error",
-          payload: {
-            message,
-            class: "transport_error",
-          },
-        }).pipe(Effect.ignore);
-        yield* emit(context, {
-          ...buildEventBase({ threadId: context.session.threadId, turnId }),
-          type: "session.exited",
-          payload: {
-            reason: message,
-            recoverable: false,
-            exitKind: "error",
-          },
-        }).pipe(Effect.ignore);
-        yield* runOpenCodeSdk("session.abort", () =>
-          context.client.session.abort({
-            sessionID: context.openCodeSessionId,
+        yield* teardownOpenCodeContext(context, {
+          awaitExistingTeardown: false,
+          beforeAbort: Effect.gen(function* () {
+            const turnId = context.activeTurnId;
+            sessions.delete(context.session.threadId);
+            yield* emit(context, {
+              ...buildEventBase({ threadId: context.session.threadId, turnId }),
+              type: "runtime.error",
+              payload: {
+                message,
+                class: "transport_error",
+              },
+            }).pipe(Effect.ignore);
+            yield* emit(context, {
+              ...buildEventBase({ threadId: context.session.threadId, turnId }),
+              type: "session.exited",
+              payload: {
+                reason: message,
+                recoverable: false,
+                exitKind: "error",
+              },
+            }).pipe(Effect.ignore);
           }),
-        ).pipe(Effect.ignore({ log: true }));
-        yield* releaseOpenCodeSessionResources(
-          context,
-          settleAllOpenCodeBackgroundTasks(context, { status: "stopped" }),
-        );
+          beforeRelease: settleAllOpenCodeBackgroundTasks(context, { status: "stopped" }),
+        });
       });
 
       const emitAssistantTextDelta = Effect.fn("emitAssistantTextDelta")(function* (
@@ -2522,7 +2623,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
               context.partById.set(event.properties.partID, nextPart);
               context.partSnapshotKeyById.set(
                 event.properties.partID,
-                openCodeSnapshotKey(nextPart),
+                OPENCODE_STALE_PART_SNAPSHOT_KEY,
               );
             }
             yield* emit(context, {
@@ -3457,8 +3558,9 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
       const rememberCurrentMessageSnapshots = Effect.fn("rememberCurrentMessageSnapshots")(
         function* (context: OpenCodeSessionContext) {
           const snapshots = yield* loadCurrentMessageSnapshots(context);
+          const retainedCallIds = liveOpenCodeToolCallIds(context);
           for (const snapshot of snapshots) {
-            rememberOpenCodeMessageSnapshot(context, snapshot);
+            rememberOpenCodeMessageSnapshot(context, snapshot, retainedCallIds);
           }
           return new Set(snapshots.map((snapshot) => snapshot.info.id));
         },
@@ -3470,7 +3572,24 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
       const captureTurnSnapshotWatchdogBaseline = Effect.fn("captureTurnSnapshotWatchdogBaseline")(
         function* (context: OpenCodeSessionContext) {
           const knownMessageIds = collectKnownMessageIds(context);
-          const snapshotsExit = yield* Effect.exit(rememberCurrentMessageSnapshots(context));
+          if (context.messageBaselineSynced) {
+            return {
+              canStartWatchdog: true,
+              messageIds: knownMessageIds,
+            } as const;
+          }
+          context.messageBaselineSynced = true;
+          const snapshotsExit = yield* Effect.exit(
+            rememberCurrentMessageSnapshots(context).pipe(
+              Effect.onExit((exit) =>
+                Effect.sync(() => {
+                  if (Exit.isFailure(exit)) {
+                    context.messageBaselineSynced = false;
+                  }
+                }),
+              ),
+            ),
+          );
           if (Exit.isSuccess(snapshotsExit)) {
             // Preserve already observed ids even if OpenCode returns a partial message list.
             for (const messageId of snapshotsExit.value) {
@@ -3532,8 +3651,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
 
           for (const part of snapshot.parts) {
             if (context.activeTurnId !== turnId) return;
-            const partKey = openCodeSnapshotKey(part);
-            if (context.partSnapshotKeyById.get(part.id) === partKey) {
+            if (openCodeSnapshotKey(part) === knownOpenCodePartSnapshotKey(context, part.id)) {
               continue;
             }
             yield* handleSubscribedEvent(context, {
@@ -3695,6 +3813,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             // A new V2 subscription has no mapper state for pre-disconnect messages,
             // and events may also have been missed while disconnected.
             context.nativeTranscriptNeedsReconciliation = true;
+            context.messageBaselineSynced = false;
             const delayMs =
               OPENCODE_EVENT_RECONNECT_DELAYS_MS[
                 Math.min(reconnectAttempt, OPENCODE_EVENT_RECONNECT_DELAYS_MS.length - 1)
@@ -4077,10 +4196,12 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                   activeAgent: undefined,
                   activeVariant: undefined,
                   stopped: yield* Ref.make(false),
+                  teardownDone: yield* Deferred.make<boolean>(),
                   sessionScope: started.sessionScope,
                   eventsAbortController: new AbortController(),
                   eventsReady: yield* Deferred.make<void>(),
                   nativeTranscriptNeedsReconciliation: false,
+                  messageBaselineSynced: false,
                   allowNativeContinuation: false,
                 };
                 sessions.set(input.threadId, context);
@@ -4524,13 +4645,26 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           );
           sessions.delete(threadId);
           if (!wasStopped) {
+            const externalRunMayContinue =
+              context.server.external && !(yield* Deferred.await(context.teardownDone));
+            if (externalRunMayContinue) {
+              yield* emit(context, {
+                ...buildEventBase({ threadId }),
+                type: "runtime.warning",
+                payload: {
+                  message: `${adapterConfig.displayName} did not confirm the abort. The external server can still be running this session.`,
+                },
+              });
+            }
             yield* emit(context, {
               ...buildEventBase({ threadId }),
               type: "session.exited",
               payload: {
-                reason: "Session stopped.",
+                reason: externalRunMayContinue
+                  ? "Session stopped without abort confirmation."
+                  : "Session stopped.",
                 recoverable: false,
-                exitKind: "graceful",
+                exitKind: externalRunMayContinue ? "error" : "graceful",
               },
             });
           }
