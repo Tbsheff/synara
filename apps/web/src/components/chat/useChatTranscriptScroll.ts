@@ -167,12 +167,31 @@ export function useChatTranscriptScroll({
   );
   // Smooth only the first auto-follow after a send; live stream re-sticks stay cheap.
   const animateNextAutoFollowScrollRef = useRef(false);
+  const automaticEndScrollRequestRef = useRef(0);
+  const automaticEndScrollInFlightRef = useRef(false);
+  const requestAutomaticEndScroll = useCallback(
+    (target: Pick<LegendListRef, "scrollToEnd">, animated: boolean): Promise<void> => {
+      const request = automaticEndScrollRequestRef.current + 1;
+      automaticEndScrollRequestRef.current = request;
+      automaticEndScrollInFlightRef.current = true;
+      const settled = () => {
+        if (automaticEndScrollRequestRef.current === request)
+          automaticEndScrollInFlightRef.current = false;
+      };
+      return Promise.resolve(target.scrollToEnd({ animated })).then(settled, (error: unknown) => {
+        settled();
+        throw error;
+      });
+    },
+    [],
+  );
   const scrollToEnd = useCallback(
     (animated = false) => {
       programmaticScrollUntilRef.current = performance.now() + 200;
-      legendListRef.current?.scrollToEnd?.({ animated });
+      const target = legendListRef.current;
+      if (target?.scrollToEnd) void requestAutomaticEndScroll(target, animated).catch(() => {});
     },
-    [legendListRef],
+    [legendListRef, requestAutomaticEndScroll],
   );
   const armTranscriptAutoFollow = useCallback(
     (targetThreadId: ThreadId, animated = false) => {
@@ -191,7 +210,12 @@ export function useChatTranscriptScroll({
     (synchronous = false) => {
       cancelPendingScrollGesture();
       disclosureDetachScrollTopRef.current = null;
-      const scrollTarget = settledScrollInFlightRef.current ? legendListRef.current : null;
+      const listScrollToRelease =
+        settledScrollInFlightRef.current || automaticEndScrollInFlightRef.current
+          ? legendListRef.current
+          : null;
+      automaticEndScrollRequestRef.current += 1;
+      automaticEndScrollInFlightRef.current = false;
       autoFollowThreadIdRef.current = null;
       animateNextAutoFollowScrollRef.current = false;
       settledScrollRequestRef.current += 1;
@@ -208,8 +232,8 @@ export function useChatTranscriptScroll({
         if (synchronous) flushSync(() => setTranscriptScrollDetached(detached));
         else setTranscriptScrollDetached(detached);
       }
-      if (scrollTarget) {
-        void stopTranscriptScrollAtCurrentOffset(scrollTarget);
+      if (listScrollToRelease) {
+        void stopTranscriptScrollAtCurrentOffset(listScrollToRelease).catch(() => {});
       }
     },
     [
@@ -807,7 +831,7 @@ export function useChatTranscriptScroll({
         )
           return;
         programmaticScrollUntilRef.current = performance.now() + 200;
-        await target.scrollToEnd({ animated: false });
+        await requestAutomaticEndScroll(target, false);
         await new Promise<void>((resolve) => {
           window.requestAnimationFrame(() => resolve());
         });
@@ -827,7 +851,7 @@ export function useChatTranscriptScroll({
       cancelled = true;
       window.cancelAnimationFrame(frameId);
     };
-  }, [activeThreadId, hasStreamingAssistantText, legendListRef]);
+  }, [activeThreadId, hasStreamingAssistantText, legendListRef, requestAutomaticEndScroll]);
 
   return {
     showScrollToBottom,

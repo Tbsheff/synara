@@ -47,6 +47,29 @@ describe("anchorSlideOffsetPx", () => {
 });
 
 describe("scrollTranscriptToSettledEnd", () => {
+  it("uses the reader's latest offset when list cancellation waits for layout", async () => {
+    const scrollNode = { scrollTop: 420, scrollTo: () => {} } as unknown as HTMLElement;
+    let dispatch: (() => void) | undefined;
+    let dispatchedOffset: number | undefined;
+    const target: TranscriptScrollCancellationTarget = {
+      getScrollableNode: () => scrollNode,
+      scrollToOffset: (options) =>
+        new Promise<void>((resolve) => {
+          dispatch = () => {
+            dispatchedOffset = options.offset;
+            resolve();
+          };
+        }),
+    };
+
+    const cancellation = stopTranscriptScrollAtCurrentOffset(target);
+    scrollNode.scrollTop = 300;
+    dispatch!();
+    await cancellation;
+
+    expect(dispatchedOffset).toBe(300);
+  });
+
   it("interrupts a native smooth scroll at its current offset", async () => {
     const nativeScrollCalls: ScrollToOptions[] = [];
     const scrollToOffsetCalls: Array<{ offset: number; animated?: boolean | undefined }> = [];

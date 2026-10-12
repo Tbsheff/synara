@@ -505,6 +505,42 @@ function touchTranscriptDom(container: HTMLElement): void {
   marker.remove();
 }
 
+const END_SCROLL_COMPLETION_MS = 300;
+const SMALL_END_GAP_PX = 6;
+
+function onAutomaticEndScroll(harness: Harness, readerInput: () => void, delayMs: number): void {
+  const list = harness.listRef.current!;
+  const listScrollToEnd = list.scrollToEnd.bind(list);
+  let delivered = false;
+  list.scrollToEnd = (options) => {
+    const request = listScrollToEnd(options);
+    if (!delivered) {
+      delivered = true;
+      if (delayMs === 0) queueMicrotask(readerInput);
+      else window.setTimeout(readerInput, delayMs);
+    }
+    return request;
+  };
+}
+
+function firstParagraphInView(container: HTMLElement): HTMLElement {
+  const viewport = container.getBoundingClientRect();
+  const paragraph = [...container.querySelectorAll<HTMLElement>("[data-message-id] p")].find(
+    (candidate) => {
+      const rect = candidate.getBoundingClientRect();
+      return rect.top > viewport.top && rect.bottom < viewport.bottom;
+    },
+  );
+  if (!paragraph) throw new Error("no paragraph fully in view");
+  return paragraph;
+}
+
+function wheelDown(container: HTMLElement): void {
+  container.dispatchEvent(
+    new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: 120 }),
+  );
+}
+
 function wheelUp(container: HTMLElement): void {
   container.dispatchEvent(
     new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: -120 }),
@@ -549,6 +585,42 @@ describe("transcript layout moves while following", () => {
       await mounted.unmount();
     }
   });
+
+  it.each([0, 50])(
+    "keeps a reader who detaches %ims after an automatic end scroll where they are",
+    async (delayMs) => {
+      const mounted = await mountFollowing("assistant");
+      try {
+        const { container } = mounted;
+        let readerAnchor: { element: HTMLElement; top: number } | null = null;
+        onAutomaticEndScroll(
+          mounted.harness,
+          () => {
+            wheelUp(container);
+            container.scrollTop -= 200;
+            const element = firstParagraphInView(container);
+            readerAnchor = { element, top: element.getBoundingClientRect().top };
+          },
+          delayMs,
+        );
+        container.scrollTop -= SMALL_END_GAP_PX;
+        wheelDown(container);
+        await expect.poll(() => readerAnchor, { interval: 4 }).not.toBeNull();
+        expect(mounted.harness.controls.isUserScrollDetached).toBe(true);
+        for (let index = 0; index < 4; index += 1) {
+          mounted.harness.grow();
+          await nextFrame();
+        }
+        await new Promise((resolve) => window.setTimeout(resolve, END_SCROLL_COMPLETION_MS));
+        await settleFrames(2);
+        expect(mounted.harness.controls.isUserScrollDetached).toBe(true);
+        const { element, top } = readerAnchor!;
+        expect(Math.abs(element.getBoundingClientRect().top - top)).toBeLessThanOrEqual(1);
+      } finally {
+        await mounted.unmount();
+      }
+    },
+  );
 
   it("does not pull a detached reader back when the layout changes", async () => {
     const mounted = await mountFollowing("command");

@@ -6,19 +6,27 @@ export type TranscriptScrollCancellationTarget = Pick<
   "getScrollableNode" | "scrollToOffset"
 >;
 
+export function replaceListScrollWithStayAtReaderOffset(
+  target: TranscriptScrollCancellationTarget,
+): Promise<void> {
+  const scrollNode = target.getScrollableNode();
+  return target.scrollToOffset({
+    get offset() {
+      return scrollNode.scrollTop;
+    },
+    animated: false,
+  });
+}
+
 /** Stop an in-flight native smooth scroll without changing the visible offset. */
 export function stopTranscriptScrollAtCurrentOffset(
   target: TranscriptScrollCancellationTarget,
 ): Promise<void> {
   const scrollNode = target.getScrollableNode();
-  const offset = scrollNode.scrollTop;
   // Cancel the browser's native smooth animation immediately. The LegendList
   // call below then clears its imperative-scroll bookkeeping at the same spot.
-  scrollNode.scrollTo({ top: offset, behavior: "auto" });
-  return target.scrollToOffset({
-    offset,
-    animated: false,
-  });
+  scrollNode.scrollTo({ top: scrollNode.scrollTop, behavior: "auto" });
+  return replaceListScrollWithStayAtReaderOffset(target);
 }
 
 /** How long the just-sent message takes to glide up to its anchored position. */
