@@ -264,3 +264,45 @@ describe("transcript follow after a layout-driven upward move", () => {
     }
   });
 });
+
+it("keeps a detached reader detached after the content shrinks to the viewport", async () => {
+  const node = document.createElement("div");
+  let height = 1000;
+  Object.defineProperties(node, {
+    scrollHeight: { get: () => height },
+    clientHeight: { value: 200 },
+    scrollTop: { value: 300, writable: true },
+  });
+  const listRef = {
+    current: {
+      getScrollableNode: () => node,
+      scrollToEnd: vi.fn(async () => {}),
+    } as unknown as LegendListRef,
+  };
+  let controls: ReturnType<typeof useChatTranscriptScroll> | undefined;
+  function Harness() {
+    controls = useChatTranscriptScroll({
+      activeThreadId: ThreadId.makeUnsafe("shrink"),
+      legendListRef: listRef,
+      timelineEntries: EMPTY_TIMELINE,
+      hasStreamingAssistantText: false,
+      composerTranscriptInsetPx: 0,
+      isInactiveSplitPane: false,
+    });
+    return null;
+  }
+  const screen = await render(<Harness />);
+  try {
+    await waitForFrames();
+    controls!.onTranscriptNavigate();
+    await waitForFrames();
+    expect(controls!.isUserScrollDetached).toBe(true);
+    height = 200;
+    node.scrollTop = 0;
+    controls!.onIsAtEndChange(true);
+    await waitForFrames();
+    expect(controls!.isUserScrollDetached).toBe(true);
+  } finally {
+    await screen.unmount();
+  }
+});

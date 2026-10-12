@@ -287,7 +287,7 @@ function readLegendListState(
 export interface MessagesTimelineController {
   scrollToMessage: (
     messageId: MessageId,
-    options?: { segmentIndex?: number; fineScrollFind?: boolean },
+    options?: { segmentIndex?: number; workEntryId?: string; fineScrollFind?: boolean },
   ) => void;
   setActiveFindMatch: (match: ThreadFindMatch | null) => void;
 }
@@ -1061,9 +1061,11 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     const scrollToMessage = (
       messageId: MessageId,
       segmentIndex?: number,
+      workEntryId?: string,
     ): ReturnType<typeof resolveThreadFindJumpTarget> => {
       const target = resolveThreadFindJumpTarget(rowsRef.current, {
         messageId,
+        ...(workEntryId === undefined ? {} : { workEntryId }),
         ...(segmentIndex === undefined ? {} : { segmentIndex }),
       });
       if (!target) {
@@ -1167,7 +1169,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     const controller: MessagesTimelineController = {
       scrollToMessage: (messageId, options) => {
         cancelPendingFindFineScroll();
-        const target = scrollToMessage(messageId, options?.segmentIndex);
+        const target = scrollToMessage(messageId, options?.segmentIndex, options?.workEntryId);
         if (!target) {
           return;
         }
@@ -1536,6 +1538,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               animate={enteringContentKeys.has(enteringWorkEntryKey(workEntry.id))}
             >
               <LiveTimelineWorkEntryRow
+                {...(onOpenThread ? { onOpenThread } : {})}
+                findHighlight={findHighlight}
                 workEntry={workEntry}
                 chatMetaFontSizePx={appTypographyScale.chatMetaPx}
                 textFontSizePx={normalizedChatFontSizePx}
@@ -1552,7 +1556,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           );
           const isLiveGroup =
             groupId === lastLiveWorkGroupId && (activeTurnInProgress || isWorking);
-          const isExpanded = expandedWorkGroupsState[groupId] ?? false;
+          const isExpanded =
+            (expandedWorkGroupsState[groupId] ?? false) ||
+            groupedEntries.some((entry) => entry.id === findHighlight?.activeMatch?.workEntryId);
           const plannedRenderChunks = planWorkEntryRenderChunks(groupedEntries, {
             tailIsLive: isLiveGroup,
           });
@@ -1580,7 +1586,12 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                         key={`tool-summary:${groupId}:${chunk.id}`}
                         summary={fold.summary}
                         liveEntry={chunk.liveEntry}
-                        open={toolGroupSummaryOverrides[summaryKey] ?? false}
+                        open={
+                          (toolGroupSummaryOverrides[summaryKey] ?? false) ||
+                          fold.entries.some(
+                            (entry) => entry.id === findHighlight?.activeMatch?.workEntryId,
+                          )
+                        }
                         onToggle={(open) => setToolGroupSummaryOpen(summaryKey, open)}
                         fontSizePx={normalizedChatFontSizePx}
                         renderChildren={() => (
@@ -2156,6 +2167,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                 animate={enteringContentKeys.has(enteringWorkEntryKey(workEntry.id))}
               >
                 <LiveTimelineWorkEntryRow
+                  {...(onOpenThread ? { onOpenThread } : {})}
+                  findHighlight={findHighlight}
                   workEntry={workEntry}
                   chatMetaFontSizePx={appTypographyScale.chatMetaPx}
                   textFontSizePx={normalizedChatFontSizePx}
@@ -2186,7 +2199,11 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               },
             );
             const cappedRenderPlan = capOpenWorkEntryRenderChunks(plannedRenderChunks, {
-              expanded: display.toolExpanded,
+              expanded:
+                display.toolExpanded ||
+                display.orderedRenderableEntries.some(
+                  (entry) => entry.id === findHighlight?.activeMatch?.workEntryId,
+                ),
               maxVisibleEntries: MAX_VISIBLE_INLINE_TOOL_ENTRIES,
               keep: activeTurnInProgress ? "last" : "first",
               shouldCapEntry: (workEntry) => workEntry.tone === "tool",
@@ -2217,7 +2234,12 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                               key={`inline-tool-summary:${summaryRowKey}`}
                               summary={fold.summary}
                               liveEntry={chunk.liveEntry}
-                              open={toolGroupSummaryOverrides[summaryOverrideKey] ?? false}
+                              open={
+                                (toolGroupSummaryOverrides[summaryOverrideKey] ?? false) ||
+                                fold.entries.some(
+                                  (entry) => entry.id === findHighlight?.activeMatch?.workEntryId,
+                                )
+                              }
                               onToggle={(open) => setToolGroupSummaryOpen(summaryOverrideKey, open)}
                               fontSizePx={normalizedChatFontSizePx}
                               renderChildren={() => (
@@ -2283,6 +2305,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                         animate={enteringContentKeys.has(enteringWorkEntryKey(workEntry.id))}
                       >
                         <LiveTimelineWorkEntryRow
+                          {...(onOpenThread ? { onOpenThread } : {})}
+                          findHighlight={findHighlight}
                           workEntry={workEntry}
                           chatMetaFontSizePx={appTypographyScale.chatMetaPx}
                           textFontSizePx={normalizedChatFontSizePx}
@@ -2307,6 +2331,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           const renderCollapsedTurnItem = (item: CollapsedTurnItem, keyPrefix: string) =>
             item.kind === "work" ? (
               <LiveTimelineWorkEntryRow
+                {...(onOpenThread ? { onOpenThread } : {})}
+                findHighlight={findHighlight}
                 key={`${keyPrefix}:work:${row.message.id}:${item.id}`}
                 workEntry={item.entry}
                 chatMetaFontSizePx={appTypographyScale.chatMetaPx}
@@ -2353,7 +2379,12 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               <ToolCallGroupSummaryRow
                 key={`${keyPrefix}:tool-group:${row.message.id}:${chunk.id}`}
                 summary={summary}
-                open={toolGroupSummaryOverrides[summaryOverrideKey] ?? false}
+                open={
+                  (toolGroupSummaryOverrides[summaryOverrideKey] ?? false) ||
+                  chunk.entries.some(
+                    (entry) => entry.id === findHighlight?.activeMatch?.workEntryId,
+                  )
+                }
                 onToggle={(open) => setToolGroupSummaryOpen(summaryOverrideKey, open)}
                 fontSizePx={normalizedChatFontSizePx}
                 renderChildren={() => (
@@ -2499,6 +2530,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                 {collapsedComputerActionEntries.map((workEntry) => (
                   <div key={`computer-action:${row.message.id}:${workEntry.id}`} className="mt-2">
                     <LiveTimelineWorkEntryRow
+                      {...(onOpenThread ? { onOpenThread } : {})}
+                      findHighlight={findHighlight}
                       workEntry={workEntry}
                       chatMetaFontSizePx={appTypographyScale.chatMetaPx}
                       textFontSizePx={normalizedChatFontSizePx}

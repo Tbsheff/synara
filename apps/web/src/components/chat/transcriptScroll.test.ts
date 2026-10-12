@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  canResumeTranscriptFollow,
   ANCHOR_SLIDE_DURATION_MS,
   anchorSlideOffsetPx,
   scrollTranscriptToSettledEnd,
@@ -125,4 +126,14 @@ describe("scrollTranscriptToSettledEnd", () => {
     await expect(result).resolves.toBe(false);
     expect(animations).toEqual([true]);
   });
+});
+
+it("does not resume a detached reader when layout shrink reaches the end", () => {
+  expect(canResumeTranscriptFollow({ detached: true, atEnd: true, userGesture: false })).toBe(
+    false,
+  );
+  expect(canResumeTranscriptFollow({ detached: true, atEnd: true, userGesture: true })).toBe(true);
+  expect(canResumeTranscriptFollow({ detached: false, atEnd: true, userGesture: false })).toBe(
+    true,
+  );
 });

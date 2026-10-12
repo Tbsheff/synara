@@ -9,6 +9,10 @@ import type { ReactNode } from "react";
 import { useScrollTailFollow } from "~/hooks/useScrollTailFollow";
 import { useTheme } from "~/hooks/useTheme";
 import { getRenderablePatch, buildFileDiffRenderKey } from "~/lib/diffRendering";
+import { Button } from "../ui/button";
+import { ThreadId } from "@synara/contracts";
+import type { WorkLogSubagent } from "../../workLog";
+import { CopyTextButton } from "../ui/copyTextButton";
 import { createMarkdownCodeFence, formatShellTranscript } from "~/lib/toolCallDetailsFormatting";
 import { openExternalLink } from "~/lib/linkChips";
 import { cn } from "~/lib/utils";
@@ -412,6 +416,7 @@ export function TypedCommandDetails(props: { view: TypedCommandView; running: bo
   return (
     <div className={DETAIL_CARD_CLASS_NAME} data-command-shell-card="true">
       <div className="space-y-1 border-b border-border/45 px-3 py-2">
+        {view.command ? <CopyTextButton text={view.command} label="command" /> : null}
         {view.command ? (
           <pre className="whitespace-pre-wrap break-words font-chat-code text-chat-code text-foreground/92">
             <span className="select-none text-muted-foreground/60">$ </span>
@@ -428,6 +433,11 @@ export function TypedCommandDetails(props: { view: TypedCommandView; running: bo
         ) : null}
       </div>
       {view.output ? (
+        <div className="px-3 pt-1">
+          <CopyTextButton text={view.output} label="output" />
+        </div>
+      ) : null}
+      {view.output ? (
         <PlainTextBlock
           dataAttr={view.isLiveOutput ? "data-command-live-output" : "data-command-output"}
           followTail={outputStreaming}
@@ -437,12 +447,18 @@ export function TypedCommandDetails(props: { view: TypedCommandView; running: bo
       ) : null}
       {view.stdout ? (
         <div data-command-stdout="true">
+          <div className="px-3 pt-1">
+            <CopyTextButton text={view.stdout} label="stdout" />
+          </div>
           {view.stderr ? <div className={DETAIL_HEADER_CLASS_NAME}>Stdout</div> : null}
           <PlainTextBlock followTail={outputStreaming}>{view.stdout}</PlainTextBlock>
         </div>
       ) : null}
       {view.stderr ? (
         <div data-command-stderr="true">
+          <div className="px-3 pt-1">
+            <CopyTextButton text={view.stderr} label="stderr" />
+          </div>
           <div className={cn(DETAIL_HEADER_CLASS_NAME, "text-destructive/80")}>Stderr</div>
           <PlainTextBlock tone="error" followTail={outputStreaming}>
             {view.stderr}
@@ -766,12 +782,37 @@ export interface SubagentLaunchView {
   status: string;
   model: string | null;
   prompt: string | null;
+  agents?: ReadonlyArray<WorkLogSubagent> | undefined;
 }
 
-export function SubagentLaunchDetails(props: { view: SubagentLaunchView }) {
+export function SubagentLaunchDetails(props: {
+  view: SubagentLaunchView;
+  onOpenThread?: ((threadId: ThreadId) => void) | undefined;
+}) {
   const { view } = props;
   return (
     <div className="space-y-3" data-subagent-launch-details="true">
+      {view.agents?.map((agent) => (
+        <div key={agent.threadId} className="space-y-1 text-ui-sm" data-subagent-history="true">
+          <p>
+            {agent.title ?? agent.nickname ?? agent.threadId} ·{" "}
+            {agent.statusLabel ?? agent.rawStatus ?? view.status}
+          </p>
+          {agent.latestUpdate ? <p className="whitespace-pre-wrap">{agent.latestUpdate}</p> : null}
+          {agent.prompt && agent.prompt !== view.prompt ? (
+            <PlainTextBlock>{agent.prompt}</PlainTextBlock>
+          ) : null}
+          {agent.resolvedThreadId && props.onOpenThread ? (
+            <Button
+              size="xs"
+              variant="ghost"
+              onClick={() => props.onOpenThread?.(ThreadId.makeUnsafe(agent.resolvedThreadId!))}
+            >
+              Open subagent thread
+            </Button>
+          ) : null}
+        </div>
+      ))}
       <dl className="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-3 gap-y-1.5 rounded-lg border border-border/45 bg-background/60 px-3 py-2.5 text-ui-sm">
         <dt className="text-muted-foreground/56">Status</dt>
         <dd className="text-foreground/84">{view.status}</dd>

@@ -431,3 +431,34 @@ describe("createThreadFindHighlightStore", () => {
     expect(listener).not.toHaveBeenCalled();
   });
 });
+
+it("finds command text and captured tool output by work entry id", () => {
+  const entries: TimelineEntry[] = [
+    {
+      id: "entry-build",
+      kind: "work",
+      createdAt: "2026-01-01T00:00:00Z",
+      entry: {
+        id: "build",
+        label: "Ran command",
+        tone: "tool",
+        createdAt: "2026-01-01T00:00:00Z",
+        itemType: "command_execution",
+        toolStatus: "failed",
+        commandExecution: {
+          command: "make build",
+          stderr: "compiler error: bad type",
+          exitCode: 1,
+        },
+      },
+    },
+  ];
+  const documents = collectThreadFindDocuments(entries);
+  expect(findThreadMatches(documents, "compiler error")).toEqual([
+    expect.objectContaining({
+      workEntryId: "build",
+      messageId: MessageId.makeUnsafe("work:build"),
+    }),
+  ]);
+  expect(findThreadMatches(documents, "make build")).toHaveLength(1);
+});

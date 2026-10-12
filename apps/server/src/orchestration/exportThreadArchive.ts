@@ -131,13 +131,40 @@ const MESSAGE_ROLE_HEADING: Record<string, string> = {
   system: "System",
 };
 
-// One chunk for the header, then one chunk per message; nothing accumulates.
+function orderedActivities(thread: OrchestrationThread) {
+  return (thread.activities ?? []).toSorted(
+    (a, b) =>
+      a.createdAt.localeCompare(b.createdAt) ||
+      (a.sequence ?? -1) - (b.sequence ?? -1) ||
+      a.id.localeCompare(b.id),
+  );
+}
+
+function activityMarkdown(activity: OrchestrationThread["activities"][number]): string {
+  const payload = JSON.stringify(activity.payload, null, 2);
+  let fenceLength = 3;
+  for (const match of payload.matchAll(/`+/g))
+    fenceLength = Math.max(fenceLength, match[0].length + 1);
+  const fence = "`".repeat(fenceLength);
+  const summary = activity.summary
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+  return `\n<details>\n<summary>${summary}</summary>\n\nKind: ${activity.kind}\n\nTurn: ${activity.turnId ?? "none"}\n\nTime: ${activity.createdAt}\n\n${fence}json\n${payload}\n${fence}\n\n</details>\n`;
+}
+
 function* transcriptMarkdownChunks(thread: OrchestrationThread): Generator<string> {
   yield `# ${thread.title}\n\n> Exported from Synara.\n`;
+  const activities = orderedActivities(thread);
+  let cursor = 0;
   for (const message of thread.messages) {
+    while (cursor < activities.length && activities[cursor]!.createdAt <= message.createdAt) {
+      yield activityMarkdown(activities[cursor++]!);
+    }
     const heading = MESSAGE_ROLE_HEADING[message.role] ?? "Message";
     yield `\n## ${heading} \`${message.createdAt}\`\n\n${message.text}\n`;
   }
+  while (cursor < activities.length) yield activityMarkdown(activities[cursor++]!);
 }
 
 function exportMessageProjection(message: OrchestrationMessage): Record<string, unknown> {
@@ -146,6 +173,7 @@ function exportMessageProjection(message: OrchestrationMessage): Record<string, 
     role: message.role,
     text: message.text,
     source: message.source,
+    turnId: message.turnId,
     // Attachment/skill/mention references are part of the user's input for a
     // turn; keep them in the structured export (metadata only — the archive
     // does not bundle the referenced files).
@@ -186,6 +214,12 @@ function* threadJsonChunks(thread: OrchestrationThread): Generator<string> {
     first = false;
   }
 
+  yield '\n  ],\n  "activities": [';
+  first = true;
+  for (const activity of orderedActivities(thread)) {
+    yield `${first ? "" : ","}\n    ${JSON.stringify(activity)}`;
+    first = false;
+  }
   yield "\n  ]\n}";
 }
 

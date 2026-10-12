@@ -288,3 +288,15 @@ it.each([
     expect(createLocalFilePreviewGrant).not.toHaveBeenCalled();
   }
 });
+
+it("omits expansion controls when a file preview supplies no viewer", async () => {
+  await render(
+    <QueryClientProvider client={client}>
+      <GeneratedMarkdownImage src="./workspace.png" alt="File preview" cwd="/repo" />
+    </QueryClientProvider>,
+  );
+  await expectReady();
+  expect(document.querySelector('[aria-label="Expand generated image"]')).toBeNull();
+  expect(document.querySelector(".chat-generated-image__overlay-pill--expand")).toBeNull();
+  expect(document.querySelector('[aria-label="Download generated image"]')).not.toBeNull();
+});

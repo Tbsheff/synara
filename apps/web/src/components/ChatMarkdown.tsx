@@ -48,6 +48,9 @@ import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
+import { remarkBackslashMath } from "../lib/remarkBackslashMath";
+import { MarkdownMermaidBlock } from "./chat/MarkdownMermaidBlock";
+import { toastManager } from "./ui/toast";
 import { copyTextToClipboard } from "../hooks/useCopyToClipboard";
 import { resolveDiffThemeName, type DiffThemeName } from "../lib/diffRendering";
 import {
@@ -65,7 +68,7 @@ import { CentralIcon } from "~/lib/central-icons";
 import { isLocalImageMarkdownSrc } from "../lib/localImageUrls";
 import {
   PENDING_DISPLAY_MATH_LANGUAGE,
-  repairStreamingMarkdown,
+  createStreamingMarkdownRepair,
 } from "../lib/markdownStreamingRepair";
 import {
   remarkMarkdownBlockOrigin,
@@ -273,6 +276,7 @@ const ParsedMarkdown = memo(function ParsedMarkdown(props: ParsedMarkdownProps) 
 const MARKDOWN_REMARK_PLUGINS: MarkdownRemarkPlugins = [
   remarkGfm,
   [remarkMath, { singleDollarTextMath: true }],
+  remarkBackslashMath,
   remarkGithubAlerts,
   remarkHtmlBreaks,
 ];
@@ -507,13 +511,13 @@ function looksLikeInlineMath(content: string): boolean {
 }
 
 // Reject obvious literal/currency dollars before searching for a closing math delimiter.
-function canOpenInlineMath(value: string, index: number): boolean {
+function canOpenInlineMath(value: string, index: number, links: MarkdownLinkIndex): boolean {
   const next = value[index + 1];
   if (!next || /\s/.test(next)) {
     return false;
   }
   if (/\d/.test(next)) {
-    const closingIndex = findInlineMathClosingDollar(value, index + 1);
+    const closingIndex = findInlineMathClosingDollar(value, index + 1, links);
     if (closingIndex === -1 || /\d/.test(value[closingIndex + 1] ?? "")) {
       return false;
     }
@@ -534,14 +538,18 @@ function canCloseInlineMath(value: string, index: number): boolean {
   return true;
 }
 
-function findInlineMathClosingDollar(value: string, index: number): number {
+function findInlineMathClosingDollar(
+  value: string,
+  index: number,
+  links: MarkdownLinkIndex,
+): number {
   let cursor = index;
   while (cursor < value.length) {
     if (value[cursor] === "\\") {
       cursor += 2;
       continue;
     }
-    const linkEnd = findInlineMarkdownLinkEnd(value, cursor);
+    const linkEnd = findInlineMarkdownLinkEnd(value, cursor, links);
     if (linkEnd !== -1) {
       // Dollars in Markdown links/images cannot close preceding literal text.
       // Dollar-free [f](x) remains valid inside a TeX expression.
@@ -560,6 +568,7 @@ function findInlineMathClosingDollar(value: string, index: number): number {
 }
 
 function protectLiteralDollarsInMarkdownLinks(value: string): string {
+  const links = indexMarkdownLinks(value);
   let result = "";
   let cursor = 0;
 
@@ -573,7 +582,7 @@ function protectLiteralDollarsInMarkdownLinks(value: string): string {
     // Scan links and math together: splitting at every `[` breaks TeX such as
     // \left[...\right] before its closing dollars can be found. A math span is
     // consumed whole below, so brackets inside it never enter link detection.
-    const linkEnd = findInlineMarkdownLinkEnd(value, cursor);
+    const linkEnd = findInlineMarkdownLinkEnd(value, cursor, links);
     if (linkEnd !== -1) {
       result += value.slice(cursor, linkEnd).replaceAll("$", LITERAL_DOLLAR_PLACEHOLDER);
       cursor = linkEnd;
@@ -593,13 +602,13 @@ function protectLiteralDollarsInMarkdownLinks(value: string): string {
     }
 
     if (value[cursor] === "$") {
-      if (!canOpenInlineMath(value, cursor)) {
+      if (!canOpenInlineMath(value, cursor, links)) {
         result += LITERAL_DOLLAR_PLACEHOLDER;
         cursor += 1;
         continue;
       }
 
-      const closingIndex = findInlineMathClosingDollar(value, cursor + 1);
+      const closingIndex = findInlineMathClosingDollar(value, cursor + 1, links);
       if (closingIndex === -1) {
         result += LITERAL_DOLLAR_PLACEHOLDER;
         cursor += 1;
@@ -621,71 +630,60 @@ function protectLiteralDollarsInMarkdownLinks(value: string): string {
   return result;
 }
 
-function findMarkdownBracketEnd(value: string, startIndex: number): number {
-  let depth = 0;
-  let cursor = startIndex;
-
-  while (cursor < value.length) {
-    if (value[cursor] === "\\") {
-      cursor += 2;
-      continue;
-    }
-    if (value[cursor] === "[") {
-      depth += 1;
-    } else if (value[cursor] === "]") {
-      depth -= 1;
-      if (depth === 0) {
-        return cursor;
-      }
-    }
-    cursor += 1;
-  }
-
-  return -1;
+interface MarkdownLinkIndex {
+  brackets: ReadonlyMap<number, number>;
+  parens: ReadonlyMap<number, number>;
+  wikiCandidates: ReadonlySet<number>;
 }
 
-function findMarkdownParenEnd(value: string, startIndex: number): number {
-  let depth = 0;
-  let cursor = startIndex;
-
-  while (cursor < value.length) {
-    if (value[cursor] === "\\") {
-      cursor += 2;
+function indexMarkdownLinks(value: string): MarkdownLinkIndex {
+  const brackets = new Map<number, number>();
+  const parens = new Map<number, number>();
+  const bracketStack: number[] = [];
+  const parenStack: number[] = [];
+  for (let cursor = 0; cursor < value.length; cursor++) {
+    const char = value[cursor];
+    if (char === "\\") {
+      cursor++;
       continue;
     }
-    if (value[cursor] === "(") {
-      depth += 1;
-    } else if (value[cursor] === ")") {
-      depth -= 1;
-      if (depth === 0) {
-        return cursor;
-      }
+    if (char === "[") bracketStack.push(cursor);
+    else if (char === "(") parenStack.push(cursor);
+    else if (char === "]") {
+      const start = bracketStack.pop();
+      if (start !== undefined) brackets.set(start, cursor);
+    } else if (char === ")") {
+      const start = parenStack.pop();
+      if (start !== undefined) parens.set(start, cursor);
     }
-    cursor += 1;
   }
-
-  return -1;
+  const wikiCandidates = new Set<number>();
+  let nextClose = -1;
+  for (let cursor = value.length - 1; cursor >= 0; cursor--) {
+    if (value[cursor] === "\n") nextClose = -1;
+    else if (value[cursor] === "]") nextClose = cursor;
+    else if (
+      value.startsWith("[[", cursor) &&
+      nextClose > cursor + 2 &&
+      value[nextClose + 1] === "]"
+    )
+      wikiCandidates.add(cursor);
+  }
+  return { brackets, parens, wikiCandidates };
 }
 
-function findInlineMarkdownLinkEnd(value: string, index: number): number {
-  const wikiLink = matchWikiLinkAt(value, index);
+function findInlineMarkdownLinkEnd(value: string, index: number, links: MarkdownLinkIndex): number {
+  const wikiLink = links.wikiCandidates.has(index) ? matchWikiLinkAt(value, index) : null;
   if (wikiLink) return index + wikiLink[0].length;
   const bracketStart = value[index] === "!" && value[index + 1] === "[" ? index + 1 : index;
-  if (value[bracketStart] !== "[") {
-    return -1;
-  }
-
-  const bracketEnd = findMarkdownBracketEnd(value, bracketStart);
-  if (bracketEnd === -1 || value[bracketEnd + 1] !== "(") {
-    return -1;
-  }
-
-  const parenEnd = findMarkdownParenEnd(value, bracketEnd + 1);
-  return parenEnd === -1 ? -1 : parenEnd + 1;
+  const bracketEnd = links.brackets.get(bracketStart);
+  if (bracketEnd === undefined || value[bracketEnd + 1] !== "(") return -1;
+  const parenEnd = links.parens.get(bracketEnd + 1);
+  return parenEnd === undefined ? -1 : parenEnd + 1;
 }
 
 // Tighten single-dollar math so currency and escaped dollars stay literal without touching code spans.
-function protectLiteralMarkdownDollars(value: string): string {
+export function protectLiteralMarkdownDollars(value: string): string {
   let result = "";
   let cursor = 0;
 
@@ -955,7 +953,13 @@ function MarkdownCodeBlock({
           copiedTimerRef.current = null;
         }, 1200);
       })
-      .catch(() => undefined);
+      .catch(() => {
+        toastManager.add({
+          type: "error",
+          title: "Could not copy code",
+          description: "Select and copy the code manually.",
+        });
+      });
   };
   const toggleWrap = () => setWrap((previous) => !previous);
 
@@ -1292,19 +1296,28 @@ const MARKDOWN_COMPONENTS: Components = {
       </pre>
     );
 
+    const content = (
+      <CodeHighlightErrorBoundary fallback={highlightedFallback}>
+        <Suspense fallback={highlightedFallback}>
+          <SuspenseShikiCodeBlock
+            language={blockState === "awaiting-info-line" ? "text" : fence.language}
+            code={code}
+            themeName={diffThemeName}
+            isStreaming={blockState !== "settled"}
+            sourceOffset={sourceOffset}
+          />
+        </Suspense>
+      </CodeHighlightErrorBoundary>
+    );
     return (
-      <MarkdownCodeBlock code={code} fence={fence} isOpen={blockState !== "settled"}>
-        <CodeHighlightErrorBoundary fallback={highlightedFallback}>
-          <Suspense fallback={highlightedFallback}>
-            <SuspenseShikiCodeBlock
-              language={blockState === "awaiting-info-line" ? "text" : fence.language}
-              code={code}
-              themeName={diffThemeName}
-              isStreaming={blockState !== "settled"}
-              sourceOffset={sourceOffset}
-            />
-          </Suspense>
-        </CodeHighlightErrorBoundary>
+      <MarkdownCodeBlock code={codeBlock.code} fence={fence} isOpen={blockState !== "settled"}>
+        {fence.language === "mermaid" && blockState === "settled" ? (
+          <MarkdownMermaidBlock source={codeBlock.code} theme={context.resolvedTheme}>
+            {content}
+          </MarkdownMermaidBlock>
+        ) : (
+          content
+        )}
       </MarkdownCodeBlock>
     );
   },
@@ -1613,16 +1626,15 @@ function ChatMarkdown({
   // The dollar rewrite exists to disambiguate math from currency; the user
   // variant has no math, so its text must stay byte-for-byte what was typed.
   // Table repair runs first so find offsets use the same normalized text.
+  const repairStream = useMemo(() => createStreamingMarkdownRepair(), [revealKey]);
   const normalizedText = useMemo(
     () =>
       isUserVariant
         ? smoothedText
         : protectLiteralMarkdownDollars(
-            repairMarkdownTableDelimiters(
-              isLive ? repairStreamingMarkdown(smoothedText) : smoothedText,
-            ),
+            repairMarkdownTableDelimiters(isLive ? repairStream(smoothedText) : smoothedText),
           ),
-    [isLive, isUserVariant, smoothedText],
+    [isLive, isUserVariant, smoothedText, repairStream],
   );
   // While streaming, let React deprioritize and coalesce the markdown re-parse so a
   // fast token stream (one flush per ~100ms) doesn't re-render the full ReactMarkdown

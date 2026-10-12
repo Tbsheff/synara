@@ -76,6 +76,12 @@ is cancelled, the task and its prompt remain available for retry.
   a new instruction in the same conversation to verify prior operations and resume remaining work;
   **Change model** opens the existing composer picker before sending. Earlier failure notices stay
   in the transcript after later turns. User cancellation keeps its interrupted meaning.
+  Settled subagent work stays in the parent conversation with its outcome and a link to
+  the child chat. Folded tool groups show failed and stopped counts. Read results stay
+  available beside **Open file**. Command cards can copy the command and each output stream.
+  **Find in thread** searches messages and captured work. A work match opens its turn and
+  shows the matching text. Thread exports include messages, work payloads, and turn links
+  in `thread.json`; `transcript.md` includes work in expandable sections.
 - **Composer** — objectives, attachments, provider selection, model selection, and task controls
 - **Terminal** — a real shell opened in the task's working directory
 - **Browser** — a shared live page surface for previews, semantic automation, and page-declared
@@ -458,6 +464,11 @@ uses an alias. Include the extension for other files, such as `[[guide.pdf]]`.
 Regular Markdown links remain relative to the document directory. Code, escaped
 Wiki syntax, embeds, and heading/block links are left literal; this is basic file
 navigation rather than full Obsidian support.
+
+Agent responses render math written as `\( … \)` or `\[ … \]` outside code and links.
+Settled `mermaid` code blocks load a diagram renderer on demand. **Show diagram source**
+keeps the source available; invalid diagrams show their source with an error message.
+Code copy keeps the provider's original indentation and reports clipboard failure.
 
 ### Terminal panels
 

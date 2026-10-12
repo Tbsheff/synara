@@ -147,3 +147,11 @@ export function isTranscriptListRevealing(scroller: HTMLElement): boolean {
   }
   return false;
 }
+
+export function canResumeTranscriptFollow(input: {
+  detached: boolean;
+  atEnd: boolean;
+  userGesture: boolean;
+}): boolean {
+  return input.atEnd && (!input.detached || input.userGesture);
+}

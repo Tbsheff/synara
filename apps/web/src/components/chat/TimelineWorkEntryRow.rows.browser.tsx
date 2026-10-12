@@ -1,7 +1,7 @@
 import "../../index.css";
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { TurnId } from "@synara/contracts";
+import { ThreadId, TurnId } from "@synara/contracts";
 import type { ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
@@ -34,6 +34,7 @@ type RowExtras = {
   onOpenTurnDiff?: (turnId: TurnId, filePath?: string) => void;
   onOpenAgentActivity?: (activityId: string) => void;
   onImageExpand?: () => void;
+  onOpenThread?: (id: ThreadId) => void;
 };
 
 function rowElement(workEntry: WorkLogEntry, extra: RowExtras = {}) {
@@ -49,6 +50,7 @@ function rowElement(workEntry: WorkLogEntry, extra: RowExtras = {}) {
           timestampFormat="24-hour"
           turnId={TURN_ID}
           {...(extra.onOpenTurnDiff ? { onOpenTurnDiff: extra.onOpenTurnDiff } : {})}
+          {...(extra.onOpenThread ? { onOpenThread: extra.onOpenThread } : {})}
           {...(extra.onOpenAgentActivity ? { onOpenAgentActivity: extra.onOpenAgentActivity } : {})}
         />
       </div>
@@ -241,7 +243,7 @@ describe("TimelineWorkEntryRow typed rows", () => {
       .toBe(true);
   });
 
-  it("opens the file for a typed Read row", async () => {
+  it("keeps captured Read results beside the file opener", async () => {
     const openFile = vi.fn(() => true);
     const opener = { openFile };
     await render(
@@ -267,10 +269,12 @@ describe("TimelineWorkEntryRow typed rows", () => {
       </Providers>,
     );
     expect(bodyText()).toContain("Read app.ts");
-    expect(document.querySelector('[data-tool-detail-trigger="true"]')).toBeNull();
+    await expand();
+    await expect.poll(() => bodyText()).toContain("1 const a = 1;");
     const button = [...document.querySelectorAll("button")].find((element) =>
-      element.textContent?.includes("Read app.ts"),
+      element.textContent?.includes("Open file"),
     );
+    expect(button).toBeDefined();
     button?.click();
     expect(openFile).toHaveBeenCalledWith("/repo/src/app.ts");
   });
@@ -366,4 +370,53 @@ describe("TimelineWorkEntryRow typed rows", () => {
     await expect.poll(() => bodyText()).toContain("No such file or directory");
     expect(bodyText().split("Exit code 1").length - 1).toBe(1);
   });
+});
+
+it("copies a command and each output stream without shell labels", async () => {
+  const writeText = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue();
+  await renderRow(
+    entry({
+      itemType: "command_execution",
+      commandExecution: {
+        command: "make",
+        stdout: "built",
+        stderr: "error: x",
+        exitCode: 1,
+      },
+    }),
+  );
+  await expand();
+  for (const [label, value] of [
+    ["command", "make"],
+    ["stdout", "built"],
+    ["stderr", "error: x"],
+  ]) {
+    const button = document.querySelector<HTMLButtonElement>(`[aria-label="Copy ${label}"]`);
+    expect(button).not.toBeNull();
+    button!.click();
+    await expect.poll(() => writeText.mock.calls.at(-1)?.[0]).toBe(value);
+  }
+  writeText.mockRestore();
+});
+
+it("opens the resolved thread from settled subagent history", async () => {
+  const onOpenThread = vi.fn();
+  await renderRow(
+    entry({
+      itemType: "collab_agent_tool_call",
+      subagents: [
+        {
+          threadId: "provider-id",
+          resolvedThreadId: "child-id",
+          statusLabel: "Completed",
+          prompt: "Check build",
+          isActive: false,
+        },
+      ],
+    }),
+    { onOpenThread },
+  );
+  await expand();
+  document.querySelector<HTMLButtonElement>("[data-subagent-history] button")!.click();
+  expect(onOpenThread).toHaveBeenCalledWith(ThreadId.makeUnsafe("child-id"));
 });

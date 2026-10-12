@@ -1,3 +1,4 @@
+import type { WorkLogEntry } from "./workLog";
 import { MessageId, TurnId, type OrchestrationThreadActivity } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
@@ -4036,7 +4037,7 @@ describe("deriveWorkLogEntries", () => {
     expect(entries[0]?.id).toBe("z-update-earlier");
   });
 
-  it("omits routed collab subagent tool lifecycle rows from the transcript", () => {
+  it("keeps settled routed collab subagent tool lifecycle rows in the transcript", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
         id: "collab-update",
@@ -4083,7 +4084,7 @@ describe("deriveWorkLogEntries", () => {
 
     const entries = deriveWorkLogEntries(activities, undefined);
     expect(entries).toHaveLength(1);
-    expect(omitRoutedSubagentWorkEntries(entries)).toEqual([]);
+    expect(omitRoutedSubagentWorkEntries(entries)).toEqual(entries);
   });
 
   // Providers stream the agent tool call before its receivers, so the routed
@@ -5779,4 +5780,25 @@ describe("transcript parity ordering and typed entries", () => {
       }),
     ).toBe("call_live");
   });
+});
+
+it("retains settled routed subagent history with outcome and route", () => {
+  const settled = {
+    id: "launch",
+    label: "Agent",
+    tone: "tool",
+    createdAt: "2026-01-01T00:00:00Z",
+    itemType: "collab_agent_tool_call",
+    toolStatus: "completed",
+    subagents: [
+      {
+        threadId: "provider-child",
+        resolvedThreadId: "child",
+        prompt: "Check tests",
+        statusLabel: "Completed",
+        isActive: false,
+      },
+    ],
+  } satisfies WorkLogEntry;
+  expect(omitRoutedSubagentWorkEntries([settled])).toEqual([settled]);
 });

@@ -2,7 +2,10 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
+import { WorkspaceFileOpenerContext } from "../../lib/workspaceFileOpener";
+import { MessageId } from "@synara/contracts";
 import type { WorkLogEntry } from "../../workLog";
+import { resolveWorkEntryFindText } from "./threadFind.logic";
 import { TimelineWorkEntryRow, workEntryDisplayText } from "./TimelineWorkEntryRow";
 
 function entry(overrides: Partial<WorkLogEntry>): WorkLogEntry {
@@ -529,4 +532,63 @@ describe("command outcome from the exit code", () => {
     });
     expect(workEntryDisplayText(row)).toBe("Read output of background shell bash_1");
   });
+});
+
+it("keeps the Read result disclosure when a file opener exists", () => {
+  const markup = renderToStaticMarkup(
+    <QueryClientProvider client={new QueryClient()}>
+      <WorkspaceFileOpenerContext.Provider value={{ openFile: () => true }}>
+        <TimelineWorkEntryRow
+          workEntry={entry({
+            itemType: "dynamic_tool_call",
+            toolName: "Read",
+            toolCall: {
+              toolName: "Read",
+              arguments: { file_path: "/repo/src/app.ts" },
+              resultText: "captured source",
+            },
+          })}
+          chatMetaFontSizePx={12}
+          density="compact"
+          markdownCwd="/repo"
+          onImageExpand={() => undefined}
+          timestampFormat="locale"
+        />
+      </WorkspaceFileOpenerContext.Provider>
+    </QueryClientProvider>,
+  );
+  expect(markup).toContain('data-tool-detail-trigger="true"');
+});
+
+it("opens captured output for the selected work search result", () => {
+  const text = "compiler error at build";
+  const work = entry({
+    id: "build",
+    itemType: "command_execution",
+    commandExecution: { command: "make", stderr: text, exitCode: 1 },
+  });
+  const startOffset = resolveWorkEntryFindText(work).indexOf("compiler error");
+  const markup = renderToStaticMarkup(
+    <QueryClientProvider client={new QueryClient()}>
+      <TimelineWorkEntryRow
+        workEntry={work}
+        findHighlight={{
+          query: "compiler error",
+          activeMatch: {
+            messageId: MessageId.makeUnsafe("work:build"),
+            workEntryId: "build",
+            startOffset,
+            endOffset: startOffset + 14,
+          },
+        }}
+        chatMetaFontSizePx={12}
+        markdownCwd={undefined}
+        onImageExpand={() => undefined}
+        timestampFormat="locale"
+      />
+    </QueryClientProvider>,
+  );
+  expect(markup).toContain('data-chat-find-document-id="work:build"');
+  expect(markup).toContain('aria-expanded="true"');
+  expect(markup).toContain(text);
 });

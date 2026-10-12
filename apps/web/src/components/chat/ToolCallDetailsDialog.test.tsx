@@ -114,3 +114,43 @@ describe("TranscriptNoticeDetails", () => {
     expect(markup).toContain("&lt;ok&gt;");
   });
 });
+
+it("offers separate copy controls for command and split output", () => {
+  const markup = renderToStaticMarkup(
+    <TypedCommandDetails
+      running={false}
+      view={buildTypedCommandView({
+        command: { command: "make", stdout: "built", stderr: "error", exitCode: 1 },
+        status: "failed",
+      })}
+    />,
+  );
+  expect(markup).toContain('aria-label="Copy command"');
+  expect(markup).toContain('aria-label="Copy stdout"');
+  expect(markup).toContain('aria-label="Copy stderr"');
+});
+
+it("keeps a settled subagent outcome and route in the parent disclosure", () => {
+  const markup = renderToStaticMarkup(
+    <SubagentLaunchDetails
+      view={{
+        status: "Completed",
+        model: null,
+        prompt: "check build",
+        agents: [
+          {
+            threadId: "provider-id",
+            resolvedThreadId: "child-id",
+            title: "Build check",
+            statusLabel: "Failed",
+            latestUpdate: "compiler error",
+          },
+        ],
+      }}
+      onOpenThread={() => undefined}
+    />,
+  );
+  expect(markup).toContain("Build check · Failed");
+  expect(markup).toContain("compiler error");
+  expect(markup).toContain("Open subagent thread");
+});

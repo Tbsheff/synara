@@ -45,6 +45,30 @@ function providerErrorDetailLines(detail: ProviderErrorDetail | undefined): stri
   return lines;
 }
 
+function providerRecoveryAdvice(error: string): string | null {
+  if (
+    /not authenticated|unauthenticated|authentication (?:failed|required)|invalid api key|token expired|401\b/i.test(
+      error,
+    )
+  ) {
+    return "Sign in to this provider in Settings, then continue the task.";
+  }
+  if (/not installed|not on PATH|(?:spawn|executable).*ENOENT|CLI.*not found/i.test(error)) {
+    return "Install this provider's CLI or set its path in Settings, then continue the task.";
+  }
+  if (/rate limit|too many requests|429\b/i.test(error)) {
+    return "Wait for the provider's rate limit to reset, then continue the task.";
+  }
+  if (
+    /connection (?:closed|lost|refused)|network|timed? out|timeout|ECONNRESET|ETIMEDOUT/i.test(
+      error,
+    )
+  ) {
+    return "Retry after you check the connection. The task may have stopped before its result arrived.";
+  }
+  return null;
+}
+
 type ThreadErrorBannerProps = {
   error: string | null;
   title?: string;
@@ -95,6 +119,7 @@ function ThreadErrorBannerContent({
   }, [error, expanded]);
   const canUnblock = onUnblock !== undefined && isProviderDeliveryBlockDetail(error);
   const title = providerStopReasonTitle(stopReason) ?? fallbackTitle;
+  const advice = providerRecoveryAdvice(error);
   const detailLines = providerErrorDetailLines(detail);
   const copyText = detailLines.length > 0 ? [error, ...detailLines].join("\n") : error;
   return (
@@ -113,6 +138,11 @@ function ThreadErrorBannerContent({
         >
           {error}
         </p>
+        {advice ? (
+          <p className="text-ui-sm" data-thread-error-recovery="true">
+            {advice}
+          </p>
+        ) : null}
         {expanded && detailLines.length > 0 ? (
           <ul className="space-y-0.5 text-ui-xs" data-thread-error-detail="true">
             {detailLines.map((line, index) => (

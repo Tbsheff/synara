@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { repairStreamingMarkdown } from "./markdownStreamingRepair";
+import { createStreamingMarkdownRepair, repairStreamingMarkdown } from "./markdownStreamingRepair";
 
 describe("repairStreamingMarkdown", () => {
   it.each([
@@ -135,3 +135,50 @@ describe("repairStreamingMarkdown", () => {
     }
   });
 });
+
+describe("incremental Markdown repair", () => {
+  it("does not rescan completed code lines on each output chunk", () => {
+    let scanned = 0;
+    const repair = createStreamingMarkdownRepair((text) => {
+      scanned += text.length;
+    });
+    let text = "```ts\n";
+    for (let index = 0; index < 100; index++) {
+      text += `const value${index} = ${index};\n`;
+      expect(repair(text)).toBe(text);
+    }
+    expect(scanned).toBeLessThan(text.length * 3);
+  });
+  it("matches stateless repair across every prefix and resets for edits", () => {
+    const repair = createStreamingMarkdownRepair();
+    for (const source of [
+      "**bold** [link](https://example.com)\n\n$$\na^2\n$$\n\nDone.",
+      "```ts\nconst a = `x`;\n```\n| a | b |\n| --- | --- |\n",
+      "\n\n- [ ] work\nhello _there_",
+      "`$$` and $$x\n\nnext",
+      "same length",
+    ]) {
+      for (let length = 0; length <= source.length; length++)
+        expect(repair(source.slice(0, length))).toBe(
+          repairStreamingMarkdown(source.slice(0, length)),
+        );
+    }
+  });
+});
+
+it.each([
+  [
+    "unmatched code runs",
+    Array.from({ length: 300 }, (_, index) => "`".repeat(index + 1) + "x ").join(""),
+  ],
+  ["mixed emphasis markers", "*a ".repeat(20_000) + "a_b ".repeat(20_000)],
+])(
+  "bounds repair time for %s",
+  (_label, source) => {
+    const start = performance.now();
+    const repaired = repairStreamingMarkdown(source);
+    expect(performance.now() - start).toBeLessThan(1_000);
+    expect(repaired.length).toBeGreaterThan(0);
+  },
+  30_000,
+);

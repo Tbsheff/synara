@@ -166,13 +166,14 @@ function GeneratedMarkdownImageContent(props: GeneratedMarkdownImageProps) {
     );
   }
 
+  const Frame = onImageExpand ? "button" : "span";
   return (
     <span className="chat-generated-image" data-status={resolvingGrant ? "loading" : status}>
-      <button
-        type="button"
+      <Frame
+        {...(onImageExpand
+          ? { type: "button", onClick: expandImage, "aria-label": "Expand generated image" }
+          : {})}
         className="chat-generated-image__frame"
-        onClick={expandImage}
-        aria-label="Expand generated image"
       >
         {status === "loading" || resolvingGrant ? (
           <span className="chat-generated-image__skeleton" aria-hidden="true">
@@ -180,13 +181,15 @@ function GeneratedMarkdownImageContent(props: GeneratedMarkdownImageProps) {
           </span>
         ) : null}
         <img {...imgProps} alt={accessibleName} className="chat-generated-image__img" />
-        <span className="chat-generated-image__overlay" aria-hidden="true">
-          <span className="chat-generated-image__overlay-pill chat-generated-image__overlay-pill--expand">
-            <Maximize2 className="size-3.5" />
-            <span>Expand</span>
+        {onImageExpand ? (
+          <span className="chat-generated-image__overlay" aria-hidden="true">
+            <span className="chat-generated-image__overlay-pill chat-generated-image__overlay-pill--expand">
+              <Maximize2 className="size-3.5" />
+              <span>Expand</span>
+            </span>
           </span>
-        </span>
-      </button>
+        ) : null}
+      </Frame>
       <a
         href={downloadUrl}
         download={downloadName}

@@ -4,10 +4,11 @@
 // Layer: Chat transcript presentation-adjacent logic (unit-tested)
 // Depends on: timeline entry shape and message ids only.
 
-import { type MessageId } from "@synara/contracts";
+import { MessageId } from "@synara/contracts";
+import { buildTypedCommandView, buildTypedToolCallView } from "../../lib/toolCallDetails";
 import { repairMarkdownTableDelimiters } from "../../lib/markdownTableRepair";
 import { deriveDisplayedUserMessageState } from "../../lib/terminalContext";
-import { type TimelineEntry } from "../../session-logic";
+import { type TimelineEntry, type WorkLogEntry } from "../../session-logic";
 import type { ChatMessage } from "../../types";
 import { resolveUserMessageMarkdownText } from "./userMessageTerminalContexts";
 
@@ -21,11 +22,13 @@ export interface ThreadFindDocument {
   text: string;
   /** Set when the document is one interleaved assistant text segment. */
   segmentIndex?: number;
+  workEntryId?: string;
 }
 
 export interface ThreadFindMatch extends ThreadFindRange {
   messageId: MessageId;
   segmentIndex?: number;
+  workEntryId?: string;
 }
 
 export interface ThreadFindHighlight {
@@ -165,12 +168,80 @@ export function createThreadFindDocumentTextCache(
 
 const defaultThreadFindDocumentTextCache = createThreadFindDocumentTextCache();
 
+const workFindText = new WeakMap<WorkLogEntry, string>();
+
+export function resolveWorkEntryFindText(entry: WorkLogEntry): string {
+  const cached = workFindText.get(entry);
+  if (cached !== undefined) return cached;
+  const parts: Array<string | null | undefined> = [
+    entry.label,
+    entry.detail,
+    entry.preview,
+    entry.toolStatus,
+    entry.steeredMessage,
+  ];
+  if (entry.commandExecution) {
+    const view = buildTypedCommandView({
+      command: entry.commandExecution,
+      status: entry.toolStatus ?? "completed",
+      liveOutput: entry.liveOutput,
+    });
+    parts.push(view.command, view.cwd, view.description, view.output, view.stdout, view.stderr);
+  } else parts.push(entry.rawCommand ?? entry.command);
+  if (entry.toolCall) {
+    const view = buildTypedToolCallView(entry.toolCall);
+    parts.push(
+      view.argumentsText,
+      view.resultText,
+      view.structuredContentText,
+      view.error,
+      ...view.otherBlocks,
+    );
+  }
+  for (const agent of entry.subagents ?? [])
+    parts.push(
+      agent.title,
+      agent.nickname,
+      agent.prompt,
+      agent.latestUpdate,
+      agent.statusLabel,
+      agent.rawStatus,
+    );
+  parts.push(...(entry.changedFiles ?? []));
+  for (const detail of [
+    entry.toolDetails,
+    entry.fileChanges,
+    entry.webSearch,
+    entry.reasoning,
+    entry.notice,
+    entry.turnFailure,
+    entry.userInputExchange,
+  ]) {
+    if (detail) parts.push(JSON.stringify(detail));
+  }
+  const text = [
+    ...new Set(parts.filter((part): part is string => typeof part === "string" && part.length > 0)),
+  ].join("\n");
+  workFindText.set(entry, text);
+  return text;
+}
+
 export function collectThreadFindDocuments(
   timelineEntries: readonly TimelineEntry[],
   textCache: ThreadFindDocumentTextCache = defaultThreadFindDocumentTextCache,
 ): ThreadFindDocument[] {
   const documents: ThreadFindDocument[] = [];
   for (const entry of timelineEntries) {
+    if (entry.kind === "work") {
+      const text = resolveWorkEntryFindText(entry.entry);
+      if (text)
+        documents.push({
+          messageId: MessageId.makeUnsafe(`work:${entry.entry.id}`),
+          workEntryId: entry.entry.id,
+          text,
+        });
+      continue;
+    }
     if (entry.kind === "message") {
       const text = textCache.resolve(entry.message, entry.message.text);
       if (text.length === 0) {
@@ -214,6 +285,7 @@ export function findThreadMatches(
     for (const range of ranges) {
       matches.push({
         messageId: document.messageId,
+        ...(document.workEntryId === undefined ? {} : { workEntryId: document.workEntryId }),
         startOffset: range.startOffset,
         endOffset: range.endOffset,
         ...(document.segmentIndex === undefined ? {} : { segmentIndex: document.segmentIndex }),

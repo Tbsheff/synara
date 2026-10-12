@@ -23,6 +23,11 @@ vi.mock("../lib/markdownStreamingRepair", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../lib/markdownStreamingRepair")>();
   return {
     ...actual,
+    createStreamingMarkdownRepair: () => {
+      const repair = actual.createStreamingMarkdownRepair();
+      return (markdown: string) =>
+        rendererMode.repairsStreamingText ? repair(markdown) : markdown;
+    },
     repairStreamingMarkdown: (markdown: string) =>
       rendererMode.repairsStreamingText ? actual.repairStreamingMarkdown(markdown) : markdown,
   };
