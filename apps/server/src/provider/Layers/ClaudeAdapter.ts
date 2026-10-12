@@ -1700,6 +1700,8 @@ const CLAUDE_CONTEXT_USAGE_TIMEOUT_MS = 1_000;
 // The SDK's interrupt resolves only once the CLI acknowledges it; a wedged CLI
 // would otherwise stall the caller (and the provider command reactor) forever.
 const CLAUDE_INTERRUPT_TIMEOUT = Duration.seconds(10);
+const CLAUDE_LIVE_CONTROL_TIMEOUT = Duration.seconds(10);
+const CLAUDE_DISPATCH_CONTROL_TIMEOUT = Duration.seconds(60);
 export const buildEmbeddedClaudeSystemPromptAppend = (
   gatewayControlAvailable: boolean,
   enableComputerControl = false,
@@ -2251,6 +2253,39 @@ function toRequestError(threadId: ThreadId, method: string, cause: unknown): Pro
     detail: toMessage(cause, `${method} failed`),
     cause,
   });
+}
+
+function requestClaudeControl<A>(
+  threadId: ThreadId,
+  method: string,
+  request: () => Promise<A>,
+  options?: {
+    readonly timeout: Duration.Duration;
+    readonly retireUnresponsiveRuntime: Effect.Effect<void, ProviderAdapterError>;
+  },
+): Effect.Effect<A, ProviderAdapterError> {
+  const timeout = options?.timeout ?? CLAUDE_LIVE_CONTROL_TIMEOUT;
+  return Effect.tryPromise({
+    try: request,
+    catch: (cause) => toRequestError(threadId, method, cause),
+  }).pipe(
+    Effect.timeoutOption(timeout),
+    Effect.flatMap((answer) =>
+      Option.isSome(answer)
+        ? Effect.succeed(answer.value)
+        : (options?.retireUnresponsiveRuntime ?? Effect.void).pipe(
+            Effect.andThen(
+              Effect.fail(
+                new ProviderAdapterRequestError({
+                  provider: PROVIDER,
+                  method,
+                  detail: `The Claude CLI did not answer ${method} within ${Duration.toMillis(timeout)}ms.`,
+                }),
+              ),
+            ),
+          ),
+    ),
+  );
 }
 
 function sdkMessageType(value: unknown): string | undefined {
@@ -3830,10 +3865,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         const reroutedFrom = context.rerouteOriginalApiModelId;
         if (reroutedFrom !== undefined) {
           const restoreExit = yield* Effect.exit(
-            Effect.tryPromise({
-              try: () => context.query.setModel(reroutedFrom),
-              catch: (cause) => toError(cause, "Failed to restore Claude model after reroute."),
-            }),
+            requestClaudeControl(context.session.threadId, "turn/restoreModel", () =>
+              context.query.setModel(reroutedFrom),
+            ),
           );
           if (Exit.isSuccess(restoreExit)) {
             context.rerouteOriginalApiModelId = undefined;
@@ -5982,7 +6016,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               run.taskId = message.task_id;
               // A stop that raced the spawn window fires now that the task id exists.
               if (context.pendingSubagentStops.delete(message.tool_use_id)) {
-                yield* Effect.tryPromise(() => context.query.stopTask(message.task_id)).pipe(
+                yield* requestClaudeControl(context.session.threadId, "task/stop", () =>
+                  context.query.stopTask(message.task_id),
+                ).pipe(
                   Effect.catch((cause) =>
                     emitRuntimeError(
                       context,
@@ -6590,6 +6626,17 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             ),
           ),
         );
+      });
+
+    const requestDispatchControl = <A>(
+      context: ClaudeSessionContext,
+      threadId: ThreadId,
+      method: string,
+      request: () => Promise<A>,
+    ) =>
+      requestClaudeControl(threadId, method, request, {
+        timeout: CLAUDE_DISPATCH_CONTROL_TIMEOUT,
+        retireUnresponsiveRuntime: stopSessionInternal(context),
       });
 
     const requireSession = (
@@ -7728,10 +7775,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           context.firstTurnSpawnModeAuthoritative &&
           desiredPermissionMode === context.spawnPermissionMode;
         if (desiredPermissionMode !== undefined && !canSkipRedundantSpawnModeRequest) {
-          yield* Effect.tryPromise({
-            try: () => context.query.setPermissionMode(desiredPermissionMode),
-            catch: (cause) => toRequestError(threadId, "turn/setPermissionMode", cause),
-          });
+          yield* requestDispatchControl(context, threadId, "turn/setPermissionMode", () =>
+            context.query.setPermissionMode(desiredPermissionMode),
+          );
         }
         return effectiveInteractionMode;
       });
@@ -7874,10 +7920,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
                 operation: "sendTurn",
               });
             }
-            yield* Effect.tryPromise({
-              try: () => context.query.setModel(apiModelId),
-              catch: (cause) => toRequestError(input.threadId, "turn/setModel", cause),
-            });
+            yield* requestDispatchControl(context, input.threadId, "turn/setModel", () =>
+              context.query.setModel(apiModelId),
+            );
           }
           context.currentApiModelId = apiModelId;
           context.rerouteOriginalApiModelId = undefined;
@@ -7920,13 +7965,11 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           modelSelection?.options?.thinking,
         );
         if (modelSelection && requestedThinking !== context.currentAlwaysThinkingEnabled) {
-          yield* Effect.tryPromise({
-            try: () =>
-              context.query.applyFlagSettings({
-                alwaysThinkingEnabled: requestedThinking ?? null,
-              }),
-            catch: (cause) => toRequestError(input.threadId, "turn/applyFlagSettings", cause),
-          });
+          yield* requestDispatchControl(context, input.threadId, "turn/applyFlagSettings", () =>
+            context.query.applyFlagSettings({
+              alwaysThinkingEnabled: requestedThinking ?? null,
+            }),
+          );
           context.currentAlwaysThinkingEnabled = requestedThinking;
         }
 
@@ -7953,17 +7996,15 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           const ultracodeChanged = requestedUltracode !== context.currentUltracode;
           const fastModeChanged = requestedFastMode !== context.currentFastMode;
           if (effortChanged || ultracodeChanged || fastModeChanged) {
-            yield* Effect.tryPromise({
-              try: () =>
-                context.query.applyFlagSettings({
-                  ...(effortChanged
-                    ? { effortLevel: requestedEffort as Exclude<ClaudeApiEffort, "max"> | null }
-                    : {}),
-                  ...(ultracodeChanged ? { ultracode: requestedUltracode ? true : null } : {}),
-                  ...(fastModeChanged ? { fastMode: requestedFastMode ? true : null } : {}),
-                }),
-              catch: (cause) => toRequestError(input.threadId, "turn/applyFlagSettings", cause),
-            });
+            yield* requestDispatchControl(context, input.threadId, "turn/applyFlagSettings", () =>
+              context.query.applyFlagSettings({
+                ...(effortChanged
+                  ? { effortLevel: requestedEffort as Exclude<ClaudeApiEffort, "max"> | null }
+                  : {}),
+                ...(ultracodeChanged ? { ultracode: requestedUltracode ? true : null } : {}),
+                ...(fastModeChanged ? { fastMode: requestedFastMode ? true : null } : {}),
+              }),
+            );
             if (effortChanged) {
               context.currentEffort = requestedEffort;
             }
@@ -8316,10 +8357,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               ? Effect.sync(() => {
                   context.pendingSubagentStops.add(providerThreadId);
                 })
-              : Effect.tryPromise({
-                  try: () => context.query.stopTask(taskId),
-                  catch: (cause) => toRequestError(threadId, "turn/interrupt", cause),
-                });
+              : requestClaudeControl(threadId, "turn/interrupt", () =>
+                  context.query.stopTask(taskId),
+                );
           // Claude subagents share the parent query's MCP transport. Their
           // browser calls are consequently registered under the active parent
           // turn, not the Task tool id. Tombstone and drain that gateway turn
@@ -8371,10 +8411,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
     const stopTask: ClaudeAdapterShape["stopTask"] = (threadId, taskId) =>
       Effect.gen(function* () {
         const context = yield* requireSession(threadId);
-        yield* Effect.tryPromise({
-          try: () => context.query.stopTask(taskId),
-          catch: (cause) => toRequestError(threadId, "task/stop", cause),
-        });
+        yield* requestClaudeControl(threadId, "task/stop", () => context.query.stopTask(taskId));
       });
 
     // Moves one in-flight foreground Task call to the background (the CLI's
@@ -8383,10 +8420,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
     const backgroundTask: ClaudeAdapterShape["backgroundTask"] = (threadId, toolUseId) =>
       Effect.gen(function* () {
         const context = yield* requireSession(threadId);
-        yield* Effect.tryPromise({
-          try: () => context.query.backgroundTasks(toolUseId).then(() => undefined),
-          catch: (cause) => toRequestError(threadId, "task/background", cause),
-        });
+        yield* requestClaudeControl(threadId, "task/background", () =>
+          context.query.backgroundTasks(toolUseId).then(() => undefined),
+        );
       });
 
     // Queues a mid-task user message for one running subagent; the PreToolUse

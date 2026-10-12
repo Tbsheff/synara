@@ -13142,6 +13142,68 @@ describe("Claude explicit native compaction", () => {
     );
   });
 
+  it.effect("retires a Claude runtime whose permission control never answers", () => {
+    const harness = makeMultiQueryHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const exitedFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.type === "session.exited"),
+        Stream.take(1),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "approval-required",
+      });
+      const stuckQuery = harness.queries[0]!;
+      stuckQuery.setPermissionModeGate = new Promise<void>(() => {});
+
+      const send = yield* adapter
+        .sendTurn({
+          threadId: THREAD_ID,
+          input: "Plan the work",
+          attachments: [],
+          interactionMode: "plan",
+        })
+        .pipe(Effect.result, Effect.forkChild);
+      while (!stuckQuery.setPermissionModeCalls.includes("plan")) {
+        yield* Effect.yieldNow;
+      }
+      yield* TestClock.adjust("60 seconds");
+
+      const result = yield* Fiber.join(send);
+      assert.equal(result._tag, "Failure");
+      if (result._tag === "Failure") {
+        assert.equal(result.failure._tag, "ProviderAdapterRequestError");
+        assert.include(result.failure.message, "turn/setPermissionMode");
+      }
+      assert.isAtLeast(stuckQuery.closeCalls, 1);
+      assert.lengthOf(Array.from(yield* Fiber.join(exitedFiber)), 1);
+
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "approval-required",
+      });
+      const retried = yield* adapter.sendTurn({
+        threadId: THREAD_ID,
+        input: "Plan the work",
+        attachments: [],
+        interactionMode: "plan",
+      });
+      assert.equal(harness.queries.length, 2);
+      assert.equal(
+        String((yield* adapter.listSessions())[0]?.activeTurnId),
+        String(retried.turnId),
+      );
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("bounds native command discovery without queueing a prompt", () => {
     const harness = makeHarness();
     harness.query.supportedCommandsNeverResolves = true;
