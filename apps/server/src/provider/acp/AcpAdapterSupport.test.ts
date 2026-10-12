@@ -3,6 +3,7 @@ import * as AcpErrors from "./AcpErrors.ts";
 
 import {
   canonicalItemTypeFromAcpToolKind,
+  acpApprovalDecisionUnavailableIssue,
   classifyAcpPromptTurnCompletion,
   mapAcpToAdapterError,
   readAcpFailedToolDetail,
@@ -52,6 +53,16 @@ describe("AcpAdapterSupport", () => {
 
     expect(selectAcpPermissionOptionId("accept", persistentOnly)).toBeUndefined();
     expect(selectAcpPermissionOptionId("acceptForSession", persistentOnly)).toBe("allow-session");
+    expect(acpApprovalDecisionUnavailableIssue("accept", persistentOnly)).toContain(
+      "Approve for session",
+    );
+    expect(acpApprovalDecisionUnavailableIssue("acceptForSession", persistentOnly)).toBeUndefined();
+    expect(acpApprovalDecisionUnavailableIssue("decline", persistentOnly)).toBeUndefined();
+    expect(
+      acpApprovalDecisionUnavailableIssue("acceptForSession", [
+        { kind: "reject_once", optionId: "deny-now" },
+      ]),
+    ).toContain("Decline");
   });
 
   it("prefers request-scoped Full Access approvals and falls back to persistent grants", () => {

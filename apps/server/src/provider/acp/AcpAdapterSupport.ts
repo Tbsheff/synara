@@ -89,7 +89,7 @@ export function mapAcpToAdapterError(
   });
 }
 
-type AcpPermissionOptionLike = {
+export type AcpPermissionOptionLike = {
   readonly kind: "allow_once" | "allow_always" | "reject_once" | "reject_always";
   readonly optionId: string;
 };
@@ -127,6 +127,21 @@ function findFirstAcpPermissionOptionId(
     }
   }
   return undefined;
+}
+
+export function acpApprovalDecisionUnavailableIssue(
+  decision: ProviderApprovalDecision,
+  options: ReadonlyArray<AcpPermissionOptionLike>,
+): string | undefined {
+  if (decision !== "accept" && decision !== "acceptForSession") {
+    return undefined;
+  }
+  if (selectAcpPermissionOptionId(decision, options) !== undefined) {
+    return undefined;
+  }
+  return options.some((option) => option.kind === "allow_always" && option.optionId.trim())
+    ? "This provider can allow this request only for the rest of the session. Choose Approve for session or Decline."
+    : "This provider offers no way to allow this request. Choose Decline.";
 }
 
 export function selectAcpFullAccessPermissionOptionId(

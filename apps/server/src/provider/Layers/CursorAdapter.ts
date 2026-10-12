@@ -75,6 +75,8 @@ import {
   readAcpFailedToolDetail,
   resolveAcpPermissionPolicy,
   selectAcpPermissionOptionId,
+  acpApprovalDecisionUnavailableIssue,
+  type AcpPermissionOptionLike,
 } from "../acp/AcpAdapterSupport.ts";
 import {
   acceptAcpPlanUpdate,
@@ -206,6 +208,7 @@ export interface CursorAdapterLiveOptions {
 interface PendingApproval {
   readonly decision: Deferred.Deferred<ProviderApprovalDecision>;
   readonly kind: string | "unknown";
+  readonly options: ReadonlyArray<AcpPermissionOptionLike>;
 }
 
 interface PendingUserInput {
@@ -954,6 +957,7 @@ export function makeCursorAdapter(
                 pendingApprovals.set(requestId, {
                   decision,
                   kind: permissionRequest.kind,
+                  options: params.options,
                 });
                 yield* offerRuntimeEvent(
                   input.lifecycleGeneration,
@@ -1571,6 +1575,14 @@ export function makeCursorAdapter(
             provider: PROVIDER,
             method: "session/request_permission",
             detail: `Unknown pending approval request: ${requestId}`,
+          });
+        }
+        const unavailableIssue = acpApprovalDecisionUnavailableIssue(decision, pending.options);
+        if (unavailableIssue !== undefined) {
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: "session/request_permission",
+            issue: unavailableIssue,
           });
         }
         yield* Deferred.succeed(pending.decision, decision);
