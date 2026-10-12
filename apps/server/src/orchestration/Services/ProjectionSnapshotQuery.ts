@@ -72,6 +72,8 @@ export interface ProjectionThreadCheckpointContext {
 }
 
 export interface ProjectionThreadCheckpointContextOptions {
+  readonly checkpointLimit?: number;
+  readonly beforeCheckpointTurnCount?: number;
   /** Include the narrow activity payload set used to attribute files in non-Git workspaces. */
   readonly includeFileChangeActivityPayloads?: boolean;
 }

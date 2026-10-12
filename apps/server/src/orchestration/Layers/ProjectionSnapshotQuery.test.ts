@@ -35,6 +35,62 @@ const projectionSnapshotLayer = it.layer(
 );
 
 projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
+  it.effect(
+    "bounds checkpoint detail and pages older history without truncating export or undo",
+    () =>
+      Effect.gen(function* () {
+        const query = yield* ProjectionSnapshotQuery;
+        const sql = yield* SqlClient.SqlClient;
+        const threadId = asThreadId("checkpoint-window-thread");
+        const now = "2026-10-01T00:00:00.000Z";
+        yield* sql`INSERT INTO projection_projects
+        (project_id, title, workspace_root, scripts_json, created_at, updated_at)
+        VALUES ('checkpoint-window-project', 'Checkpoint window', '/tmp/checkpoint-window', '[]', ${now}, ${now})`;
+        yield* sql`INSERT INTO projection_threads
+        (thread_id, project_id, title, model_selection_json, created_at, updated_at)
+        VALUES (${threadId}, 'checkpoint-window-project', 'Checkpoint window', '{"provider":"codex","model":"gpt-5"}', ${now}, ${now})`;
+        yield* sql`WITH RECURSIVE entries(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM entries WHERE n < 505)
+        INSERT INTO projection_turns
+        (thread_id, turn_id, state, requested_at, completed_at, checkpoint_turn_count,
+         checkpoint_ref, checkpoint_status, checkpoint_files_json)
+        SELECT ${threadId}, 'checkpoint-turn-' || n, 'completed', ${now}, ${now}, n,
+          'checkpoint-' || n, 'ready', '[{"path":"file.ts","kind":"modified","additions":1,"deletions":0}]'
+        FROM entries`;
+        const detail = Option.getOrThrow(yield* query.getThreadDetailById(threadId));
+        const snapshot = Option.getOrThrow(yield* query.getThreadDetailSnapshotById(threadId));
+        const exported = Option.getOrThrow(yield* query.getThreadDetailForExportById(threadId));
+        const undo = Option.getOrThrow(yield* query.getThreadCheckpointContext(threadId));
+        assert.equal(detail.checkpoints.length, 500);
+        assert.equal(detail.checkpoints[0]?.checkpointTurnCount, 6);
+        assert.equal(detail.checkpoints.at(-1)?.checkpointTurnCount, 505);
+        assert.deepEqual(snapshot.thread.checkpoints, detail.checkpoints);
+        assert.equal(exported.checkpoints.length, 505);
+        assert.equal(undo.checkpoints.length, 505);
+        const older = Option.getOrThrow(
+          yield* query.getThreadCheckpointContext(threadId, {
+            checkpointLimit: 3,
+            beforeCheckpointTurnCount: 6,
+          }),
+        );
+        assert.deepEqual(
+          older.checkpoints.map((checkpoint) => checkpoint.checkpointTurnCount),
+          [3, 4, 5],
+        );
+        const oldest = Option.getOrThrow(
+          yield* query.getThreadCheckpointContext(threadId, {
+            checkpointLimit: 3,
+            beforeCheckpointTurnCount: 3,
+          }),
+        );
+        assert.deepEqual(
+          oldest.checkpoints.map((checkpoint) => checkpoint.checkpointTurnCount),
+          [1, 2],
+        );
+        const diff = Option.getOrThrow(yield* query.getFullThreadDiffContext(threadId, 2));
+        assert.equal(diff.toCheckpointRef, "checkpoint-2");
+      }),
+  );
+
   it.effect("returns a multi-folder project's extra folders from every project read", () =>
     Effect.gen(function* () {
       const query = yield* ProjectionSnapshotQuery;
