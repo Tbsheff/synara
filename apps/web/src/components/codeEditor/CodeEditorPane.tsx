@@ -64,7 +64,7 @@ export function useCodeEditorSessionOptions(input: {
       onHistoryChangeRef.current?.(history);
     };
     return {
-      persistState: input.persistState,
+      ...(input.persistState === undefined ? {} : { persistState: input.persistState }),
       onAttach: (editor: PierreEditor) => {
         editorRef.current = editor;
         onAttachRef.current?.(editor);
