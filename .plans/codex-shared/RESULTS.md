@@ -58,7 +58,7 @@ An independent native protocol probe also started three MCP fixture children for
 - The broad workspace run stopped with SIGTERM when Synara closed. Scripts (255 tests), shared (1,036 tests; one skipped), and plugin SDK (15 tests) passed before shutdown.
 - Web: 512 files passed; four failed and three skipped. Two failed assertions concern snoozed empty threads and done-today inbox entries; two suites fail because their React mock omits `forwardRef`. All four match the supplied warm-pool report and their test files are unchanged from the starting commit.
 - Desktop: 1,423 tests passed; six skipped and one upload test failed. Its complete focused file passed on retry (11 tests). The interrupted server run also reported a checkpoint restore-interruption failure; its focused retry passed. Neither test was changed.
-- Resumed full server suite with `GIT_CONFIG_GLOBAL=/dev/null`: result pending.
+- The resumed full server suite was also interrupted at 23:43 UTC (exit 143). It reported four failures in two unchanged files before shutdown: two simulated-auth cleanup cases in `CodexTextGeneration.test.ts`, and two probe/replay cases in `AcpJsonRpcConnection.test.ts`. No complete server-suite totals are available.
 
 The requested browser command was:
 
@@ -66,6 +66,25 @@ The requested browser command was:
 cd apps/web
 VITEST_BROWSER_API_PORT=51293 ../../node_modules/.bin/vitest run --config vitest.browser.config.ts --root . src/components/chat/MessagesTimeline.warmSession.browser.tsx src/components/chat/useWarmProviderSession.browser.tsx
 ```
+
+## Final two-file comparison
+
+Only the two failing server files were rerun after the final interruption. Runs used separate disposable Synara homes, `GIT_CONFIG_GLOBAL=/dev/null`, the same Bun and locked dependencies, and no inherited `SYNARA_AUTH_TOKEN`. They ran in sequence. The `integrate/all` run used a detached checkout of its pinned commit, without changing the user's active checkout.
+
+| Source | Tested commit | Result | Duration |
+| --- | --- | --- | --- |
+| `synara/share-codex-app-server` | `595edecbc` | Two files passed; 63 tests passed | 21.98 s |
+| `integrate/all` | `a4800758e` | Two files passed; 63 tests passed | 19.42 s |
+
+Both test files, their implementation files, and `bun.lock` are identical between these commits. The four earlier server failures did not reproduce on either branch. These retries establish no reproduced regression; they do not prove the failures' cause or establish that they are pre-existing. The interrupted broad runs remain incomplete and non-green.
+
+The command in each checkout was:
+
+```sh
+env -u SYNARA_AUTH_TOKEN SYNARA_HOME=<isolated-test-home> GIT_CONFIG_GLOBAL=/dev/null bun run --cwd apps/server test src/git/Layers/CodexTextGeneration.test.ts src/provider/acp/AcpJsonRpcConnection.test.ts
+```
+
+Logs: `checks/feature-two-files.log`, `checks/integrate-two-files.log` and `checks/two-file-comparison.json` under `~/synara-builds/codex-shared`.
 
 ## Limits
 
@@ -84,5 +103,6 @@ Raw evidence stays outside the repository in `~/synara-builds/codex-shared`: mod
 | `102e8fec6` | Required server setting in web test fixtures |
 | `9bd84bdc1` | Crash cleanup when a session callback throws |
 | `a85fed3f5` | Native-open validation and fresh account capabilities |
+| `595edecbc` | Saved measurements and live lifecycle proof |
 
 No commits were pushed. No stash was used. Unrelated untracked plans remain untouched.
