@@ -5001,7 +5001,7 @@ describe("thread checkpoint control", () => {
 });
 
 describe("respondToRequest", () => {
-  it("keeps acceptForSession active for later Codex turns", async () => {
+  it("keeps native session grants scoped without changing later turn permissions", async () => {
     const { manager, context, requireSession, writeMessage, emitEvent, sendRequest } =
       createPendingApprovalHarness();
 
@@ -5018,7 +5018,7 @@ describe("respondToRequest", () => {
         decision: "acceptForSession",
       },
     });
-    expect(context.sessionApprovalOverride).toEqual(fullAccessTurnOverrides);
+    expect(context.sessionApprovalOverride).toBeUndefined();
     expect(emitEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         method: "item/requestApproval/decision",
@@ -5039,7 +5039,7 @@ describe("respondToRequest", () => {
 
     expect(sendRequest).toHaveBeenLastCalledWith(context, "turn/start", {
       threadId: "thread_1",
-      ...fullAccessTurnOverrides,
+      ...approvalRequiredTurnOverrides,
       summary: "auto",
       input: [
         {
@@ -5052,9 +5052,8 @@ describe("respondToRequest", () => {
     });
   });
 
-  it("auto-resolves later approval requests during an always-allowed Codex session", async () => {
+  it("keeps unrelated file requests interactive after a command session grant", async () => {
     const { manager, context, writeMessage, emitEvent } = createPendingApprovalHarness();
-
     await manager.respondToRequest(
       asThreadId("thread_1"),
       ApprovalRequestId.makeUnsafe("req-approval-1"),
@@ -5062,45 +5061,16 @@ describe("respondToRequest", () => {
     );
     writeMessage.mockClear();
     emitEvent.mockClear();
-
-    await (
-      manager as unknown as {
-        handleServerRequest: (context: unknown, request: Record<string, unknown>) => Promise<void>;
-      }
-    ).handleServerRequest(context, {
-      jsonrpc: "2.0",
+    await handleServerRequestForTest(manager, context, {
       id: 99,
       method: "item/fileChange/requestApproval",
-      params: {
-        turnId: "turn_2",
-        itemId: "item_file_change",
-        path: "apps/web/src/components/chat/ComposerPendingApprovalActions.tsx",
-      },
+      params: { turnId: "turn_2", itemId: "item_file_change", path: "src/other.ts" },
     });
-
-    expect(context.pendingApprovals.size).toBe(0);
-    expect(writeMessage).toHaveBeenCalledWith(context, {
-      id: 99,
-      result: {
-        decision: "acceptForSession",
-      },
-    });
+    expect(context.pendingApprovals.size).toBe(1);
+    expect(writeMessage).not.toHaveBeenCalled();
     expect(emitEvent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        kind: "notification",
-        method: "item/requestApproval/decision",
-        turnId: "turn_2",
-        itemId: "item_file_change",
-        requestKind: "file-change",
-        payload: expect.objectContaining({
-          requestKind: "file-change",
-          decision: "acceptForSession",
-        }),
-      }),
+      expect.objectContaining({ kind: "request", requestKind: "file-change" }),
     );
-    expect(
-      emitEvent.mock.calls.some(([event]) => (event as { kind?: string }).kind === "request"),
-    ).toBe(false);
   });
 
   it("keeps later permission-profile requests interactive during an always-allowed session", async () => {
@@ -5227,7 +5197,7 @@ describe("respondToRequest", () => {
       ApprovalRequestId.makeUnsafe("req-approval-1"),
       "acceptForSession",
     );
-    expect(context.sessionApprovalOverride).toBeDefined();
+    expect(context.sessionApprovalOverride).toBeUndefined();
 
     await handleServerRequestForTest(manager, context, {
       id: 100,
@@ -6097,13 +6067,8 @@ describe("collab child conversation routing", () => {
     );
   });
 
-  it("preserves the inferred child route when session approvals resolve immediately", async () => {
+  it("preserves the inferred child route when a file approval is accepted for the session", async () => {
     const { manager, context, emitEvent, writeMessage } = createCollabNotificationHarness();
-    context.sessionApprovalOverride = {
-      approvalPolicy: "never",
-      approvalsReviewer: "user",
-      sandboxPolicy: { type: "dangerFullAccess" },
-    };
 
     await handleServerRequestForTest(manager, context, {
       id: 44,
@@ -6116,12 +6081,15 @@ describe("collab child conversation routing", () => {
       },
     });
 
+    expect(context.pendingApprovals.size).toBe(1);
+    const requestId = [...context.pendingApprovals.keys()][0]!;
+    await manager.respondToRequest(asThreadId("thread_parent"), requestId, "acceptForSession");
     expect(context.pendingApprovals.size).toBe(0);
     expect(writeMessage).toHaveBeenCalledWith(context, {
       id: 44,
       result: { decision: "acceptForSession" },
     });
-    expect(emitEvent).toHaveBeenCalledTimes(1);
+    expect(emitEvent).toHaveBeenCalledTimes(2);
     expect(emitEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         kind: "notification",

@@ -50,6 +50,15 @@ is reported for inspection instead of automatically changing the workspace again
 New chats start in **Ask for approval** when no access mode was saved. Synara keeps saved
 thread and draft modes. The composer shows the current mode, including at narrow widths.
 
+**Always allow this session** keeps the thread mode. Codex remembers its native approval
+key. Claude applies only suggested rules for the requested tool, stored for this session.
+Claude hides the session choice when it has no scoped rule to offer. A session grant does
+not approve other pending requests or change the provider permission mode.
+
+Claude file grants use an exact absolute `Read` or `Edit` rule. `Edit` also covers
+Write, MultiEdit, and NotebookEdit, as defined in the
+[Claude permission rules](https://code.claude.com/docs/en/permissions#read-and-edit).
+
 Pi and Antigravity do not offer Synara Plan mode or Ask for approval. Select Full access
 explicitly to use these providers. Changing providers does not grant more access to a saved
 thread or draft. Oh My Pi keeps its existing mode choices.

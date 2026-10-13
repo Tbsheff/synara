@@ -45,7 +45,6 @@ import {
   BROWSER_SCRIPT_BATCH_GUIDANCE,
 } from "@synara/shared/browserAutomationCatalogue";
 import { normalizeModelSlug } from "@synara/shared/model";
-import { approvalSessionGrantWidensSessionPolicy } from "@synara/shared/approvalSessionGrant";
 import {
   JsonRpcStdioRequestRegistry,
   type JsonRpcPendingRequest,
@@ -203,13 +202,6 @@ type CodexTurnSandboxPolicy = {
   /** Extra writable folders of a multi-folder project, besides the session cwd. */
   readonly writableRoots?: ReadonlyArray<string>;
 };
-type CodexSessionApprovalOverride = {
-  readonly approvalPolicy: "never";
-  readonly approvalsReviewer: "user";
-  readonly sandboxPolicy: {
-    readonly type: "dangerFullAccess";
-  };
-};
 
 export class CodexSessionAuthInvalidatedError extends Error {}
 
@@ -235,7 +227,6 @@ interface CodexSessionContext {
   rpcRequests?: JsonRpcStdioRequestRegistry;
   pendingApprovals: Map<ApprovalRequestId, PendingApprovalRequest>;
   pendingUserInputs: Map<ApprovalRequestId, PendingUserInputRequest>;
-  sessionApprovalOverride?: CodexSessionApprovalOverride;
   /** Extra folders of a multi-folder project, granted as workspace-write roots. */
   readonly additionalDirectories?: ReadonlyArray<string>;
   collabReceiverTurns: Map<string, TurnId>;
@@ -855,22 +846,12 @@ function mapCodexRuntimeModeToTurnOverrides(runtimeMode: RuntimeMode): {
   }
 }
 
-const CODEX_ALWAYS_ALLOW_SESSION_TURN_OVERRIDES: CodexSessionApprovalOverride = {
-  approvalPolicy: "never",
-  approvalsReviewer: "user",
-  sandboxPolicy: { type: "dangerFullAccess" },
-};
-
-// Synara re-sends turn-level Codex permission overrides, so keep "always allow"
-// as live session state instead of relying on one native approval reply.
 function resolveCodexTurnOverrides(context: CodexSessionContext): {
   readonly approvalPolicy: CodexApprovalPolicy;
   readonly approvalsReviewer: CodexApprovalsReviewer;
   readonly sandboxPolicy: CodexTurnSandboxPolicy;
 } {
-  const overrides =
-    context.sessionApprovalOverride ??
-    mapCodexRuntimeModeToTurnOverrides(context.session.runtimeMode);
+  const overrides = mapCodexRuntimeModeToTurnOverrides(context.session.runtimeMode);
   // Read-only sessions can already read every folder and full access needs no grant;
   // only workspace-write has to name the extra folders it may edit.
   if (overrides.sandboxPolicy.type !== "workspaceWrite" || !context.additionalDirectories?.length) {
@@ -3023,18 +3004,6 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     });
   }
 
-  private async resolveRemainingSessionApprovalRequests(
-    context: CodexSessionContext,
-  ): Promise<void> {
-    const remainingRequests = Array.from(context.pendingApprovals.values()).filter((request) =>
-      approvalSessionGrantWidensSessionPolicy(request.requestKind),
-    );
-    for (const pendingRequest of remainingRequests) {
-      context.pendingApprovals.delete(pendingRequest.requestId);
-      await this.resolveApprovalRequest(context, pendingRequest, "acceptForSession");
-    }
-  }
-
   async respondToRequest(
     threadId: ThreadId,
     requestId: ApprovalRequestId,
@@ -3059,23 +3028,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     }
     context.pendingApprovals.delete(requestId);
     const isPermissionRequest = isPermissionApprovalRequest(pendingRequest);
-    // The session override widens every later approval — commands and file
-    // changes included — so only a command/file-change prompt may set it. A
-    // tool call keeps its own, properly scoped channel: `acceptForSession` on
-    // an MCP tool request rides back as `_meta.persist: "session"`, which is
-    // the persistence Codex itself advertised, not a blanket grant.
-    const overridesSessionPolicy =
-      decision === "acceptForSession" &&
-      approvalSessionGrantWidensSessionPolicy(pendingRequest.requestKind);
-    if (overridesSessionPolicy) {
-      context.sessionApprovalOverride = CODEX_ALWAYS_ALLOW_SESSION_TURN_OVERRIDES;
-    }
     await this.resolveApprovalRequest(context, pendingRequest, decision, approvalRule);
     if (decision === "cancel" && (isPermissionRequest || pendingRequest.requestKind === "tool")) {
       await this.interruptTurn(threadId, pendingRequest.turnId, pendingRequest.providerThreadId);
-    }
-    if (overridesSessionPolicy) {
-      await this.resolveRemainingSessionApprovalRequests(context);
     }
   }
 
@@ -3252,7 +3207,6 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       context.gatewayCredentialRenewable !== true ||
       context.gatewayRenewalInProgress ||
       context.session.activeTurnId !== undefined ||
-      context.sessionApprovalOverride ||
       this.hasPendingHumanRequests(context) ||
       !this.isContextInitializedAndRoutable(context)
     )
@@ -5009,16 +4963,6 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
           ? { mcpSessionPersistenceAdvertised: mcpSessionPersistenceAdvertised === true }
           : {}),
       };
-      // A session grant answers the command/file-change prompts it came from.
-      // Tool calls are gated on their own channel (see respondToRequest), so
-      // they neither set the override nor get swept up by it.
-      if (
-        context.sessionApprovalOverride &&
-        approvalSessionGrantWidensSessionPolicy(pendingRequest.requestKind)
-      ) {
-        await this.resolveApprovalRequest(context, pendingRequest, "acceptForSession");
-        return;
-      }
       context.pendingApprovals.set(requestId, pendingRequest);
     }
 

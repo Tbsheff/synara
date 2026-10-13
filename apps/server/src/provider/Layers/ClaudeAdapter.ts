@@ -89,8 +89,6 @@ import {
 } from "@synara/shared/model";
 import { buildClaudeSubagentPrompt } from "@synara/shared/agentMentions";
 import { assessClaudeCache } from "@synara/shared/claudeCache";
-import { approvalSessionGrantWidensSessionPolicy } from "@synara/shared/approvalSessionGrant";
-import { approvalRequestKindFromRequestType } from "@synara/shared/threadSummary";
 import { nonEmptyTrimmed } from "@synara/shared/text";
 import {
   claudeCacheContextTokens,
@@ -427,7 +425,6 @@ interface ClaudeSessionContext {
   // Supervised-mode "Always allow this session": later canUseTool prompts
   // auto-allow for this live session only. Auto must keep routing every SDK
   // "ask" outcome through its reviewer/user boundary.
-  approvalsAlwaysAllowedForSession: boolean;
   readonly pendingUserInputs: Map<ApprovalRequestId, PendingUserInput>;
   readonly recentTurnIds: Array<TurnId>;
   settledTurnCount: number;
@@ -1382,9 +1379,6 @@ function isReadOnlyToolName(toolName: string): boolean {
 }
 
 function classifyRequestType(toolName: string): CanonicalRequestType {
-  // MCP tools are always generic tool approvals, whatever their names contain
-  // ("search", "create_file", "run_command"): a command or file kind would let
-  // "Always allow this session" on one MCP tool widen the whole session.
   if (toolName.startsWith("mcp__")) {
     return "tool_approval";
   }
@@ -1642,6 +1636,85 @@ const claimTurnBlockKey = (context: ClaudeSessionContext, key: string): boolean 
   turn.emittedBlockKeys.add(key);
   return true;
 };
+
+export function claudePermissionFileRuleContent(absolutePath: string): string {
+  const normalizedPath = /^[a-z]:[\\/]/i.test(absolutePath)
+    ? absolutePath
+        .replaceAll("\\", "/")
+        .replace(/^([a-z]):/i, (_path, drive: string) => `/${drive.toLowerCase()}`)
+    : absolutePath;
+  return `/${normalizedPath.replace(/[\\*?[\]]/g, "\\$&")}`;
+}
+
+function scopedClaudeSessionPermissionUpdates(
+  toolName: string,
+  toolInput: Record<string, unknown>,
+  cwd: string,
+  suggestions: ReadonlyArray<PermissionUpdate>,
+): ReadonlyArray<PermissionUpdate> {
+  const fileTool = ["Read", "Edit", "Write", "MultiEdit", "NotebookEdit"].includes(toolName);
+  const permissionToolName = fileTool && toolName !== "Read" ? "Edit" : toolName;
+  const filePath = toolInput.file_path ?? toolInput.notebook_path;
+  const absoluteFilePath =
+    typeof filePath === "string" && filePath.trim() !== ""
+      ? nodePath.resolve(cwd, filePath)
+      : undefined;
+  const fileRuleContent =
+    absoluteFilePath !== undefined && !absoluteFilePath.startsWith("\\\\")
+      ? claudePermissionFileRuleContent(absoluteFilePath)
+      : undefined;
+  return suggestions.flatMap((suggestion): PermissionUpdate[] => {
+    if (suggestion.type !== "addRules" || suggestion.behavior !== "allow") return [];
+    const rules = suggestion.rules
+      .filter((rule) => {
+        if (rule.toolName !== permissionToolName) return false;
+        if (toolName.startsWith("mcp__")) return true;
+        const content = rule.ruleContent?.trim();
+        if (!content) return false;
+        if (toolName === "Bash") {
+          const prefix = content.replace(/(?::\*| \*)$/, "");
+          const command = toolInput.command;
+          return (
+            prefix.length > 0 &&
+            !/[?*[\]]/.test(prefix) &&
+            typeof command === "string" &&
+            (command === prefix || command.startsWith(`${prefix} `))
+          );
+        }
+        if (fileTool) {
+          if (fileRuleContent === undefined || /[?*[\]]/.test(content) || content.startsWith("~/"))
+            return false;
+          const ruleContent = content.startsWith("//")
+            ? content
+            : claudePermissionFileRuleContent(nodePath.resolve(cwd, content.replace(/^\//, "")));
+          return ruleContent === fileRuleContent;
+        }
+        if (
+          toolName === "WebFetch" &&
+          content.startsWith("domain:") &&
+          typeof toolInput.url === "string"
+        ) {
+          try {
+            return (
+              content.slice("domain:".length).toLowerCase() ===
+              new URL(toolInput.url).hostname.toLowerCase()
+            );
+          } catch {
+            return false;
+          }
+        }
+        return false;
+      })
+      .map((rule) => {
+        if (!fileTool || fileRuleContent === undefined) return rule;
+        return {
+          toolName: permissionToolName,
+          ruleContent: fileRuleContent,
+        };
+      });
+    return rules.length > 0 ? [{ ...suggestion, rules, destination: "session" }] : [];
+  });
+}
 
 function claudePermissionPromptFields(options: {
   readonly title?: string | undefined;
@@ -4124,7 +4197,6 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           currentApiModelId: undefined,
           resumeSessionId: undefined,
           pendingApprovals: new Map(),
-          approvalsAlwaysAllowedForSession: false,
           pendingUserInputs: new Map(),
           recentTurnIds: [],
           settledTurnCount: 0,
@@ -7126,7 +7198,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
                   updatedInput: toolInput,
                 } satisfies PermissionResult;
               }
-              if (runtimeMode === "full-access" || context.approvalsAlwaysAllowedForSession) {
+              if (runtimeMode === "full-access") {
                 return {
                   behavior: "allow",
                   updatedInput: toolInput,
@@ -7148,6 +7220,12 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               );
               const decisionDeferred = yield* Deferred.make<ProviderApprovalDecision>();
               const settledDeferred = yield* Deferred.make<ProviderApprovalDecision>();
+              const sessionPermissionUpdates = scopedClaudeSessionPermissionUpdates(
+                toolName,
+                toolInput,
+                context.session.cwd ?? serverConfig.cwd,
+                callbackOptions.suggestions ?? [],
+              );
               const pendingApproval: PendingApproval = {
                 requestType,
                 detail,
@@ -7159,8 +7237,8 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
                   ? { agentId: callbackOptions.agentID }
                   : {}),
                 settlementStarted: false,
-                ...(callbackOptions.suggestions && callbackOptions.suggestions.length > 0
-                  ? { suggestions: callbackOptions.suggestions }
+                ...(sessionPermissionUpdates.length > 0
+                  ? { suggestions: sessionPermissionUpdates }
                   : {}),
               };
 
@@ -7181,9 +7259,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
                   args: {
                     toolName,
                     input: toolInput,
-                    sessionApprovalAvailable:
-                      callbackOptions.suggestions !== undefined &&
-                      callbackOptions.suggestions.length > 0,
+                    sessionApprovalAvailable: sessionPermissionUpdates.length > 0,
                     ...(callbackOptions.toolUseID ? { toolUseId: callbackOptions.toolUseID } : {}),
                     ...claudePermissionPromptFields(callbackOptions),
                   },
@@ -7228,33 +7304,13 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               );
 
               if (decision === "accept" || decision === "acceptForSession") {
-                // Only command and file prompts widen the whole session. A tool
-                // grant stays scoped to that tool through the SDK's permission
-                // suggestions below, so the next Bash or Edit still prompts.
-                const requestKind = approvalRequestKindFromRequestType(requestType);
-                if (
-                  decision === "acceptForSession" &&
-                  runtimeMode !== "auto" &&
-                  requestKind !== null &&
-                  approvalSessionGrantWidensSessionPolicy(requestKind)
-                ) {
-                  // The SDK's permission suggestions only cover some requests;
-                  // supervised mode preserves its live "always allow" fallback.
-                  // Auto stays reviewer-gated and applies only SDK-provided
-                  // permission suggestions below.
-                  context.approvalsAlwaysAllowedForSession = true;
-                }
                 const sessionPermissionUpdates =
-                  decision === "acceptForSession"
-                    ? (pendingApproval.suggestions ?? []).filter(
-                        (suggestion) => suggestion.type !== "setMode",
-                      )
-                    : [];
+                  decision === "acceptForSession" ? (pendingApproval.suggestions ?? []) : [];
                 return {
                   behavior: "allow",
                   updatedInput: toolInput,
                   ...(sessionPermissionUpdates.length > 0
-                    ? { updatedPermissions: sessionPermissionUpdates }
+                    ? { updatedPermissions: [...sessionPermissionUpdates] }
                     : {}),
                 } satisfies PermissionResult;
               }
@@ -7563,7 +7619,6 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             // A generated id is only a launch option until Claude emits conversation output.
             resumeSessionId: existingResumeSessionId,
             pendingApprovals,
-            approvalsAlwaysAllowedForSession: false,
             pendingUserInputs,
             recentTurnIds: [],
             settledTurnCount: resumeState?.turnCount ?? 0,

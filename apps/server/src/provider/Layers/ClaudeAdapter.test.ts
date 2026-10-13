@@ -55,6 +55,7 @@ import {
 import { ClaudeAdapter, type ClaudeAdapterShape } from "../Services/ClaudeAdapter.ts";
 import {
   buildEmbeddedClaudeSystemPromptAppend,
+  claudePermissionFileRuleContent,
   claudeHomeEnvironment,
   claudeHookMatcher,
   makeClaudeAdapterLive as makeClaudeAdapterLiveBase,
@@ -74,6 +75,15 @@ function makeClaudeAdapterLive(options?: ClaudeAdapterLiveOptions) {
     ...options,
   });
 }
+
+it.each([
+  ["/repo/src/index.ts", "//repo/src/index.ts"],
+  ["C:\\repo\\src\\index.ts", "//c/repo/src/index.ts"],
+  ["D:/repo/src/index.ts", "//d/repo/src/index.ts"],
+  ["/repo/[draft]*?.ts", "//repo/\\[draft\\]\\*\\?.ts"],
+])("encodes the exact Claude file scope for %s", (filePath, ruleContent) => {
+  assert.equal(claudePermissionFileRuleContent(filePath), ruleContent);
+});
 
 class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
   private readonly queue: Array<SDKMessage> = [];
@@ -7875,9 +7885,10 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         Effect.forkChild,
       );
 
-      const directoryGrant: PermissionUpdate = {
-        type: "addDirectories",
-        directories: ["/tmp/claude-adapter-test/notes"],
+      const fileGrant: PermissionUpdate = {
+        type: "addRules",
+        rules: [{ toolName: "Edit", ruleContent: "//tmp/claude-adapter-test/notes/plan.md" }],
+        behavior: "allow",
         destination: "session",
       };
       const permission = harness.getLastCreateQueryInput()!.options.canUseTool!(
@@ -7887,7 +7898,23 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
           signal: new AbortController().signal,
           suggestions: [
             { type: "setMode", mode: "acceptEdits", destination: "session" },
-            directoryGrant,
+            fileGrant,
+            {
+              type: "addRules",
+              rules: [
+                { toolName: "Write", ruleContent: "**" },
+                { toolName: "Write", ruleContent: "/tmp/claude-adapter-test/notes/**" },
+                { toolName: "Write", ruleContent: "/tmp/claude-adapter-test/other.md" },
+                { toolName: "Bash", ruleContent: "*" },
+              ],
+              behavior: "allow",
+              destination: "userSettings",
+            },
+            {
+              type: "addDirectories",
+              directories: ["/tmp/claude-adapter-test/notes"],
+              destination: "session",
+            },
           ],
           toolUseID: "tool-use-write",
           requestId: "request-tool-use-write",
@@ -7906,12 +7933,121 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         readonly updatedPermissions?: unknown;
       };
       assert.equal(result.behavior, "allow");
-      assert.deepEqual(result.updatedPermissions, [directoryGrant]);
+      assert.deepEqual(result.updatedPermissions, [fileGrant]);
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
     );
   });
+
+  it.effect.each([
+    {
+      toolName: "Bash",
+      ruleToolName: "Bash",
+      input: { command: "git status --short" },
+      allowed: "git status:*",
+      expected: "git status:*",
+      rejected: ["*", "**", "rm:*", ""],
+    },
+    {
+      toolName: "WebFetch",
+      ruleToolName: "WebFetch",
+      input: { url: "https://example.com/page" },
+      allowed: "domain:example.com",
+      expected: "domain:example.com",
+      rejected: ["domain:*", "domain:other.com", ""],
+    },
+    {
+      toolName: "Edit",
+      ruleToolName: "Edit",
+      input: { file_path: "src/index.ts", old_string: "old", new_string: "new" },
+      allowed: "src/index.ts",
+      expected: "//tmp/claude-adapter-test/src/index.ts",
+      rejected: ["src/**", "src/other.ts", "*"],
+    },
+    {
+      toolName: "Write",
+      ruleToolName: "Edit",
+      input: { file_path: "/tmp/claude-adapter-test/notes/plan.md", content: "plan" },
+      allowed: "//tmp/claude-adapter-test/notes/plan.md",
+      expected: "//tmp/claude-adapter-test/notes/plan.md",
+      rejected: ["/tmp/claude-adapter-test/notes/plan.md", "//tmp/other.md", "//*"],
+    },
+    {
+      toolName: "Edit",
+      ruleToolName: "Edit",
+      input: { file_path: "src/index.ts", old_string: "old", new_string: "new" },
+      allowed: "/src/index.ts",
+      expected: "//tmp/claude-adapter-test/src/index.ts",
+      rejected: ["/src/**", "//src/index.ts"],
+    },
+    {
+      toolName: "Read",
+      ruleToolName: "Read",
+      input: { file_path: "file.txt" },
+      allowed: "file.txt",
+      expected: "//tmp/claude-adapter-test/file.txt",
+      rejected: ["*", "other.txt"],
+    },
+  ])(
+    "grants only the requested $toolName scope for this session",
+    ({ toolName, ruleToolName, input, allowed, expected, rejected }) => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        const session = yield* adapter.startSession({
+          threadId: THREAD_ID,
+          provider: "claudeAgent",
+          runtimeMode: "approval-required",
+        });
+        yield* Stream.take(adapter.streamEvents, 3).pipe(Stream.runDrain);
+        const permission = harness.getLastCreateQueryInput()!.options.canUseTool!(toolName, input, {
+          signal: new AbortController().signal,
+          suggestions: [
+            {
+              type: "addRules",
+              behavior: "allow",
+              destination: "userSettings",
+              rules: [allowed, ...rejected].map((ruleContent) => ({
+                toolName: ruleToolName,
+                ruleContent,
+              })),
+            },
+          ],
+          toolUseID: "scoped-tool",
+          requestId: "scoped-request",
+        });
+        const opened = yield* Stream.runHead(adapter.streamEvents);
+        if (opened._tag !== "Some" || opened.value.type !== "request.opened")
+          return assert.fail("Expected an approval request.");
+        assert.equal(
+          (opened.value.payload.args as Record<string, unknown>).sessionApprovalAvailable,
+          true,
+        );
+        yield* adapter.respondToRequest(
+          session.threadId,
+          ApprovalRequestId.makeUnsafe(String(opened.value.requestId)),
+          "acceptForSession",
+        );
+        yield* Stream.runHead(adapter.streamEvents);
+        const result = (yield* Effect.promise(() => permission)) as PermissionResult & {
+          readonly updatedPermissions?: unknown;
+        };
+        assert.deepEqual(result.updatedPermissions, [
+          {
+            type: "addRules",
+            behavior: "allow",
+            destination: "session",
+            rules: [{ toolName: ruleToolName, ruleContent: expected }],
+          },
+        ]);
+        assert.equal(harness.query.setPermissionModeCalls.includes("bypassPermissions"), false);
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    },
+  );
 
   it.effect("keeps Auto reviewer-gated after accepting one request for the session", () => {
     const harness = makeHarness();
@@ -7991,7 +8127,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
       assert.deepEqual(requested.value.payload.args, {
         toolName: "Bash",
         input: { command: "pwd" },
-        sessionApprovalAvailable: true,
+        sessionApprovalAvailable: false,
         toolUseId: "tool-use-1",
       });
       const runtimeRequestId = requested.value.requestId;
@@ -8159,7 +8295,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     },
   );
 
-  it.effect("always allows later requests after a command is allowed for the session", () => {
+  it.effect("keeps unrelated edits supervised after allowing a command for the session", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
@@ -8202,18 +8338,29 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
       const firstPermissionResult = yield* Effect.promise(() => firstPermissionPromise);
       assert.equal((firstPermissionResult as PermissionResult).behavior, "allow");
 
-      const secondPermissionResult = yield* Effect.promise(() =>
-        canUseTool(
-          "Edit",
-          { file_path: "src/index.ts", old_string: "a", new_string: "b" },
-          {
-            signal: new AbortController().signal,
-            toolUseID: "tool-use-edit-1",
-            requestId: "request-tool-use-edit-1",
-          },
-        ),
+      const secondPermissionPromise = canUseTool(
+        "Edit",
+        { file_path: "src/index.ts", old_string: "a", new_string: "b" },
+        {
+          signal: new AbortController().signal,
+          toolUseID: "tool-use-edit-1",
+          requestId: "request-tool-use-edit-1",
+        },
       );
-      assert.equal((secondPermissionResult as PermissionResult).behavior, "allow");
+      const secondRequested = yield* Stream.runHead(adapter.streamEvents).pipe(
+        Effect.timeout("500 millis"),
+      );
+      assert.equal(secondRequested._tag, "Some");
+      if (secondRequested._tag !== "Some" || secondRequested.value.type !== "request.opened")
+        return;
+      assert.equal(secondRequested.value.payload.requestType, "file_change_approval");
+      yield* adapter.respondToRequest(
+        session.threadId,
+        ApprovalRequestId.makeUnsafe(String(secondRequested.value.requestId)),
+        "decline",
+      );
+      const secondPermissionResult = yield* Effect.promise(() => secondPermissionPromise);
+      assert.equal((secondPermissionResult as PermissionResult).behavior, "deny");
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
