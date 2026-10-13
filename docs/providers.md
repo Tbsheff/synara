@@ -59,6 +59,11 @@ Claude file grants use an exact absolute `Read` or `Edit` rule. `Edit` also cove
 Write, MultiEdit, and NotebookEdit, as defined in the
 [Claude permission rules](https://code.claude.com/docs/en/permissions#read-and-edit).
 
+Codex **Ask for approval** uses `workspace-write`, `on-request`, and the user as reviewer
+on thread start, resume, fork, and each turn. Workspace work can proceed within the sandbox;
+actions outside its boundary can ask for approval. This follows the
+[Codex sandbox and approval guide](https://learn.chatgpt.com/docs/agent-approvals-security#defaults-and-recommendations).
+
 Pi and Antigravity do not offer Synara Plan mode or Ask for approval. Select Full access
 explicitly to use these providers. Changing providers does not grant more access to a saved
 thread or draft. Oh My Pi keeps its existing mode choices.

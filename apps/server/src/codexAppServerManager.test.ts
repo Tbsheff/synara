@@ -450,9 +450,9 @@ it.each([
   },
 );
 const approvalRequiredTurnOverrides = {
-  approvalPolicy: "untrusted",
+  approvalPolicy: "on-request",
   approvalsReviewer: "user",
-  sandboxPolicy: { type: "readOnly" },
+  sandboxPolicy: { type: "workspaceWrite" },
 } as const;
 const autoTurnOverrides = {
   approvalPolicy: "on-request",
@@ -2251,6 +2251,46 @@ describe("resolveCodexModelForAccount", () => {
 });
 
 describe("startSession", () => {
+  it.each([false, true])(
+    "uses workspace-write and on-request for supervised thread open (resume=%s) and turns",
+    async (resume) => {
+      const fake = createSyntheticCodexAppServer();
+      const { manager } = createSyntheticCodexManager(fake);
+      const cwd = mkdtempSync(path.join(os.tmpdir(), "synara-codex-supervised-"));
+      try {
+        const session = await manager.startSession({
+          threadId: asThreadId("thread-supervised"),
+          provider: "codex",
+          runtimeMode: "approval-required",
+          cwd,
+          ...(resume
+            ? {
+                resumeCursor: { threadId: "provider-thread" },
+                expectedCodexContinuationGeneration: SYNTHETIC_CONTINUATION_GENERATION,
+              }
+            : {}),
+          agentGatewayCapabilityInput: AGENT_GATEWAY_NO_CAPABILITIES,
+        });
+        expect(
+          fake.requests.find(
+            (request) => request.method === (resume ? "thread/resume" : "thread/start"),
+          )?.params,
+        ).toMatchObject({
+          approvalPolicy: "on-request",
+          approvalsReviewer: "user",
+          sandbox: "workspace-write",
+        });
+        await manager.sendTurn({ threadId: session.threadId, input: "Edit a workspace file" });
+        expect(
+          fake.requests.find((request) => request.method === "turn/start")?.params,
+        ).toMatchObject(approvalRequiredTurnOverrides);
+      } finally {
+        await manager.stopAll();
+        rmSync(cwd, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("resumes a synthetic large-history thread across restart without replay or payload exposure", async () => {
     const fake = createSyntheticCodexAppServer();
     const cwd = mkdtempSync(path.join(os.tmpdir(), "synara-codex-large-resume-"));

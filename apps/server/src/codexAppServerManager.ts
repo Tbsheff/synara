@@ -720,9 +720,9 @@ function mapCodexRuntimeMode(runtimeMode: RuntimeMode): {
   switch (runtimeMode) {
     case "approval-required":
       return {
-        approvalPolicy: "untrusted",
+        approvalPolicy: "on-request",
         approvalsReviewer: "user",
-        sandbox: "read-only",
+        sandbox: "workspace-write",
       };
     case "auto":
       return {
@@ -826,9 +826,9 @@ function mapCodexRuntimeModeToTurnOverrides(runtimeMode: RuntimeMode): {
   switch (runtimeMode) {
     case "approval-required":
       return {
-        approvalPolicy: "untrusted",
+        approvalPolicy: "on-request",
         approvalsReviewer: "user",
-        sandboxPolicy: { type: "readOnly" },
+        sandboxPolicy: { type: "workspaceWrite" },
       };
     case "auto":
       return {
@@ -1591,7 +1591,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         model: normalizedModel ?? null,
         ...(input.serviceTier !== undefined ? { serviceTier: input.serviceTier } : {}),
         cwd: resolvedCwd,
-        ...mapCodexRuntimeMode(input.runtimeMode ?? "full-access"),
+        ...mapCodexRuntimeMode(input.runtimeMode),
       };
 
       const threadOpenRequest = buildCodexThreadOpenRequest({
