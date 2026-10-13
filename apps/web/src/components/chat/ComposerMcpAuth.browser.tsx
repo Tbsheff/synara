@@ -19,11 +19,11 @@ const initial: ProviderMcpAuthState = {
   sessionKey: "attempt-1",
   servers: [{ name: "linear", status: "needs-auth", action: { type: "oauth" } }],
 };
-async function mount() {
+async function mount(provider: "codex" | "claudeAgent" = "codex") {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const screen = await render(
     <QueryClientProvider client={client}>
-      <ComposerMcpAuth threadId={threadId} provider="codex" enabled />
+      <ComposerMcpAuth threadId={threadId} provider={provider} enabled />
     </QueryClientProvider>,
   );
   return { screen, client };
@@ -145,6 +145,9 @@ describe("MCP sign-in near the composer", () => {
   });
 
   it("shows Claude's exact manual command and Re-check without launching a browser", async () => {
+    const command =
+      "cd '/tmp/MCP check' && CLAUDE_CONFIG_DIR='/tmp/provider home' '/opt/Claude CLI'";
+    const writeText = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue();
     api.getMcpAuth.mockResolvedValue({
       sessionKey: "claude-attempt",
       servers: [
@@ -153,17 +156,18 @@ describe("MCP sign-in near the composer", () => {
           status: "needs-auth",
           action: {
             type: "manual",
-            command: "claude",
+            command,
             instructions: "Enter /mcp, select linear, then Authenticate.",
           },
         },
       ],
     });
-    const { screen, client } = await mount();
+    const { screen, client } = await mount("claudeAgent");
     try {
       await page.getByRole("button", { name: "1 MCP server needs sign-in" }).click();
-      await page.getByRole("button", { name: "Authenticate linear" }).click();
-      await expect.element(page.getByText("claude", { exact: true })).toBeVisible();
+      await expect.element(page.getByText(command, { exact: true })).toBeVisible();
+      await page.getByRole("button", { name: "Copy command for linear" }).click();
+      expect(writeText).toHaveBeenCalledExactlyOnceWith(command);
       await expect
         .element(page.getByText("Enter /mcp, select linear, then Authenticate."))
         .toBeVisible();
@@ -174,6 +178,7 @@ describe("MCP sign-in near the composer", () => {
     } finally {
       await screen.unmount();
       client.clear();
+      writeText.mockRestore();
     }
   });
 });

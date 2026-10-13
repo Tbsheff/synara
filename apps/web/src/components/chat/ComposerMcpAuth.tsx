@@ -2,6 +2,7 @@ import type { ProviderKind, ProviderMcpAuthState, ThreadId } from "@synara/contr
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState } from "react";
 import { ensureNativeApi } from "~/nativeApi";
+import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { Button } from "../ui/button";
 import { Popover, PopoverPopup, PopoverTitle, PopoverTrigger } from "../ui/popover";
 
@@ -61,15 +62,16 @@ function McpAuthList({
   const [busy, setBusy] = useState<string | null>(null);
   const busyRef = useRef(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
-  const [manualServer, setManualServer] = useState<string | null>(null);
+  const [copiedServer, setCopiedServer] = useState<string | null>(null);
+  const { copyToClipboard, isCopied } = useCopyToClipboard<string>({
+    onCopy: setCopiedServer,
+    onError: (error, name) => setErrors((current) => ({ ...current, [name]: error.message })),
+  });
   const [authorizationUrls, setAuthorizationUrls] = useState<Record<string, string>>({});
   const [refreshError, setRefreshError] = useState<string | undefined>();
   const count = state.servers.length;
   const signIn = async (server: ProviderMcpAuthState["servers"][number]) => {
-    if (server.action.type === "manual") {
-      setManualServer(server.name);
-      return;
-    }
+    if (server.action.type === "manual") return;
     if (busyRef.current || !state.sessionKey) return;
     busyRef.current = true;
     setBusy(server.name);
@@ -88,12 +90,6 @@ function McpAuthList({
         }));
         await ensureNativeApi().shell.openExternal(result.authorizationUrl);
       }
-      if (
-        result.state.servers.some(
-          (entry) => entry.name === server.name && entry.action.type === "manual",
-        )
-      )
-        setManualServer(server.name);
     } catch (error) {
       setErrors((current) => ({
         ...current,
@@ -126,21 +122,36 @@ function McpAuthList({
               <li key={server.name} className="space-y-2 text-ui-sm">
                 <div className="flex items-center justify-between gap-3">
                   <span className="min-w-0 break-words">{server.name}</span>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    aria-label={`Authenticate ${server.name}`}
-                    disabled={
-                      busy !== null ||
-                      state.servers.some((entry) => entry.status === "authenticating")
-                    }
-                    onClick={() => void signIn(server)}
-                  >
-                    {busy === server.name || server.status === "authenticating"
-                      ? "Signing in…"
-                      : "Authenticate"}
-                  </Button>
+                  {server.action.type === "manual" ? (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      aria-label={`Copy command for ${server.name}`}
+                      onClick={() => {
+                        if (server.action.type === "manual")
+                          copyToClipboard(server.action.command, server.name);
+                      }}
+                    >
+                      {isCopied && copiedServer === server.name ? "Copied" : "Copy"}
+                    </Button>
+                  ) : (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      aria-label={`Authenticate ${server.name}`}
+                      disabled={
+                        busy !== null ||
+                        state.servers.some((entry) => entry.status === "authenticating")
+                      }
+                      onClick={() => void signIn(server)}
+                    >
+                      {busy === server.name || server.status === "authenticating"
+                        ? "Signing in…"
+                        : "Authenticate"}
+                    </Button>
+                  )}
                 </div>
                 {(errors[server.name] || server.error) && (
                   <p role="alert" className="break-words text-ui-sm text-destructive">
@@ -178,7 +189,7 @@ function McpAuthList({
                     )}
                   </div>
                 )}
-                {manualServer === server.name && server.action.type === "manual" && (
+                {server.action.type === "manual" && (
                   <div className="space-y-2 text-ui-xs text-muted-foreground">
                     <p>{server.action.instructions}</p>
                     <code className="block whitespace-pre-wrap break-all [font-family:inherit] rounded-md bg-muted p-2 text-ui-xs">
