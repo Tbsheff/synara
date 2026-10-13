@@ -1,7 +1,12 @@
 import {
+  TRANSCRIPT_FILE_DIFF_MAX_CHARS,
   TRANSCRIPT_OUTPUT_TAIL_MAX_CHARS,
   TRANSCRIPT_TOOL_ARGUMENTS_MAX_CHARS,
 } from "@synara/contracts";
+import * as NodeServices from "@effect/platform-node/NodeServices";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { Effect, FileSystem, PlatformError } from "effect";
 import { describe, expect, it } from "vitest";
 
@@ -12,6 +17,7 @@ import {
   CLAUDE_TURN_IMAGE_MAX_BYTES,
   CLAUDE_TURN_IMAGE_MAX_COUNT,
   buildClaudeServerToolResultDetails,
+  buildClaudeProposedFileChanges,
   buildClaudeToolResultDetails,
   buildClaudeToolStartDetails,
   capHead,
@@ -39,6 +45,118 @@ const bash: ClaudeToolIdentity = {
   itemType: "command_execution",
   input: { command: "npm test", description: "Run tests", run_in_background: false },
 };
+
+describe("buildClaudeProposedFileChanges", () => {
+  async function preview(original: string, toolName: string, input: Record<string, unknown>) {
+    const directory = mkdtempSync(path.join(os.tmpdir(), "synara-proposed-diff-"));
+    writeFileSync(path.join(directory, "file.txt"), original);
+    try {
+      return await Effect.runPromise(
+        Effect.gen(function* () {
+          const fileSystem = yield* FileSystem.FileSystem;
+          return yield* buildClaudeProposedFileChanges(
+            fileSystem,
+            toolName,
+            { file_path: "file.txt", notebook_path: "file.txt", ...input },
+            directory,
+          );
+        }).pipe(Effect.provide(NodeServices.layer)),
+      );
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  }
+
+  it("previews every replace_all match and sequential MultiEdit changes", async () => {
+    const details = await preview("old\nold\n", "MultiEdit", {
+      edits: [
+        { old_string: "old", new_string: "step", replace_all: true },
+        { old_string: "step", new_string: "done", replace_all: true },
+      ],
+    });
+    expect(details?.changes[0]).toMatchObject({ additions: 2, deletions: 2 });
+    expect(details?.changes[0]?.unifiedDiff).toContain("-old\n-old\n+done\n+done");
+  });
+
+  it("shows a newline-only change without inventing unchanged edits", async () => {
+    const details = await preview("same", "Write", { content: "same\n" });
+    expect(details?.changes[0]?.unifiedDiff).toContain(
+      "-same\n\\ No newline at end of file\n+same",
+    );
+  });
+
+  it("keeps changed lines visible after a long unchanged prefix", async () => {
+    const details = await preview("same\n".repeat(100) + "old\n", "Edit", {
+      old_string: "old",
+      new_string: "new",
+    });
+    expect(details?.changes[0]?.unifiedDiff).toContain("@@ -98,4 +98,4 @@");
+    expect(details?.changes[0]?.unifiedDiff).toContain("-old\n+new");
+    expect(details?.changes[0]?.additions).toBe(1);
+  });
+
+  it("marks ambiguous matches and oversized files as unavailable previews", async () => {
+    for (const original of ["old\nold\n", "old" + "x".repeat(1024 * 1024)]) {
+      const details = await preview(original, "Edit", { old_string: "old", new_string: "new" });
+      expect(details?.changes[0]).toEqual({
+        path: "file.txt",
+        kind: "update",
+        diffTruncated: true,
+      });
+    }
+  });
+
+  it("caps proposed content without splitting an emoji", async () => {
+    const details = await preview("old\n", "Write", {
+      content: "😀".repeat(TRANSCRIPT_FILE_DIFF_MAX_CHARS),
+    });
+    const change = details?.changes[0];
+    expect(change?.diffTruncated).toBe(true);
+    expect(change?.unifiedDiff?.length).toBeLessThanOrEqual(TRANSCRIPT_FILE_DIFF_MAX_CHARS);
+    expect(isWellFormed(change?.unifiedDiff)).toBe(true);
+  });
+
+  it("shows a partial notebook cell preview", async () => {
+    const details = await preview(
+      JSON.stringify({ cells: [{ id: "cell-1", source: ["old\n"] }] }),
+      "NotebookEdit",
+      { cell_id: "cell-1", new_source: "new\n" },
+    );
+    expect(details?.changes[0]?.unifiedDiff).toContain("-old\n+new");
+    expect(details?.changes[0]?.diffTruncated).toBe(true);
+  });
+
+  it("keeps unreadable files from blocking approval and omits non-edit previews", () => {
+    const fileSystem = FileSystem.makeNoop({
+      stat: () =>
+        Effect.fail(
+          PlatformError.systemError({
+            _tag: "PermissionDenied",
+            module: "FileSystem",
+            method: "stat",
+          }),
+        ),
+    });
+    expect(
+      run(
+        buildClaudeProposedFileChanges(
+          fileSystem,
+          "Write",
+          { file_path: "file.txt", content: "new" },
+          "/tmp",
+        ),
+      ),
+    ).toEqual({
+      changes: [{ path: "file.txt", kind: "update", diffTruncated: true }],
+      totalFiles: 1,
+    });
+    expect(
+      run(
+        buildClaudeProposedFileChanges(fileSystem, "Bash", { command: "touch file.txt" }, "/tmp"),
+      ),
+    ).toBeUndefined();
+  });
+});
 
 describe("buildClaudeToolStartDetails", () => {
   it("sends Bash command details at start", () => {

@@ -79,7 +79,9 @@ export const SynaraCreateThreadSpec = Schema.Struct({
   // MCP catalog no longer advertises branch-backed worktree creation.
   baseBranch: Schema.optional(Schema.String.check(Schema.isNonEmpty())),
   branchName: Schema.optional(Schema.String.check(Schema.isNonEmpty())),
-  runtimeMode: Schema.optional(Schema.Literals(["approval-required", "full-access"])),
+  runtimeMode: Schema.optional(
+    Schema.Literals(["approval-required", "accept-edits", "full-access"]),
+  ),
   // External integrations need the "computer:control" scope; provider sessions
   // cannot delegate computer control to created threads.
   enableComputerControl: Schema.optional(Schema.Boolean),
@@ -155,7 +157,7 @@ export const SynaraCreatedThreadResult = Schema.Struct({
   target: ModelSelection,
   provider: ProviderKind,
   model: Schema.String,
-  runtimeMode: Schema.Literals(["approval-required", "full-access"]),
+  runtimeMode: Schema.Literals(["approval-required", "accept-edits", "full-access"]),
   environment: Schema.Literals(["local", "worktree"]),
   branch: Schema.NullOr(Schema.String),
   worktreePath: Schema.NullOr(Schema.String),

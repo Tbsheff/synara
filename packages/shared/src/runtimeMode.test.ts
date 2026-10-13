@@ -4,6 +4,8 @@ import {
   normalizeRuntimeModeForProvider,
   providerSupportsAutoRuntimeMode,
   runtimeModeEscalatesPrivilege,
+  providerSupportsAcceptEditsRuntimeMode,
+  runtimeModeSelectionIssue,
 } from "./runtimeMode";
 
 describe("runtime mode compatibility", () => {
@@ -27,4 +29,21 @@ describe("runtime mode compatibility", () => {
     expect(runtimeModeEscalatesPrivilege("auto", "full-access")).toBe(true);
     expect(runtimeModeEscalatesPrivilege("auto", "approval-required")).toBe(false);
   });
+});
+
+it("keeps Accept edits scoped to Claude and below Auto privilege", () => {
+  expect(providerSupportsAcceptEditsRuntimeMode("claudeAgent")).toBe(true);
+  expect(providerSupportsAcceptEditsRuntimeMode("codex")).toBe(false);
+  expect(normalizeRuntimeModeForProvider("accept-edits", "codex")).toBe("approval-required");
+  expect(normalizeRuntimeModeForProvider("accept-edits", "claudeAgent")).toBe("accept-edits");
+  expect(
+    runtimeModeSelectionIssue({
+      runtimeMode: "accept-edits",
+      modelSelection: { provider: "codex", model: "gpt-5.5" },
+    }),
+  ).toContain("does not support Accept edits");
+  expect(runtimeModeEscalatesPrivilege("approval-required", "accept-edits")).toBe(true);
+  expect(runtimeModeEscalatesPrivilege("accept-edits", "auto")).toBe(true);
+  expect(runtimeModeEscalatesPrivilege("accept-edits", "full-access")).toBe(true);
+  expect(runtimeModeEscalatesPrivilege("accept-edits", "approval-required")).toBe(false);
 });

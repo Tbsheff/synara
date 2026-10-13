@@ -1528,11 +1528,14 @@ export function makeDroidAdapter(
         const model = turnModelSelection?.model ?? ctx.session.model;
         const interactionMode = resolveAcpTurnInteractionMode(input.interactionMode);
         const runtimeMode = ctx.session.runtimeMode;
-        if (runtimeMode === "auto") {
+        if (runtimeMode === "auto" || runtimeMode === "accept-edits") {
           return yield* new ProviderAdapterValidationError({
             provider: PROVIDER,
             operation: "sendTurn",
-            issue: "Auto runtime mode is available only to Codex and Claude.",
+            issue:
+              runtimeMode === "accept-edits"
+                ? "Droid does not support Accept edits."
+                : "Auto runtime mode is available only to Codex and Claude.",
           });
         }
         // Selection changes normally arrive via a session restart, but a turn

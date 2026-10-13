@@ -35,3 +35,25 @@ it.each(["pi", "antigravity", "omp", "codex"] as const)(
     expect(onChange).not.toHaveBeenCalled();
   },
 );
+
+it.each([
+  [
+    "codex",
+    "Allow workspace edits and commands; ask when an action needs access outside the sandbox",
+  ],
+  [
+    "claudeAgent",
+    "Ask before file edits and commands that need permission; saved Claude rules still apply",
+  ],
+  ["opencode", "Ask for actions that need permission under the provider rules"],
+] as const)("describes supervised access for %s", (provider, description) => {
+  const html = renderToStaticMarkup(
+    <RuntimeUsageControls
+      provider={provider}
+      runtimeMode="approval-required"
+      onRuntimeModeChange={vi.fn()}
+    />,
+  );
+  expect(html).toContain(description);
+  expect(html).not.toContain("Always ask to edit external files and use the internet");
+});

@@ -231,7 +231,7 @@ describe("threadBootstrap", () => {
       worktreePath: "/repo/.worktrees/new-terminal",
       workingDirectory: null,
       envMode: "worktree",
-      runtimeMode: "full-access",
+      runtimeMode: "approval-required",
       entryPoint: "terminal",
     });
   });
@@ -283,7 +283,7 @@ describe("threadBootstrap", () => {
       worktreePath: null,
       workingDirectory: null,
       envMode: "local",
-      runtimeMode: "full-access",
+      runtimeMode: "approval-required",
       entryPoint: "chat",
       isTemporary: true,
     });
@@ -429,4 +429,27 @@ describe("threadBootstrap", () => {
       }).modelSelection,
     ).toEqual(lastUsed);
   });
+});
+
+it("defaults new users to supervised access and preserves saved draft access", () => {
+  expect(
+    createFreshDraftThreadSeed({
+      createdAt: "2026-10-12T00:00:00.000Z",
+      entryPoint: "chat",
+      options: undefined,
+    }).runtimeMode,
+  ).toBe("approval-required");
+  const storedDraftThread = {
+    ...makeDraftThread({ runtimeMode: "full-access" }),
+    threadId: THREAD_ID,
+  };
+  const plan = resolveThreadBootstrapPlan({
+    entryPoint: "chat",
+    latestActiveDraftThread: null,
+    projectId: PROJECT_ID,
+    routeThreadId: null,
+    storedDraftThread,
+  });
+  expect(plan.kind).toBe("stored");
+  if (plan.kind === "stored") expect(plan.draftThread.runtimeMode).toBe("full-access");
 });

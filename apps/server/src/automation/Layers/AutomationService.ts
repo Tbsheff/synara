@@ -36,7 +36,7 @@ import {
 } from "@synara/shared/automationMode";
 import { buildTemporaryWorktreeBranchName } from "@synara/shared/git";
 import { providerStartOptionsFromServerSettings } from "@synara/shared/serverSettings";
-import { autoRuntimeModeSelectionIssue } from "@synara/shared/runtimeMode";
+import { runtimeModeSelectionIssue } from "@synara/shared/runtimeMode";
 import { Cause, Effect, Layer, Option, PubSub, Queue, Stream } from "effect";
 import {
   isUnresolvedAutomationInstanceId,
@@ -1097,7 +1097,7 @@ export const AutomationServiceLive = Layer.effect(
       readonly modelSelection: AutomationDefinition["modelSelection"];
       readonly runtimeMode: AutomationDefinition["runtimeMode"];
     }) => {
-      const issue = autoRuntimeModeSelectionIssue(input);
+      const issue = runtimeModeSelectionIssue(input);
       return issue === null
         ? Effect.void
         : Effect.fail(new AutomationServiceError({ message: issue }));

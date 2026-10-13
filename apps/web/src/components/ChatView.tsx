@@ -5469,12 +5469,8 @@ export default function ChatView({
     activeContextWindowLabel: contextWindowSelectionStatus.activeLabel,
     pendingContextWindowLabel: contextWindowSelectionStatus.pendingSelectedLabel,
   };
-  // The composer's leading controls (extras "+" menu, access-rules/runtime
-  // indicator). At the narrowest footer tier they relocate from the footer to
-  // the branch-toolbar row below the input instead of getting clipped; the
-  // relocated variant is icon-only since relocation means space is minimal.
   const relocateComposerLeadingControls = composerFooterControlsPlan.relocateLeadingControls;
-  const renderComposerLeadingControls = (options: { iconOnly: boolean }) => (
+  const renderComposerLeadingControls = () => (
     <>
       <ComposerExtrasTrigger
         open={isComposerExtrasPanelOpen}
@@ -5487,11 +5483,7 @@ export default function ChatView({
         }}
       />
       {!isVoiceRecording && !isVoiceTranscribing ? (
-        <RuntimeUsageControls
-          {...runtimeUsageControlsProps}
-          className="shrink-0"
-          hideLabel={options.iconOnly}
-        />
+        <RuntimeUsageControls {...runtimeUsageControlsProps} className="shrink-0" />
       ) : null}
     </>
   );
@@ -6363,9 +6355,7 @@ export default function ChatView({
                 <ChatComposerFooter
                   isComposerFooterCompact={isComposerFooterCompact}
                   leadingControls={
-                    relocateComposerLeadingControls
-                      ? null
-                      : renderComposerLeadingControls({ iconOnly: false })
+                    relocateComposerLeadingControls ? null : renderComposerLeadingControls()
                   }
                   pluginControls={
                     <PluginComposerControls context={pluginContext} composer={pluginComposerHost} />
@@ -6902,7 +6892,7 @@ export default function ChatView({
                         <div className="flex w-full items-center gap-1">
                           {relocateComposerLeadingControls ? (
                             <div className="flex shrink-0 items-center gap-1 pl-1">
-                              {renderComposerLeadingControls({ iconOnly: true })}
+                              {renderComposerLeadingControls()}
                             </div>
                           ) : null}
                           {showTrailingBranchToolbar ? (

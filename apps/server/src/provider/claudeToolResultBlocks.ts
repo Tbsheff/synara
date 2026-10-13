@@ -16,6 +16,7 @@ import {
 } from "@synara/contracts";
 import { splitsSurrogatePair, unicodeSafeEndOffset } from "@synara/shared/text";
 import { Effect, type FileSystem, type PlatformError } from "effect";
+import nodePath from "node:path";
 
 export const CLAUDE_TOOL_RESULT_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
 export const CLAUDE_TOOL_RESULT_MAX_IMAGES = 20;
@@ -308,6 +309,142 @@ function hunksForCreatedContent(content: string): ReadonlyArray<StructuredPatchH
       lines: lines.map((line) => `+${line}`),
     },
   ];
+}
+
+function proposedPatchLines(lines: ReadonlyArray<string>, sign: string): Array<string> {
+  return lines.flatMap((line) => [
+    `${sign}${line.replace(/\n$/, "")}`,
+    ...(line.endsWith("\n") ? [] : ["\\ No newline at end of file"]),
+  ]);
+}
+
+export function buildClaudeProposedFileChanges(
+  fileSystem: FileSystem.FileSystem,
+  toolName: string,
+  input: Record<string, unknown>,
+  cwd: string,
+): Effect.Effect<FileChangeDetails | undefined> {
+  if (!["Edit", "MultiEdit", "Write", "NotebookEdit"].includes(toolName)) {
+    return Effect.succeed(undefined);
+  }
+  const path = readNonEmpty(input, toolName === "NotebookEdit" ? "notebook_path" : "file_path");
+  if (!path) return Effect.succeed(undefined);
+  const unavailable: FileChangeDetails = {
+    changes: [{ path, kind: "update", diffTruncated: true }],
+    totalFiles: 1,
+  };
+  return Effect.gen(function* () {
+    const filePath = nodePath.resolve(cwd, path);
+    const stat = yield* fileSystem.stat(filePath).pipe(Effect.result);
+    const created = stat._tag === "Failure" && stat.failure.reason._tag === "NotFound";
+    if (stat._tag === "Failure" && !created) return unavailable;
+    if (
+      stat._tag === "Success" &&
+      (stat.success.type !== "File" || stat.success.size > 1024 * 1024)
+    ) {
+      return unavailable;
+    }
+    const original = created
+      ? ""
+      : yield* fileSystem
+          .readFileString(filePath)
+          .pipe(Effect.catch(() => Effect.succeed(undefined)));
+    if (original === undefined || original.includes("\0")) return unavailable;
+    let before = original;
+    let after: string;
+    if (toolName === "Write") {
+      const content = readString(input, "content");
+      if (content === undefined) return unavailable;
+      after = content;
+    } else if (toolName === "NotebookEdit") {
+      const notebook = yield* Effect.try({
+        try: () => asRecord(JSON.parse(original)),
+        catch: () => undefined,
+      }).pipe(Effect.catch(() => Effect.succeed(undefined)));
+      const cells = Array.isArray(notebook?.cells) ? notebook.cells : [];
+      const cell = cells.map(asRecord).find((entry) => entry?.id === input.cell_id);
+      if (input.edit_mode !== "insert" && !cell) return unavailable;
+      before =
+        input.edit_mode === "insert"
+          ? ""
+          : typeof cell?.source === "string"
+            ? cell.source
+            : Array.isArray(cell?.source)
+              ? cell.source.filter((line): line is string => typeof line === "string").join("")
+              : "";
+      const source = readString(input, "new_source");
+      if (input.edit_mode !== "delete" && source === undefined) return unavailable;
+      after = input.edit_mode === "delete" ? "" : (source ?? "");
+    } else {
+      if (created) return unavailable;
+      const edits = toolName === "MultiEdit" ? input.edits : [input];
+      if (!Array.isArray(edits) || edits.length === 0) return unavailable;
+      after = original;
+      for (const edit of edits) {
+        const entry = asRecord(edit);
+        const oldText = readString(entry, "old_string");
+        const newText = readString(entry, "new_string");
+        if (!oldText || newText === undefined) return unavailable;
+        const first = after.indexOf(oldText);
+        if (
+          first < 0 ||
+          (entry?.replace_all !== true && after.indexOf(oldText, first + oldText.length) >= 0)
+        ) {
+          return unavailable;
+        }
+        after =
+          entry?.replace_all === true
+            ? after.split(oldText).join(newText)
+            : after.slice(0, first) + newText + after.slice(first + oldText.length);
+      }
+    }
+    const oldLines = before.match(/[^\n]*\n|[^\n]+$/g) ?? [];
+    const newLines = after.match(/[^\n]*\n|[^\n]+$/g) ?? [];
+    let prefix = 0;
+    while (
+      prefix < Math.min(oldLines.length, newLines.length) &&
+      oldLines[prefix] === newLines[prefix]
+    )
+      prefix++;
+    let suffix = 0;
+    while (
+      suffix < Math.min(oldLines.length, newLines.length) - prefix &&
+      oldLines[oldLines.length - 1 - suffix] === newLines[newLines.length - 1 - suffix]
+    )
+      suffix++;
+    const start = Math.max(0, prefix - 3);
+    const oldEnd = Math.min(oldLines.length, oldLines.length - suffix + 3);
+    const newEnd = Math.min(newLines.length, newLines.length - suffix + 3);
+    const kind = created ? "add" : "update";
+    const hunks =
+      before === after
+        ? []
+        : [
+            {
+              oldStart: oldLines.length === 0 ? 0 : start + 1,
+              oldLines: oldEnd - start,
+              newStart: newLines.length === 0 ? 0 : start + 1,
+              newLines: newEnd - start,
+              lines: [
+                ...proposedPatchLines(oldLines.slice(start, prefix), " "),
+                ...proposedPatchLines(oldLines.slice(prefix, oldLines.length - suffix), "-"),
+                ...proposedPatchLines(newLines.slice(prefix, newLines.length - suffix), "+"),
+                ...proposedPatchLines(oldLines.slice(oldLines.length - suffix, oldEnd), " "),
+              ],
+            },
+          ];
+    return {
+      changes: [
+        {
+          path,
+          kind,
+          ...diffFromHunks(path, kind, hunks),
+          ...(toolName === "NotebookEdit" ? { diffTruncated: true } : {}),
+        },
+      ],
+      totalFiles: 1,
+    };
+  });
 }
 
 function fileChangesFromStructuredResult(

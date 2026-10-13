@@ -47,6 +47,36 @@ Slow Git work in one workspace leaves other workspaces free to progress. Recover
 completed captures and undo outcomes; an interrupted operation with an uncertain outcome
 is reported for inspection instead of automatically changing the workspace again.
 
+New chats start in **Ask for approval** when no access mode was saved. Synara keeps saved
+thread and draft modes. The composer shows the current mode, including at narrow widths.
+
+**Always allow this session** keeps the thread mode. Codex remembers its native approval
+key. Claude applies only suggested rules for the requested tool, stored for this session.
+Claude hides the session choice when it has no scoped rule to offer. A session grant does
+not approve other pending requests or change the provider permission mode.
+
+Claude file grants use an exact absolute `Read` or `Edit` rule. `Edit` also covers
+Write, MultiEdit, and NotebookEdit, as defined in the
+[Claude permission rules](https://code.claude.com/docs/en/permissions#read-and-edit).
+
+Codex **Ask for approval** uses `workspace-write`, `on-request`, and the user as reviewer
+on thread start, resume, fork, and each turn. Workspace work can proceed within the sandbox;
+actions outside its boundary can ask for approval. This follows the
+[Codex sandbox and approval guide](https://learn.chatgpt.com/docs/agent-approvals-security#defaults-and-recommendations).
+
+The mode description follows the provider. For Claude, **Ask for approval** asks before
+file edits and commands that need permission; saved Claude rules still apply. For Codex,
+the description states that workspace work can proceed within the sandbox.
+
+Claude also offers **Accept edits**, which maps to native `acceptEdits`. Claude approves
+file edits and routine file commands and still asks for other commands. Only Claude shows
+this choice. The server refuses it for other providers. Thread runtime mode remains the
+source of Claude permission mode; saved provider-option overrides cannot grant more access.
+
+Claude edit approvals show the proposed file diff before the user decides. The preview
+does not write the file. Large or unreadable files show a preview limit; notebook edits
+show a partial cell diff. The existing approval card renders these previews.
+
 Pi and Antigravity do not offer Synara Plan mode or Ask for approval. Select Full access
 explicitly to use these providers. Changing providers does not grant more access to a saved
 thread or draft. Oh My Pi keeps its existing mode choices.

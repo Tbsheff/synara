@@ -92,7 +92,7 @@ import {
   serverSettingsQueryOptions,
 } from "~/lib/serverReactQuery";
 import { cn } from "~/lib/utils";
-import { RUNTIME_MODE_PRESENTATION } from "~/lib/runtimeMode";
+import { runtimeModePresentation } from "~/lib/runtimeMode";
 import { useStore } from "~/store";
 import { EMPTY_THREAD_SHELL_BY_ID } from "~/storeState";
 import { ensureNativeApi } from "~/nativeApi";
@@ -1560,10 +1560,13 @@ function ProviderAccountsControl(props: {
               <SettingsListRow
                 key={thread.id}
                 title={thread.title}
-                description={`Source: conversation settings · ${RUNTIME_MODE_PRESENTATION[thread.runtimeMode].description}`}
+                description={`Source: conversation settings · ${runtimeModePresentation(thread.runtimeMode, thread.modelSelection.provider).description}`}
                 actions={
                   <span className="text-ui-sm">
-                    {RUNTIME_MODE_PRESENTATION[thread.runtimeMode].label}
+                    {
+                      runtimeModePresentation(thread.runtimeMode, thread.modelSelection.provider)
+                        .label
+                    }
                   </span>
                 }
               />

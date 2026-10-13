@@ -46,6 +46,8 @@ import {
 } from "@synara/shared/providerInstances";
 import {
   providerSupportsAutoRuntimeMode,
+  providerSupportsAcceptEditsRuntimeMode,
+  unsupportedAcceptEditsRuntimeModeMessage,
   unsupportedAutoRuntimeModeMessage,
 } from "@synara/shared/runtimeMode";
 import { createHash, createHmac, randomUUID } from "node:crypto";
@@ -179,11 +181,24 @@ const PROVIDER_RUNTIME_IDLE_STOP_MS = Number.isFinite(Number(configuredProviderR
 const MAX_TARGETED_CHILD_INTERRUPT_TOMBSTONES = 16_384;
 const PROVIDER_OPTIONS_FINGERPRINT_HMAC_SECRET = "provider-options-fingerprint-hmac-key";
 
-function validateAutoRuntimeMode(
+function validateRuntimeMode(
   operation: string,
   provider: ProviderSession["provider"],
   runtimeMode: ProviderSession["runtimeMode"],
 ) {
+  if (
+    runtimeMode === "accept-edits" &&
+    (!Schema.is(ProviderKind)(provider) || !providerSupportsAcceptEditsRuntimeMode(provider))
+  ) {
+    return Effect.fail(
+      new ProviderValidationError({
+        operation,
+        issue: Schema.is(ProviderKind)(provider)
+          ? unsupportedAcceptEditsRuntimeModeMessage(provider)
+          : `Provider '${provider}' does not support Accept edits.`,
+      }),
+    );
+  }
   return runtimeMode !== "auto" ||
     (Schema.is(ProviderKind)(provider) && providerSupportsAutoRuntimeMode(provider))
     ? Effect.void
@@ -2449,7 +2464,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             const persistedAdditionalDirectories = readPersistedAdditionalDirectories(
               binding.runtimePayload,
             );
-            yield* validateAutoRuntimeMode(
+            yield* validateRuntimeMode(
               input.operation,
               resolved.instance.driver,
               binding.runtimeMode ?? "full-access",
@@ -2934,7 +2949,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         );
         const adapter = yield* getAdapterForInstance(initialResolved.instance);
         yield* ensureProviderEnabled(adapter.provider, "ProviderService.startSession");
-        yield* validateAutoRuntimeMode(
+        yield* validateRuntimeMode(
           "ProviderService.startSession",
           adapter.provider,
           input.runtimeMode,
@@ -3556,7 +3571,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         }
         const sourceCwd = readPersistedCwd(sourceBinding.runtimePayload);
         const targetCwd = input.cwd ?? sourceCwd;
-        yield* validateAutoRuntimeMode(
+        yield* validateRuntimeMode(
           "ProviderService.forkThread",
           resolvedSource.instance.driver,
           input.runtimeMode,
@@ -3688,7 +3703,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           );
         }
         yield* ensureProviderEnabled(input.provider, operation);
-        yield* validateAutoRuntimeMode(operation, input.provider, input.runtimeMode);
+        yield* validateRuntimeMode(operation, input.provider, input.runtimeMode);
         yield* waitForCurrentInterruptionFence(input.threadId);
         clearRuntimeIdleTimer(input.threadId);
         yield* waitForRuntimeIdleStop(input.threadId);

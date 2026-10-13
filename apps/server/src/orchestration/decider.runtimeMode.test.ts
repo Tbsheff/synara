@@ -229,3 +229,28 @@ describe("decider Auto model compatibility", () => {
     expect("type" in event ? event.type : event[0]?.type).toBe("thread.meta-updated");
   });
 });
+
+it("refuses Accept edits on Codex at the server boundary", async () => {
+  const base = makeReadModel(true);
+  const readModel = {
+    ...base,
+    threads: base.threads.map((thread) => ({
+      ...thread,
+      modelSelection: { provider: "codex" as const, model: "gpt-5.5" },
+    })),
+  };
+  await expect(
+    Effect.runPromise(
+      decideOrchestrationCommand({
+        command: {
+          type: "thread.runtime-mode.set",
+          commandId: CommandId.makeUnsafe("cmd-codex-accept-edits"),
+          threadId: THREAD_ID,
+          runtimeMode: "accept-edits",
+          createdAt: NOW,
+        },
+        readModel,
+      }),
+    ),
+  ).rejects.toThrow("does not support Accept edits");
+});

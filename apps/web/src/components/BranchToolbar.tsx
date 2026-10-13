@@ -21,9 +21,10 @@ import { useComposerDraftStore } from "../composerDraftStore";
 import { useProviderUsageSummary } from "../hooks/useProviderUsageSummary";
 import { resolveThreadEnvironmentPresentation } from "../lib/threadEnvironment";
 import {
-  RUNTIME_MODE_PRESENTATION,
+  runtimeModePresentation,
   providerModelSupportsAutoRuntimeMode,
   providerSupportsApprovalRequiredMode,
+  providerSupportsAcceptEditsRuntimeMode,
 } from "../lib/runtimeMode";
 import { useStore } from "../store";
 import {
@@ -75,14 +76,16 @@ function WorktreeGlyph({ className }: { className?: string }) {
 
 function RuntimeModeMenuItem({
   mode,
+  provider,
   icon,
   accent = false,
 }: {
   mode: RuntimeMode;
+  provider?: ProviderKind | undefined;
   icon: ReactNode;
   accent?: boolean;
 }) {
-  const presentation = RUNTIME_MODE_PRESENTATION[mode];
+  const presentation = runtimeModePresentation(mode, provider);
   return (
     <MenuRadioItem
       value={mode}
@@ -145,10 +148,6 @@ export interface RuntimeUsageControlsProps {
   activeContextWindowLabel?: string | null | undefined;
   pendingContextWindowLabel?: string | null | undefined;
   className?: string | undefined;
-  // Force icon-only rendering regardless of container width. Used when the
-  // control is relocated outside the composer footer (which provides the
-  // @container the responsive sr-only fallback depends on).
-  hideLabel?: boolean | undefined;
 }
 
 export function RuntimeUsageControls({
@@ -158,13 +157,14 @@ export function RuntimeUsageControls({
   runtimeMode,
   onRuntimeModeChange,
   className,
-  hideLabel: hideLabelProp,
 }: RuntimeUsageControlsProps) {
   const autoModeAvailable =
     provider !== undefined &&
     providerModelSupportsAutoRuntimeMode(provider, runtimeModel, providerStatus);
-  const runtimePresentation = RUNTIME_MODE_PRESENTATION[runtimeMode ?? "approval-required"];
-  const hideLabel = hideLabelProp ?? false;
+  const runtimePresentation = runtimeModePresentation(
+    runtimeMode ?? "approval-required",
+    provider ?? "codex",
+  );
   return (
     <div
       className={cn(
@@ -197,15 +197,8 @@ export function RuntimeUsageControls({
               ) : (
                 <HiOutlineHandRaised className="size-3.5 shrink-0" />
               )}
-              <span className={cn("truncate", hideLabel ? "sr-only" : "@max-[480px]:sr-only")}>
-                {runtimePresentation.label}
-              </span>
-              <ChevronDownIcon
-                className={cn(
-                  "size-3 shrink-0 opacity-70",
-                  hideLabel ? "hidden" : "@max-[480px]:hidden",
-                )}
-              />
+              <span className="truncate">{runtimePresentation.label}</span>
+              <ChevronDownIcon className="size-3 shrink-0 opacity-70" />
             </span>
           </MenuTrigger>
           <ComposerPickerMenuPopup
@@ -219,8 +212,13 @@ export function RuntimeUsageControls({
               onValueChange={(value) => {
                 if (
                   !value ||
-                  (value !== "full-access" && value !== "auto" && value !== "approval-required") ||
+                  (value !== "full-access" &&
+                    value !== "auto" &&
+                    value !== "approval-required" &&
+                    value !== "accept-edits") ||
                   (value === "auto" && !autoModeAvailable) ||
+                  (value === "accept-edits" &&
+                    !providerSupportsAcceptEditsRuntimeMode(provider ?? "codex")) ||
                   (value === "approval-required" &&
                     !providerSupportsApprovalRequiredMode(provider ?? "codex")) ||
                   value === runtimeMode
@@ -233,7 +231,14 @@ export function RuntimeUsageControls({
               {providerSupportsApprovalRequiredMode(provider ?? "codex") ? (
                 <RuntimeModeMenuItem
                   mode="approval-required"
+                  provider={provider ?? "codex"}
                   icon={<HiOutlineHandRaised className="size-4 shrink-0" />}
+                />
+              ) : null}
+              {providerSupportsAcceptEditsRuntimeMode(provider ?? "codex") ? (
+                <RuntimeModeMenuItem
+                  mode="accept-edits"
+                  icon={<CentralIcon name="shield-code" className="size-4 shrink-0" />}
                 />
               ) : null}
               {autoModeAvailable ? (
