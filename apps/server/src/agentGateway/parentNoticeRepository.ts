@@ -54,8 +54,14 @@ export const makeParentNoticeRepository = Effect.gen(function* () {
     sql`SELECT 1 FROM agent_parent_notify_links WHERE parent_thread_id = ${parentThreadId} AND child_thread_id = ${childThreadId}`.pipe(
       Effect.map((rows) => rows.length > 0),
     );
-  const candidates = () =>
-    sql<ParentNoticeCandidate>`
+  const isLinkedChild = (childThreadId: string) =>
+    sql`SELECT 1 FROM agent_parent_notify_links WHERE child_thread_id = ${childThreadId} AND enabled = 1 LIMIT 1`.pipe(
+      Effect.map((rows) => rows.length > 0),
+    );
+  const candidates = (childThreadIds?: ReadonlyArray<string>) =>
+    childThreadIds?.length === 0
+      ? Effect.succeed([])
+      : sql<ParentNoticeCandidate>`
     SELECT link.parent_thread_id AS "parentThreadId", link.child_thread_id AS "childThreadId",
       t.turn_id AS "turnId", t.pending_message_id AS "messageId", t.state,
       EXISTS (SELECT 1 FROM projection_pending_interactions a
@@ -67,7 +73,9 @@ export const makeParentNoticeRepository = Effect.gen(function* () {
           OR (t.turn_id IS NULL AND e.event_type = 'thread.session-set' AND e.occurred_at >= t.requested_at))), 0) AS "sourceSequence",
       t.completed_at AS "completedAt"
     FROM agent_parent_notify_links link JOIN projection_turns t ON t.thread_id = link.child_thread_id
-    WHERE link.enabled = 1 AND (t.turn_id IS NOT NULL OR t.pending_message_id IS NOT NULL)
+    WHERE link.enabled = 1
+      AND ${childThreadIds === undefined ? sql`1 = 1` : sql`link.child_thread_id IN ${sql.in(childThreadIds)}`}
+      AND (t.turn_id IS NOT NULL OR t.pending_message_id IS NOT NULL)
       AND t.requested_at >= link.created_at
       AND NOT EXISTS (SELECT 1 FROM agent_parent_notices n
         WHERE n.parent_thread_id = link.parent_thread_id AND n.child_thread_id = t.thread_id AND (n.turn_key = COALESCE(t.turn_id, t.pending_message_id) OR n.turn_key = t.pending_message_id))
@@ -195,6 +203,7 @@ export const makeParentNoticeRepository = Effect.gen(function* () {
   return {
     setLink,
     isChild,
+    isLinkedChild,
     candidates,
     save,
     acknowledge,

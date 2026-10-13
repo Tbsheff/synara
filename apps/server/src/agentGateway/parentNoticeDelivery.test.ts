@@ -1,6 +1,7 @@
 import { it } from "@effect/vitest";
-import { Effect, Option } from "effect";
-import { expect } from "vitest";
+import { Effect, Option, Queue, Stream } from "effect";
+import { TestClock } from "effect/testing";
+import { expect, vi } from "vitest";
 import { ThreadId, type OrchestrationCommand } from "@synara/contracts";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
@@ -8,6 +9,7 @@ import { makeCompletionRepository } from "./completionRepository.ts";
 import {
   collectParentNotices,
   flushParentNotices,
+  startParentNoticeDelivery,
   type ParentNoticeDependencies,
 } from "./parentNoticeDelivery.ts";
 import { readChildThreadNotices } from "@synara/shared/threadNotice";
@@ -67,6 +69,80 @@ const setup = Effect.gen(function* () {
 });
 
 layer("parent notices", (it) => {
+  it.effect("does not reconcile for 120 unrelated events", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const h = yield* setup;
+        const events = yield* Queue.unbounded<never>();
+        const candidates = vi.spyOn(h.repository.parentNotices, "candidates");
+        yield* startParentNoticeDelivery({
+          ...h.deps,
+          orchestrationEngine: {
+            ...h.deps.orchestrationEngine,
+            subscribeDomainEvents: Effect.succeed(Stream.fromQueue(events)),
+          },
+        });
+        yield* TestClock.adjust(250);
+        for (let i = 0; i < 120; i++) {
+          yield* Queue.offer(events, {
+            type: i % 2 === 0 ? "thread.message-sent" : "thread.activity-appended",
+            aggregateId: "unrelated",
+            payload: { threadId: "unrelated" },
+          } as never);
+          yield* TestClock.adjust(25);
+        }
+        yield* TestClock.adjust(100);
+        expect(candidates).toHaveBeenCalledTimes(1);
+      }),
+    ),
+  );
+
+  it.effect("collects only dirty linked children and recovers missed events", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const h = yield* setup;
+        const events = yield* Queue.unbounded<never>();
+        const candidates = vi.spyOn(h.repository.parentNotices, "candidates");
+        yield* startParentNoticeDelivery({
+          ...h.deps,
+          orchestrationEngine: {
+            ...h.deps.orchestrationEngine,
+            subscribeDomainEvents: Effect.succeed(Stream.fromQueue(events)),
+          },
+        });
+        yield* TestClock.adjust(250);
+        yield* h.child("linked", "completed");
+        yield* Queue.offer(events, {
+          type: "thread.session-set",
+          aggregateId: "linked",
+          payload: { threadId: "linked" },
+        } as never);
+        yield* TestClock.adjust(250);
+        expect(candidates).toHaveBeenLastCalledWith(["linked"]);
+        expect(h.commands).toHaveLength(1);
+        yield* h.child("missed", "interrupted");
+        yield* TestClock.adjust(60_500);
+        expect(h.commands).toHaveLength(2);
+        yield* TestClock.adjust(60_500);
+        expect(h.commands).toHaveLength(2);
+      }),
+    ),
+  );
+  it.effect("does not wake for a disabled child link", () =>
+    Effect.gen(function* () {
+      const h = yield* setup;
+      yield* h.child("disabled", "error", false, false);
+      expect(yield* h.repository.parentNotices.isLinkedChild("disabled")).toBe(false);
+      expect(yield* h.repository.parentNotices.candidates(["disabled"])).toEqual([]);
+      yield* h.child("enabled");
+      expect(yield* h.repository.parentNotices.isLinkedChild("enabled")).toBe(true);
+      expect(yield* h.repository.parentNotices.candidates([])).toEqual([]);
+      expect(
+        (yield* h.repository.parentNotices.candidates(["enabled"])).map((c) => c.childThreadId),
+      ).toEqual(["enabled"]);
+      yield* h.repository.parentNotices.setLink("parent", "enabled", "enabled:message", false, now);
+    }),
+  );
   it.effect("delivers once per child turn and batches sibling results", () =>
     Effect.gen(function* () {
       const h = yield* setup;

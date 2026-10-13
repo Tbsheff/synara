@@ -728,6 +728,9 @@ it. Other providers queue the notice until the parent is idle. An idle parent
 starts a new turn. Notices never interrupt a live turn. Nearby results share a
 batch after a 200 ms window, with up to 20 child results per message. Saved
 parent links, per-turn results, batches, and command IDs survive restart.
+Only events for linked children trigger notice collection, and each such pass
+reads candidates for those children. A full scan runs at startup and every
+minute to recover missed events or unfinished delivery.
 Provider sends use the existing durable delivery and reconciliation path.
 Archived or deleted parents receive no wake.
 
@@ -804,10 +807,15 @@ sign-in attempt appear in the list.
   reopens the browser if needed. Older runtimes without the login method show
   a `codex mcp login` command for the selected account and **Re-check**.
 - **Claude:** the pinned SDK exposes `mcpServerStatus` and `reconnectMcpServer`,
-  but no public MCP OAuth login method. **Authenticate** shows a command for
-  the session's executable, working directory, and account directories. Run it
+  but no public MCP OAuth login method. Opening the server list shows the exact
+  command for the session's executable, working directory, and account directories.
+  **Copy** copies that command. Run it
   on the server machine, enter `/mcp`, select the server, and authenticate.
   **Re-check** reconnects that server and reads native status.
+
+Session MCP events refresh the indicator. A recovery check runs every five
+minutes, including when the list is empty. A pending OAuth login keeps the
+ten-second check. Reconnecting the thread stream also refreshes state.
 
 Browser callbacks must reach the machine that runs the provider. Synara does
 not read or copy MCP tokens. Auth state belongs to the live session; a stopped
