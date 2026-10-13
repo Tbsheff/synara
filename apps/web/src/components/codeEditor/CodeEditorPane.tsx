@@ -38,6 +38,7 @@ export function useCodeEditorSessionOptions(input: {
   onHistoryChange?: ((history: CodeEditHistoryState) => void) | undefined;
   historyControlsRef?: RefObject<CodeEditHistoryControls | null> | undefined;
   onAttach?: ((editor: PierreEditor) => void) | undefined;
+  persistState?: boolean | undefined;
 }): EditorOptions<undefined> {
   const onChangeRef = useRef(input.onChange);
   onChangeRef.current = input.onChange;
@@ -63,6 +64,7 @@ export function useCodeEditorSessionOptions(input: {
       onHistoryChangeRef.current?.(history);
     };
     return {
+      persistState: input.persistState,
       onAttach: (editor: PierreEditor) => {
         editorRef.current = editor;
         onAttachRef.current?.(editor);
@@ -79,7 +81,7 @@ export function useCodeEditorSessionOptions(input: {
         }
       },
     };
-  }, [historyControlsRef]);
+  }, [historyControlsRef, input.persistState]);
 }
 
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
@@ -131,10 +133,8 @@ export function CodeEditorPane(props: CodeEditorPaneProps) {
     [props.fileName, props.documentKey, props.valueVersion, props.language],
   );
   const editorOptions = useCodeEditorSessionOptions({
-    onChange: (value) => {
-      file.contents = value;
-      props.onChange(value);
-    },
+    onChange: props.onChange,
+    persistState: true,
     onHistoryChange: props.onHistoryChange,
     historyControlsRef: props.historyControlsRef,
     onAttach: (editor) => {
