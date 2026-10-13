@@ -1,5 +1,6 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter } from "node:events";
+import fs from "node:fs";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -21,10 +22,14 @@ import { codexSharedProcessEnabled } from "./codexAppServerMode";
 const cleanups: (() => Promise<void>)[] = [];
 afterEach(async () => {
   for (const cleanup of cleanups.splice(0)) await cleanup();
+  vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
 
-async function fixture(mode: ServerSettings["codexAppServerMode"] = "shared") {
+async function fixture(
+  mode: ServerSettings["codexAppServerMode"] = "shared",
+  options?: { authRevalidationTimeoutMs?: number; authRevalidationRetryBaseMs?: number },
+) {
   const root = mkdtempSync(path.join(os.tmpdir(), "synara-codex-shared-"));
   const home = path.join(root, "codex");
   mkdirSync(home);
@@ -91,6 +96,7 @@ async function fixture(mode: ServerSettings["codexAppServerMode"] = "shared") {
     Effect.gen(function* () {
       const services = yield* Effect.services<never>();
       return new CodexAppServerManager(services, {
+        ...options,
         spawnAppServer,
         teardownProcessTree,
         sharedProcessGraceMs: 20,
@@ -115,7 +121,12 @@ async function fixture(mode: ServerSettings["codexAppServerMode"] = "shared") {
   );
   const events: ProviderEvent[] = [];
   manager.on("event", (event) => events.push(event));
-  const start = (id: string, environment: Record<string, string> = {}, model?: string) =>
+  const start = (
+    id: string,
+    environment: Record<string, string> = {},
+    model?: string,
+    account = { homePath: home, accountId: "test" },
+  ) =>
     manager.startSession({
       threadId: ThreadId.makeUnsafe(id),
       cwd: root,
@@ -124,8 +135,7 @@ async function fixture(mode: ServerSettings["codexAppServerMode"] = "shared") {
       providerOptions: {
         codex: {
           binaryPath,
-          homePath: home,
-          accountId: "test",
+          ...account,
           environment: { HOME: root, SYNARA_HOME: path.join(root, "synara"), ...environment },
         },
       },
@@ -156,6 +166,153 @@ async function fixture(mode: ServerSettings["codexAppServerMode"] = "shared") {
 }
 
 describe("shared Codex manager", () => {
+  it.each(["shared", "per-session"] as const)(
+    "keeps three active turns running after an auth read timeout in %s mode",
+    async (mode) => {
+      const h = await fixture(mode, { authRevalidationTimeoutMs: 50 });
+      const sessions = await Promise.all([h.start("a"), h.start("b"), h.start("c")]);
+      const turns = await Promise.all(
+        sessions.map(({ threadId }) => h.manager.sendTurn({ threadId, input: "hello" })),
+      );
+      const realpath = fs.promises.realpath.bind(fs.promises);
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      vi.spyOn(fs.promises, "realpath").mockImplementation(async (file) => {
+        await gate;
+        return realpath(file);
+      });
+      try {
+        await Promise.all(
+          sessions.map(({ threadId }) =>
+            expect(h.manager.getSessionEventOrigin(threadId).inspect()).resolves.toMatchObject({
+              session: { status: "running" },
+            }),
+          ),
+        );
+        expect(h.manager.listSessions().map((session) => session.activeTurnId)).toEqual(
+          turns.map((turn) => turn.turnId),
+        );
+        expect(h.teardownProcessTree).not.toHaveBeenCalled();
+        expect(h.events.filter((event) => event.method === "session/exited")).toEqual([]);
+        expect(h.requests.filter((request) => request.method === "turn/interrupt")).toEqual([]);
+        expect(h.children).toHaveLength(mode === "shared" ? 1 : 3);
+      } finally {
+        release();
+        vi.restoreAllMocks();
+      }
+      for (let i = 0; i < sessions.length; i++) {
+        h.emit(h.children[mode === "shared" ? 0 : i]!, {
+          method: "turn/completed",
+          params: {
+            threadId: (sessions[i]!.resumeCursor as { threadId: string }).threadId,
+            turn: { id: turns[i]!.turnId, status: "completed" },
+          },
+        });
+      }
+      expect(h.manager.listSessions().every((session) => session.status === "ready")).toBe(true);
+    },
+  );
+
+  it.each(["shared", "per-session"] as const)(
+    "fails only the confirmed account after logout or 401 in %s mode",
+    async (mode) => {
+      for (const failure of ["logout", "unauthorized", "401", "disk-change"] as const) {
+        const h = await fixture(mode);
+        const otherHome = path.join(h.root, "other-account");
+        mkdirSync(otherHome);
+        writeFileSync(path.join(otherHome, "config.toml"), "");
+        const sessions = [
+          await h.start("a"),
+          await h.start("b"),
+          await h.start("c", {}, undefined, { homePath: otherHome, accountId: "other" }),
+        ];
+        await Promise.all(
+          sessions.map(({ threadId }) => h.manager.sendTurn({ threadId, input: "hello" })),
+        );
+        const origin = h.manager.getSessionEventOrigin(sessions[1]!.threadId);
+        if (failure === "disk-change") {
+          writeFileSync(
+            path.join(h.home, "auth.json"),
+            JSON.stringify({
+              auth_mode: "apikey",
+              OPENAI_API_KEY: "fixture-new-key",
+            }),
+          );
+          await expect(h.manager.inspectSessionAsync(sessions[0]!.threadId)).rejects.toThrow(
+            "authentication changed",
+          );
+        } else {
+          h.emit(
+            h.children[0]!,
+            failure === "logout"
+              ? {
+                  method: "account/updated",
+                  params: { authMode: null },
+                }
+              : {
+                  method: "error",
+                  params: {
+                    threadId: (sessions[0]!.resumeCursor as { threadId: string }).threadId,
+                    willRetry: false,
+                    error: {
+                      message: "Sign in again",
+                      codexErrorInfo:
+                        failure === "401"
+                          ? { httpConnectionFailed: { httpStatusCode: 401 } }
+                          : "unauthorized",
+                    },
+                  },
+                },
+          );
+        }
+        expect(h.manager.hasSession(sessions[0]!.threadId)).toBe(false);
+        expect(h.manager.hasSession(sessions[1]!.threadId)).toBe(false);
+        expect(origin.isAuthRejected()).toBe(true);
+        expect(h.manager.listSessions()).toMatchObject([
+          { threadId: sessions[2]!.threadId, status: "running" },
+        ]);
+        await vi.waitFor(() =>
+          expect(h.teardownProcessTree).toHaveBeenCalledTimes(mode === "shared" ? 1 : 2),
+        );
+        expect(
+          h.events.some(
+            (event) =>
+              event.threadId === sessions[0]!.threadId &&
+              event.message?.includes(
+                failure === "disk-change" ? "authentication changed" : "authentication failed",
+              ),
+          ),
+        ).toBe(true);
+      }
+    },
+  );
+
+  it.each(["shared", "per-session"] as const)(
+    "logs complete redacted stderr lines without stopping a turn in %s mode",
+    async (mode) => {
+      const h = await fixture(mode);
+      const session = await h.start("a");
+      await h.manager.sendTurn({ threadId: session.threadId, input: "hello" });
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      h.children[0]!.stderr.emit("data", Buffer.from("ERROR auth refresh: Bearer secret-"));
+      expect(warn).not.toHaveBeenCalled();
+      h.children[0]!.stderr.emit("data", Buffer.from("token-value timed out\n"));
+      const logged = warn.mock.calls.flat().join(" ");
+      expect(logged).toContain("auth refresh");
+      expect(logged).toContain("timed out");
+      expect(logged).toContain("[redacted]");
+      expect(logged).not.toContain("secret-token-value");
+      h.children[0]!.stderr.emit("data", Buffer.from("x".repeat(20_000)));
+      h.children[0]!.stderr.emit("data", Buffer.from("\nERROR trailing line"));
+      expect(() => h.children[0]!.stderr.emit("end")).not.toThrow();
+      expect(warn.mock.calls.flat().join(" ")).toContain("trailing line");
+      expect(h.manager.listSessions()).toMatchObject([{ status: "running" }]);
+      expect(h.teardownProcessTree).not.toHaveBeenCalled();
+    },
+  );
+
   it("uses current account capabilities when a new session joins an existing process", async () => {
     const h = await fixture();
     h.setAccount({ type: "chatgpt", planType: "pro" });

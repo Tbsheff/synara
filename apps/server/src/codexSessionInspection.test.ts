@@ -23,7 +23,10 @@ afterEach(() => {
 const auth = (account: string, token: string) =>
   JSON.stringify({ auth_mode: "chatgpt", tokens: { account_id: account, access_token: token } });
 
-function fixture(options?: { authRevalidationTimeoutMs?: number }) {
+function fixture(options?: {
+  authRevalidationTimeoutMs?: number;
+  authRevalidationRetryBaseMs?: number;
+}) {
   const homePath = fs.mkdtempSync(path.join(os.tmpdir(), "codex-async-inspection-"));
   roots.push(homePath);
   const authPath = path.join(homePath, "auth.json");
@@ -103,13 +106,11 @@ it.each(["first", "changed-account", "unstable"])(
       }
       return handle;
     });
-    if (account === "first") {
+    if (account === "first" || account === "unstable") {
       await expect(manager.inspectSessionAsync(threadId)).resolves.toBeDefined();
       expect(stop).not.toHaveBeenCalled();
     } else {
-      await expect(manager.inspectSessionAsync(threadId)).rejects.toThrow(
-        account === "unstable" ? "revalidated" : "authentication changed",
-      );
+      await expect(manager.inspectSessionAsync(threadId)).rejects.toThrow("authentication changed");
       expect(stop).toHaveBeenCalledOnce();
     }
     expect(rewrites).toBe(account === "unstable" ? 3 : 2);
@@ -117,7 +118,7 @@ it.each(["first", "changed-account", "unstable"])(
   },
 );
 
-it("bounds a hung revalidation without stopping another auth-tracked session", async () => {
+it("bounds a hung revalidation and keeps both auth-tracked sessions alive", async () => {
   const { manager, context, sessions, threadId, stop } = fixture({
     authRevalidationTimeoutMs: 100,
   });
@@ -136,15 +137,15 @@ it("bounds a hung revalidation without stopping another auth-tracked session", a
     return realpath(file);
   });
   const origin = manager.getSessionEventOrigin(threadId);
-  await expect(origin.inspect()).rejects.toThrow("revalidated");
-  expect(origin.isAuthRejected()).toBe(true);
-  expect(stop).toHaveBeenCalledExactlyOnceWith(threadId);
+  await expect(origin.inspect()).resolves.toBeDefined();
+  expect(origin.isAuthRejected()).toBe(false);
+  expect(stop).not.toHaveBeenCalled();
   await expect(manager.inspectSessionAsync(healthyThread)).resolves.toBeDefined();
   release();
   const slots = (manager as unknown as { authReadSlots: Semaphore.Semaphore }).authReadSlots;
   await Effect.runPromise(slots.withPermits(2)(Effect.void));
-  await expect(origin.inspect()).rejects.toThrow("revalidated");
-  expect(stop).toHaveBeenCalledOnce();
+  await expect(origin.inspect()).resolves.toBeDefined();
+  expect(stop).not.toHaveBeenCalled();
 }, 1_000);
 
 it("binds queued events to their original context even without a generation tag", async () => {
@@ -187,12 +188,10 @@ it("retains native I/O leases after timeout and removes expired lease waiters", 
   try {
     const inspections = contexts
       .slice(0, 2)
-      .map(({ threadId }) =>
-        expect(manager.inspectSessionAsync(threadId)).rejects.toThrow("revalidated"),
-      );
+      .map(({ threadId }) => expect(manager.inspectSessionAsync(threadId)).resolves.toBeDefined());
     await Promise.all(inspections);
     expect(started.size).toBe(2);
-    await expect(manager.inspectSessionAsync(contexts[2]!.threadId)).rejects.toThrow("revalidated");
+    await expect(manager.inspectSessionAsync(contexts[2]!.threadId)).resolves.toBeDefined();
     expect(started.has(contexts[2]!.homePath)).toBe(false);
     gates[0]!.release();
     await expect(manager.inspectSessionAsync(contexts[3]!.threadId)).resolves.toBeDefined();

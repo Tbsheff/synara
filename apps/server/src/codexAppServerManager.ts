@@ -53,8 +53,10 @@ import {
   BROWSER_SCRIPT_BATCH_GUIDANCE,
 } from "@synara/shared/browserAutomationCatalogue";
 import { normalizeModelSlug } from "@synara/shared/model";
+import { redactDiagnosticText } from "@synara/shared/diagnosticsRedaction";
 import {
   JsonRpcStdioRequestRegistry,
+  JsonRpcStdioFramer,
   type JsonRpcPendingRequest,
 } from "@synara/shared/jsonrpc-stdio";
 import { decodeSubagentReceiverThreadIds } from "@synara/shared/subagents";
@@ -220,6 +222,15 @@ type CodexTurnSandboxPolicy = {
 
 export class CodexSessionAuthInvalidatedError extends Error {}
 
+class CodexAuthRevalidationUnavailableError extends Error {}
+
+function isConfirmedCodexAuthBindingFailure(error: unknown): boolean {
+  return (
+    error instanceof CodexPreparedHomeFileSnapshotError &&
+    ["home-changed", "symbolic-link", "not-regular-file"].includes(error.failure)
+  );
+}
+
 interface McpLoginCompletion {
   readonly loginId: string | undefined;
   readonly success: boolean;
@@ -240,6 +251,8 @@ interface CodexSessionContext {
   mcpAuthReadAt?: number | undefined;
   mcpLogin?: CodexMcpLoginAttempt | undefined;
   authInvalidation?: string;
+  authRevalidation?: { failures: number; retryAt: number };
+  authInspection?: Promise<void>;
   readonly autoApproveSynaraTools?: boolean;
   readonly enableComputerControl?: boolean;
   gatewaySessionLease?: AgentGatewaySessionLease;
@@ -1373,6 +1386,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   private readonly taskCompleteFallbackGraceMs: number;
   private readonly discoverySessionIdleMs: number;
   private readonly authRevalidationTimeoutMs: number;
+  private readonly authRevalidationRetryBaseMs: number;
   // Native filesystem promises cannot be cancelled. Keep their permits until
   // they settle, even after the caller's deadline rejects its session origin.
   // Stay below libuv's default four-worker pool so auth reads cannot occupy it all.
@@ -1394,6 +1408,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       readonly taskCompleteFallbackGraceMs?: number;
       readonly discoverySessionIdleMs?: number;
       readonly authRevalidationTimeoutMs?: number;
+      readonly authRevalidationRetryBaseMs?: number;
       readonly sharedProcessGraceMs?: number;
     },
   ) {
@@ -1409,6 +1424,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       options?.discoverySessionIdleMs ?? CODEX_DISCOVERY_SESSION_IDLE_MS,
     );
     this.authRevalidationTimeoutMs = Math.max(1, options?.authRevalidationTimeoutMs ?? 5_000);
+    this.authRevalidationRetryBaseMs = Math.max(1, options?.authRevalidationRetryBaseMs ?? 250);
     this.sharedProcesses = new CodexSharedProcessRegistry(
       (child) => teardownChildProcessTree(child, this.teardownProcessTree),
       options?.sharedProcessGraceMs ?? 1_000,
@@ -1467,15 +1483,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
             cwd: processCwd,
             env: launch.env,
           });
-          child.stderr.on("data", (chunk: Buffer) => {
-            if (
-              chunk
-                .toString()
-                .split(/\r?\n/g)
-                .some((line) => classifyCodexStderrLine(line))
-            )
-              log.warn("Shared Codex app-server reported a process-level stderr error.");
-          });
+          this.attachStderrLogging(child);
           return child;
         });
         return { child: sharedProcess.child, sharedProcess };
@@ -1944,6 +1952,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
   async sendTurn(input: CodexAppServerSendTurnInput): Promise<ProviderTurnStartResult> {
     const context = this.requireSession(input.threadId);
+    await this.requireFreshAuthForTurn(context);
     if (context.gatewayCredentialRetired === true) {
       throw new Error(
         "Codex session gateway authority is retired; resume the provider runtime before starting another turn.",
@@ -2099,6 +2108,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
   async startReview(input: ProviderStartReviewInput): Promise<ProviderTurnStartResult> {
     const context = this.requireSession(input.threadId);
+    await this.requireFreshAuthForTurn(context);
     if (context.gatewayCredentialRetired === true) {
       throw new Error(
         "Codex session gateway authority is retired; resume the provider runtime before starting another review.",
@@ -3513,7 +3523,11 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         activeTurnId: undefined,
       });
       if (emitClosedLifecycle && this.sessions.get(threadId) === context) {
-        this.emitLifecycleEvent(context, "session/closed", "Session stopped");
+        this.emitLifecycleEvent(
+          context,
+          "session/closed",
+          context.authInvalidation ?? "Session stopped",
+        );
       }
     }
     let stopPromise: Promise<void>;
@@ -3649,9 +3663,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       isAuthRejected: () => context?.authInvalidation !== undefined,
       rejectInspection: () => {
         if (matches)
-          this.invalidateContextAuth(
+          this.deferAuthRevalidation(
             context,
-            "Codex configuration or authentication state could not be safely revalidated; the stale app-server session was stopped and must be restarted.",
+            new Error("Codex callback auth inspection could not complete."),
           );
       },
       inspect: async () => {
@@ -3678,6 +3692,62 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       (lifecycleGeneration !== undefined && context.lifecycleGeneration !== lifecycleGeneration)
     )
       return undefined;
+    await this.revalidateContextAuth(context);
+    if (context.authInvalidation)
+      throw new CodexSessionAuthInvalidatedError(context.authInvalidation);
+    if (this.sessions.get(threadId) !== context || !this.isContextRoutable(context))
+      return undefined;
+    const codexOptions = normalizeCodexDiscoveryOptions(context.codexOptions);
+    return { session: { ...context.session }, ...(codexOptions ? { codexOptions } : {}) };
+  }
+
+  private async revalidateContextAuth(context: CodexSessionContext, force = false): Promise<void> {
+    if (context.authInspection) return context.authInspection;
+    if (!force && context.authRevalidation && Date.now() < context.authRevalidation.retryAt) return;
+    const inspection = this.readContextAuth(context);
+    context.authInspection = inspection;
+    try {
+      await inspection;
+    } finally {
+      if (context.authInspection === inspection) context.authInspection = undefined;
+    }
+  }
+
+  private deferAuthRevalidation(context: CodexSessionContext, error: unknown): void {
+    const failures = Math.min((context.authRevalidation?.failures ?? 0) + 1, 8);
+    const retryDelayMs = Math.min(this.authRevalidationRetryBaseMs * 2 ** (failures - 1), 30_000);
+    context.authRevalidation = { failures, retryAt: Date.now() + retryDelayMs };
+    log.warn("codex session auth freshness revalidation deferred", {
+      threadId: context.session.threadId,
+      cause: redactDiagnosticText(error instanceof Error ? error.message : String(error), {
+        maxLength: 500,
+      }),
+      retryDelayMs,
+    });
+  }
+
+  private async requireFreshAuthForTurn(context: CodexSessionContext): Promise<void> {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (context.authRevalidation) {
+        const delay = context.authRevalidation.retryAt - Date.now();
+        if (delay > 0) await new Promise<void>((resolve) => setTimeout(resolve, delay));
+      }
+      if (
+        this.sessions.get(context.session.threadId) !== context ||
+        !this.isContextRoutable(context)
+      )
+        throw new Error("Session is closed before Codex auth revalidation.");
+      await this.revalidateContextAuth(context, true);
+      if (context.authInvalidation)
+        throw new CodexSessionAuthInvalidatedError(context.authInvalidation);
+      if (!context.authRevalidation) return;
+    }
+    throw new CodexAuthRevalidationUnavailableError(
+      "Codex authentication could not be checked. Retry this turn; the existing session is still running.",
+    );
+  }
+
+  private async readContextAuth(context: CodexSessionContext): Promise<void> {
     let stalenessMessage: string | undefined;
     if (context.authTracking && context.authFingerprint !== undefined) {
       try {
@@ -3715,7 +3785,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
               timer = setTimeout(() => {
                 expired = true;
                 abort.abort();
-                reject(new Error("Codex auth revalidation timed out."));
+                reject(
+                  new CodexAuthRevalidationUnavailableError("Codex auth revalidation timed out."),
+                );
               }, this.authRevalidationTimeoutMs);
               timer.unref();
             }),
@@ -3723,28 +3795,21 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         } finally {
           if (timer) clearTimeout(timer);
         }
+        context.authRevalidation = undefined;
         if (fingerprint !== context.authFingerprint) {
           stalenessMessage =
             "Codex authentication changed on disk; the stale app-server session was stopped and must be restarted.";
         }
       } catch (error) {
-        log.warn("codex session auth freshness revalidation failed", {
-          threadId,
-          cause: error instanceof Error ? error.message : String(error),
-        });
-        stalenessMessage =
-          "Codex configuration or authentication state could not be safely revalidated; the stale app-server session was stopped and must be restarted.";
+        if (isConfirmedCodexAuthBindingFailure(error)) {
+          stalenessMessage =
+            "Codex authentication binding is no longer safe; the session must be restarted.";
+        } else {
+          this.deferAuthRevalidation(context, error);
+        }
       }
     }
     if (stalenessMessage) this.invalidateContextAuth(context, stalenessMessage);
-    // Other overlapping reads may have invalidated this origin while we awaited disk.
-    if (context.authInvalidation)
-      throw new CodexSessionAuthInvalidatedError(context.authInvalidation);
-    // Filesystem awaits must not attach a replacement session's identity to an old event.
-    if (this.sessions.get(threadId) !== context || !this.isContextRoutable(context))
-      return undefined;
-    const codexOptions = normalizeCodexDiscoveryOptions(context.codexOptions);
-    return { session: { ...context.session }, ...(codexOptions ? { codexOptions } : {}) };
   }
 
   hasSession(threadId: ThreadId): boolean {
@@ -4219,6 +4284,19 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   }
 
   private invalidateContextAuth(context: CodexSessionContext, message: string): void {
+    const owners = [...this.sessions.values(), ...this.discoverySessions.values()].filter(
+      (owner) =>
+        owner === context ||
+        (owner.codexOptions?.accountId === context.codexOptions?.accountId &&
+          owner.authTracking?.authoritativeAuthFilePath !== undefined &&
+          owner.authTracking.authoritativeAuthFilePath ===
+            context.authTracking?.authoritativeAuthFilePath &&
+          owner.authFingerprint === context.authFingerprint),
+    );
+    for (const owner of new Set([context, ...owners])) this.invalidateAuthOwner(owner, message);
+  }
+
+  private invalidateAuthOwner(context: CodexSessionContext, message: string): void {
     if (context.authInvalidation && context.teardownFailed !== true) return;
     context.authInvalidation = message;
     if (context.sharedProcess) {
@@ -4227,6 +4305,10 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       return;
     }
     const threadId = context.session.threadId;
+    if (context.discovery) {
+      void this.stopDiscoverySessionContext(context).catch(() => undefined);
+      return;
+    }
     if (this.sessions.get(threadId) === context) {
       void this.stopSession(threadId).catch((error) => {
         log.warn("failed to stop stale Codex session", { threadId, error });
@@ -4241,11 +4323,16 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     if (context.authInvalidation) return context.authInvalidation;
     if (!context.authTracking || context.authFingerprint === undefined) return undefined;
     try {
-      return readCurrentCodexAuthFingerprint(context.codexOptions, authReads) ===
-        context.authFingerprint
+      const fingerprint = readCurrentCodexAuthFingerprint(context.codexOptions, authReads);
+      return fingerprint === context.authFingerprint
         ? undefined
         : "Codex authentication changed on disk; the stale app-server session was stopped and must be restarted.";
     } catch (error) {
+      if (!isConfirmedCodexAuthBindingFailure(error)) {
+        if (!context.authRevalidation || Date.now() >= context.authRevalidation.retryAt)
+          this.deferAuthRevalidation(context, error);
+        return undefined;
+      }
       log.warn("codex session auth freshness revalidation failed", {
         threadId: context.session.threadId,
         cause: error instanceof Error ? error.message : String(error),
@@ -4258,12 +4345,19 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     context: CodexSessionContext,
     authReads?: CodexAuthReadMemo,
   ): boolean {
-    return this.contextAuthStalenessMessage(context, authReads) === undefined;
+    return (
+      this.contextAuthStalenessMessage(context, authReads) === undefined &&
+      !context.authRevalidation
+    );
   }
 
   private assertContextAuthCurrent(context: CodexSessionContext): void {
     const stalenessMessage = this.contextAuthStalenessMessage(context);
     if (stalenessMessage) throw new Error(stalenessMessage);
+    if (context.authRevalidation)
+      throw new CodexAuthRevalidationUnavailableError(
+        "Codex auth revalidation is pending; retry the request.",
+      );
   }
 
   private assertDiscoveryAuthMatchesRequest(
@@ -4745,21 +4839,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       delete context.detachStdout;
     };
 
-    context.child.stderr.on("data", (chunk: Buffer) => {
-      if (context.stopping) {
-        return;
-      }
-      const raw = chunk.toString();
-      const lines = raw.split(/\r?\n/g);
-      for (const rawLine of lines) {
-        const classified = classifyCodexStderrLine(rawLine);
-        if (!classified) {
-          continue;
-        }
-
-        this.emitErrorEvent(context, "process/stderr", classified.message);
-      }
-    });
+    this.attachStderrLogging(context.child, context);
 
     context.child.on("error", (error) => this.handleTransportFailure(context, error));
 
@@ -4806,6 +4886,41 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       // Retire resources promptly while retaining the replacement barrier until
       // teardown settles. Post-exit capture keeps startup failures uncertain.
       this.stopFailedContext(context);
+    });
+  }
+
+  private attachStderrLogging(
+    child: ChildProcessWithoutNullStreams,
+    context?: CodexSessionContext,
+  ): void {
+    const framer = new JsonRpcStdioFramer(16_384, () => {
+      log.warn("Codex stderr line was omitted because it could not be safely framed.");
+    });
+    const publish = (chunk: Buffer) => {
+      for (const line of framer.push(chunk)) {
+        const classified = classifyCodexStderrLine(line);
+        if (!classified) continue;
+        log.warn(
+          context
+            ? "Codex app-server stderr error."
+            : "Shared Codex app-server reported a process-level stderr error.",
+          {
+            threadId: context?.session.threadId,
+            stderr: redactDiagnosticText(line, { maxLength: 2_000 }),
+          },
+        );
+        if (context && !context.stopping)
+          this.emitErrorEvent(
+            context,
+            "process/stderr",
+            redactDiagnosticText(classified.message, { maxLength: 2_000 }),
+          );
+      }
+    };
+    child.stderr.on("data", publish);
+    child.stderr.once("end", () => {
+      publish(Buffer.from("\n"));
+      framer.close();
     });
   }
 
@@ -4967,6 +5082,26 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       providerParentThreadId,
       isChildConversation,
     } = resolvedCollaborationRoute;
+    const errorInfo = this.readObject(this.readObject(notification.params)?.error)?.codexErrorInfo;
+    const authError =
+      errorInfo === "unauthorized" ||
+      Object.values(asObject(errorInfo) ?? {}).some(
+        (value) => asObject(value)?.httpStatusCode === 401,
+      );
+    if (
+      !isChildConversation &&
+      ((notification.method === "account/updated" &&
+        asObject(notification.params)?.authMode === null) ||
+        (notification.method === "error" &&
+          asObject(notification.params)?.willRetry !== true &&
+          authError))
+    ) {
+      this.invalidateContextAuth(
+        context,
+        "Codex authentication failed for this account. Sign in again before starting a turn.",
+      );
+      return;
+    }
     if (
       context.gatewayRenewalInProgress &&
       !isChildConversation &&

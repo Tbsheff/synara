@@ -4049,9 +4049,12 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
                   if (error instanceof CodexSessionAuthInvalidatedError) return null;
                   rejectInspection();
                   void Effect.runPromise(
-                    Effect.logError("Codex callback auth inspection failed; origin rejected", {
-                      threadId,
-                    }),
+                    Effect.logWarning(
+                      "Codex callback auth inspection failed; revalidation deferred",
+                      {
+                        threadId,
+                      },
+                    ),
                   );
                   return null;
                 });
