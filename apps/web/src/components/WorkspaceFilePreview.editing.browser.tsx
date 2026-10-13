@@ -1024,6 +1024,7 @@ it("preserves the bounded Markdown editor while its preview is open", async () =
     expect(editor.element().getAttribute("contenteditable")).toBe("true");
     await editor.click({ position: { x: 15, y: 5 } });
     await userEvent.keyboard(shortcut("z"));
+    await userEvent.keyboard(shortcut("z"));
     await expect.element(editor).toHaveTextContent("line");
   } finally {
     restoreNativeApi();
