@@ -14,6 +14,7 @@ import {
   ProviderStartOptions,
   ProjectId,
   TurnId,
+  ThreadId,
 } from "@synara/contracts";
 import { automationRequiresTargetThread } from "@synara/shared/automationMode";
 import { Effect, Layer, Option, Schema } from "effect";
@@ -893,11 +894,12 @@ const makeAutomationRepository = Effect.gen(function* () {
 
   const listRunRows = SqlSchema.findAll({
     Request: Schema.Struct({
+      threadIds: Schema.optional(Schema.Array(ThreadId)),
       projectId: Schema.optional(ProjectId),
       includeArchived: Schema.Boolean,
     }),
     Result: AutomationRunDbRow,
-    execute: ({ projectId, includeArchived }) =>
+    execute: ({ projectId, includeArchived, threadIds }) =>
       sql`
         SELECT
           runs.run_id AS "id",
@@ -927,8 +929,9 @@ const makeAutomationRepository = Effect.gen(function* () {
           ON definitions.automation_id = runs.automation_id
         WHERE (${projectId ?? null} IS NULL OR runs.project_id = ${projectId ?? null})
           AND (${includeArchived ? 1 : 0} = 1 OR definitions.archived_at IS NULL)
+          AND ${threadIds === undefined ? sql`1 = 1` : threadIds.length === 0 ? sql`0 = 1` : sql`runs.thread_id IN ${sql.in(threadIds)}`}
         ORDER BY runs.scheduled_for DESC, runs.run_id DESC
-        LIMIT ${MAX_RUN_LIST_ROWS}
+        LIMIT ${threadIds === undefined ? MAX_RUN_LIST_ROWS : Math.max(1, threadIds.length)}
       `,
   });
 
@@ -1731,6 +1734,7 @@ const makeAutomationRepository = Effect.gen(function* () {
 
   const list: AutomationRepositoryShape["list"] = (input = {}) => {
     const normalized = {
+      threadIds: input.threadIds,
       projectId: input.projectId,
       includeArchived: input.includeArchived ?? false,
     };

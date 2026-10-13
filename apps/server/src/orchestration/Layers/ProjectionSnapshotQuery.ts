@@ -793,6 +793,7 @@ function toProjectedThreadShellFromStoredSummary(input: {
     createdAt: threadRow.createdAt,
     updatedAt: threadRow.updatedAt,
     archivedAt: threadRow.archivedAt ?? null,
+    archivedByThreadId: threadRow.archivedByThreadId ?? null,
     settledAt: threadRow.settledAt ?? null,
     snoozedUntil: threadRow.snoozedUntil ?? null,
     snoozeReminderAt: threadRow.snoozeReminderAt ?? null,
@@ -855,6 +856,7 @@ function toProjectedThread(input: {
     createdAt: threadRow.createdAt,
     updatedAt: threadRow.updatedAt,
     archivedAt: threadRow.archivedAt ?? null,
+    archivedByThreadId: threadRow.archivedByThreadId ?? null,
     settledAt: threadRow.settledAt ?? null,
     snoozedUntil: threadRow.snoozedUntil ?? null,
     snoozeReminderAt: threadRow.snoozeReminderAt ?? null,
@@ -1070,7 +1072,12 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           goal_achievements_json AS "goalAchievements",
           parent_thread_id AS "parentThreadId",
           creation_source AS "creationSource",
-          source_thread_id AS "sourceThreadId",
+          COALESCE(source_thread_id, CASE WHEN creation_source = 'automation_run' THEN (
+            SELECT COALESCE(definitions.target_thread_id, definitions.source_thread_id)
+            FROM automation_runs runs JOIN automation_definitions definitions USING (automation_id)
+            WHERE runs.thread_id = projection_threads.thread_id
+            ORDER BY runs.created_at DESC LIMIT 1
+          ) END) AS "sourceThreadId",
           source_turn_id AS "sourceTurnId",
           gateway_operation_id AS "gatewayOperationId",
           gateway_operation_index AS "gatewayOperationIndex",
@@ -1095,6 +1102,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           archived_at AS "archivedAt",
+          archived_by_thread_id AS "archivedByThreadId",
           settled_at AS "settledAt",
           snoozed_until AS "snoozedUntil",
           snooze_reminder_at AS "snoozeReminderAt",
@@ -1127,7 +1135,12 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           is_pinned AS "isPinned",
           parent_thread_id AS "parentThreadId",
           creation_source AS "creationSource",
-          source_thread_id AS "sourceThreadId",
+          COALESCE(source_thread_id, CASE WHEN creation_source = 'automation_run' THEN (
+            SELECT COALESCE(definitions.target_thread_id, definitions.source_thread_id)
+            FROM automation_runs runs JOIN automation_definitions definitions USING (automation_id)
+            WHERE runs.thread_id = projection_threads.thread_id
+            ORDER BY runs.created_at DESC LIMIT 1
+          ) END) AS "sourceThreadId",
           source_turn_id AS "sourceTurnId",
           gateway_operation_id AS "gatewayOperationId",
           gateway_operation_index AS "gatewayOperationIndex",
@@ -1155,6 +1168,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           archived_at AS "archivedAt",
+          archived_by_thread_id AS "archivedByThreadId",
           settled_at AS "settledAt",
           snoozed_until AS "snoozedUntil",
           snooze_reminder_at AS "snoozeReminderAt",
@@ -1172,6 +1186,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         SELECT
           thread_id AS "threadId",
           archived_at AS "archivedAt",
+          archived_by_thread_id AS "archivedByThreadId",
           deleted_at AS "deletedAt",
           worktree_path AS "worktreePath",
           associated_worktree_path AS "associatedWorktreePath"
@@ -1910,7 +1925,12 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           goal_achievements_json AS "goalAchievements",
           parent_thread_id AS "parentThreadId",
           creation_source AS "creationSource",
-          source_thread_id AS "sourceThreadId",
+          COALESCE(source_thread_id, CASE WHEN creation_source = 'automation_run' THEN (
+            SELECT COALESCE(definitions.target_thread_id, definitions.source_thread_id)
+            FROM automation_runs runs JOIN automation_definitions definitions USING (automation_id)
+            WHERE runs.thread_id = projection_threads.thread_id
+            ORDER BY runs.created_at DESC LIMIT 1
+          ) END) AS "sourceThreadId",
           source_turn_id AS "sourceTurnId",
           gateway_operation_id AS "gatewayOperationId",
           gateway_operation_index AS "gatewayOperationIndex",
@@ -1935,6 +1955,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           archived_at AS "archivedAt",
+          archived_by_thread_id AS "archivedByThreadId",
           settled_at AS "settledAt",
           snoozed_until AS "snoozedUntil",
           snooze_reminder_at AS "snoozeReminderAt",
@@ -1975,7 +1996,12 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           goal_achievements_json AS "goalAchievements",
           parent_thread_id AS "parentThreadId",
           creation_source AS "creationSource",
-          source_thread_id AS "sourceThreadId",
+          COALESCE(source_thread_id, CASE WHEN creation_source = 'automation_run' THEN (
+            SELECT COALESCE(definitions.target_thread_id, definitions.source_thread_id)
+            FROM automation_runs runs JOIN automation_definitions definitions USING (automation_id)
+            WHERE runs.thread_id = projection_threads.thread_id
+            ORDER BY runs.created_at DESC LIMIT 1
+          ) END) AS "sourceThreadId",
           source_turn_id AS "sourceTurnId",
           gateway_operation_id AS "gatewayOperationId",
           gateway_operation_index AS "gatewayOperationIndex",
@@ -2000,6 +2026,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           archived_at AS "archivedAt",
+          archived_by_thread_id AS "archivedByThreadId",
           settled_at AS "settledAt",
           snoozed_until AS "snoozedUntil",
           snooze_reminder_at AS "snoozeReminderAt",
@@ -2318,7 +2345,12 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           goal_achievements_json AS "goalAchievements",
           parent_thread_id AS "parentThreadId",
           creation_source AS "creationSource",
-          source_thread_id AS "sourceThreadId",
+          COALESCE(source_thread_id, CASE WHEN creation_source = 'automation_run' THEN (
+            SELECT COALESCE(definitions.target_thread_id, definitions.source_thread_id)
+            FROM automation_runs runs JOIN automation_definitions definitions USING (automation_id)
+            WHERE runs.thread_id = projection_threads.thread_id
+            ORDER BY runs.created_at DESC LIMIT 1
+          ) END) AS "sourceThreadId",
           source_turn_id AS "sourceTurnId",
           gateway_operation_id AS "gatewayOperationId",
           gateway_operation_index AS "gatewayOperationIndex",
@@ -2343,6 +2375,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           archived_at AS "archivedAt",
+          archived_by_thread_id AS "archivedByThreadId",
           settled_at AS "settledAt",
           snoozed_until AS "snoozedUntil",
           snooze_reminder_at AS "snoozeReminderAt",

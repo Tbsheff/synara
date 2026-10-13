@@ -1,10 +1,42 @@
 // FILE: threadHierarchy.ts
-// Purpose: Parent/child traversal over subagent thread linkage shared by server and web.
-// Exports: collectSubagentDescendants
 
 interface HierarchyThread {
   readonly id: string;
   readonly parentThreadId?: string | null | undefined;
+  readonly sourceThreadId?: string | null | undefined;
+  readonly creationSource?: string | null | undefined;
+  readonly projectId?: string | undefined;
+  readonly deletedAt?: string | null | undefined;
+}
+
+export function ownedThreadParentId<T extends HierarchyThread>(thread: T): T["id"] | null {
+  return (
+    thread.parentThreadId ??
+    (thread.creationSource === "synara_mcp" ||
+    thread.creationSource === "external_mcp" ||
+    thread.creationSource === "automation_run"
+      ? (thread.sourceThreadId ?? null)
+      : null)
+  );
+}
+
+export function collectOwnedThreadDescendants<T extends HierarchyThread>(
+  threads: readonly T[],
+  rootThreadId: T["id"],
+): T[] {
+  const byId = new Map(threads.map((thread) => [thread.id, thread]));
+  return collectSubagentDescendants(
+    threads.map((thread) => {
+      const parentId = ownedThreadParentId(thread);
+      const parent = parentId === null ? undefined : byId.get(parentId);
+      return {
+        ...thread,
+        parentThreadId:
+          parent && !parent.deletedAt && parent.projectId === thread.projectId ? parentId : null,
+      };
+    }),
+    rootThreadId,
+  ).map((thread) => byId.get(thread.id)!);
 }
 
 // Collects every thread reachable from `rootThreadId` through `parentThreadId`

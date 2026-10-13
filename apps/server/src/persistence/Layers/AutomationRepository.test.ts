@@ -296,6 +296,48 @@ layer("AutomationRepository", (it) => {
     }),
   );
 
+  it.effect(
+    "limits sidebar run links to the requested threads, including archived definitions",
+    () =>
+      Effect.gen(function* () {
+        const repository = yield* AutomationRepository;
+        yield* runMigrations();
+        const automationId = AutomationId.makeUnsafe("sidebar-links");
+        const projectId = ProjectId.makeUnsafe("sidebar-links-project");
+        yield* repository.createDefinition({
+          id: automationId,
+          input: createInputForProject(projectId),
+          now: permissionSnapshot.createdAt,
+        });
+        for (const suffix of ["wanted", "other"]) {
+          yield* repository.createRun({
+            id: AutomationRunId.makeUnsafe(`sidebar-${suffix}`),
+            automationId,
+            projectId,
+            threadId: ThreadId.makeUnsafe(suffix),
+            trigger: { type: "manual" },
+            scheduledFor: permissionSnapshot.createdAt,
+            permissionSnapshot,
+            now: permissionSnapshot.createdAt,
+          });
+        }
+        yield* repository.archiveDefinition({
+          id: automationId,
+          archivedAt: permissionSnapshot.createdAt,
+        });
+        const result = yield* repository.list({
+          includeArchived: true,
+          threadIds: [ThreadId.makeUnsafe("wanted")],
+        });
+        assert.deepStrictEqual(
+          result.runs.map((run) => run.threadId),
+          [ThreadId.makeUnsafe("wanted")],
+        );
+        assert.isTrue(result.definitions.some((definition) => definition.id === automationId));
+        assert.deepStrictEqual((yield* repository.list({ threadIds: [] })).runs, []);
+      }),
+  );
+
   it.effect("persists automation memory without including bodies in list snapshots", () =>
     Effect.gen(function* () {
       const repository = yield* AutomationRepository;

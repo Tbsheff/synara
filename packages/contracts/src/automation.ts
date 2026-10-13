@@ -418,6 +418,7 @@ export const AutomationResolveProposalResult = Schema.Struct({
 export type AutomationResolveProposalResult = typeof AutomationResolveProposalResult.Type;
 
 export const AutomationListInput = Schema.Struct({
+  threadIds: Schema.optional(Schema.Array(ThreadId)),
   projectId: Schema.optional(ProjectId),
   includeArchived: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
 });

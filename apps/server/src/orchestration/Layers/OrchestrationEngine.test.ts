@@ -2474,6 +2474,94 @@ describe("OrchestrationEngine", () => {
     await system.dispose();
   });
 
+  it("archives owned children after settlement and restores only its own archives", async () => {
+    const system = await createOrchestrationSystem();
+    const { engine } = system;
+    const createdAt = now();
+    const projectId = asProjectId("owned-archives");
+    const parentId = ThreadId.makeUnsafe("owned-parent");
+    const childId = ThreadId.makeUnsafe("owned-child");
+    const priorId = ThreadId.makeUnsafe("already-archived-child");
+    const commandId = () => CommandId.makeUnsafe(crypto.randomUUID());
+    try {
+      await system.run(
+        engine.dispatch({
+          type: "project.create",
+          commandId: commandId(),
+          projectId,
+          title: "Owned archive test",
+          workspaceRoot: "/tmp/owned-archive-test",
+          createdAt,
+        }),
+      );
+      for (const threadId of [parentId, childId, priorId]) {
+        await system.run(
+          engine.dispatch({
+            type: "thread.create",
+            commandId: commandId(),
+            threadId,
+            projectId,
+            title: threadId,
+            modelSelection: { provider: "codex", model: "gpt-5-codex" },
+            interactionMode: "default",
+            runtimeMode: "approval-required",
+            branch: null,
+            worktreePath: null,
+            createdAt,
+            ...(threadId !== parentId
+              ? { creationSource: "synara_mcp", sourceThreadId: parentId }
+              : {}),
+          }),
+        );
+      }
+      await system.run(
+        engine.dispatch({ type: "thread.archive", commandId: commandId(), threadId: priorId }),
+      );
+      const setSession = (status: "running" | "ready") =>
+        engine.dispatch({
+          type: "thread.session.set",
+          commandId: commandId(),
+          threadId: childId,
+          createdAt,
+          session: {
+            threadId: childId,
+            providerName: "codex",
+            status,
+            activeTurnId: status === "running" ? asTurnId("owned-turn") : null,
+            runtimeMode: "approval-required",
+            lastError: null,
+            updatedAt: createdAt,
+          },
+        });
+      await system.run(setSession("running"));
+      await system.run(
+        engine.dispatch({ type: "thread.archive", commandId: commandId(), threadId: parentId }),
+      );
+      expect(
+        (await system.run(engine.getReadModel())).threads.find((t) => t.id === childId)?.archivedAt,
+      ).toBeNull();
+      await system.run(setSession("ready"));
+      const settled = (await system.run(engine.getReadModel())).threads.find(
+        (t) => t.id === childId,
+      );
+      expect(settled?.archivedAt).toBeTruthy();
+      expect(settled?.archivedByThreadId).toBe(parentId);
+      const rows = await system.run(system.sql<{ archived_by_thread_id: string | null }>`
+        SELECT archived_by_thread_id FROM projection_threads WHERE thread_id = ${childId}
+      `);
+      expect(rows[0]?.archived_by_thread_id).toBe(parentId);
+      await system.run(
+        engine.dispatch({ type: "thread.unarchive", commandId: commandId(), threadId: parentId }),
+      );
+      const restored = await system.run(engine.getReadModel());
+      expect(restored.threads.find((t) => t.id === childId)?.archivedAt).toBeNull();
+      expect(restored.threads.find((t) => t.id === childId)?.archivedByThreadId).toBeNull();
+      expect(restored.threads.find((t) => t.id === priorId)?.archivedAt).toBeTruthy();
+    } finally {
+      await system.dispose();
+    }
+  });
+
   it("stores completed checkpoint summaries even when no files changed", async () => {
     const system = await createOrchestrationSystem();
     const { engine } = system;

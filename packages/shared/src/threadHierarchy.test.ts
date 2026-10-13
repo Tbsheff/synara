@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { collectSubagentDescendants } from "./threadHierarchy";
+import { collectOwnedThreadDescendants, collectSubagentDescendants } from "./threadHierarchy";
 
 function thread(id: string, parentThreadId?: string | null) {
   return { id, parentThreadId: parentThreadId ?? null };
@@ -34,5 +34,45 @@ describe("collectSubagentDescendants", () => {
     ];
 
     expect(collectSubagentDescendants(threads, "root").map((entry) => entry.id)).toEqual(["child"]);
+  });
+});
+
+describe("collectOwnedThreadDescendants", () => {
+  it("preserves source-only rows without turning them into native subagents", () => {
+    const parent = { id: "parent", projectId: "p" };
+    const child = {
+      id: "child",
+      projectId: "p",
+      creationSource: "synara_mcp",
+      sourceThreadId: "parent",
+    };
+    const hub = {
+      id: "hub-work",
+      projectId: "p",
+      creationSource: "external_mcp",
+      sourceThreadId: "child",
+    };
+    const run = {
+      id: "run",
+      projectId: "p",
+      creationSource: "automation_run",
+      sourceThreadId: "parent",
+    };
+    const result = collectOwnedThreadDescendants([parent, child, hub, run], "parent");
+    expect(result).toEqual([child, run, hub]);
+    expect(result[0]).toBe(child);
+    expect(result[0]).not.toHaveProperty("parentThreadId");
+  });
+  it("ignores missing, deleted, and cross-project owners and survives cycles", () => {
+    const threads = [
+      { id: "parent", projectId: "p", sourceThreadId: "child", creationSource: "synara_mcp" },
+      { id: "child", projectId: "p", sourceThreadId: "parent", creationSource: "synara_mcp" },
+      { id: "other", projectId: "q", sourceThreadId: "parent", creationSource: "synara_mcp" },
+      { id: "deleted", projectId: "p", deletedAt: "now" },
+      { id: "orphan", projectId: "p", sourceThreadId: "deleted", creationSource: "synara_mcp" },
+      { id: "missing", projectId: "p", sourceThreadId: "absent", creationSource: "synara_mcp" },
+    ];
+    expect(collectOwnedThreadDescendants(threads, "parent").map((t) => t.id)).toEqual(["child"]);
+    expect(collectOwnedThreadDescendants(threads, "deleted")).toEqual([]);
   });
 });
