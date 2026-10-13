@@ -381,7 +381,13 @@ import type {
   ProviderReadPluginInput,
   ProviderReadPluginResult,
 } from "./providerDiscovery";
-import type { ProviderCompactThreadInput } from "./provider";
+import type {
+  ProviderCompactThreadInput,
+  ProviderGetMcpAuthInput,
+  ProviderMcpAuthState,
+  ProviderAuthenticateMcpInput,
+  ProviderAuthenticateMcpResult,
+} from "./provider";
 import type {
   StatsGetProfileStatsInput,
   StatsGetProfileStatsResult,
@@ -1408,6 +1414,10 @@ export interface NativeApi {
     listPlugins: (input: ProviderListPluginsInput) => Promise<ProviderListPluginsResult>;
     readPlugin: (input: ProviderReadPluginInput) => Promise<ProviderReadPluginResult>;
     getPermissions: (input: ProviderGetPermissionsInput) => Promise<ProviderPermissionsResult>;
+    getMcpAuth: (input: ProviderGetMcpAuthInput) => Promise<ProviderMcpAuthState>;
+    authenticateMcp: (
+      input: ProviderAuthenticateMcpInput,
+    ) => Promise<ProviderAuthenticateMcpResult>;
     listModels: (input: ProviderListModelsInput) => Promise<ProviderListModelsResult>;
     listAgents: (input: ProviderListAgentsInput) => Promise<ProviderListAgentsResult>;
   };

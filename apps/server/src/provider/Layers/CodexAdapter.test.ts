@@ -3352,6 +3352,22 @@ describe("Codex runtime event mapper transcript details", () => {
     );
   });
 
+  it("labels native MCP reauthentication so the transcript filter keeps it hidden", () => {
+    const event = single(
+      makeCodexRuntimeEventMapper()(
+        native("mcpServer/startupStatus/updated", {
+          name: "linear",
+          status: "failed",
+          failureReason: "reauthenticationRequired",
+          error: "Sign in again",
+        }),
+        mapperThreadId,
+      ),
+    );
+    if (event.type !== "transcript.notice") return assert.fail("expected notice");
+    assert.equal(event.payload.title, "MCP server linear needs authentication");
+  });
+
   it("dedupes skills and MCP startup notices per lifecycle generation", () => {
     const map = makeCodexRuntimeEventMapper();
     const skillsKey = (generation: string, tracker = new CodexTranscriptTracker()) => {

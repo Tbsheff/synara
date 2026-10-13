@@ -12,6 +12,10 @@
  * @module ProviderService
  */
 import type {
+  ProviderGetMcpAuthInput,
+  ProviderMcpAuthState,
+  ProviderAuthenticateMcpInput,
+  ProviderAuthenticateMcpResult,
   ClaudeCacheObservation,
   ProviderBackgroundTaskInput,
   ProviderForkThreadInput,
@@ -102,6 +106,12 @@ export interface ProviderServiceShape {
   readonly cancelClaudeCompactionDiscovery?: (
     threadId: ThreadId,
   ) => Effect.Effect<void, ProviderServiceError>;
+  readonly getMcpAuth?: (
+    input: ProviderGetMcpAuthInput,
+  ) => Effect.Effect<ProviderMcpAuthState, ProviderServiceError>;
+  readonly authenticateMcp?: (
+    input: ProviderAuthenticateMcpInput,
+  ) => Effect.Effect<ProviderAuthenticateMcpResult, ProviderServiceError>;
   readonly getClaudeCacheObservation?: (
     threadId: ThreadId,
   ) => Effect.Effect<ClaudeCacheObservation | undefined, ProviderServiceError>;

@@ -4869,6 +4869,32 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           ),
         );
 
+    const getMcpAuth: NonNullable<ProviderServiceShape["getMcpAuth"]> = (input) =>
+      Effect.gen(function* () {
+        const routed = yield* resolveRoutableSession({
+          threadId: input.threadId,
+          operation: "ProviderService.getMcpAuth",
+          allowRecovery: false,
+        });
+        if (!routed.isActive || !routed.adapter.getMcpAuth) return { servers: [] };
+        return yield* routed.adapter.getMcpAuth(input);
+      });
+
+    const authenticateMcp: NonNullable<ProviderServiceShape["authenticateMcp"]> = (input) =>
+      Effect.gen(function* () {
+        const routed = yield* resolveRoutableSession({
+          threadId: input.threadId,
+          operation: "ProviderService.authenticateMcp",
+          allowRecovery: false,
+        });
+        if (!routed.isActive || !routed.adapter.authenticateMcp)
+          return yield* toValidationError(
+            "ProviderService.authenticateMcp",
+            "MCP sign-in is unavailable for this session. Re-check and try again.",
+          );
+        return yield* routed.adapter.authenticateMcp(input);
+      });
+
     const getClaudeCacheObservation: NonNullable<
       ProviderServiceShape["getClaudeCacheObservation"]
     > = (threadId) =>
@@ -5200,6 +5226,8 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       clearSessionResumeCursor,
       listSessions,
       getCapabilities,
+      getMcpAuth,
+      authenticateMcp,
       getClaudeCacheObservation,
       startClaudeCompaction,
       cancelClaudeCompactionDiscovery,

@@ -8,6 +8,10 @@
  * @module ProviderAdapter
  */
 import type {
+  ProviderGetMcpAuthInput,
+  ProviderMcpAuthState,
+  ProviderAuthenticateMcpInput,
+  ProviderAuthenticateMcpResult,
   ApprovalRequestId,
   ClaudeCacheObservation,
   ProviderComposerCapabilities,
@@ -335,6 +339,12 @@ export interface ProviderAdapterShape<TError> {
   readonly cancelClaudeCompactionDiscovery?: (threadId: ThreadId) => Effect.Effect<void>;
 
   /** Read bounded native/local cache evidence without delivering a model prompt. */
+  readonly getMcpAuth?: (
+    input: ProviderGetMcpAuthInput,
+  ) => Effect.Effect<ProviderMcpAuthState, TError>;
+  readonly authenticateMcp?: (
+    input: ProviderAuthenticateMcpInput,
+  ) => Effect.Effect<ProviderAuthenticateMcpResult, TError>;
   readonly getClaudeCacheObservation?: (
     threadId: ThreadId,
   ) => Effect.Effect<ClaudeCacheObservation | undefined, TError>;

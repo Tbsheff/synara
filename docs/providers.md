@@ -672,3 +672,29 @@ The welcome tour shows **Could not check** and the probe error when a provider c
 **Not installed** means the probe found no executable. An installed CLI with a failed sign-in
 check does not count as connected. If the sign-in command cannot start in the terminal, use
 **Retry** to run it again, then **Re-detect** to check the result.
+
+## MCP server sign-in
+
+When a live Codex or Claude session reports servers that need authentication,
+the composer shows **N MCP servers need sign-in**. Open it for the server list.
+These authentication notices stay hidden in the transcript. Errors from a
+sign-in attempt appear in the list.
+
+- **Codex:** **Authenticate** starts `mcpServer/oauth/login` in the thread's own
+  app-server and opens its authorization URL. Complete browser consent. Native
+  completion or the next status check clears the indicator. **Open sign-in**
+  reopens the browser if needed. Older runtimes without the login method show
+  a `codex mcp login` command for the selected account and **Re-check**.
+- **Claude:** the pinned SDK exposes `mcpServerStatus` and `reconnectMcpServer`,
+  but no public MCP OAuth login method. **Authenticate** shows a command for
+  the session's executable, working directory, and account directories. Run it
+  on the server machine, enter `/mcp`, select the server, and authenticate.
+  **Re-check** reconnects that server and reads native status.
+
+Browser callbacks must reach the machine that runs the provider. Synara does
+not read or copy MCP tokens. Auth state belongs to the live session; a stopped
+or replaced session cannot authenticate through an old list. Other providers
+have no verified MCP sign-in path here.
+
+Native references: [Codex app-server MCP OAuth](https://github.com/openai/codex/blob/main/codex-rs/app-server/README.md#mcp-oauth-login)
+and [Claude MCP authentication](https://code.claude.com/docs/en/mcp#authenticate-with-remote-mcp-servers).

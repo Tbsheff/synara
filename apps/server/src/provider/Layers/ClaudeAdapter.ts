@@ -1,3 +1,5 @@
+import type { Query } from "@anthropic-ai/claude-agent-sdk";
+import { McpAuthState, mcpManualCommand } from "../mcpAuth";
 import { providerProcessPriorityEnabled } from "../../providerProcessPriority";
 import { claudeTurnResultUsage, type ClaudeResultUsageBaseline } from "../claudeResultUsage.ts";
 import { restoreClaudeImportedCopyDates } from "../claudeImportedCopyDates.ts";
@@ -384,6 +386,7 @@ interface ClaudeSubagentRun {
 type ClaudeTokenUsageState = "current" | "skip-compaction-call" | "awaiting-fresh-assistant";
 
 interface ClaudeSessionContext {
+  readonly mcpAuth: McpAuthState;
   resultUsageBaseline?: ClaudeResultUsageBaseline;
   readonly gatewaySessionLease?: AgentGatewaySessionLease;
   session: ProviderSession;
@@ -543,6 +546,8 @@ interface ClaudeStopSessionOptions {
 }
 
 interface ClaudeQueryRuntime extends AsyncIterable<SDKMessage> {
+  readonly mcpServerStatus?: Query["mcpServerStatus"];
+  readonly reconnectMcpServer?: Query["reconnectMcpServer"];
   readonly interrupt: () => Promise<void>;
   readonly stopTask: (taskId: string) => Promise<void>;
   readonly backgroundTasks: (toolUseId?: string) => Promise<boolean>;
@@ -3198,6 +3203,31 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         if (context.subagentRefs !== undefined || message.type !== "system") return;
         const servers = (message as { mcp_servers?: unknown }).mcp_servers;
         if (!Array.isArray(servers)) return;
+        const knownServers = new Set(
+          context.mcpAuth.snapshot().servers.map((server) => server.name),
+        );
+        context.mcpAuth.replace(
+          servers.flatMap((server: unknown) => {
+            if (
+              !server ||
+              typeof server !== "object" ||
+              !("name" in server) ||
+              typeof server.name !== "string" ||
+              !("status" in server)
+            )
+              return [];
+            return [
+              {
+                name: server.name,
+                needsAuth:
+                  server.status === "needs-auth" ||
+                  (knownServers.has(server.name) &&
+                    server.status !== "connected" &&
+                    server.status !== "disabled"),
+              },
+            ];
+          }),
+        );
         const generation = noticeGeneration(context);
         const raw = {
           method: sdkNativeMethod(message),
@@ -4100,6 +4130,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         toolUseId,
         taskId: undefined,
         context: {
+          mcpAuth: context.mcpAuth,
           session: context.session,
           commandDiscoveryKey: context.commandDiscoveryKey,
           accountDiscoveryKey: context.accountDiscoveryKey,
@@ -7536,6 +7567,17 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           };
 
           const context: ClaudeSessionContext = {
+            mcpAuth: new McpAuthState(crypto.randomUUID(), {
+              type: "manual",
+              command: mcpManualCommand({
+                provider: "claudeAgent",
+                binaryPath: resolveClaudeExecutable(providerOptions?.binaryPath),
+                cwd: input.cwd,
+                environment: claudeSdkEnv,
+              }),
+              instructions:
+                "Run on the Synara server machine. Enter /mcp, select this server, then Authenticate. Return here and select Re-check.",
+            }),
             ...(initialCacheObservation ? { cacheObservation: initialCacheObservation } : {}),
             ...(gatewaySessionLease ? { gatewaySessionLease } : {}),
             session,
@@ -9016,6 +9058,52 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         return { agents: [], source: "pending", cached: false };
       });
 
+    const getMcpAuth: NonNullable<ClaudeAdapterShape["getMcpAuth"]> = (input) =>
+      Effect.gen(function* () {
+        const context = yield* requireSession(input.threadId);
+        const state = context.mcpAuth;
+        if (input.refresh && context.query.mcpServerStatus) {
+          for (const server of state.snapshot().servers) {
+            if (context.query.reconnectMcpServer)
+              yield* requestClaudeControl(input.threadId, "mcp_reconnect", () =>
+                context.query.reconnectMcpServer!(server.name),
+              );
+          }
+          const servers = yield* requestClaudeControl(input.threadId, "mcp_status", () =>
+            context.query.mcpServerStatus!(),
+          );
+          if (context.stopped || sessions.get(input.threadId) !== context) return { servers: [] };
+          const knownServers = new Set(state.snapshot().servers.map((server) => server.name));
+          state.replace(
+            servers.map((server) => ({
+              name: server.name,
+              needsAuth:
+                server.status === "needs-auth" ||
+                (knownServers.has(server.name) &&
+                  server.status !== "connected" &&
+                  server.status !== "disabled"),
+            })),
+          );
+        }
+        return state.snapshot();
+      });
+
+    const authenticateMcp: NonNullable<ClaudeAdapterShape["authenticateMcp"]> = (input) =>
+      Effect.gen(function* () {
+        const context = yield* requireSession(input.threadId);
+        const state = context.mcpAuth.snapshot();
+        if (
+          state.sessionKey !== input.sessionKey ||
+          !state.servers.some((server) => server.name === input.serverName)
+        )
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: "authenticateMcp",
+            issue: "MCP sign-in session changed. Re-check and try again.",
+          });
+        return { state };
+      });
+
     const didResumeSession: NonNullable<ClaudeAdapterShape["didResumeSession"]> = (
       input,
       session,
@@ -9045,6 +9133,8 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
       startSession,
       didResumeSession,
       prepareSessionReplacement,
+      getMcpAuth,
+      authenticateMcp,
       getClaudeCacheObservation,
       startClaudeCompaction,
       cancelClaudeCompactionDiscovery,
