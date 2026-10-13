@@ -439,6 +439,10 @@
     "./keybindingRules": {
       "types": "./src/keybindingRules.ts",
       "import": "./src/keybindingRules.ts"
+    },
+    "./threadNotice": {
+      "types": "./src/threadNotice.ts",
+      "import": "./src/threadNotice.ts"
     }
   },
   "scripts": {

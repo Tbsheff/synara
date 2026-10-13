@@ -1,3 +1,4 @@
+import { makeParentNoticeRepository } from "./parentNoticeRepository.ts";
 import { Effect } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
@@ -14,6 +15,7 @@ export interface GatewayCompletionRow {
 /** Durable outbox and provider-send assignments, sharing the command ledger's transaction. */
 export const makeCompletionRepository = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
+  const parentNotices = yield* makeParentNoticeRepository;
   const isOutputSettled = (childThreadId: string) =>
     sql<{ count: number }>`
     SELECT count(*) AS count FROM provider_runtime_events
@@ -123,6 +125,7 @@ export const makeCompletionRepository = Effect.gen(function* () {
       }),
     );
   return {
+    parentNotices,
     hasCompletedRun,
     isOutputSettled,
     initialFailure,
