@@ -3961,16 +3961,13 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     const context = this.requireSession(input.threadId);
     const state = this.mcpAuthState(context);
     if (!readResumeCursorThreadId(context.session.resumeCursor)) return { servers: [] };
-    if (
-      context.mcpLogin &&
-      !state.snapshot().servers.some((server) => server.status === "authenticating")
-    )
-      context.mcpLogin = undefined;
+    const pending = state.snapshot().servers.some((server) => server.status === "authenticating");
+    if (context.mcpLogin && !pending) context.mcpLogin = undefined;
     if (
       !context.mcpAuthRead &&
       (input.refresh ||
         context.mcpAuthReadAt === undefined ||
-        Date.now() - context.mcpAuthReadAt >= 10_000)
+        Date.now() - context.mcpAuthReadAt >= (pending ? 10_000 : 300_000))
     ) {
       const version = state.version;
       const knownServers = new Set(state.snapshot().servers.map((server) => server.name));
@@ -4915,12 +4912,33 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     attempt: CodexMcpLoginAttempt,
     completion: McpLoginCompletion,
   ): void {
-    if (context.mcpLogin !== attempt || (attempt.loginId && completion.loginId !== attempt.loginId))
+    if (
+      this.sessions.get(context.session.threadId) !== context ||
+      context.stopping ||
+      context.mcpLogin !== attempt ||
+      (attempt.loginId && completion.loginId !== attempt.loginId)
+    )
       return;
     context.mcpLogin = undefined;
-    context.mcpAuthReadAt = undefined;
+    context.mcpAuthReadAt = Date.now();
     if (completion.success) this.mcpAuthState(context).succeed(attempt.name);
     else this.mcpAuthState(context).fail(attempt.name, completion.error ?? "MCP sign-in failed.");
+    this.emitEvent({
+      id: EventId.makeUnsafe(randomUUID()),
+      kind: "notification",
+      provider: "codex",
+      threadId: context.session.threadId,
+      createdAt: new Date().toISOString(),
+      ...(context.lifecycleGeneration !== undefined
+        ? { lifecycleGeneration: context.lifecycleGeneration }
+        : {}),
+      method: "mcpServer/oauthLogin/completed",
+      payload: {
+        name: attempt.name,
+        success: completion.success,
+        ...(completion.error ? { error: completion.error } : {}),
+      },
+    });
   }
 
   private handleServerNotification(
