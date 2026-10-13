@@ -15974,6 +15974,7 @@ describe("ProviderCommandReactor", () => {
     "child notice steers or queues without interrupting %s",
     async (provider) => {
       const harness = await createHarness({
+        ingestRuntimeEvents: true,
         threadModelSelection: {
           provider,
           model: provider === "cursor" ? "composer-1" : "gpt-5.6-terra",
@@ -16055,8 +16056,17 @@ describe("ProviderCommandReactor", () => {
           payload: { state: "completed" },
           providerRefs: {},
         } as ProviderRuntimeEvent);
+        await waitFor(async () => {
+          const rows = await Effect.runPromise(
+            harness.sql<{
+              text: string | null;
+            }>`SELECT delivery_text AS text FROM agent_parent_notice_batches WHERE batch_id = ${command.commandId}`,
+          );
+          return rows[0]?.text === "";
+        });
         await harness.drain();
         expect(harness.sendTurn).not.toHaveBeenCalled();
+        expect((await readHarnessThread(harness))?.session?.status).toBe("ready");
       }
     },
   );
