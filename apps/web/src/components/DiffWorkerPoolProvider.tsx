@@ -1,8 +1,19 @@
-import { WorkerPoolContextProvider, useWorkerPool } from "@pierre/diffs/react";
-import DiffsWorker from "@pierre/diffs/worker/worker.js?worker";
-import { useEffect, useState, type ReactNode } from "react";
+import { WorkerPoolContext, useWorkerPool } from "@pierre/diffs/react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type ReactNode,
+} from "react";
 import { useTheme } from "../hooks/useTheme";
 import { resolveDiffThemeName, type DiffThemeName } from "../lib/diffRendering";
+import {
+  getDiffWorkerPool,
+  setDiffWorkerWorkload,
+  subscribeDiffWorkerPool,
+} from "../lib/diffWorkerPool";
 
 function DiffWorkerThemeSync({ themeName }: { themeName: DiffThemeName }) {
   const workerPool = useWorkerPool();
@@ -31,34 +42,34 @@ function DiffWorkerThemeSync({ themeName }: { themeName: DiffThemeName }) {
 export function DiffWorkerPoolProvider({
   children,
   enabled = true,
+  fileCount,
 }: {
   children?: ReactNode;
   enabled?: boolean;
+  fileCount: number;
 }) {
-  const [started, setStarted] = useState(enabled);
+  const [owner] = useState(() => Symbol("diff-surface"));
+  const [workload, setWorkload] = useState(enabled ? fileCount : 0);
   const { resolvedTheme } = useTheme();
   const diffThemeName = resolveDiffThemeName(resolvedTheme);
-  const cores =
-    typeof navigator === "undefined" ? 4 : Math.max(1, navigator.hardwareConcurrency || 4);
-  const workerPoolSize = Math.max(2, Math.min(6, Math.floor(cores / 2)));
+  const themeRef = useRef(diffThemeName);
+  themeRef.current = diffThemeName;
+  const { pool, generation } = useSyncExternalStore(
+    subscribeDiffWorkerPool,
+    getDiffWorkerPool,
+    getDiffWorkerPool,
+  );
 
-  if (enabled && !started) setStarted(true);
-  if (!enabled && !started) return children;
+  if (enabled && fileCount > 0 && workload !== fileCount) setWorkload(fileCount);
+  useLayoutEffect(() => {
+    setDiffWorkerWorkload(owner, workload, diffThemeName);
+  }, [owner, workload, diffThemeName]);
+  useEffect(() => () => setDiffWorkerWorkload(owner, 0, themeRef.current), [owner]);
 
   return (
-    <WorkerPoolContextProvider
-      poolOptions={{
-        workerFactory: () => new DiffsWorker(),
-        poolSize: workerPoolSize,
-        totalASTLRUCacheSize: 240,
-      }}
-      highlighterOptions={{
-        theme: diffThemeName,
-        tokenizeMaxLineLength: 1_000,
-      }}
-    >
+    <WorkerPoolContext.Provider key={generation} value={pool}>
       <DiffWorkerThemeSync themeName={diffThemeName} />
-      {children}
-    </WorkerPoolContextProvider>
+      {workload > 0 && !pool ? null : children}
+    </WorkerPoolContext.Provider>
   );
 }

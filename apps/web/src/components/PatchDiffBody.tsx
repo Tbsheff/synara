@@ -53,7 +53,10 @@ export function PatchDiffBody({
   );
 
   return (
-    <DiffWorkerPoolProvider enabled={!isPending && renderableFiles.length > 0}>
+    <DiffWorkerPoolProvider
+      enabled={!isPending && renderableFiles.length > 0}
+      fileCount={renderableFiles.length}
+    >
       <div className="flex h-full min-h-0 flex-col">
         {truncatedLabel ? (
           <PullRequestWarningNote shape="banner">{truncatedLabel}</PullRequestWarningNote>

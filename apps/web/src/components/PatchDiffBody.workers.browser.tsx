@@ -69,7 +69,7 @@ it("starts one pool for files and keeps it through refresh, empty, and error sta
   const screen = await render(<PatchDiffBody {...pending} />);
   expect(workerStarts).toHaveBeenCalledTimes(0);
   await screen.rerender(<PatchDiffBody {...pending} patch={patch} isPending={false} isSuccess />);
-  const poolSize = Math.max(2, Math.min(6, Math.floor((navigator.hardwareConcurrency || 4) / 2)));
+  const poolSize = 1;
   await expect.poll(() => workerStarts.mock.calls.length).toBe(poolSize);
   await screen.rerender(<PatchDiffBody {...pending} />);
   await screen.rerender(
