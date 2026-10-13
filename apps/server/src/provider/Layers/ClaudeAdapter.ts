@@ -386,6 +386,7 @@ type ClaudeTokenUsageState = "current" | "skip-compaction-call" | "awaiting-fres
 
 interface ClaudeSessionContext {
   readonly mcpAuth: McpAuthState;
+  mcpAuthReadAt?: number;
   resultUsageBaseline?: ClaudeResultUsageBaseline;
   readonly gatewaySessionLease?: AgentGatewaySessionLease;
   session: ProviderSession;
@@ -9128,8 +9129,14 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
       Effect.gen(function* () {
         const context = yield* requireSession(input.threadId);
         const state = context.mcpAuth;
-        if (input.refresh && context.query.mcpServerStatus) {
-          for (const server of state.snapshot().servers) {
+        context.mcpAuthReadAt ??= Date.now();
+        if (
+          (input.refresh || Date.now() - context.mcpAuthReadAt >= 300_000) &&
+          context.query.mcpServerStatus
+        ) {
+          const version = state.version;
+          const knownServers = new Set(state.snapshot().servers.map((server) => server.name));
+          for (const server of input.refresh ? state.snapshot().servers : []) {
             if (context.query.reconnectMcpServer)
               yield* requestClaudeControl(input.threadId, "mcp_reconnect", () =>
                 context.query.reconnectMcpServer!(server.name),
@@ -9139,17 +9146,18 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             context.query.mcpServerStatus!(),
           );
           if (context.stopped || sessions.get(input.threadId) !== context) return { servers: [] };
-          const knownServers = new Set(state.snapshot().servers.map((server) => server.name));
-          state.replace(
-            servers.map((server) => ({
-              name: server.name,
-              needsAuth:
-                server.status === "needs-auth" ||
-                (knownServers.has(server.name) &&
-                  server.status !== "connected" &&
-                  server.status !== "disabled"),
-            })),
-          );
+          context.mcpAuthReadAt = Date.now();
+          if (version === state.version)
+            state.replace(
+              servers.map((server) => ({
+                name: server.name,
+                needsAuth:
+                  server.status === "needs-auth" ||
+                  (knownServers.has(server.name) &&
+                    server.status !== "connected" &&
+                    server.status !== "disabled"),
+              })),
+            );
         }
         return state.snapshot();
       });

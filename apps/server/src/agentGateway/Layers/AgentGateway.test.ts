@@ -1101,6 +1101,10 @@ function makeHarnessLayer(
             noticeLinks.set(`${parent}:${child}`, enabled);
           }),
         isChild: (parent, child) => Effect.sync(() => noticeLinks.has(`${parent}:${child}`)),
+        isLinkedChild: (child) =>
+          Effect.sync(() =>
+            [...noticeLinks].some(([key, enabled]) => enabled && key.endsWith(`:${child}`)),
+          ),
         candidates: () => Effect.succeed([]),
         save: () => Effect.void,
         acknowledge: (parent, child, sequence, turn) =>

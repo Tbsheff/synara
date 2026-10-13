@@ -1,29 +1,39 @@
 import "../../index.css";
-import { ThreadId, type ProviderMcpAuthState } from "@synara/contracts";
+import {
+  ThreadId,
+  type ProviderMcpAuthState,
+  type OrchestrationThreadStreamItem,
+} from "@synara/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { page } from "vitest/browser";
 import { render } from "vitest-browser-react";
 import { ComposerMcpAuth } from "./ComposerMcpAuth";
+import { makeActivity, makeDomainEvent } from "../../storeTestFixtures";
 
 const api = vi.hoisted(() => ({
   getMcpAuth: vi.fn(),
   authenticateMcp: vi.fn(),
   openExternal: vi.fn(),
+  onThreadEvent: vi.fn(),
 }));
 vi.mock("../../nativeApi", () => ({
-  ensureNativeApi: () => ({ provider: api, shell: { openExternal: api.openExternal } }),
+  ensureNativeApi: () => ({
+    provider: api,
+    shell: { openExternal: api.openExternal },
+    orchestration: { onThreadEvent: api.onThreadEvent },
+  }),
 }));
 const threadId = ThreadId.makeUnsafe("auth-thread");
 const initial: ProviderMcpAuthState = {
   sessionKey: "attempt-1",
   servers: [{ name: "linear", status: "needs-auth", action: { type: "oauth" } }],
 };
-async function mount() {
+async function mount(provider: "codex" | "claudeAgent" = "codex") {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const screen = await render(
     <QueryClientProvider client={client}>
-      <ComposerMcpAuth threadId={threadId} provider="codex" enabled />
+      <ComposerMcpAuth threadId={threadId} provider={provider} enabled />
     </QueryClientProvider>,
   );
   return { screen, client };
@@ -31,6 +41,51 @@ async function mount() {
 afterEach(() => vi.resetAllMocks());
 
 describe("MCP sign-in near the composer", () => {
+  it("uses slow empty recovery and wakes on the owning thread's MCP events", async () => {
+    let listener!: (event: OrchestrationThreadStreamItem) => void;
+    const unsubscribe = vi.fn();
+    api.onThreadEvent.mockImplementation((callback) => {
+      listener = callback;
+      return unsubscribe;
+    });
+    api.getMcpAuth.mockResolvedValue({ sessionKey: "attempt-1", servers: [] });
+    const { screen, client } = await mount();
+    try {
+      await expect.poll(() => api.getMcpAuth.mock.calls.length).toBe(1);
+      const query = client
+        .getQueryCache()
+        .find({ queryKey: ["provider", "mcp-auth", threadId, "codex"] })!;
+      const interval = (query.options as { refetchInterval?: unknown }).refetchInterval;
+      expect(typeof interval === "function" ? interval(query) : interval).toBe(300_000);
+      api.getMcpAuth.mockResolvedValue(initial);
+      const event = (
+        id: string,
+        noticeKind = "mcp-server-status",
+      ): OrchestrationThreadStreamItem => ({
+        kind: "event",
+        event: makeDomainEvent("thread.activity-appended", {
+          threadId: ThreadId.makeUnsafe(id),
+          activity: makeActivity({ kind: "transcript.notice", payload: { noticeKind } }),
+        }),
+      });
+      listener(event("different-thread"));
+      listener(event(threadId, "skills-changed"));
+      expect(api.getMcpAuth).toHaveBeenCalledTimes(1);
+      listener(event(threadId));
+      await expect
+        .element(page.getByRole("button", { name: "1 MCP server needs sign-in" }))
+        .toBeVisible();
+      api.getMcpAuth.mockResolvedValue({ sessionKey: "attempt-1", servers: [] });
+      listener(event(threadId, "mcp-oauth"));
+      await expect
+        .element(page.getByRole("button", { name: "1 MCP server needs sign-in" }))
+        .not.toBeInTheDocument();
+    } finally {
+      await screen.unmount();
+      client.clear();
+      expect(unsubscribe).toHaveBeenCalledOnce();
+    }
+  });
   it("opens native auth, re-checks status, and clears the indicator after success", async () => {
     api.getMcpAuth.mockResolvedValue(initial);
     api.authenticateMcp.mockResolvedValue({
@@ -145,6 +200,9 @@ describe("MCP sign-in near the composer", () => {
   });
 
   it("shows Claude's exact manual command and Re-check without launching a browser", async () => {
+    const command =
+      "cd '/tmp/MCP check' && CLAUDE_CONFIG_DIR='/tmp/provider home' '/opt/Claude CLI'";
+    const writeText = vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue();
     api.getMcpAuth.mockResolvedValue({
       sessionKey: "claude-attempt",
       servers: [
@@ -153,17 +211,18 @@ describe("MCP sign-in near the composer", () => {
           status: "needs-auth",
           action: {
             type: "manual",
-            command: "claude",
+            command,
             instructions: "Enter /mcp, select linear, then Authenticate.",
           },
         },
       ],
     });
-    const { screen, client } = await mount();
+    const { screen, client } = await mount("claudeAgent");
     try {
       await page.getByRole("button", { name: "1 MCP server needs sign-in" }).click();
-      await page.getByRole("button", { name: "Authenticate linear" }).click();
-      await expect.element(page.getByText("claude", { exact: true })).toBeVisible();
+      await expect.element(page.getByText(command, { exact: true })).toBeVisible();
+      await page.getByRole("button", { name: "Copy command for linear" }).click();
+      expect(writeText).toHaveBeenCalledExactlyOnceWith(command);
       await expect
         .element(page.getByText("Enter /mcp, select linear, then Authenticate."))
         .toBeVisible();
@@ -174,6 +233,7 @@ describe("MCP sign-in near the composer", () => {
     } finally {
       await screen.unmount();
       client.clear();
+      writeText.mockRestore();
     }
   });
 });

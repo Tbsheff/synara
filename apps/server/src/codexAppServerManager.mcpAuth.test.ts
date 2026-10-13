@@ -1,7 +1,7 @@
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { ThreadId } from "@synara/contracts";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { CodexAppServerManager } from "./codexAppServerManager";
 import { CodexJsonlFramer, CodexJsonlWriter } from "./codexAppServerTransport";
 
@@ -115,6 +115,85 @@ function harness(
 }
 
 describe("Codex native MCP auth", () => {
+  it("uses cached empty status for a minute and recovers a later sign-in need", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const h = harness();
+      h.setStatus("oAuth");
+      await h.manager.getMcpAuth({ threadId: h.threadId });
+      for (let i = 0; i < 6; i++) {
+        vi.setSystemTime(Date.now() + 10_000);
+        expect((await h.manager.getMcpAuth({ threadId: h.threadId })).servers).toEqual([]);
+      }
+      expect(h.requests).toHaveLength(1);
+      h.setStatus("notLoggedIn");
+      vi.setSystemTime(Date.now() + 300_000);
+      expect((await h.manager.getMcpAuth({ threadId: h.threadId })).servers[0]?.name).toBe(
+        "linear",
+      );
+      expect(h.requests).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("pushes an accepted OAuth completion on the owning session event path", async () => {
+    const h = harness();
+    const events: unknown[] = [];
+    h.manager.on("event", (event) => events.push(event));
+    await h.manager.getMcpAuth({ threadId: h.threadId });
+    await h.manager.authenticateMcp({
+      threadId: h.threadId,
+      sessionKey: "attempt-1",
+      serverName: "linear",
+    });
+    h.complete({ name: "linear", threadId: "native-thread", loginId: "old", success: true });
+    expect(events).toHaveLength(0);
+    h.complete({ name: "linear", threadId: "native-thread", loginId: "login-1", success: true });
+    expect(events).toEqual([
+      expect.objectContaining({
+        threadId: h.threadId,
+        method: "mcpServer/oauthLogin/completed",
+        payload: { name: "linear", success: true },
+      }),
+    ]);
+    expect((await h.manager.getMcpAuth({ threadId: h.threadId })).servers).toEqual([]);
+    expect(h.requests.filter((r) => r.method === "mcpServerStatus/list")).toHaveLength(1);
+  });
+  it("keeps a later pushed sign-in need without polling or changing another native thread", async () => {
+    const h = harness();
+    h.setStatus("oAuth");
+    await h.manager.getMcpAuth({ threadId: h.threadId });
+    const notify = (threadId: string) =>
+      h.internals.handleServerNotification(h.context, {
+        method: "mcpServer/startupStatus/updated",
+        params: {
+          threadId,
+          name: "linear",
+          status: "failed",
+          failureReason: "reauthenticationRequired",
+        },
+      });
+    notify("another-native-thread");
+    expect((await h.manager.getMcpAuth({ threadId: h.threadId })).servers).toEqual([]);
+    notify("native-thread");
+    expect((await h.manager.getMcpAuth({ threadId: h.threadId })).servers[0]?.name).toBe("linear");
+    expect(h.requests).toHaveLength(1);
+  });
+  it("does not publish completion from a replaced session", async () => {
+    const h = harness();
+    const events: unknown[] = [];
+    h.manager.on("event", (event) => events.push(event));
+    await h.manager.getMcpAuth({ threadId: h.threadId });
+    await h.manager.authenticateMcp({
+      threadId: h.threadId,
+      sessionKey: "attempt-1",
+      serverName: "linear",
+    });
+    h.internals.sessions.set(h.threadId, { ...h.context, sessionAttemptId: "attempt-2" });
+    h.complete({ name: "linear", threadId: "native-thread", loginId: "login-1", success: true });
+    expect(events).toEqual([]);
+  });
   it("reads the owning thread's paged OAuth status and starts native login", async () => {
     const h = harness();
     h.paginate();

@@ -1,6 +1,6 @@
 import { ThreadId, type ChildThreadNotice } from "@synara/contracts";
 import { CHILD_NOTICE_EXCERPT_LIMIT } from "@synara/shared/threadNotice";
-import { Effect, Option, Queue, Stream } from "effect";
+import { Clock, Effect, Option, Queue, Stream } from "effect";
 import type { OrchestrationEngineShape } from "../orchestration/Services/OrchestrationEngine.ts";
 import type { ProjectionSnapshotQueryShape } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import type { CompletionRepository } from "./completionRepository.ts";
@@ -11,10 +11,13 @@ export interface ParentNoticeDependencies {
   readonly orchestrationEngine: OrchestrationEngineShape;
 }
 
-export const collectParentNotices = (dependencies: ParentNoticeDependencies) =>
+export const collectParentNotices = (
+  dependencies: ParentNoticeDependencies,
+  childThreadIds?: ReadonlyArray<string>,
+) =>
   Effect.gen(function* () {
     const { repository, snapshotQuery } = dependencies;
-    for (const candidate of yield* repository.parentNotices.candidates()) {
+    for (const candidate of yield* repository.parentNotices.candidates(childThreadIds)) {
       if (!(yield* repository.isOutputSettled(candidate.childThreadId))) continue;
       const completed =
         candidate.state === "completed" && candidate.turnId !== null
@@ -88,28 +91,54 @@ export const startParentNoticeDelivery = (dependencies: ParentNoticeDependencies
   Effect.gen(function* () {
     const events = yield* dependencies.orchestrationEngine.subscribeDomainEvents;
     const wakeups = yield* Queue.sliding<void>(1);
+    const dirtyChildren = new Set<string>();
     yield* Effect.addFinalizer(() => Queue.shutdown(wakeups));
     yield* Effect.forkScoped(
       Stream.runForEach(events, (event) =>
-        event.type === "thread.session-set" ||
-        event.type === "thread.turn-diff-completed" ||
-        event.type === "thread.message-sent" ||
-        event.type === "thread.activity-appended" ||
-        event.type === "thread.turn-start-requested" ||
-        event.type === "thread.deleted"
-          ? Queue.offer(wakeups, undefined).pipe(Effect.asVoid)
-          : Effect.void,
+        Effect.gen(function* () {
+          if (
+            !(
+              event.type === "thread.session-set" ||
+              event.type === "thread.turn-diff-completed" ||
+              event.type === "thread.message-sent" ||
+              event.type === "thread.activity-appended" ||
+              event.type === "thread.turn-start-requested" ||
+              event.type === "thread.deleted"
+            )
+          )
+            return;
+          const childThreadId = event.payload.threadId;
+          if (!(yield* dependencies.repository.parentNotices.isLinkedChild(childThreadId))) return;
+          dirtyChildren.add(childThreadId);
+          yield* Queue.offer(wakeups, undefined);
+        }).pipe(
+          Effect.catch((error) => Effect.logWarning("parent notice event will recover", { error })),
+        ),
       ),
     );
-    const reconcile = Effect.sleep(200).pipe(
-      Effect.andThen(collectParentNotices(dependencies)),
-      Effect.andThen(flushParentNotices(dependencies)),
-      Effect.catch((error) => Effect.logWarning("parent notice delivery will retry", { error })),
-    );
-    yield* Queue.offer(wakeups, undefined);
+    const reconcile = (recover: boolean) =>
+      Effect.gen(function* () {
+        yield* Effect.sleep(200);
+        const children = [...dirtyChildren];
+        dirtyChildren.clear();
+        yield* collectParentNotices(dependencies, recover ? undefined : children);
+        yield* flushParentNotices(dependencies);
+      }).pipe(
+        Effect.catch((error) => Effect.logWarning("parent notice delivery will retry", { error })),
+      );
     yield* Effect.forkScoped(
-      Effect.forever(
-        Effect.raceFirst(Queue.take(wakeups), Effect.sleep(5000)).pipe(Effect.andThen(reconcile)),
-      ),
+      Effect.gen(function* () {
+        yield* reconcile(true);
+        let recoveredAt = yield* Clock.currentTimeMillis;
+        while (true) {
+          const now = yield* Clock.currentTimeMillis;
+          const recover = yield* Effect.raceFirst(
+            Queue.take(wakeups).pipe(Effect.as(false)),
+            Effect.sleep(Math.max(0, 60_000 - (now - recoveredAt))).pipe(Effect.as(true)),
+          );
+          yield* reconcile(recover);
+          if (recover) recoveredAt = yield* Clock.currentTimeMillis;
+        }
+      }),
     );
   });

@@ -771,6 +771,29 @@ describe("Claude Synara harness policy", () => {
 });
 
 describe("ClaudeAdapterLive", () => {
+  it.effect("recovers a later MCP sign-in after five minutes without reconnecting", () => {
+    const harness = makeHarness();
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+      const initial = yield* adapter.getMcpAuth!({ threadId: THREAD_ID });
+      assert.deepEqual(initial.servers, []);
+      harness.query.mcpStatus = [{ name: "linear", status: "needs-auth" }];
+      now.mockReturnValue(1_299_999);
+      const cached = yield* adapter.getMcpAuth!({ threadId: THREAD_ID });
+      assert.deepEqual(cached.servers, []);
+      now.mockReturnValue(1_300_000);
+      const recovered = yield* adapter.getMcpAuth!({ threadId: THREAD_ID });
+      assert.equal(recovered.servers[0]?.name, "linear");
+      assert.deepEqual(harness.query.reconnectCalls, []);
+    }).pipe(Effect.provide(harness.layer), Effect.ensuring(Effect.sync(() => now.mockRestore())));
+  });
+
   it.effect(
     "tracks MCP needs-auth notices per session and re-checks native status after manual auth",
     () => {
