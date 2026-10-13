@@ -299,11 +299,12 @@ To put a feature behind the list:
 
 Promote a feature to Stable by deleting its entry; every gate resolves itself.
 
-The list currently contains `provider-cloud` and `codex-shared-process`, gated off in Stable.
-Codex process sharing starts in Beta because its routing and crash handling span multiple
-sessions. Stable always uses dedicated session processes. The server setting
-`codexAppServerMode` defaults to `shared`; `per-session` restores dedicated launches without
-an app update. Existing sessions must stop and restart to use a changed launch setting.
+The list currently contains only `provider-cloud`, gated off in Stable.
+Codex process sharing is available in Stable and Beta after the isolated ten-case soak.
+Settings → Providers → Codex offers **Share one Codex process per account**, on by default.
+It uses less memory; a crash stops all Codex threads of that account. Changes apply to new
+sessions. The server setting `codexAppServerMode` defaults to `shared`; `per-session` restores
+dedicated launches without an app update. Stop and restart existing sessions to change their mode.
 See [provider sessions](docs/providers.md#provider-sessions) for the registry key and MCP limit.
 [Cloud agents](docs/cloud-agents.md) use a separate Cloud page. Stable refuses the
 cloud APIs, does not start the cloud service, and leaves saved submissions inert.

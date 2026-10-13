@@ -1980,6 +1980,36 @@ function ProviderToolRow(props: {
                 updateSettings={props.updateSettings}
                 updateSettingsAndWait={props.updateSettingsAndWait}
               />
+              {props.config.provider === "codex" ? (
+                <SettingsRow
+                  title="Share one Codex process per account"
+                  description="Use less memory; a crash stops all Codex threads of that account."
+                  status="Applies to new sessions."
+                  resetAction={
+                    props.settings.codexAppServerMode !== props.defaults.codexAppServerMode ? (
+                      <SettingResetButton
+                        label="Codex process sharing"
+                        onClick={() =>
+                          props.updateSettings({
+                            codexAppServerMode: props.defaults.codexAppServerMode,
+                          })
+                        }
+                      />
+                    ) : null
+                  }
+                  control={
+                    <Switch
+                      checked={props.settings.codexAppServerMode === "shared"}
+                      onCheckedChange={(checked) =>
+                        props.updateSettings({
+                          codexAppServerMode: checked ? "shared" : "per-session",
+                        })
+                      }
+                      aria-label="Share one Codex process per account"
+                    />
+                  }
+                />
+              ) : null}
             </div>
           </div>
         </CollapsiblePanel>
@@ -2541,7 +2571,7 @@ export function ProvidersSettingsPanel({
         <SettingsSection title="Provider tools">
           <SettingsRow
             title="Installed CLIs"
-            description="Review provider versions and update tools. Open a row only when you need binary overrides."
+            description="Review provider versions and update tools. Open a row to manage accounts and runtime settings."
             status={
               !settings.enableProviderUpdateChecks
                 ? "Automatic checks off"

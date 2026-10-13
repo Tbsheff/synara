@@ -176,6 +176,35 @@ it("saves provider CPU priority opt-out and exposes reset to the default", async
   );
 });
 
+it("saves Codex process sharing for new sessions and resets it to on", async () => {
+  const updateSettings = vi.fn();
+  const result = await render(
+    <ProvidersSettingsPanel {...props} updateSettings={updateSettings} />,
+  );
+  await page.getByRole("button", { name: "Codex", exact: true }).click();
+  const control = page.getByRole("switch", { name: "Share one Codex process per account" });
+  await expect.element(control).toBeChecked();
+  const row = control.element().closest('[data-slot="settings-row"]');
+  expect(row?.textContent).toContain(
+    "Use less memory; a crash stops all Codex threads of that account.",
+  );
+  expect(row?.textContent).toContain("Applies to new sessions.");
+  await control.click();
+  expect(updateSettings).toHaveBeenCalledWith({ codexAppServerMode: "per-session" });
+  await result.rerender(
+    <ProvidersSettingsPanel
+      {...props}
+      settings={{ ...props.settings, codexAppServerMode: "per-session" }}
+      updateSettings={updateSettings}
+    />,
+  );
+  await expect.element(control).not.toBeChecked();
+  await control.click();
+  expect(updateSettings).toHaveBeenLastCalledWith({ codexAppServerMode: "shared" });
+  await page.getByRole("button", { name: "Reset Codex process sharing to default" }).click();
+  expect(updateSettings).toHaveBeenLastCalledWith({ codexAppServerMode: "shared" });
+});
+
 it("shows installation and auth beside activity switches with visible setup guides", async () => {
   await render(<ProvidersSettingsPanel {...props} />);
   expect(activityRow("OpenCode").textContent).toContain("Unavailable");

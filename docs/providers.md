@@ -274,10 +274,12 @@ and creates independent conversation copies without replacing your existing Syna
 
 Each task owns a provider session.
 
-In Beta and source builds, Codex sessions share an app-server when their process settings
-match. Stable keeps one app-server per session. The server setting `codexAppServerMode`
-defaults to `"shared"`; set it to `"per-session"` through `server.updateSettings` and restart
-the affected sessions to use the fallback. Stable ignores the saved shared preference.
+In Stable, Beta, and source builds, Codex sessions share an app-server when their process
+settings match. Settings → Providers → Codex offers **Share one Codex process per account**,
+on by default. Sharing uses less memory; a crash stops all Codex threads of that account.
+Changes apply to new sessions. Stop and restart existing sessions to change their mode.
+The server setting `codexAppServerMode` defaults to `"shared"`; set it to `"per-session"`
+through `server.updateSettings` to use the same off switch without the UI.
 Metadata discovery leases the same compatible process, including requests for another
 project directory. Discovery leases use the existing short idle timeout and load no native thread.
 
