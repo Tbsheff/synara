@@ -1952,7 +1952,6 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
   async sendTurn(input: CodexAppServerSendTurnInput): Promise<ProviderTurnStartResult> {
     const context = this.requireSession(input.threadId);
-    await this.requireFreshAuthForTurn(context);
     if (context.gatewayCredentialRetired === true) {
       throw new Error(
         "Codex session gateway authority is retired; resume the provider runtime before starting another turn.",
@@ -1967,6 +1966,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     if (turnInput.length === 0) {
       throw new Error("Turn input must include text or attachments.");
     }
+    await this.requireFreshAuthForTurn(context);
 
     const providerThreadId = readResumeThreadId({
       resumeCursor: context.session.resumeCursor,
@@ -2108,12 +2108,12 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
   async startReview(input: ProviderStartReviewInput): Promise<ProviderTurnStartResult> {
     const context = this.requireSession(input.threadId);
-    await this.requireFreshAuthForTurn(context);
     if (context.gatewayCredentialRetired === true) {
       throw new Error(
         "Codex session gateway authority is retired; resume the provider runtime before starting another review.",
       );
     }
+    await this.requireFreshAuthForTurn(context);
     const providerThreadId = readResumeThreadId({
       resumeCursor: context.session.resumeCursor,
     });
@@ -3709,7 +3709,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     try {
       await inspection;
     } finally {
-      if (context.authInspection === inspection) context.authInspection = undefined;
+      if (context.authInspection === inspection) delete context.authInspection;
     }
   }
 
@@ -3727,6 +3727,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   }
 
   private async requireFreshAuthForTurn(context: CodexSessionContext): Promise<void> {
+    if (!context.authTracking || context.authFingerprint === undefined) return;
     for (let attempt = 0; attempt < 3; attempt++) {
       if (context.authRevalidation) {
         const delay = context.authRevalidation.retryAt - Date.now();
@@ -3795,7 +3796,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         } finally {
           if (timer) clearTimeout(timer);
         }
-        context.authRevalidation = undefined;
+        delete context.authRevalidation;
         if (fingerprint !== context.authFingerprint) {
           stalenessMessage =
             "Codex authentication changed on disk; the stale app-server session was stopped and must be restarted.";

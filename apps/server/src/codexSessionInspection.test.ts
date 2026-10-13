@@ -160,6 +160,31 @@ it("binds queued events to their original context even without a generation tag"
   expect(stop).not.toHaveBeenCalled();
 });
 
+it("coalesces concurrent inspections and backs off transient failures", async () => {
+  const { manager, threadId, stop, context } = fixture({ authRevalidationRetryBaseMs: 10 });
+  const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+  const realpath = fs.promises.realpath.bind(fs.promises);
+  const read = vi.spyOn(fs.promises, "realpath").mockImplementation(async (file) => {
+    if (file === context.codexOptions.homePath) throw new Error("Temporary I/O failure");
+    return realpath(file);
+  });
+  const reads = () => read.mock.calls.filter(([file]) => file === context.codexOptions.homePath);
+  await Promise.all(Array.from({ length: 3 }, () => manager.inspectSessionAsync(threadId)));
+  expect(reads()).toHaveLength(2);
+  await manager.inspectSessionAsync(threadId);
+  expect(reads()).toHaveLength(2);
+  now.mockReturnValue(1_010);
+  await manager.inspectSessionAsync(threadId);
+  expect(reads()).toHaveLength(4);
+  now.mockReturnValue(1_029);
+  await manager.inspectSessionAsync(threadId);
+  expect(reads()).toHaveLength(4);
+  now.mockReturnValue(1_030);
+  await manager.inspectSessionAsync(threadId);
+  expect(reads()).toHaveLength(6);
+  expect(stop).not.toHaveBeenCalled();
+});
+
 it("retains native I/O leases after timeout and removes expired lease waiters", async () => {
   const { manager, sessions } = fixture({ authRevalidationTimeoutMs: 100 });
   const contexts = Array.from({ length: 4 }, (_, index) => {

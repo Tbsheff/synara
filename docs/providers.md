@@ -302,6 +302,14 @@ Synara thread cannot claim it and receive late events.
 Stopping a session interrupts and unloads its native threads, then releases its lease.
 Other hosted sessions keep running. The last lease starts a one-second shutdown grace;
 new work cancels that grace. Account auth invalidation stops all hosted sessions at once.
+An auth freshness timeout or temporary disk-read failure keeps active turns and their
+process running. Event checks retry with backoff, from 250 milliseconds to 30 seconds.
+Before a new turn or review starts, Synara requires a fresh check and makes up to three
+attempts. If the check still fails, the new request reports a retry error and leaves the
+session running. Confirmed sign-out, an unauthorized response (401), or a verified change
+to the auth identity rejects only sessions that use that account and auth source. The same
+rules apply in per-session mode. Unsafe auth file bindings still reject the session.
+Local process logs include bounded, redacted stderr lines so process errors can be traced.
 A process or pipe failure fails all hosted sessions as an error, including idle sessions.
 New work waits for verified process-tree teardown before it can start a replacement.
 An unload failure retains the session stop barrier; it cannot kill another hosted session.

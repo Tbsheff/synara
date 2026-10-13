@@ -216,6 +216,38 @@ describe("shared Codex manager", () => {
   );
 
   it.each(["shared", "per-session"] as const)(
+    "retries new-turn auth checks without stopping existing work in %s mode",
+    async (mode) => {
+      const h = await fixture(mode, { authRevalidationRetryBaseMs: 5 });
+      const a = await h.start("a");
+      const b = await h.start("b");
+      const turns = await Promise.all(
+        [a, b].map(({ threadId }) => h.manager.sendTurn({ threadId, input: "hello" })),
+      );
+      const realpath = fs.promises.realpath.bind(fs.promises);
+      const read = vi.spyOn(fs.promises, "realpath").mockImplementation(async (file) => {
+        if (file === h.home) throw new Error("Temporary I/O failure");
+        return realpath(file);
+      });
+      await expect(h.manager.sendTurn({ threadId: a.threadId, input: "next" })).rejects.toThrow(
+        "Retry this turn",
+      );
+      expect(read.mock.calls.filter(([file]) => file === h.home)).toHaveLength(6);
+      expect(h.requests.filter((request) => request.method === "turn/start")).toHaveLength(2);
+      expect(h.manager.listSessions().map((session) => session.activeTurnId)).toEqual(
+        turns.map((turn) => turn.turnId),
+      );
+      expect(h.teardownProcessTree).not.toHaveBeenCalled();
+      read.mockRestore();
+      await expect(
+        h.manager.sendTurn({ threadId: a.threadId, input: "retry" }),
+      ).resolves.toBeDefined();
+      expect(h.requests.filter((request) => request.method === "turn/start")).toHaveLength(3);
+      expect(h.children).toHaveLength(mode === "shared" ? 1 : 2);
+    },
+  );
+
+  it.each(["shared", "per-session"] as const)(
     "fails only the confirmed account after logout or 401 in %s mode",
     async (mode) => {
       for (const failure of ["logout", "unauthorized", "401", "disk-change"] as const) {
