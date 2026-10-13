@@ -14,6 +14,7 @@ import { useQuery } from "@tanstack/react-query";
 import { type RefObject, useEffect, useState } from "react";
 
 import { useAppSettings } from "~/appSettings";
+import { ComposerEnvironmentPicker } from "~/components/chat/ComposerEnvironmentPicker";
 import {
   ScratchModelPickers,
   ScratchRuntimeControls,
@@ -24,6 +25,7 @@ import { useScratchModelCatalog } from "~/hooks/useScratchModelCatalog";
 import { LoaderCircleIcon } from "~/lib/icons";
 import { resolveProviderDiscoveryCwd } from "~/lib/providerDiscovery";
 import { serverConfigQueryOptions } from "~/lib/serverReactQuery";
+import { resolveThreadEnvironmentPresentation } from "~/lib/threadEnvironment";
 import { cn } from "~/lib/utils";
 import { useComposerDraftStore } from "../../composerDraftStore";
 import { TaskActionButton, TaskCardLabel } from "./TaskCardPrimitives";
@@ -83,7 +85,7 @@ export function TaskHandOff({
       : prompt;
   };
 
-  const { isStarting, canStart, handleStart } = useTaskDelegation({
+  const { isStarting, canStart, handleStart, envMode, handleEnvModeChange } = useTaskDelegation({
     todo,
     onLinkChat,
     onDelegated: undefined,
@@ -112,6 +114,12 @@ export function TaskHandOff({
             providerStatuses={providerStatuses}
           />
           <TaskDelegateTargetPicker runIn={runIn} />
+          <ComposerEnvironmentPicker
+            environmentPresentation={resolveThreadEnvironmentPresentation({ envMode })}
+            onEnvModeChange={handleEnvModeChange}
+            canSwitchToWorktree={target?.kind === "project" && envMode === "local"}
+            disabled={isStarting}
+          />
         </div>
       )}
 

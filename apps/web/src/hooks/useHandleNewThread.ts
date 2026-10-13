@@ -36,6 +36,7 @@ import {
   createActiveThreadSnapshot,
   createFreshDraftThreadSeed,
   resolveTerminalThreadCreationState,
+  resolveNewThreadDefaultEnvMode,
   resolveThreadBootstrapPlan,
   type NewThreadOptions,
 } from "../lib/threadBootstrap";
@@ -100,10 +101,11 @@ export function useHandleNewThread() {
     }
 
     const entryPoint = options?.entryPoint ?? "chat";
-    const defaultEnvMode =
-      (entryPoint === "chat"
-        ? useProjectEnvironmentStore.getState().envModeByProjectId[projectId]
-        : undefined) ?? settings.defaultThreadEnvMode;
+    const defaultEnvMode = resolveNewThreadDefaultEnvMode({
+      entryPoint,
+      projectEnvMode: useProjectEnvironmentStore.getState().envModeByProjectId[projectId],
+      defaultEnvMode: settings.defaultThreadEnvMode,
+    });
     if (entryPoint === "chat") {
       const draftStore = useComposerDraftStore.getState();
       const draftThread = draftStore.getDraftThreadByProjectId(projectId, "chat");

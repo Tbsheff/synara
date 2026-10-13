@@ -6,7 +6,13 @@
 // Layer: Tasks UI hook
 // Exports: useTaskDelegation
 
-import type { ServerProviderStatus, ThreadId, Todo, TodoUpdateInput } from "@synara/contracts";
+import type {
+  ServerProviderStatus,
+  ThreadEnvironmentMode,
+  ThreadId,
+  Todo,
+  TodoUpdateInput,
+} from "@synara/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import { useRef, useState } from "react";
 
@@ -29,6 +35,7 @@ import {
 } from "~/lib/draftThreadDispatch";
 import { resolveProviderSendAvailabilityWithRefresh } from "~/lib/providerAvailability";
 import { isRequestOutcomeUnknown } from "~/lib/requestOutcome";
+import { resolveNewThreadDefaultEnvMode } from "~/lib/threadBootstrap";
 import {
   composerDraftHasUnsentContent,
   composerDraftsMatchForCleanup,
@@ -37,6 +44,7 @@ import {
 import { providerInstanceModelSelectionKey, useComposerDraftStore } from "../../composerDraftStore";
 import { ensureNativeApi } from "../../nativeApi";
 import { buildModelSelection } from "../../providerModelOptions";
+import { useProjectEnvironmentStore } from "../../projectEnvironmentStore";
 import { DEFAULT_INTERACTION_MODE, type SidebarThreadSummary } from "../../types";
 import { useWorkspacePathsStore } from "../../workspacePathsStore";
 import { beginTaskDelegation, finishTaskDelegation } from "./taskDelegationState";
@@ -77,6 +85,22 @@ export function useTaskDelegation(options: {
   const { modelOptionsByProvider, runtimeMode, runtimeModelForCapabilities } = catalog;
   const navigate = useNavigate();
   const { settings } = useAppSettings();
+  const projectEnvMode = useProjectEnvironmentStore((state) =>
+    target?.kind === "project" ? state.envModeByProjectId[target.projectId] : undefined,
+  );
+  const envMode =
+    target?.kind === "project"
+      ? resolveNewThreadDefaultEnvMode({
+          entryPoint: "chat",
+          projectEnvMode,
+          defaultEnvMode: settings.defaultThreadEnvMode,
+        })
+      : "local";
+  const handleEnvModeChange = (mode: ThreadEnvironmentMode) => {
+    if (target?.kind === "project") {
+      useProjectEnvironmentStore.getState().setProjectEnvMode(target.projectId, mode);
+    }
+  };
   const refreshProviderStatuses = useRefreshProviderStatusesNow();
   const [isStarting, setIsStarting] = useState(false);
   // Synchronous re-entry guard: a repeated ⌘↵ can land before React flushes isStarting.
@@ -312,7 +336,7 @@ export function useTaskDelegation(options: {
         modelSelection,
         runtimeMode,
         interactionMode: DEFAULT_INTERACTION_MODE,
-        envMode: "local",
+        envMode,
         workingDirectory: target.kind === "folder" ? target.path : null,
         defaultProvider: settings.defaultProvider,
         assistantDeliveryMode: resolveAssistantDeliveryMode(settings),
@@ -389,5 +413,5 @@ export function useTaskDelegation(options: {
     }
   };
 
-  return { isStarting, canStart, handleStart };
+  return { isStarting, canStart, handleStart, envMode, handleEnvModeChange };
 }

@@ -210,6 +210,14 @@ export function resolveThreadBootstrapPlan(input: {
   return { kind: "fresh" };
 }
 
+export function resolveNewThreadDefaultEnvMode(input: {
+  entryPoint: ThreadPrimarySurface;
+  projectEnvMode: DraftThreadEnvMode | undefined;
+  defaultEnvMode: DraftThreadEnvMode;
+}): DraftThreadEnvMode {
+  return (input.entryPoint === "chat" ? input.projectEnvMode : undefined) ?? input.defaultEnvMode;
+}
+
 // Build the initial draft-thread metadata for a brand new thread bootstrap.
 export function createFreshDraftThreadSeed(input: {
   createdAt: string;
