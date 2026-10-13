@@ -441,6 +441,7 @@ function WorkspaceFilesTree(props: WorkspaceFilesTreeProps & { workspaceRoot: st
   });
   const virtualRows = virtualizer.getVirtualItems();
   const selectedIndex = rows.findIndex((row) => row.key === props.selectedFilePath);
+  const revealedSelection = useRef<string | null>(null);
   useLayoutEffect(() => {
     const path = pendingFocus.current;
     if (!path) return;
@@ -453,8 +454,11 @@ function WorkspaceFilesTree(props: WorkspaceFilesTreeProps & { workspaceRoot: st
     }
   });
   useEffect(() => {
-    if (virtual && selectedIndex >= 0) virtualizer.scrollToIndex(selectedIndex, { align: "auto" });
-  }, [selectedIndex, virtual, virtualizer]);
+    if (props.selectedFilePath === null) revealedSelection.current = null;
+    if (selectedIndex < 0 || revealedSelection.current === props.selectedFilePath) return;
+    if (virtual) virtualizer.scrollToIndex(selectedIndex, { align: "auto" });
+    revealedSelection.current = props.selectedFilePath;
+  }, [props.selectedFilePath, selectedIndex, virtual, virtualizer]);
 
   return (
     <div
