@@ -164,8 +164,8 @@ it("keeps the expanded folder in view when an earlier file is selected", async (
   }));
   await mount(
     [
-      { path: "active.txt", name: "active.txt", kind: "file" },
       { path: "wide", name: "wide", kind: "directory" },
+      { path: "active.txt", name: "active.txt", kind: "file" },
     ],
     children,
     "active.txt",
