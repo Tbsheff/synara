@@ -57,6 +57,8 @@ import {
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { makeParentNoticeRepository } from "../../agentGateway/parentNoticeRepository.ts";
+import { readChildThreadNotices } from "@synara/shared/threadNotice";
 import { AgentGatewayOperationRepositoryLive } from "../../agentGateway/Layers/AgentGatewayOperationRepository.ts";
 import { AgentGatewayOperationRepository } from "../../agentGateway/Services/AgentGatewayOperationRepository.ts";
 import { makeAgentGatewaySessionRegistry } from "../../agentGateway/Layers/AgentGatewaySessionRegistry.ts";
@@ -15967,6 +15969,107 @@ describe("ProviderCommandReactor", () => {
       input: "wait your turn",
     });
   });
+
+  it.each(["codex", "cursor"] as const)(
+    "child notice steers or queues without interrupting %s",
+    async (provider) => {
+      const harness = await createHarness({
+        ingestRuntimeEvents: true,
+        threadModelSelection: {
+          provider,
+          model: provider === "cursor" ? "composer-1" : "gpt-5.6-terra",
+        },
+      });
+      const now = new Date().toISOString();
+      const notices = await Effect.runPromise(
+        makeParentNoticeRepository.pipe(Effect.provideService(SqlClient.SqlClient, harness.sql)),
+      );
+      await Effect.runPromise(
+        notices.setLink("thread-1", "notice-child", "notice-initial", true, now),
+      );
+      await Effect.runPromise(
+        notices.save(
+          {
+            parentThreadId: "thread-1",
+            childThreadId: "notice-child",
+            turnId: "notice-turn",
+            messageId: "notice-initial",
+            state: "error",
+            attention: 0,
+            sourceSequence: 1,
+            completedAt: now,
+          },
+          {
+            childThreadId: ThreadId.makeUnsafe("notice-child"),
+            title: "Child",
+            turnId: "notice-turn",
+            status: "error",
+            excerpt: "Child result",
+          },
+          now,
+        ),
+      );
+      await Effect.runPromise(notices.batchPending());
+      const command = (await Effect.runPromise(notices.batches()))[0]!;
+      harness.setRuntimeSessionTurnState({
+        threadId: "thread-1",
+        status: "running",
+        activeTurnId: asTurnId("parent-live"),
+      });
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.makeUnsafe("notice-parent-running"),
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          session: {
+            threadId: ThreadId.makeUnsafe("thread-1"),
+            status: "running",
+            providerName: provider,
+            runtimeMode: "approval-required",
+            activeTurnId: asTurnId("parent-live"),
+            lastError: null,
+            updatedAt: now,
+          },
+          createdAt: now,
+        }),
+      );
+      await Effect.runPromise(harness.engine.dispatch(command));
+      await harness.drain();
+      expect(harness.interruptTurn).not.toHaveBeenCalled();
+      expect(harness.sendTurn).not.toHaveBeenCalled();
+      if (provider === "codex") {
+        expect(harness.steerTurn).toHaveBeenCalledTimes(1);
+        expect(
+          readChildThreadNotices(harness.steerTurn.mock.calls[0]![0].input ?? "")[0]?.excerpt,
+        ).toBe("Child result");
+      } else {
+        expect(harness.steerTurn).not.toHaveBeenCalled();
+        await Effect.runPromise(notices.acknowledge("thread-1", "notice-child", 100));
+        harness.setRuntimeSessionTurnState({ threadId: "thread-1", status: "ready" });
+        await harness.emitRuntimeEvent({
+          type: "turn.completed",
+          eventId: asEventId("notice-parent-done"),
+          provider,
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          createdAt: now,
+          turnId: asTurnId("parent-live"),
+          payload: { state: "completed" },
+          providerRefs: {},
+        } as ProviderRuntimeEvent);
+        await waitFor(async () => {
+          const rows = await Effect.runPromise(
+            harness.sql<{
+              text: string | null;
+            }>`SELECT delivery_text AS text FROM agent_parent_notice_batches WHERE batch_id = ${command.commandId}`,
+          );
+          return rows[0]?.text === "";
+        });
+        await harness.drain();
+        expect(harness.sendTurn).not.toHaveBeenCalled();
+        expect((await readHarnessThread(harness))?.session?.status).toBe("ready");
+      }
+    },
+  );
 
   it("steers Debug turns immediately with one prompt prefix", async () => {
     const harness = await createHarness();

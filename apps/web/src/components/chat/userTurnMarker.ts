@@ -10,8 +10,9 @@ export type UserTurnMarkerKind = "automation" | "agent" | "steer";
 
 export function resolveUserTurnMarker(message: {
   readonly dispatchMode?: "queue" | "steer" | undefined;
-  readonly dispatchOrigin?: "user" | "automation" | "agent" | undefined;
+  readonly dispatchOrigin?: "user" | "automation" | "agent" | "notification" | undefined;
 }): UserTurnMarkerKind | null {
+  if (message.dispatchOrigin === "notification") return null;
   if (message.dispatchOrigin === "automation") {
     return "automation";
   }

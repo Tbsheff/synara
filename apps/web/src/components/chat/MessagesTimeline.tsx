@@ -82,6 +82,7 @@ import { ForkSourceDivider, type ForkSourceReference } from "./ForkSourceDivider
 import { ProviderHandoffDivider } from "./ProviderHandoffDivider";
 import { ThreadErrorBanner } from "./ThreadErrorBanner";
 import { SynaraThreadCreationCard } from "./SynaraThreadCreationCard";
+import { readChildThreadNotices } from "@synara/shared/threadNotice";
 import { WorkerMonitorNoticePill } from "./WorkerMonitorNoticePill";
 import { buildExpandedImagePreview, ExpandedImagePreview } from "./ExpandedImagePreview";
 import { ProposedPlanCard } from "./ProposedPlanCard";
@@ -988,7 +989,11 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   const lastLiveWorkGroupId = useMemo(() => findLastLiveWorkGroupId(rows), [rows]);
   const firstUserMessageId = useMemo(() => {
     for (const row of rows) {
-      if (row.kind === "message" && row.message.role === "user") {
+      if (
+        row.kind === "message" &&
+        row.message.role === "user" &&
+        row.message.dispatchOrigin !== "notification"
+      ) {
         return row.message.id;
       }
     }
@@ -1271,7 +1276,11 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   const userMessageAnchors = useMemo<MessageTrailAnchor[]>(() => {
     const anchors: MessageTrailAnchor[] = [];
     rows.forEach((row, index) => {
-      if (row.kind === "message" && row.message.role === "user") {
+      if (
+        row.kind === "message" &&
+        row.message.role === "user" &&
+        row.message.dispatchOrigin !== "notification"
+      ) {
         anchors.push({ id: row.message.id, rowIndex: index });
       }
     });
@@ -1716,8 +1725,44 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             </div>
           );
         })()}
+      {row.kind === "message" && row.message.dispatchOrigin === "notification" && (
+        <div
+          className="flex w-full flex-col items-start gap-3 text-ui"
+          data-child-thread-notice="true"
+        >
+          {readChildThreadNotices(row.message.text).map((notice) => (
+            <WorkerMonitorNoticePill
+              key={`${notice.childThreadId}:${notice.turnId}`}
+              entry={{
+                id: row.message.id,
+                createdAt: row.message.createdAt,
+                label: "Child thread update",
+                tone: "info",
+              }}
+              notice={{
+                kind: "settled",
+                marker: null,
+                phrase: notice.status === "needs-attention" ? "needs attention" : notice.status,
+                threads: [
+                  {
+                    threadId: notice.childThreadId,
+                    title: notice.title,
+                    outcome: notice.status,
+                    result: null,
+                    pr: null,
+                    projectId: null,
+                  },
+                ],
+              }}
+              quotedExcerpt={notice.excerpt}
+              {...(onOpenThread ? { onOpenThread } : {})}
+            />
+          ))}
+        </div>
+      )}
       {row.kind === "message" &&
         row.message.role === "user" &&
+        row.message.dispatchOrigin !== "notification" &&
         (() => {
           const userImages = (row.message.attachments ?? []).filter(
             (
@@ -3283,6 +3328,7 @@ function applyMessageSendEnterAnimation(params: {
       (row) =>
         row.kind === "message" &&
         row.message.role === "user" &&
+        row.message.dispatchOrigin !== "notification" &&
         enteringUserMessageIds.has(row.message.id) &&
         (previousRowIds === null || !previousRowIds.has(row.id)),
     )

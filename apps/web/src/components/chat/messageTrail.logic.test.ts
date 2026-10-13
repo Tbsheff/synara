@@ -56,6 +56,25 @@ function anchor(id: string, rowIndex: number): MessageTrailAnchor {
 }
 
 describe("deriveMessageTrailItems", () => {
+  it("keeps child notices and their replies out of sent-message navigation", () => {
+    const notice = messageEntry("notice", "user", "Child thread update");
+    if (notice.kind !== "message") throw new Error("Expected a message");
+    const items = deriveMessageTrailItems([
+      messageEntry("u1", "user", "delegate"),
+      messageEntry("a1", "assistant", "parent idle"),
+      { ...notice, message: { ...notice.message, dispatchOrigin: "notification" } },
+      messageEntry("a2", "assistant", "parent woke"),
+      messageEntry("u2", "user", "next request"),
+    ]);
+
+    expect(
+      items.map(({ id, ordinal, responsePreview }) => ({ id, ordinal, responsePreview })),
+    ).toEqual([
+      { id: MessageId.makeUnsafe("u1"), ordinal: 1, responsePreview: "parent idle" },
+      { id: MessageId.makeUnsafe("u2"), ordinal: 2, responsePreview: "" },
+    ]);
+  });
+
   it("keeps only user messages, in order, with sequential ordinals", () => {
     const items = deriveMessageTrailItems([
       messageEntry("u1", "user", "first"),

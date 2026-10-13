@@ -260,13 +260,16 @@ export function useChatTranscriptScroll({
     showScrollDebouncer.current.maybeExecute();
   }, [clearTranscriptAutoFollow]);
   const transcriptMessageCount = useMemo(
-    () => timelineEntries.filter((entry) => entry.kind === "message").length,
+    () =>
+      timelineEntries.filter(
+        (entry) => entry.kind === "message" && entry.message.dispatchOrigin !== "notification",
+      ).length,
     [timelineEntries],
   );
   const latestTranscriptMessage = useMemo(() => {
     for (let index = timelineEntries.length - 1; index >= 0; index -= 1) {
       const entry = timelineEntries[index];
-      if (entry?.kind === "message") {
+      if (entry?.kind === "message" && entry.message.dispatchOrigin !== "notification") {
         return entry.message;
       }
     }

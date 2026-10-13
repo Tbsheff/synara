@@ -5,7 +5,7 @@ import {
   type OrchestrationThreadShell,
   type ProviderKind,
 } from "@synara/contracts";
-import { Effect, Option } from "effect";
+import { Effect, Option, Queue, Stream } from "effect";
 
 import {
   isOrdinaryProjectRow,
@@ -48,10 +48,15 @@ import {
   type ToolEntry,
 } from "./toolRuntime.ts";
 
+import type { OrchestrationEngineShape } from "../orchestration/Services/OrchestrationEngine.ts";
+import type { ParentNoticeRepository } from "./parentNoticeRepository.ts";
+
 const LIST_THREADS_DEFAULT_LIMIT = 50;
 const LIST_THREADS_MAX_LIMIT = 200;
 
 export interface ThreadReadToolsInput {
+  readonly orchestrationEngine: OrchestrationEngineShape;
+  readonly parentNotices: ParentNoticeRepository;
   readonly snapshotQuery: ProjectionSnapshotQueryShape;
   readonly projectionTurns: ProjectionTurnRepositoryShape;
   readonly providerDiscovery: ProviderDiscoveryServiceShape;
@@ -288,7 +293,7 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
     requiredCapability: "thread:read",
     definition: {
       name: "synara_read_thread",
-      description: `Read one Synara thread's status and recent messages (newest last). Pass nextCursor as cursor to page older messages. To read one settled long message losslessly, pass the summary's index, messageId, and messageVersion with messageOffsetChars 0, then follow messagePage.nextOffsetChars with the same identity and version.`,
+      description: `Read one Synara thread's status and recent messages (newest last). Reading acknowledges pending child notices for this caller. Pass nextCursor as cursor to page older messages. To read one settled long message losslessly, pass the summary's index, messageId, and messageVersion with messageOffsetChars 0, then follow messagePage.nextOffsetChars with the same identity and version.`,
       inputSchema: {
         type: "object",
         properties: {
@@ -344,6 +349,7 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
         const messageOffsetChars = readNumberArg(args, "messageOffsetChars");
         const messageId = readStringArg(args, "messageId");
         const messageVersion = readStringArg(args, "messageVersion");
+        const throughSequence = yield* input.orchestrationEngine.getEventHighWaterSequence;
         const detail = yield* snapshotQuery.getThreadDetailById(ThreadId.makeUnsafe(threadId)).pipe(
           Effect.mapError((error) => new ToolInputError(errorText(error))),
           Effect.flatMap(
@@ -353,18 +359,31 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
             }),
           ),
         );
-        return mcpToolResultJson(
-          summarizeThreadDetail({
-            thread: detail,
-            cursor,
-            messageLimit,
-            maxMessageChars,
-            messageIndex,
-            messageOffsetChars,
-            messageId,
-            messageVersion,
-          }),
-        );
+        const summary = summarizeThreadDetail({
+          thread: detail,
+          cursor,
+          messageLimit,
+          maxMessageChars,
+          messageIndex,
+          messageOffsetChars,
+          messageId,
+          messageVersion,
+        });
+        yield* input.parentNotices.acknowledge(context.callerThreadId, threadId, throughSequence);
+        if (
+          detail.latestTurn &&
+          (detail.latestTurn.state === "completed" ||
+            detail.latestTurn.state === "error" ||
+            detail.latestTurn.state === "interrupted" ||
+            detail.pendingInteractions?.some((interaction) => interaction.status === "pending"))
+        )
+          yield* input.parentNotices.acknowledge(
+            context.callerThreadId,
+            threadId,
+            throughSequence,
+            detail.latestTurn.turnId,
+          );
+        return mcpToolResultJson(summary);
       }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
   };
 
@@ -372,7 +391,7 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
     requiredCapability: "thread:read",
     definition: {
       name: "synara_wait_for_threads",
-      description: `Wait for the pinned turns of 1–20 Synara threads and return every outcome in input order. Assistant summaries are capped at ${WAIT_THREAD_SUMMARY_MAX_CHARS} characters; use each result's readThread call to page the full transcript. Timeouts only report progress; they never retry, replace, cancel, or create work.`,
+      description: `Wait for the pinned turns of 1–20 Synara threads and return every outcome in input order. Assistant summaries are capped at ${WAIT_THREAD_SUMMARY_MAX_CHARS} characters; use each result's readThread call to page the full transcript. With notifyParent enabled, end your turn instead of polling or spawning watchers. This wait blocks only when you need results now; it acknowledges the returned settled results. Timeouts only report progress; they never retry, replace, cancel, or create work.`,
       inputSchema: {
         type: "object",
         properties: {
@@ -392,7 +411,7 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
             type: "integer",
             minimum: 0,
             maximum: 60_000,
-            description: "Long-poll duration; defaults to 30000ms.",
+            description: "Wait duration; defaults to 30000ms.",
           },
         },
         required: ["threadIds"],
@@ -407,116 +426,33 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
       },
     },
     handler: (args, context) =>
-      Effect.gen(function* () {
-        const waitInput = decodeWaitForThreadsInput(args);
-        if (waitInput.runIds && waitInput.runIds.length !== waitInput.threadIds.length) {
-          throw new ToolInputError('Argument "runIds" must have the same length as "threadIds".');
-        }
-        const timeoutMs = waitInput.timeoutMs ?? 30_000;
-        const deadline = Date.now() + timeoutMs;
-        const pinned = yield* Effect.forEach(waitInput.threadIds, (threadId, index) =>
-          snapshotQuery.getThreadShellById(threadId).pipe(
-            Effect.mapError((error) => new ToolInputError(errorText(error))),
-            Effect.flatMap(
-              Option.match({
-                onNone: () =>
-                  Effect.fail(
-                    new GatewayToolError("thread_not_found", `Thread "${threadId}" was not found.`),
-                  ),
-                onSome: (thread) =>
-                  Effect.succeed({
-                    threadId,
-                    runId: waitInput.runIds?.[index] ?? thread.latestTurn?.turnId ?? null,
-                    shell: thread,
-                  }),
-              }),
+      Effect.scoped(
+        Effect.gen(function* () {
+          const waitInput = decodeWaitForThreadsInput(args);
+          if (waitInput.runIds && waitInput.runIds.length !== waitInput.threadIds.length) {
+            throw new ToolInputError('Argument "runIds" must have the same length as "threadIds".');
+          }
+          const timeoutMs = waitInput.timeoutMs ?? 30_000;
+          const deadline = Date.now() + timeoutMs;
+          const events = yield* input.orchestrationEngine.subscribeDomainEvents;
+          const wakeups = yield* Queue.sliding<void>(1);
+          yield* Effect.addFinalizer(() => Queue.shutdown(wakeups));
+          const watched = new Set<string>(waitInput.threadIds);
+          yield* Effect.forkScoped(
+            Stream.runForEach(events, (event) =>
+              "threadId" in event.payload &&
+              watched.has(event.payload.threadId) &&
+              (event.type === "thread.turn-diff-completed" ||
+                event.type === "thread.deleted" ||
+                (event.type === "thread.session-set" &&
+                  event.payload.session.status !== "running" &&
+                  event.payload.session.status !== "starting"))
+                ? Queue.offer(wakeups, undefined).pipe(Effect.asVoid)
+                : Effect.void,
             ),
-          ),
-        );
-
-        const initialStateByKey = new Map(
-          pinned.map((pin) => {
-            const shell = pin.shell;
-            return [
-              `${pin.threadId}\u0000${pin.runId ?? ""}`,
-              shell.latestTurn?.turnId === pin.runId ? shell.latestTurn.state : "pending",
-            ] as const;
-          }),
-        );
-        const readPinnedStates = () =>
-          projectionTurns
-            .getManyWaitSnapshot({
-              threadIds: pinned.map((pin) => ThreadId.makeUnsafe(pin.threadId)),
-              turns: pinned.flatMap((pin) =>
-                pin.runId === null
-                  ? []
-                  : [{ threadId: pin.threadId, turnId: TurnId.makeUnsafe(pin.runId) }],
-              ),
-            })
-            .pipe(
-              Effect.mapError((error) => new ToolInputError(errorText(error))),
-              Effect.flatMap((snapshot) => {
-                const existingThreadIds = new Set(snapshot.existingThreadIds);
-                const missing = pinned.find((pin) => !existingThreadIds.has(pin.threadId));
-                if (missing) {
-                  return Effect.fail(
-                    new GatewayToolError(
-                      "thread_not_found",
-                      `Thread "${missing.threadId}" was not found.`,
-                    ),
-                  );
-                }
-                const turnsByKey = new Map(
-                  snapshot.turns.map(
-                    (turn) => [`${turn.threadId}\u0000${turn.turnId}`, turn] as const,
-                  ),
-                );
-                return Effect.succeed(
-                  pinned.map((pin) => {
-                    const state =
-                      pin.runId === null
-                        ? ("idle" as const)
-                        : (turnsByKey.get(`${pin.threadId}\u0000${pin.runId}`)?.state ??
-                          initialStateByKey.get(`${pin.threadId}\u0000${pin.runId}`) ??
-                          "pending");
-                    const terminal =
-                      state === "idle" ||
-                      state === "completed" ||
-                      state === "error" ||
-                      state === "interrupted";
-                    return {
-                      threadId: pin.threadId,
-                      runId: pin.runId,
-                      state,
-                      terminal,
-                      timedOut: false,
-                      summary: null as string | null,
-                      summaryTruncated: false,
-                      error: null as string | null,
-                      readThread: {
-                        tool: "synara_read_thread" as const,
-                        arguments: { threadId: pin.threadId },
-                      },
-                    };
-                  }),
-                );
-              }),
-            );
-
-        let results = yield* readPinnedStates();
-        let pollDelayMs = 200;
-        while (results.some((result) => !result.terminal) && Date.now() < deadline) {
-          yield* Effect.sleep(Math.min(pollDelayMs, Math.max(1, deadline - Date.now())));
-          results = yield* readPinnedStates();
-          pollDelayMs = Math.min(1_000, Math.ceil(pollDelayMs * 1.5));
-        }
-        const timedOut = results.some((result) => !result.terminal);
-        const finalResults = yield* Effect.forEach(results, (result) =>
-          Effect.gen(function* () {
-            if (!result.terminal || result.runId === null) {
-              return { ...result, timedOut: !result.terminal && timedOut };
-            }
-            const detail = yield* snapshotQuery.getThreadDetailById(result.threadId).pipe(
+          );
+          const pinned = yield* Effect.forEach(waitInput.threadIds, (threadId, index) =>
+            snapshotQuery.getThreadShellById(threadId).pipe(
               Effect.mapError((error) => new ToolInputError(errorText(error))),
               Effect.flatMap(
                 Option.match({
@@ -524,35 +460,148 @@ export function makeThreadReadTools(input: ThreadReadToolsInput): ReadonlyArray<
                     Effect.fail(
                       new GatewayToolError(
                         "thread_not_found",
-                        `Thread "${result.threadId}" was not found.`,
+                        `Thread "${threadId}" was not found.`,
                       ),
                     ),
-                  onSome: Effect.succeed,
+                  onSome: (thread) =>
+                    Effect.succeed({
+                      threadId,
+                      runId: waitInput.runIds?.[index] ?? thread.latestTurn?.turnId ?? null,
+                      shell: thread,
+                    }),
                 }),
               ),
+            ),
+          );
+
+          const initialStateByKey = new Map(
+            pinned.map((pin) => {
+              const shell = pin.shell;
+              return [
+                `${pin.threadId}\u0000${pin.runId ?? ""}`,
+                shell.latestTurn?.turnId === pin.runId ? shell.latestTurn.state : "pending",
+              ] as const;
+            }),
+          );
+          const readPinnedStates = () =>
+            projectionTurns
+              .getManyWaitSnapshot({
+                threadIds: pinned.map((pin) => ThreadId.makeUnsafe(pin.threadId)),
+                turns: pinned.flatMap((pin) =>
+                  pin.runId === null
+                    ? []
+                    : [{ threadId: pin.threadId, turnId: TurnId.makeUnsafe(pin.runId) }],
+                ),
+              })
+              .pipe(
+                Effect.mapError((error) => new ToolInputError(errorText(error))),
+                Effect.flatMap((snapshot) => {
+                  const existingThreadIds = new Set(snapshot.existingThreadIds);
+                  const missing = pinned.find((pin) => !existingThreadIds.has(pin.threadId));
+                  if (missing) {
+                    return Effect.fail(
+                      new GatewayToolError(
+                        "thread_not_found",
+                        `Thread "${missing.threadId}" was not found.`,
+                      ),
+                    );
+                  }
+                  const turnsByKey = new Map(
+                    snapshot.turns.map(
+                      (turn) => [`${turn.threadId}\u0000${turn.turnId}`, turn] as const,
+                    ),
+                  );
+                  return Effect.succeed(
+                    pinned.map((pin) => {
+                      const state =
+                        pin.runId === null
+                          ? ("idle" as const)
+                          : (turnsByKey.get(`${pin.threadId}\u0000${pin.runId}`)?.state ??
+                            initialStateByKey.get(`${pin.threadId}\u0000${pin.runId}`) ??
+                            "pending");
+                      const terminal =
+                        state === "idle" ||
+                        state === "completed" ||
+                        state === "error" ||
+                        state === "interrupted";
+                      return {
+                        threadId: pin.threadId,
+                        runId: pin.runId,
+                        state,
+                        terminal,
+                        timedOut: false,
+                        summary: null as string | null,
+                        summaryTruncated: false,
+                        error: null as string | null,
+                        readThread: {
+                          tool: "synara_read_thread" as const,
+                          arguments: { threadId: pin.threadId },
+                        },
+                      };
+                    }),
+                  );
+                }),
+              );
+
+          let results = yield* readPinnedStates();
+          while (results.some((result) => !result.terminal) && Date.now() < deadline) {
+            yield* Effect.raceFirst(
+              Queue.take(wakeups),
+              Effect.sleep(Math.max(1, deadline - Date.now())),
             );
-            const assistantMessage = detail.messages.findLast(
-              (message) => message.role === "assistant" && message.turnId === result.runId,
-            );
-            const summary = summarizeWaitThreadText(assistantMessage?.text);
-            return {
-              ...result,
-              timedOut: false,
-              summary: summary.summary,
-              summaryTruncated: summary.truncated,
-              error:
-                result.state === "error" ? (detail.session?.lastError ?? "Turn failed.") : null,
-            };
-          }),
-        );
-        return mcpToolResultJson({
-          callerThreadId: context.callerThreadId,
-          runIds: pinned.map((pin) => pin.runId),
-          allTerminal: finalResults.every((result) => result.terminal),
-          timedOut,
-          threads: finalResults,
-        });
-      }).pipe(
+            results = yield* readPinnedStates();
+          }
+          const throughSequence = yield* input.orchestrationEngine.getEventHighWaterSequence;
+          const timedOut = results.some((result) => !result.terminal);
+          const finalResults = yield* Effect.forEach(results, (result) =>
+            Effect.gen(function* () {
+              if (!result.terminal || result.runId === null) {
+                return { ...result, timedOut: !result.terminal && timedOut };
+              }
+              const detail = yield* snapshotQuery.getThreadDetailById(result.threadId).pipe(
+                Effect.mapError((error) => new ToolInputError(errorText(error))),
+                Effect.flatMap(
+                  Option.match({
+                    onNone: () =>
+                      Effect.fail(
+                        new GatewayToolError(
+                          "thread_not_found",
+                          `Thread "${result.threadId}" was not found.`,
+                        ),
+                      ),
+                    onSome: Effect.succeed,
+                  }),
+                ),
+              );
+              const assistantMessage = detail.messages.findLast(
+                (message) => message.role === "assistant" && message.turnId === result.runId,
+              );
+              const summary = summarizeWaitThreadText(assistantMessage?.text);
+              yield* input.parentNotices.acknowledge(
+                context.callerThreadId,
+                result.threadId,
+                throughSequence,
+                result.runId,
+              );
+              return {
+                ...result,
+                timedOut: false,
+                summary: summary.summary,
+                summaryTruncated: summary.truncated,
+                error:
+                  result.state === "error" ? (detail.session?.lastError ?? "Turn failed.") : null,
+              };
+            }),
+          );
+          return mcpToolResultJson({
+            callerThreadId: context.callerThreadId,
+            runIds: pinned.map((pin) => pin.runId),
+            allTerminal: finalResults.every((result) => result.terminal),
+            timedOut,
+            threads: finalResults,
+          });
+        }),
+      ).pipe(
         Effect.catch((error) =>
           Effect.succeed(
             error instanceof GatewayToolError

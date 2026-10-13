@@ -194,6 +194,12 @@ export const makeAgentGatewayOperationRepository = Effect.gen(function* () {
             WHERE op.operation_id = ${input.operationId}
               AND json_extract(entry.value, '$.notifyCreatorOnComplete') = 1
           `;
+          yield* sql`INSERT OR IGNORE INTO agent_parent_notify_links
+            (parent_thread_id, child_thread_id, first_message_id, enabled, created_at)
+            SELECT op.caller_thread_id, json_extract(entry.value, '$.ids.threadId'),
+              json_extract(entry.value, '$.ids.messageId'), json_extract(entry.value, '$.notifyParent'), op.created_at
+            FROM agent_gateway_operations op, json_each(op.plan_json) entry
+            WHERE op.operation_id = ${input.operationId} AND json_type(entry.value, '$.notifyParent') IS NOT NULL`;
           yield* sql`
             DELETE FROM agent_gateway_operations
             WHERE operation_id = ${input.operationId}
@@ -234,6 +240,12 @@ export const makeAgentGatewayOperationRepository = Effect.gen(function* () {
             SET status = 'failed', error_json = ${input.errorJson}, updated_at = ${input.now}
             WHERE operation_id = ${input.operationId}
           `;
+          yield* sql`INSERT OR IGNORE INTO agent_parent_notify_links
+            (parent_thread_id, child_thread_id, first_message_id, enabled, created_at)
+            SELECT op.caller_thread_id, json_extract(entry.value, '$.ids.threadId'),
+              json_extract(entry.value, '$.ids.messageId'), json_extract(entry.value, '$.notifyParent'), op.created_at
+            FROM agent_gateway_operations op, json_each(op.plan_json) entry
+            WHERE op.operation_id = ${input.operationId} AND json_type(entry.value, '$.notifyParent') IS NOT NULL`;
           yield* sql`
             DELETE FROM agent_gateway_operations
             WHERE operation_id = ${input.operationId}

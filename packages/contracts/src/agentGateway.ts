@@ -70,6 +70,7 @@ export const SynaraCreateThreadSpec = Schema.Struct({
     Schema.Array(Schema.String.check(Schema.isNonEmpty())).check(Schema.isMaxLength(16)),
   ),
   notifyCreatorOnComplete: Schema.optional(Schema.Boolean),
+  notifyParent: Schema.optional(Schema.Boolean),
   title: Schema.optional(Schema.String.check(Schema.isNonEmpty())),
   target: ModelSelection,
   projectId: Schema.optional(ProjectId),

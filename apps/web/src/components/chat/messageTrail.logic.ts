@@ -96,6 +96,10 @@ export function deriveMessageTrailItems(
       continue;
     }
     const { role } = entry.message;
+    if (role === "user" && entry.message.dispatchOrigin === "notification") {
+      currentTurnIndex = -1;
+      continue;
+    }
     if (role === "user") {
       items.push({
         id: entry.message.id,

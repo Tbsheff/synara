@@ -354,7 +354,7 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
       }
       if (
         context.kind !== "provider-session" &&
-        input.threads.some((spec) => spec.notifyCreatorOnComplete)
+        input.threads.some((spec) => spec.notifyCreatorOnComplete || spec.notifyParent)
       ) {
         return yield* Effect.fail(
           new GatewayToolError(
@@ -964,7 +964,15 @@ export const makeCreateThreadsHandler = Effect.fn(function* (
               planJson: canonicalJson(
                 prepared.map((entry) => ({
                   index: entry.index,
-                  notifyCreatorOnComplete: entry.spec.notifyCreatorOnComplete === true,
+                  notifyCreatorOnComplete:
+                    entry.spec.notifyCreatorOnComplete === true && entry.spec.notifyParent !== true,
+                  ...(context.kind === "provider-session"
+                    ? {
+                        notifyParent:
+                          entry.spec.notifyParent ??
+                          entry.spec.notifyCreatorOnComplete === undefined,
+                      }
+                    : {}),
                   projectId: entry.projectId,
                   workspaceRoot: entry.workspaceRoot,
                   environment: entry.environment,

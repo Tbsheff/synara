@@ -129,6 +129,7 @@ export function makeHubWorkGateway(dependencies: {
             {
               ...spec,
               notifyCreatorOnComplete: false,
+              notifyParent: false,
               projectId: record.targetProjectId,
               prompt: renderHubWorkPrompt({
                 workItemId: record.id,

@@ -2953,7 +2953,7 @@ const make = Effect.gen(function* () {
     readonly completionEventSequence?: number;
     readonly messageId: string;
     readonly messageText: string;
-    readonly dispatchOrigin?: "user" | "automation" | "agent";
+    readonly dispatchOrigin?: "user" | "automation" | "agent" | "notification";
     readonly attachments?: ReadonlyArray<ChatAttachment>;
     readonly skills?: ReadonlyArray<ProviderSkillReference>;
     readonly mentions?: ReadonlyArray<ProviderMentionReference>;
@@ -4579,7 +4579,10 @@ const make = Effect.gen(function* () {
         // only when that exact blocking turn settles, not on any late
         // terminal event for the shared provider session.
         yield* bindPendingQueuedDispatchToTurn(liveTurnId);
-        if (event.payload.dispatchMode === "steer") {
+        if (
+          event.payload.dispatchMode === "steer" &&
+          event.payload.dispatchOrigin !== "notification"
+        ) {
           // Preserve steer semantics: jump the queue (enqueue unshifts steers)
           // and ask the live turn to stop so the steer dispatches next.
           yield* interruptProviderTurn({
@@ -4589,6 +4592,12 @@ const make = Effect.gen(function* () {
         }
         return;
       }
+
+      const notificationText =
+        event.payload.dispatchOrigin === "notification"
+          ? yield* gatewayOperations.completions.parentNotices.deliveryText(message.id)
+          : undefined;
+      if (notificationText === null) return;
 
       // Surface the upcoming work immediately: provider session init can take
       // seconds (e.g. Cursor), and without an early status the thread reads as
@@ -4670,7 +4679,7 @@ const make = Effect.gen(function* () {
         ...(acceptedCacheReview ? { acceptedCacheReview } : {}),
         threadId: event.payload.threadId,
         messageId: message.id,
-        messageText: message.text,
+        messageText: notificationText ?? message.text,
         dispatchOrigin: event.payload.dispatchOrigin ?? "user",
         ...(message.attachments !== undefined ? { attachments: resolvedAttachments } : {}),
         ...(message.skills !== undefined ? { skills: message.skills } : {}),

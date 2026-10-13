@@ -640,6 +640,7 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         [134, "CloudSubmissions"],
         [135, "DropUnusedReceiptSequenceIndex"],
         [136, "ThreadTitleVersionIndex"],
+        [137, "ParentThreadNotices"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -728,6 +729,7 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
           { migration_id: 134, name: "CloudSubmissions" },
           { migration_id: 135, name: "DropUnusedReceiptSequenceIndex" },
           { migration_id: 136, name: "ThreadTitleVersionIndex" },
+          { migration_id: 137, name: "ParentThreadNotices" },
         ],
       );
       const groupConfigColumns = yield* sql<{ readonly name: string }>`
@@ -896,6 +898,7 @@ agentGatewayRetentionLegacyLayer(
           [134, "CloudSubmissions"],
           [135, "DropUnusedReceiptSequenceIndex"],
           [136, "ThreadTitleVersionIndex"],
+          [137, "ParentThreadNotices"],
         ]);
 
         const columns = yield* sql<{ readonly name: string }>`
@@ -1027,6 +1030,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [134, "CloudSubmissions"],
         [135, "DropUnusedReceiptSequenceIndex"],
         [136, "ThreadTitleVersionIndex"],
+        [137, "ParentThreadNotices"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -1099,6 +1103,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [134, "CloudSubmissions"],
           [135, "DropUnusedReceiptSequenceIndex"],
           [136, "ThreadTitleVersionIndex"],
+          [137, "ParentThreadNotices"],
         ],
       );
 
@@ -1225,6 +1230,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [134, "CloudSubmissions"],
         [135, "DropUnusedReceiptSequenceIndex"],
         [136, "ThreadTitleVersionIndex"],
+        [137, "ParentThreadNotices"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -1293,6 +1299,7 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [134, "CloudSubmissions"],
           [135, "DropUnusedReceiptSequenceIndex"],
           [136, "ThreadTitleVersionIndex"],
+          [137, "ParentThreadNotices"],
         ],
       );
       const preservedSpaces = yield* sql<{ readonly spaceId: string }>`
