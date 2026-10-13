@@ -147,6 +147,9 @@ export const ServerSettings = Schema.Struct({
     Schema.isBetween({ minimum: 1, maximum: 240 }),
   ).pipe(Schema.withDecodingDefault(() => 15)),
   lowerProviderProcessPriority: Schema.Boolean.pipe(Schema.withDecodingDefault(() => true)),
+  codexAppServerMode: Schema.Literals(["shared", "per-session"]).pipe(
+    Schema.withDecodingDefault(() => "shared" as const),
+  ),
   defaultThreadEnvMode: ThreadEnvironmentMode.pipe(Schema.withDecodingDefault(() => "local")),
   addProjectBaseDirectory: StringSetting.pipe(Schema.withDecodingDefault(() => "")),
   // The GitHub inbox reads one repository per project (the preferred remote). When true it also
@@ -220,6 +223,7 @@ export const ServerSettingsPatch = Schema.Struct({
     Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 240 })),
   ),
   lowerProviderProcessPriority: Schema.optionalKey(Schema.Boolean),
+  codexAppServerMode: Schema.optionalKey(Schema.Literals(["shared", "per-session"])),
   defaultThreadEnvMode: Schema.optionalKey(ThreadEnvironmentMode),
   addProjectBaseDirectory: Schema.optionalKey(StringSetting),
   githubInboxIncludeUpstreams: Schema.optionalKey(Schema.Boolean),

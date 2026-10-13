@@ -100,6 +100,7 @@ An externally managed OpenCode server must be configured by its operator.
 The Synara server, terminals opened by the user, Git checkpoint helpers, and brief version,
 authentication, and dedicated Codex/Claude model-list probes keep their existing priority.
 ACP/OpenCode discovery uses the shared agent process/server and retains its agent priority.
+Shared Codex metadata discovery also uses the account process and its selected priority.
 Auxiliary Codex/Claude model-generation processes use the agent priority. Priority changes are best effort: an OS
 failure is logged and the agent launch continues. Lower CPU priority improves scheduling
 under contention; it does not impose a CPU quota or guarantee response times under overload.
@@ -241,6 +242,42 @@ and creates independent conversation copies without replacing your existing Syna
 
 Each task owns a provider session.
 
+In Beta and source builds, Codex sessions share an app-server when their process settings
+match. Stable keeps one app-server per session. The server setting `codexAppServerMode`
+defaults to `"shared"`; set it to `"per-session"` through `server.updateSettings` and restart
+the affected sessions to use the fallback. Stable ignores the saved shared preference.
+Metadata discovery leases the same compatible process, including requests for another
+project directory. Discovery leases use the existing short idle timeout and load no native thread.
+
+The registry key hashes the effective environment (including `CODEX_HOME` and the source
+continuation home), account ID, auth identity, account config snapshot, resolved executable
+path, executable file identity and CLI version, launch arguments, extra skill root, process
+priority, and platform. Keys do not expose environment values or credentials. A changed
+environment or process-wide capability creates a separate process. Shared processes start
+in the account continuation home; each native thread supplies its own project directory,
+model, approval and sandbox policy, and Synara MCP authorization header. Each turn supplies
+its own effort, collaboration mode, and developer instructions.
+
+One process owns the pipe and assigns unique request IDs. Responses return to the requesting
+session; native thread IDs route notifications, approvals, tool output, and known native
+subagent events. Unowned requests receive an error. The registry does not guess an owner
+from whichever turn is active. Account notifications use an explicit process-wide allowlist.
+Within a process, a released native thread ID keeps its original Synara identity; another
+Synara thread cannot claim it and receive late events.
+
+Stopping a session interrupts and unloads its native threads, then releases its lease.
+Other hosted sessions keep running. The last lease starts a one-second shutdown grace;
+new work cancels that grace. Account auth invalidation stops all hosted sessions at once.
+A process or pipe failure fails all hosted sessions as an error, including idle sessions.
+New work waits for verified process-tree teardown before it can start a replacement.
+An unload failure retains the session stop barrier; it cannot kill another hosted session.
+
+Process sharing does **not** imply shared external MCP transports. In an isolated Codex
+0.162.1 probe, three native threads in one app-server still started three copies of a stdio
+MCP server. Codex owns those per-thread clients. Synara keeps per-thread gateway tokens in
+native thread config, so one thread cannot use another thread's caller identity. This change
+does not pool arbitrary stateful stdio servers.
+
 The session may preserve provider-specific behavior such as:
 
 - Plans
@@ -269,10 +306,10 @@ Synara does not put it in the shared Codex config or the child process environme
 This avoids process startup and initialization between ordinary replies while preserving
 the rejection of stale tool requests. It still reloads the native conversation and its MCP clients.
 
-If additional native threads remain loaded, native unloading or resume cannot be verified, or
-a turn was interrupted, failed, or aborted for inactivity, Synara uses the full process-restart
-recovery path. You can continue in the same task. Idle provider processes still shut down after
-15 minutes by default.
+If native child threads remain loaded for that session, native unloading or resume cannot be
+verified, or a turn was interrupted, failed, or aborted for inactivity, Synara reloads that
+session. Shared mode unloads only its owned threads; dedicated mode restarts its process.
+You can continue in the same task. Idle sessions still shut down after 15 minutes by default.
 
 ### Warm idle sessions
 
@@ -291,6 +328,9 @@ memory permits. Every 15 seconds, idle sessions check system free RAM. Below 10%
 or 1.5 GiB, warm and resumable agent sessions expire after one idle minute, even if the operator
 disabled normal idle expiry. A shorter configured timeout stays shorter. Running turns,
 provider background tasks, pending approvals, and queued messages prevent teardown.
+
+In shared Codex mode, each warm session costs one native thread slot. Sharing a process does
+not bypass the limit, extend a session lease, or change its event consumer.
 
 Saved model and access-mode changes use the existing session reconfiguration path before the
 next send. A warm request must match the thread’s saved provider account; it cannot move a native

@@ -35,8 +35,12 @@ export const PULL_REQUEST_AUTO_FIX_BETA_FEATURE = "pull-request-auto-fix";
 
 export const INLINE_HTML_RENDER_BETA_FEATURE = "inline-html-render";
 export const PROVIDER_CLOUD_BETA_FEATURE = "provider-cloud";
+export const CODEX_SHARED_PROCESS_BETA_FEATURE = "codex-shared-process";
 
-export const BETA_ONLY_FEATURES: readonly BetaOnlyFeature[] = [PROVIDER_CLOUD_BETA_FEATURE];
+export const BETA_ONLY_FEATURES: readonly BetaOnlyFeature[] = [
+  PROVIDER_CLOUD_BETA_FEATURE,
+  CODEX_SHARED_PROCESS_BETA_FEATURE,
+];
 
 /**
  * Whether a Beta-only feature is on for this host. Only the Stable

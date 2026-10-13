@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   BETA_ONLY_FEATURES,
+  CODEX_SHARED_PROCESS_BETA_FEATURE,
   desktopFlavorFromBundleId,
   desktopFlavorFromProtocol,
   GROUPS_BETA_FEATURE,
@@ -42,8 +43,11 @@ describe("isBetaFeatureEnabled", () => {
     }
   });
 
-  it("lists only cloud agents as Beta-only", () => {
-    expect(BETA_ONLY_FEATURES).toEqual([PROVIDER_CLOUD_BETA_FEATURE]);
+  it("lists only cloud agents and shared Codex processes as Beta-only", () => {
+    expect(BETA_ONLY_FEATURES).toEqual([
+      PROVIDER_CLOUD_BETA_FEATURE,
+      CODEX_SHARED_PROCESS_BETA_FEATURE,
+    ]);
     for (const flavor of ["development", "canary", "cua", "beta", "unknown"] as const) {
       expect(isBetaFeatureEnabled(GROUPS_BETA_FEATURE, flavor)).toBe(true);
     }

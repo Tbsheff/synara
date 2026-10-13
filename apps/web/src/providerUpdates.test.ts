@@ -61,6 +61,7 @@ function serverSettings(overrides: Partial<ServerSettings["providers"]> = {}): S
     warmSessionIdleTimeoutMinutes: 15,
     keepAwakeMode: "off",
     lowerProviderProcessPriority: true,
+    codexAppServerMode: "shared",
     defaultThreadEnvMode: "local",
     addProjectBaseDirectory: "",
     githubInboxIncludeUpstreams: false,
