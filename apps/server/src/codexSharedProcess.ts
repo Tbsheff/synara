@@ -63,6 +63,8 @@ const GLOBAL_NOTIFICATIONS = new Set([
   "account/rateLimits/updated",
   "configWarning",
   "deprecationNotice",
+  "mcpServer/oauthLogin/completed",
+  "mcpServer/startupStatus/updated",
 ]);
 
 export class CodexSharedProcess<T extends object> {

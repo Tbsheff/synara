@@ -207,6 +207,17 @@ describe("Codex shared process routing", () => {
     await h.registry.stopAll();
   });
 
+  it("fans out threadless MCP sign-in updates to every session", async () => {
+    const h = harness();
+    await h.acquire();
+    h.emit({
+      method: "mcpServer/oauthLogin/completed",
+      params: { name: "linear", threadId: null, success: true },
+    });
+    await vi.waitFor(() => expect(h.messages.map((list) => list.length)).toEqual([1, 1, 1]));
+    await h.registry.stopAll();
+  });
+
   it("rejects cross-session outbound thread control", async () => {
     const h = harness();
     const p = await h.acquire();
