@@ -97,6 +97,10 @@ is cancelled, the task and its prompt remain available for retry.
   **Find in thread** searches messages and captured work. A work match opens its turn and
   shows the matching text. Thread exports include messages, work payloads, and turn links
   in `thread.json`; `transcript.md` includes work in expandable sections.
+- **Settings** — search by a setting's name or description. Each result has one tab stop.
+  The top match starts selected. ArrowDown and ArrowUp move selection; Enter opens the
+  selected setting. Home and End select the first and last result while a result has focus.
+  Escape clears the search. Opening a result or clearing search returns focus to the search input.
 - **Composer** — objectives, attachments, provider selection, model selection, and task controls
 - **Terminal** — a real shell opened in the task's working directory
 - **Browser** — a shared live page surface for previews, semantic automation, and page-declared
