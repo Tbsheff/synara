@@ -9,6 +9,7 @@ import {
   type ProjectScript,
   PROVIDER_DISPLAY_NAMES,
   type ProviderKind,
+  type ProviderInstanceId,
   type ResolvedKeybindingsConfig,
   type ThreadId,
 } from "@synara/contracts";
@@ -85,6 +86,7 @@ interface ChatHeaderProps {
   activeThreadTitle: string;
   activeThreadEntryPoint: ThreadPrimarySurface;
   activeProvider: ProviderKind;
+  activeProviderInstanceId?: ProviderInstanceId | undefined;
   activeProjectName: string | undefined;
   activeProjectId: ProjectId | null;
   threadBreadcrumbs: ReadonlyArray<{
@@ -422,6 +424,7 @@ export function ChatHeader({
   activeThreadTitle,
   activeThreadEntryPoint,
   activeProvider,
+  activeProviderInstanceId,
   activeProjectName,
   activeProjectId,
   threadBreadcrumbs,
@@ -730,7 +733,10 @@ export function ChatHeader({
           />
         ) : null}
         {!minimalChrome && !hideHandoffControls && !environment ? (
-          <ProviderUsageMenuControl provider={activeProvider} />
+          <ProviderUsageMenuControl
+            provider={activeProvider}
+            instanceId={activeProviderInstanceId}
+          />
         ) : null}
         {!minimalChrome && !hideHandoffControls && showHandoffAction ? (
           <Menu modal={false}>

@@ -53,7 +53,11 @@ is cancelled, the task and its prompt remain available for retry.
   detail pane and three actions on every item (see [Code review](#code-review))
 - **Tasks** (Stable and Beta) — a to-do list for anything you need to do, with or without
   a project. Select a to-do to open its floating card, then hand it to an agent with **Start**: pick the
-  provider, model, and effort, the project or folder it works in, and a new or existing chat. The
+  provider, model, and effort, the project or folder it works in, and a new or existing chat.
+  New chats use the project's saved Local/Worktree choice, or the app default when no choice is saved.
+  Change it with the same environment picker used by the chat composer. A new worktree opens the
+  chat to finish worktree setup before sending. A picked folder runs locally; an existing chat
+  keeps its current environment. The
   agent receives the to-do's current title and note. The to-do then follows the chat's status — Running, Needs you, Review when the agent finishes, or
   Failed — and its details show the agent's recent activity, let you approve a pending request
   without opening the chat, and show the agent's latest reply for review before you mark it done. A

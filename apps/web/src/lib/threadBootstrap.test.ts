@@ -5,6 +5,7 @@ import {
   buildDraftThreadContextPatch,
   createFreshDraftThreadSeed,
   resolveInheritedThreadContext,
+  resolveNewThreadDefaultEnvMode,
   resolveTerminalThreadCreationState,
   resolveThreadBootstrapPlan,
   shouldReuseActiveDraftThread,
@@ -12,6 +13,35 @@ import {
 
 const PROJECT_ID = ProjectId.makeUnsafe("project-bootstrap");
 const THREAD_ID = ThreadId.makeUnsafe("thread-bootstrap");
+
+it.each([
+  { entryPoint: "chat", projectEnvMode: "worktree", defaultEnvMode: "local", expected: "worktree" },
+  { entryPoint: "chat", projectEnvMode: "local", defaultEnvMode: "worktree", expected: "local" },
+  {
+    entryPoint: "chat",
+    projectEnvMode: undefined,
+    defaultEnvMode: "worktree",
+    expected: "worktree",
+  },
+  { entryPoint: "chat", projectEnvMode: undefined, defaultEnvMode: "local", expected: "local" },
+  {
+    entryPoint: "terminal",
+    projectEnvMode: "worktree",
+    defaultEnvMode: "local",
+    expected: "local",
+  },
+  {
+    entryPoint: "terminal",
+    projectEnvMode: "local",
+    defaultEnvMode: "worktree",
+    expected: "worktree",
+  },
+] as const)(
+  "uses $expected for $entryPoint with project=$projectEnvMode and default=$defaultEnvMode",
+  ({ expected, ...input }) => {
+    expect(resolveNewThreadDefaultEnvMode(input)).toBe(expected);
+  },
+);
 
 function modelSelection(
   provider: ModelSelection["provider"],

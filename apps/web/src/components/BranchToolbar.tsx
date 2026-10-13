@@ -317,6 +317,11 @@ export default function BranchToolbar({
     : (draftThread?.workingDirectory ?? null);
   const activeProvider =
     serverThreadSession?.provider ?? serverThread?.modelSelection.provider ?? null;
+  const activeProviderInstanceId =
+    serverThreadSession?.providerInstanceId ??
+    serverThread?.modelSelection.instanceId ??
+    activeProvider ??
+    undefined;
   const usesFixedLocalWorkspace = fixedLocalWorkspaceCwd !== undefined;
   const branchCwd = usesFixedLocalWorkspace
     ? fixedLocalWorkspaceCwd
@@ -478,6 +483,7 @@ export default function BranchToolbar({
 
   const usageSummary = useProviderUsageSummary({
     provider: activeProvider,
+    instanceId: activeProviderInstanceId,
     threads,
     codexHomePath: settings.codexHomePath || null,
     fetchOpenUsageData: false,
