@@ -164,6 +164,29 @@ afterEach(() => {
 });
 
 describe("wsNativeApi", () => {
+  it("routes MCP status and login with their owning thread and session key", async () => {
+    const { createWsNativeApi } = await import("./wsNativeApi");
+    const api = createWsNativeApi();
+    const threadId = ThreadId.makeUnsafe("mcp-thread");
+    const state = { sessionKey: "attempt-1", servers: [] };
+    requestMock.mockResolvedValueOnce(state).mockResolvedValueOnce({ state });
+    expect(await api.provider.getMcpAuth({ threadId, refresh: true })).toEqual(state);
+    expect(
+      await api.provider.authenticateMcp({
+        threadId,
+        sessionKey: "attempt-1",
+        serverName: "linear",
+      }),
+    ).toEqual({ state });
+    expect(requestMock.mock.calls).toEqual([
+      [WS_METHODS.providerGetMcpAuth, { threadId, refresh: true }],
+      [
+        WS_METHODS.providerAuthenticateMcp,
+        { threadId, sessionKey: "attempt-1", serverName: "linear" },
+      ],
+    ]);
+  });
+
   it("forwards exhausted shell failures and removes unsubscribed listeners", async () => {
     const { createWsNativeApi, onShellStreamFailure } = await import("./wsNativeApi");
     createWsNativeApi();

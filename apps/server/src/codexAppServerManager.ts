@@ -1,7 +1,15 @@
+import type {
+  ProviderGetMcpAuthInput,
+  ProviderMcpAuthState,
+  ProviderAuthenticateMcpInput,
+  ProviderAuthenticateMcpResult,
+} from "@synara/contracts";
+import { McpAuthState, mcpManualCommand } from "./provider/mcpAuth";
 import { parseCodexPermissionsSnapshot } from "./provider/codexPermissions";
 import { providerProcessPriorityEnabled } from "./providerProcessPriority";
 import type { ChildProcess, ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import * as NodePath from "node:path";
 import { EventEmitter } from "node:events";
 
 import {
@@ -212,8 +220,25 @@ type CodexTurnSandboxPolicy = {
 
 export class CodexSessionAuthInvalidatedError extends Error {}
 
+interface McpLoginCompletion {
+  readonly loginId: string | undefined;
+  readonly success: boolean;
+  readonly error: string | undefined;
+}
+
+interface CodexMcpLoginAttempt {
+  readonly name: string;
+  loginId?: string | undefined;
+  responseReceived: boolean;
+  readonly completions: McpLoginCompletion[];
+}
+
 interface CodexSessionContext {
   sharedProcess?: CodexSharedProcess<CodexSessionContext>;
+  mcpAuth?: McpAuthState;
+  mcpAuthRead?: Promise<void> | undefined;
+  mcpAuthReadAt?: number | undefined;
+  mcpLogin?: CodexMcpLoginAttempt | undefined;
   authInvalidation?: string;
   readonly autoApproveSynaraTools?: boolean;
   readonly enableComputerControl?: boolean;
@@ -3909,6 +3934,157 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     return result;
   }
 
+  private mcpAuthState(context: CodexSessionContext): McpAuthState {
+    return (context.mcpAuth ??= new McpAuthState(context.sessionAttemptId, { type: "oauth" }));
+  }
+
+  private manualMcpAuth(context: CodexSessionContext, name: string): void {
+    this.mcpAuthState(context).manual(name, {
+      type: "manual",
+      command: mcpManualCommand({
+        provider: "codex",
+        binaryPath: context.codexOptions?.binaryPath,
+        cwd: context.session.cwd,
+        name,
+        environment: {
+          CODEX_HOME: context.authTracking
+            ? NodePath.dirname(context.authTracking.sourceConfigPath)
+            : (context.codexOptions?.homePath ?? context.codexOptions?.environment?.CODEX_HOME),
+        },
+      }),
+      instructions:
+        "This Codex version has no native MCP OAuth login method. Run on the Synara server machine, then select Re-check.",
+    });
+  }
+
+  async getMcpAuth(input: ProviderGetMcpAuthInput): Promise<ProviderMcpAuthState> {
+    const context = this.requireSession(input.threadId);
+    const state = this.mcpAuthState(context);
+    if (!readResumeCursorThreadId(context.session.resumeCursor)) return { servers: [] };
+    if (
+      context.mcpLogin &&
+      !state.snapshot().servers.some((server) => server.status === "authenticating")
+    )
+      context.mcpLogin = undefined;
+    if (
+      !context.mcpAuthRead &&
+      (input.refresh ||
+        context.mcpAuthReadAt === undefined ||
+        Date.now() - context.mcpAuthReadAt >= 10_000)
+    ) {
+      const version = state.version;
+      const knownServers = new Set(state.snapshot().servers.map((server) => server.name));
+      context.mcpAuthRead = (async () => {
+        const statuses: { name: string; needsAuth: boolean }[] = [];
+        let cursor: string | undefined;
+        const seen = new Set<string>();
+        for (let page = 0; page < 20; page++) {
+          const result = this.readObject(
+            await this.sendRequest(
+              context,
+              "mcpServerStatus/list",
+              {
+                threadId: readResumeCursorThreadId(context.session.resumeCursor),
+                detail: "toolsAndAuthOnly",
+                limit: 100,
+                ...(cursor ? { cursor } : {}),
+              },
+              10_000,
+            ),
+          );
+          if (!Array.isArray(result?.data)) throw new Error("Codex returned invalid MCP status.");
+          for (const server of result.data) {
+            const name = this.readString(server, "name");
+            const authStatus = this.readString(server, "authStatus");
+            if (name)
+              statuses.push({
+                name,
+                needsAuth:
+                  authStatus === "notLoggedIn" ||
+                  (knownServers.has(name) &&
+                    authStatus !== "oAuth" &&
+                    authStatus !== "bearerToken"),
+              });
+          }
+          cursor = this.readString(result, "nextCursor");
+          if (!cursor) break;
+          if (seen.has(cursor) || page === 19)
+            throw new Error("Codex MCP status pagination did not finish.");
+          seen.add(cursor);
+        }
+        if (
+          this.sessions.get(input.threadId) === context &&
+          !context.stopping &&
+          version === state.version
+        )
+          state.replace(statuses);
+      })()
+        .catch((error: unknown) => {
+          if (!isUnsupportedCodexMethodError(error, "mcpServerStatus/list")) throw error;
+          for (const server of state.snapshot().servers) this.manualMcpAuth(context, server.name);
+        })
+        .finally(() => {
+          context.mcpAuthRead = undefined;
+          context.mcpAuthReadAt = Date.now();
+        });
+    }
+    await context.mcpAuthRead;
+    return this.sessions.get(input.threadId) === context && !context.stopping
+      ? state.snapshot()
+      : { servers: [] };
+  }
+
+  async authenticateMcp(
+    input: ProviderAuthenticateMcpInput,
+  ): Promise<ProviderAuthenticateMcpResult> {
+    const context = this.requireSession(input.threadId);
+    const state = this.mcpAuthState(context);
+    if (state.sessionKey !== input.sessionKey)
+      throw new Error("MCP sign-in session changed. Re-check and try again.");
+    const server = state.snapshot().servers.find((server) => server.name === input.serverName);
+    if (!server) throw new Error("This MCP server does not need sign-in. Re-check the list.");
+    if (server.action.type === "manual") return { state: state.snapshot() };
+    if (context.mcpLogin || !state.begin(input.serverName))
+      throw new Error("MCP sign-in is already in progress.");
+    const attempt: CodexMcpLoginAttempt = {
+      name: input.serverName,
+      responseReceived: false,
+      completions: [],
+    };
+    context.mcpLogin = attempt;
+    try {
+      const result = this.readObject(
+        await this.sendRequest(context, "mcpServer/oauth/login", {
+          name: input.serverName,
+          threadId: readResumeCursorThreadId(context.session.resumeCursor),
+          timeoutSecs: 120,
+        }),
+      );
+      if (this.sessions.get(input.threadId) !== context || context.stopping)
+        throw new Error("MCP sign-in session closed.");
+      const authorizationUrl = this.readString(result, "authorizationUrl");
+      if (!authorizationUrl || !["https:", "http:"].includes(new URL(authorizationUrl).protocol))
+        throw new Error("Codex returned an invalid MCP authorization URL.");
+      attempt.loginId = this.readString(result, "loginId");
+      attempt.responseReceived = true;
+      for (const completion of attempt.completions)
+        this.completeMcpLogin(context, attempt, completion);
+      return context.mcpLogin === attempt
+        ? { state: state.snapshot(), authorizationUrl }
+        : { state: state.snapshot() };
+    } catch (error) {
+      if (context.mcpLogin === attempt) context.mcpLogin = undefined;
+      if (isUnsupportedCodexMethodError(error, "mcpServer/oauth/login"))
+        this.manualMcpAuth(context, input.serverName);
+      else
+        state.fail(
+          input.serverName,
+          error instanceof Error ? error.message : "MCP sign-in failed.",
+        );
+      return { state: state.snapshot() };
+    }
+  }
+
   async getPermissions(input: {
     readonly cwd?: string;
     readonly codexOptions?: CodexDiscoveryOptions;
@@ -4734,11 +4910,55 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     );
   }
 
+  private completeMcpLogin(
+    context: CodexSessionContext,
+    attempt: CodexMcpLoginAttempt,
+    completion: McpLoginCompletion,
+  ): void {
+    if (context.mcpLogin !== attempt || (attempt.loginId && completion.loginId !== attempt.loginId))
+      return;
+    context.mcpLogin = undefined;
+    context.mcpAuthReadAt = undefined;
+    if (completion.success) this.mcpAuthState(context).succeed(attempt.name);
+    else this.mcpAuthState(context).fail(attempt.name, completion.error ?? "MCP sign-in failed.");
+  }
+
   private handleServerNotification(
     context: CodexSessionContext,
     notification: JsonRpcNotification,
   ): void {
     const rawRoute = this.readRouteFields(notification.params);
+    if (notification.method === "mcpServer/oauthLogin/completed") {
+      const params = this.readObject(notification.params);
+      const attempt = context.mcpLogin;
+      const nativeThreadId = this.readString(params, "threadId");
+      if (
+        attempt &&
+        this.readString(params, "name") === attempt.name &&
+        (!nativeThreadId ||
+          nativeThreadId === readResumeCursorThreadId(context.session.resumeCursor))
+      ) {
+        const completion: McpLoginCompletion = {
+          loginId: this.readString(params, "loginId"),
+          success: params?.success === true,
+          error: this.readString(params, "error"),
+        };
+        if (!attempt.responseReceived) {
+          if (attempt.completions.length < 4) attempt.completions.push(completion);
+        } else this.completeMcpLogin(context, attempt, completion);
+      }
+      return;
+    }
+    if (
+      notification.method === "mcpServer/startupStatus/updated" &&
+      (!this.readString(notification.params, "threadId") ||
+        this.readString(notification.params, "threadId") ===
+          readResumeCursorThreadId(context.session.resumeCursor)) &&
+      this.readString(notification.params, "failureReason") === "reauthenticationRequired"
+    ) {
+      const name = this.readString(notification.params, "name");
+      if (name) this.mcpAuthState(context).needsAuth(name);
+    }
     this.rememberCollabReceiverTurns(context, notification.params, rawRoute.turnId);
     const resolvedCollaborationRoute = this.resolveCollaborationRoute(context, notification.params);
     const {

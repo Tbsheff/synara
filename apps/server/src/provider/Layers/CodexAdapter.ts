@@ -2279,7 +2279,12 @@ function mcpStartupStatusEvents(
       transcriptNoticeEvent(event, canonicalThreadId, {
         noticeKind: "mcp-server-status",
         severity: "warning",
-        title: noticeTitle(`MCP server ${name} failed to start`, "MCP server failed to start"),
+        title: noticeTitle(
+          payload?.failureReason === "reauthenticationRequired"
+            ? `MCP server ${name} needs authentication`
+            : `MCP server ${name} failed to start`,
+          "MCP server failed to start",
+        ),
         status: "failed",
         ...noticeDetail(reason),
         dedupeKey: `mcp:${generation}:${name}`,
@@ -4174,6 +4179,16 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
       listSkills,
       listPlugins,
       readPlugin,
+      getMcpAuth: (input) =>
+        Effect.tryPromise({
+          try: () => manager.getMcpAuth(input),
+          catch: (cause) => toRequestError(input.threadId, "mcpServerStatus/list", cause),
+        }),
+      authenticateMcp: (input) =>
+        Effect.tryPromise({
+          try: () => manager.authenticateMcp(input),
+          catch: (cause) => toRequestError(input.threadId, "mcpServer/oauth/login", cause),
+        }),
       getPermissions,
       listModels,
       prewarmVoice,

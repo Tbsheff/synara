@@ -201,7 +201,11 @@ import {
   ProviderListSkillsInput,
   ProviderSkillsCatalogInput,
 } from "./providerDiscovery";
-import { ProviderCompactThreadInput } from "./provider";
+import {
+  ProviderCompactThreadInput,
+  ProviderGetMcpAuthInput,
+  ProviderAuthenticateMcpInput,
+} from "./provider";
 import {
   PullRequestActionInput,
   PullRequestCommentInput,
@@ -359,6 +363,8 @@ export const WS_METHODS = {
   providerReadPlugin: "provider.readPlugin",
   providerGetPermissions: "provider.getPermissions",
   providerListModels: "provider.listModels",
+  providerGetMcpAuth: "provider.getMcpAuth",
+  providerAuthenticateMcp: "provider.authenticateMcp",
   providerListAgents: "provider.listAgents",
 
   // Automation methods
@@ -634,6 +640,8 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.providerListPlugins, ProviderListPluginsInput),
   tagRequestBody(WS_METHODS.providerReadPlugin, ProviderReadPluginInput),
   tagRequestBody(WS_METHODS.providerGetPermissions, ProviderGetPermissionsInput),
+  tagRequestBody(WS_METHODS.providerGetMcpAuth, ProviderGetMcpAuthInput),
+  tagRequestBody(WS_METHODS.providerAuthenticateMcp, ProviderAuthenticateMcpInput),
   tagRequestBody(WS_METHODS.providerListModels, ProviderListModelsInput),
   tagRequestBody(WS_METHODS.providerListAgents, ProviderListAgentsInput),
 

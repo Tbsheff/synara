@@ -466,6 +466,12 @@ function makeFakeCodexAdapter(
   const prepareSessionReplacement = vi.fn<
     NonNullable<ProviderAdapterShape<ProviderAdapterError>["prepareSessionReplacement"]>
   >(() => Effect.succeed(undefined));
+  const getMcpAuth = vi.fn<NonNullable<ProviderAdapterShape<ProviderAdapterError>["getMcpAuth"]>>(
+    (input) => Effect.succeed({ sessionKey: `${provider}:${input.threadId}`, servers: [] }),
+  );
+  const authenticateMcp = vi.fn<
+    NonNullable<ProviderAdapterShape<ProviderAdapterError>["authenticateMcp"]>
+  >((input) => Effect.succeed({ state: { sessionKey: input.sessionKey, servers: [] } }));
   const adapter: ProviderAdapterShape<ProviderAdapterError> = {
     provider,
     capabilities: {
@@ -487,6 +493,8 @@ function makeFakeCodexAdapter(
     respondToUserInput,
     stopSession,
     renewAgentGatewayCredential,
+    getMcpAuth,
+    authenticateMcp,
     listSessions,
     hasSession,
     readThread,
@@ -522,6 +530,8 @@ function makeFakeCodexAdapter(
 
   return {
     adapter,
+    getMcpAuth,
+    authenticateMcp,
     prepareSessionReplacement,
     emit,
     waitForRuntimeSubscribers,
@@ -1644,6 +1654,32 @@ it.effect(
 );
 
 routing.layer("ProviderServiceLive routing", (it) => {
+  it.effect(
+    "routes MCP auth to the owning live provider and does not recover a stopped runtime",
+    () =>
+      Effect.gen(function* () {
+        const service = yield* ProviderService;
+        const threadId = asThreadId("mcp-auth-routing");
+        yield* service.startSession(threadId, {
+          threadId,
+          provider: "claudeAgent",
+          runtimeMode: "full-access",
+        });
+        const state = yield* service.getMcpAuth!({ threadId });
+        assert.equal(state.sessionKey, `claudeAgent:${threadId}`);
+        const input = { threadId, sessionKey: state.sessionKey!, serverName: "linear" };
+        yield* service.authenticateMcp!(input);
+        assert.deepEqual(routing.claude.authenticateMcp.mock.calls.at(-1), [input]);
+        assert.equal(routing.codex.authenticateMcp.mock.calls.length, 0);
+        yield* service.stopRuntimeSession!({ threadId });
+        const starts = routing.claude.startSession.mock.calls.length;
+        assert.deepEqual(yield* service.getMcpAuth!({ threadId }), { servers: [] });
+        const stopped = yield* service.authenticateMcp!(input).pipe(Effect.result);
+        assert.equal(stopped._tag, "Failure");
+        assert.equal(routing.claude.startSession.mock.calls.length, starts);
+      }),
+  );
+
   it.effect("starts another provider on a Codex thread only after a continuation reset", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;

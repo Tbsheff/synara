@@ -2754,6 +2754,20 @@ const makeWsRpcHandlersLayer = () =>
             providerDiscoveryService.getPermissions(input),
             "Failed to load provider permissions",
           ),
+        [WS_METHODS.providerGetMcpAuth]: (input) =>
+          rpcEffect(
+            providerService.getMcpAuth
+              ? providerService.getMcpAuth(input)
+              : Effect.succeed({ servers: [] }),
+            "Failed to check MCP sign-in",
+          ),
+        [WS_METHODS.providerAuthenticateMcp]: (input) =>
+          rpcEffect(
+            providerService.authenticateMcp
+              ? providerService.authenticateMcp(input)
+              : Effect.fail(new Error("MCP sign-in is unavailable.")),
+            "Failed to start MCP sign-in",
+          ),
         [WS_METHODS.providerListModels]: (input) =>
           rpcEffect(providerDiscoveryService.listModels(input), "Failed to list models"),
         [WS_METHODS.providerListAgents]: (input) =>

@@ -260,7 +260,13 @@ import {
   OrchestrationShellStreamItem,
   OrchestrationThreadStreamItem,
 } from "./orchestration";
-import { ProviderCompactThreadInput } from "./provider";
+import {
+  ProviderCompactThreadInput,
+  ProviderGetMcpAuthInput,
+  ProviderMcpAuthState,
+  ProviderAuthenticateMcpInput,
+  ProviderAuthenticateMcpResult,
+} from "./provider";
 import {
   ProviderGetComposerCapabilitiesInput,
   ProviderComposerCapabilities,
@@ -1702,6 +1708,17 @@ export const WsProviderGetPermissionsRpc = Rpc.make(WS_METHODS.providerGetPermis
   error: WsRpcError,
 });
 
+export const WsProviderGetMcpAuthRpc = Rpc.make(WS_METHODS.providerGetMcpAuth, {
+  payload: ProviderGetMcpAuthInput,
+  success: ProviderMcpAuthState,
+  error: WsRpcError,
+});
+export const WsProviderAuthenticateMcpRpc = Rpc.make(WS_METHODS.providerAuthenticateMcp, {
+  payload: ProviderAuthenticateMcpInput,
+  success: ProviderAuthenticateMcpResult,
+  error: WsRpcError,
+});
+
 export const WsProviderListModelsRpc = Rpc.make(WS_METHODS.providerListModels, {
   payload: ProviderListModelsInput,
   success: ProviderListModelsResult,
@@ -2165,6 +2182,8 @@ export const WsFeatureRpcGroup: RpcGroup.RpcGroup<
   | typeof WsProviderListPluginsRpc
   | typeof WsProviderReadPluginRpc
   | typeof WsProviderGetPermissionsRpc
+  | typeof WsProviderGetMcpAuthRpc
+  | typeof WsProviderAuthenticateMcpRpc
   | typeof WsProviderListModelsRpc
   | typeof WsProviderListAgentsRpc
   | typeof WsAutomationListRpc
@@ -2318,6 +2337,8 @@ export const WsFeatureRpcGroup: RpcGroup.RpcGroup<
   WsProviderListPluginsRpc,
   WsProviderReadPluginRpc,
   WsProviderGetPermissionsRpc,
+  WsProviderGetMcpAuthRpc,
+  WsProviderAuthenticateMcpRpc,
   WsProviderListModelsRpc,
   WsProviderListAgentsRpc,
   WsAutomationListRpc,

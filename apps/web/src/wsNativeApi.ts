@@ -860,6 +860,8 @@ export function createWsNativeApi(): NativeApi {
       listPlugins: (input) => transport.request(WS_METHODS.providerListPlugins, input),
       readPlugin: (input) => transport.request(WS_METHODS.providerReadPlugin, input),
       getPermissions: (input) => transport.request(WS_METHODS.providerGetPermissions, input),
+      getMcpAuth: (input) => transport.request(WS_METHODS.providerGetMcpAuth, input),
+      authenticateMcp: (input) => transport.request(WS_METHODS.providerAuthenticateMcp, input),
       listModels: (input) => transport.request(WS_METHODS.providerListModels, input),
       listAgents: (input) => transport.request(WS_METHODS.providerListAgents, input),
     },

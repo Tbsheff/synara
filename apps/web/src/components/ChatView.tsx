@@ -287,6 +287,7 @@ import { SponsorLandingBanner } from "./SponsorLandingBanner";
 import TerminalWorkspaceTabs from "./TerminalWorkspaceTabs";
 import { ThreadWorktreeHandoffDialog } from "./ThreadWorktreeHandoffDialog";
 
+import { ComposerMcpAuth } from "./chat/ComposerMcpAuth";
 import { ChatComposerFooter } from "./chat/ChatComposerFooter";
 import { ChatHeader } from "./chat/ChatHeader";
 import { OpenThreadTabStrip } from "./chat/OpenThreadTabStrip";
@@ -6348,6 +6349,18 @@ export default function ChatView({
                   />
                 </div>
               </div>
+              {activeThread?.session && (
+                <ComposerMcpAuth
+                  key={`${threadId}:${activeThread.session.provider}:${activeThread.session.providerInstanceId ?? "default"}`}
+                  threadId={threadId}
+                  provider={activeThread.session.provider}
+                  enabled={
+                    isServerThread &&
+                    activeThread.session.status !== "closed" &&
+                    !activeThread.parentThreadId
+                  }
+                />
+              )}
               {/* Bottom toolbar — hidden while an approval takes over the composer,
                     since the approve/decline actions live in the detached approval card
                     floating above (see ComposerPendingApprovalPanel). */}

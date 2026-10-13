@@ -51,6 +51,44 @@ export const ProviderSession = Schema.Struct({
 });
 export type ProviderSession = typeof ProviderSession.Type;
 
+export const ProviderMcpAuthAction = Schema.Union([
+  Schema.Struct({ type: Schema.Literal("oauth") }),
+  Schema.Struct({
+    type: Schema.Literal("manual"),
+    command: TrimmedNonEmptyString,
+    instructions: TrimmedNonEmptyString,
+  }),
+]);
+export type ProviderMcpAuthAction = typeof ProviderMcpAuthAction.Type;
+export const ProviderMcpAuthState = Schema.Struct({
+  sessionKey: Schema.optional(TrimmedNonEmptyString),
+  servers: Schema.Array(
+    Schema.Struct({
+      name: TrimmedNonEmptyString,
+      status: Schema.Literals(["needs-auth", "authenticating", "error"]),
+      action: ProviderMcpAuthAction,
+      error: Schema.optional(TrimmedNonEmptyString),
+    }),
+  ),
+});
+export type ProviderMcpAuthState = typeof ProviderMcpAuthState.Type;
+export const ProviderGetMcpAuthInput = Schema.Struct({
+  threadId: ThreadId,
+  refresh: Schema.optional(Schema.Boolean),
+});
+export type ProviderGetMcpAuthInput = typeof ProviderGetMcpAuthInput.Type;
+export const ProviderAuthenticateMcpInput = Schema.Struct({
+  threadId: ThreadId,
+  sessionKey: TrimmedNonEmptyString,
+  serverName: TrimmedNonEmptyString,
+});
+export type ProviderAuthenticateMcpInput = typeof ProviderAuthenticateMcpInput.Type;
+export const ProviderAuthenticateMcpResult = Schema.Struct({
+  state: ProviderMcpAuthState,
+  authorizationUrl: Schema.optional(TrimmedNonEmptyString),
+});
+export type ProviderAuthenticateMcpResult = typeof ProviderAuthenticateMcpResult.Type;
+
 export const ProviderSessionStartInput = Schema.Struct({
   threadId: ThreadId,
   provider: Schema.optional(ProviderDriverKind),

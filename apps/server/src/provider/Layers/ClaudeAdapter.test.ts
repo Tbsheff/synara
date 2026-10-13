@@ -7,6 +7,7 @@ import type {
   Options as ClaudeQueryOptions,
   HookInput,
   ModelInfo,
+  McpServerStatus,
   PermissionMode,
   PermissionResult,
   PermissionUpdate,
@@ -108,6 +109,12 @@ class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
   private contextUsageResponse: SDKControlGetContextUsageResponse | undefined;
   private contextUsageNeverResolves = false;
   public closeCalls = 0;
+  public mcpStatus: McpServerStatus[] = [];
+  public reconnectCalls: string[] = [];
+  readonly mcpServerStatus = async () => this.mcpStatus;
+  readonly reconnectMcpServer = async (name: string) => {
+    this.reconnectCalls.push(name);
+  };
   public supportedCommandList: Array<{ name: string; description: string; argumentHint: string }> =
     [];
   public supportedCommandsNeverResolves = false;
@@ -764,6 +771,85 @@ describe("Claude Synara harness policy", () => {
 });
 
 describe("ClaudeAdapterLive", () => {
+  it.effect(
+    "tracks MCP needs-auth notices per session and re-checks native status after manual auth",
+    () => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        yield* adapter.startSession({
+          threadId: THREAD_ID,
+          provider: "claudeAgent",
+          runtimeMode: "full-access",
+          cwd: "/tmp",
+          providerOptions: { claudeAgent: { homePath: "/tmp/mcp-test-account" } },
+        });
+        const initRead = yield* adapter.streamEvents.pipe(
+          Stream.filter((event) => event.type === "transcript.notice"),
+          Stream.take(1),
+          Stream.runCollect,
+          Effect.forkChild,
+        );
+        harness.query.emit({
+          type: "system",
+          subtype: "init",
+          uuid: "mcp-init",
+          tools: [],
+          mcp_servers: [
+            { name: "linear", status: "needs-auth" },
+            { name: "docs", status: "failed" },
+            { name: "github", status: "connected" },
+          ],
+        } as unknown as SDKMessage);
+        yield* Fiber.join(initRead);
+        const state = yield* adapter.getMcpAuth!({ threadId: THREAD_ID });
+        assert.equal(state.servers.length, 1);
+        assert.equal(state.servers[0]?.name, "linear");
+        const action = state.servers[0]?.action;
+        assert.equal(action?.type, "manual");
+        if (action?.type === "manual") {
+          assert.match(action.command, /mcp-test-account/);
+          assert.match(action.instructions, /\/mcp/);
+        }
+        const login = yield* adapter.authenticateMcp!({
+          threadId: THREAD_ID,
+          sessionKey: state.sessionKey!,
+          serverName: "linear",
+        });
+        assert.equal(login.authorizationUrl, undefined);
+        harness.query.mcpStatus = [{ name: "linear", status: "pending" }];
+        const pending = yield* adapter.getMcpAuth!({ threadId: THREAD_ID, refresh: true });
+        assert.equal(pending.servers[0]?.name, "linear");
+        harness.query.mcpStatus = [{ name: "linear", status: "connected" }];
+        const refreshed = yield* adapter.getMcpAuth!({ threadId: THREAD_ID, refresh: true });
+        assert.deepEqual(refreshed.servers, []);
+        assert.deepEqual(harness.query.reconnectCalls, ["linear", "linear"]);
+        yield* adapter.stopSession(THREAD_ID);
+        const stopped = yield* adapter.getMcpAuth!({ threadId: THREAD_ID }).pipe(Effect.result);
+        assert.equal(stopped._tag, "Failure");
+      }).pipe(Effect.provide(harness.layer));
+    },
+  );
+
+  it.effect("rejects auth commands for a stale Claude session without native calls", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+      const result = yield* adapter.authenticateMcp!({
+        threadId: THREAD_ID,
+        sessionKey: "retired-session",
+        serverName: "linear",
+      }).pipe(Effect.result);
+      assert.equal(result._tag, "Failure");
+      assert.deepEqual(harness.query.reconnectCalls, []);
+    }).pipe(Effect.provide(harness.layer));
+  });
+
   it.effect("grants a multi-folder project's extra folders as additional directories", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
