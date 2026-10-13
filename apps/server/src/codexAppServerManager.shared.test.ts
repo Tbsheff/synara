@@ -309,12 +309,15 @@ describe("shared Codex manager", () => {
     expect(shared.children).toHaveLength(2);
   });
 
-  it("refuses shared mode in Stable even when the stored setting enables it", async () => {
-    expect(codexSharedProcessEnabled("shared", "com.emanueledipietro.synara")).toBe(false);
-    expect(codexSharedProcessEnabled("shared", "com.emanueledipietro.synara.beta")).toBe(true);
+  it("shares processes in Stable and honors the per-session off switch", async () => {
+    expect(codexSharedProcessEnabled("shared")).toBe(true);
+    expect(codexSharedProcessEnabled("per-session")).toBe(false);
     vi.stubEnv("SYNARA_DESKTOP_BUNDLE_ID", "com.emanueledipietro.synara");
     const h = await fixture();
     await Promise.all([h.start("a"), h.start("b")]);
-    expect(h.children).toHaveLength(2);
+    expect(h.children).toHaveLength(1);
+    const fallback = await fixture("per-session");
+    await Promise.all([fallback.start("a"), fallback.start("b")]);
+    expect(fallback.children).toHaveLength(2);
   });
 });

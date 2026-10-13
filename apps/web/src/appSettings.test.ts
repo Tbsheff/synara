@@ -64,6 +64,21 @@ describe("provider process priority settings", () => {
   });
 });
 
+describe("Codex process sharing settings", () => {
+  it("defaults on and preserves the server off switch across settings reloads", () => {
+    expect(Schema.decodeSync(AppSettingsSchema)({}).codexAppServerMode).toBe("shared");
+    for (const codexAppServerMode of ["per-session", "shared"] as const) {
+      expect(appSettingsPatchToServerSettingsPatch({ codexAppServerMode })).toEqual({
+        codexAppServerMode,
+      });
+      expect(
+        serverSettingsToAppSettings({ ...DEFAULT_SERVER_SETTINGS_VIEW, codexAppServerMode })
+          .codexAppServerMode,
+      ).toBe(codexAppServerMode);
+    }
+  });
+});
+
 describe("source control writing settings", () => {
   it("defaults old settings to repository conventions and saves both preferences to the server", () => {
     const settings = Schema.decodeSync(AppSettingsSchema)({});

@@ -496,6 +496,9 @@ export const AppSettingsSchema = Schema.Struct({
   enableProviderUpdateChecks: Schema.Boolean.pipe(withDefaults(() => true)),
   keepAwakeMode: KeepAwakeMode.pipe(withDefaults(() => "off" as const satisfies KeepAwakeMode)),
   lowerProviderProcessPriority: Schema.Boolean.pipe(withDefaults(() => true)),
+  codexAppServerMode: Schema.Literals(["shared", "per-session"]).pipe(
+    withDefaults(() => "shared" as const),
+  ),
   enableNativeFontSmoothing: Schema.Boolean.pipe(withDefaults(getDefaultNativeFontSmoothing)),
   desktopAppIcon: DesktopAppIcon.pipe(withDefaults(() => "default" as const)),
   // Local desktop preference: frameless custom title bar on Windows/Linux.
@@ -1549,6 +1552,7 @@ export function serverSettingsToAppSettings(settings: ServerSettingsView): Parti
     enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
     keepAwakeMode: settings.keepAwakeMode,
     lowerProviderProcessPriority: settings.lowerProviderProcessPriority,
+    codexAppServerMode: settings.codexAppServerMode,
     antigravityBinaryPath: settings.providers.antigravity.binaryPath,
     grokBinaryPath: settings.providers.grok.binaryPath,
     droidBinaryPath: settings.providers.droid.binaryPath,
@@ -1693,6 +1697,9 @@ export function appSettingsPatchToServerSettingsPatch(
   }
   if (hasOwn(patch, "lowerProviderProcessPriority")) {
     serverPatch.lowerProviderProcessPriority = Boolean(patch.lowerProviderProcessPriority);
+  }
+  if (patch.codexAppServerMode === "shared" || patch.codexAppServerMode === "per-session") {
+    serverPatch.codexAppServerMode = patch.codexAppServerMode;
   }
   if (patch.defaultThreadEnvMode === "local" || patch.defaultThreadEnvMode === "worktree") {
     serverPatch.defaultThreadEnvMode = patch.defaultThreadEnvMode;
