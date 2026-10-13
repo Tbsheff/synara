@@ -146,8 +146,14 @@ export function ProviderUsageMenuPopup({
   );
 }
 
-export function ProviderUsageMenuControl({ provider }: { provider: ProviderKind }) {
-  const model = useProviderUsageMenuModel(provider);
+export function ProviderUsageMenuControl({
+  provider,
+  instanceId,
+}: {
+  provider: ProviderKind;
+  instanceId?: ProviderInstanceId | undefined;
+}) {
+  const model = useProviderUsageMenuModel(provider, { instanceId: instanceId ?? provider });
 
   if (!model.primaryRow) {
     return null;
