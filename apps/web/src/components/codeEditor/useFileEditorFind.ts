@@ -1,11 +1,6 @@
 import { useCallback, useEffect, useRef, type RefObject } from "react";
-import type { PierreEditor } from "./pierreEdit";
 
-export function useFileEditorFind(
-  containerRef: RefObject<HTMLDivElement | null>,
-  editorRef: RefObject<PierreEditor | null>,
-  label: string,
-) {
+export function useFileEditorFind(containerRef: RefObject<HTMLDivElement | null>, label: string) {
   const observerRef = useRef<MutationObserver | null>(null);
   const hadSearch = useRef(false);
   const update = useCallback(() => {
@@ -25,7 +20,7 @@ export function useFileEditorFind(
       !search &&
       (document.activeElement === host || document.activeElement === document.body)
     ) {
-      editorRef.current?.focus({ preventScroll: true });
+      (editable as HTMLElement | null)?.focus({ preventScroll: true });
     }
     hadSearch.current = search !== null;
     observerRef.current?.observe(root, {
@@ -34,7 +29,7 @@ export function useFileEditorFind(
       attributes: true,
       attributeFilter: ["contenteditable", "aria-label"],
     });
-  }, [containerRef, editorRef, label]);
+  }, [containerRef, label]);
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;

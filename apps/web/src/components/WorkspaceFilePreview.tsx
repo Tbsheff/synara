@@ -302,8 +302,7 @@ function PierreEditableFileContents(props: EditableFileContentsProps) {
     [pierreEdit],
   );
   const editorContainerRef = useRef<HTMLDivElement>(null);
-  const editorRef = useRef<PierreEditor | null>(null);
-  const labelEditor = useFileEditorFind(editorContainerRef, editorRef, `Edit ${props.path}`);
+  const labelEditor = useFileEditorFind(editorContainerRef, `Edit ${props.path}`);
   const editorId = useId();
   // Local typing updates this snapshot in the same batch as the parent draft.
   // Only a different incoming document (reload/watcher) resets Pierre's history.
@@ -341,10 +340,7 @@ function PierreEditableFileContents(props: EditableFileContentsProps) {
   );
   const editorOptions = useMemo<PierreEditorOptions<undefined>>(
     () => ({
-      onAttach: (editor) => {
-        editorRef.current = editor;
-        labelEditor();
-      },
+      onAttach: labelEditor,
       onChange: (nextFile) => {
         const contents = nextFile.contents;
         setDocument((current) => ({ ...current, contents }));

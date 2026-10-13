@@ -29,7 +29,6 @@ export interface CodeEditorPaneProps {
   onChange: (value: string) => void;
   onSave: () => void;
   historyControlsRef?: RefObject<CodeEditHistoryControls | null> | undefined;
-  editorRef?: RefObject<PierreEditor | null> | undefined;
   onHistoryChange?: ((history: CodeEditHistoryState) => void) | undefined;
 }
 
@@ -114,13 +113,7 @@ export function useCodeEditorSaveKeyDownHandler(onSave: () => void) {
 
 export function CodeEditorPane(props: CodeEditorPaneProps) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const localEditorRef = useRef<PierreEditor | null>(null);
-  const editorRef = props.editorRef ?? localEditorRef;
-  const labelEditor = useFileEditorFind(
-    containerRef,
-    editorRef,
-    props.ariaLabel ?? `Edit ${props.fileName}`,
-  );
+  const labelEditor = useFileEditorFind(containerRef, props.ariaLabel ?? `Edit ${props.fileName}`);
   const valueRef = useRef(props.value);
   valueRef.current = props.value;
   const file = useMemo(
@@ -137,10 +130,7 @@ export function CodeEditorPane(props: CodeEditorPaneProps) {
     persistState: true,
     onHistoryChange: props.onHistoryChange,
     historyControlsRef: props.historyControlsRef,
-    onAttach: (editor) => {
-      editorRef.current = editor;
-      labelEditor();
-    },
+    onAttach: labelEditor,
   });
   const options = useMemo(
     () => ({
