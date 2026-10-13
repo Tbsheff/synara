@@ -141,8 +141,8 @@ it("scrolls a selected offscreen file into view and measures rows at the chosen 
     name: `entry-${String(index).padStart(4, "0")}.txt`,
     kind: "file",
   }));
-  const previous = document.documentElement.style.getPropertyValue("--app-font-size-ui-sm");
-  document.documentElement.style.setProperty("--app-font-size-ui-sm", "22px");
+  const previous = document.documentElement.style.getPropertyValue("--app-font-size-ui");
+  document.documentElement.style.setProperty("--app-font-size-ui", "22px");
   try {
     await mount(entries, [], "entry-4999.txt");
     const last = page.getByRole("button", { name: "entry-4999.txt", exact: true });
@@ -151,7 +151,7 @@ it("scrolls a selected offscreen file into view and measures rows at the chosen 
     expect(document.querySelectorAll("[data-explorer-row]").length).toBeLessThan(100);
     expect(getComputedStyle(last.element()).fontSize).toBe("22px");
   } finally {
-    if (previous) document.documentElement.style.setProperty("--app-font-size-ui-sm", previous);
-    else document.documentElement.style.removeProperty("--app-font-size-ui-sm");
+    if (previous) document.documentElement.style.setProperty("--app-font-size-ui", previous);
+    else document.documentElement.style.removeProperty("--app-font-size-ui");
   }
 });

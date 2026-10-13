@@ -1,7 +1,7 @@
 import "../../index.css";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ThreadId, type NativeApi } from "@synara/contracts";
-import { page } from "vitest/browser";
+import { page, userEvent, type Locator } from "vitest/browser";
 import { afterEach, expect, it, vi } from "vitest";
 import { cleanup, render } from "vitest-browser-react";
 import { useDockExplorerBrowseStore } from "../../dockExplorerBrowseStore";
@@ -14,8 +14,6 @@ afterEach(async () => {
   useDockExplorerBrowseStore.setState({ browseStateByThreadId: {} });
 });
 async function mount() {
-  // The lightweight editor accepts native textarea input; persistence is the
-  // same shared session used by Pierre and by the full-screen/diff editors.
   const writeFile = vi.fn().mockResolvedValue({ relativePath: "a.ts", version: "sha256:saved" });
   const readFile = vi
     .fn<NativeApi["projects"]["readFile"]>()
@@ -62,9 +60,15 @@ async function mount() {
   return { editor, writeFile };
 }
 
+async function replaceDraft(editor: Locator, contents: string) {
+  await editor.click({ position: { x: 15, y: 5 } });
+  const modifier = /Mac/.test(navigator.platform) ? "Meta" : "Control";
+  await userEvent.keyboard(`{${modifier}>}a{/${modifier}}${contents}`);
+}
+
 it("autosaves without a keyboard shortcut", async () => {
   const { editor, writeFile } = await mount();
-  await editor.fill("changed without Cmd+S");
+  await replaceDraft(editor, "changed without Cmd+S");
   await expect.poll(() => writeFile.mock.calls.length).toBe(1);
   expect(writeFile).toHaveBeenCalledWith(
     expect.objectContaining({
@@ -83,11 +87,11 @@ it("waits for the last edits before switching files", async () => {
       finish = resolve;
     }),
   );
-  await editor.fill("first edit");
+  await replaceDraft(editor, "first edit");
   await page.getByTitle("b.ts", { exact: true }).click();
   await expect.poll(() => writeFile.mock.calls.length).toBe(1);
   await expect.element(editor).toBeVisible();
-  await editor.fill("newest edit");
+  await replaceDraft(editor, "newest edit");
   finish({ relativePath: "a.ts", version: "sha256:first" });
   await expect.element(page.getByRole("textbox", { name: "Edit b.ts" })).toBeVisible();
   expect(writeFile).toHaveBeenNthCalledWith(
@@ -107,9 +111,9 @@ it("waits for the last edits before switching files", async () => {
 it("keeps the current file and its draft when a switch encounters a save failure", async () => {
   const { editor, writeFile } = await mount();
   writeFile.mockRejectedValue(new Error("Permission denied"));
-  await editor.fill("keep this draft");
+  await replaceDraft(editor, "keep this draft");
   await page.getByTitle("b.ts", { exact: true }).click();
   await expect.element(page.getByRole("alert")).toHaveTextContent("Permission denied");
-  await expect.element(editor).toHaveValue("keep this draft");
+  await expect.element(editor).toHaveTextContent("keep this draft");
   await expect.element(page.getByRole("textbox", { name: "Edit b.ts" })).not.toBeInTheDocument();
 });
