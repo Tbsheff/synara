@@ -9,10 +9,33 @@ import {
   localPreviewGrantRefetchIntervalMs,
   projectLocalPreviewGrantQueryOptions,
   projectQueryKeys,
+  projectListDirectoriesQueryOptions,
   projectReadFileQueryOptions,
   projectSearchContentQueryOptions,
   refetchFreshProjectFileQuery,
 } from "./projectReactQuery";
+
+it("keeps Files listings without hints separate from picker listings", async () => {
+  const listDirectories = vi.fn().mockResolvedValue({ entries: [] });
+  vi.spyOn(nativeApi, "ensureNativeApi").mockReturnValue({
+    projects: { listDirectories },
+  } as unknown as NativeApi);
+  const client = new QueryClient();
+  try {
+    const picker = projectListDirectoriesQueryOptions({ cwd: "/fixture" });
+    const files = projectListDirectoriesQueryOptions({ cwd: "/fixture", includeChildHints: false });
+    expect(picker.queryKey).not.toEqual(files.queryKey);
+    await client.fetchQuery(picker);
+    await client.fetchQuery(files);
+    expect(listDirectories.mock.calls).toEqual([
+      [{ cwd: "/fixture", includeFiles: true }],
+      [{ cwd: "/fixture", includeFiles: true, includeChildHints: false }],
+    ]);
+  } finally {
+    client.clear();
+    vi.restoreAllMocks();
+  }
+});
 
 describe("local preview grant query options", () => {
   it("refreshes active preview grants before the server-side token expires", () => {

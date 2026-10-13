@@ -19,6 +19,7 @@ import { type Thread } from "../../types";
 import { resolveCycledModelSlug } from "../ChatView.logic";
 import { collectForegroundRunningSubagentStripItems } from "./ComposerSubagentStrip.logic";
 import { eventTargetsInAppBrowser, shouldCaptureChatFindShortcut } from "./threadFind.logic";
+import { eventTargetsFileEditor } from "../codeEditor/useFileEditorFind";
 import { useChatProjectScripts } from "./useChatProjectScripts";
 import { useChatProviderModels } from "./useChatProviderModels";
 import { useChatTerminalController } from "./useChatTerminalController";
@@ -284,6 +285,7 @@ export function useChatKeyboardShortcuts({
       }
 
       if (command === "chat.find") {
+        if (eventTargetsFileEditor(event)) return;
         if (
           !shouldCaptureChatFindShortcut({
             shouldRenderChatPaneContent,

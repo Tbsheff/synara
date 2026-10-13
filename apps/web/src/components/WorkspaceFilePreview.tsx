@@ -78,6 +78,8 @@ import { PluginFileOpener, resolvePluginFileSource } from "~/plugins/PluginFileO
 import { PluginSourceCodeRenderer } from "~/plugins/PluginSourceCodeRenderer";
 import ChatMarkdown from "./ChatMarkdown";
 import { loadPierreEdit } from "./codeEditor/pierreEdit";
+import { CodeEditorPane } from "./codeEditor/CodeEditorPane";
+import { useFileEditorFind } from "./codeEditor/useFileEditorFind";
 import { DiffTruncationWarning } from "./DiffTruncationWarning";
 import { FileLineCommentBox } from "./chat/FileLineCommentBox";
 import { PanelStateMessage } from "./chat/PanelStateMessage";
@@ -282,6 +284,7 @@ type EditableFileContentsProps = {
   path: string;
   contents: string;
   cacheKey: string;
+  valueVersion: number;
   hidden: boolean;
   themeName: DiffThemeName;
   theme: "light" | "dark";
@@ -299,30 +302,8 @@ function PierreEditableFileContents(props: EditableFileContentsProps) {
     [pierreEdit],
   );
   const editorContainerRef = useRef<HTMLDivElement>(null);
+  const labelEditor = useFileEditorFind(editorContainerRef, `Edit ${props.path}`);
   const editorId = useId();
-  const labelEditor = useCallback(() => {
-    editorContainerRef.current
-      ?.querySelector("diffs-container")
-      ?.shadowRoot?.querySelector<HTMLElement>('[contenteditable="true"]')
-      ?.setAttribute("aria-label", `Edit ${props.path}`);
-  }, [props.path]);
-  const editorObserverRef = useRef<MutationObserver | null>(null);
-  const attachEditor = useCallback(() => {
-    const shadowRoot = editorContainerRef.current?.querySelector("diffs-container")?.shadowRoot;
-    if (!shadowRoot) return;
-    labelEditor();
-    if (editorObserverRef.current === null) {
-      editorObserverRef.current = new MutationObserver(labelEditor);
-    }
-    editorObserverRef.current.observe(shadowRoot, { childList: true, subtree: true });
-  }, [labelEditor]);
-  useEffect(() => {
-    attachEditor();
-    return () => {
-      editorObserverRef.current?.disconnect();
-      editorObserverRef.current = null;
-    };
-  }, [attachEditor]);
   // Local typing updates this snapshot in the same batch as the parent draft.
   // Only a different incoming document (reload/watcher) resets Pierre's history.
   const [document, setDocument] = useState({
@@ -359,19 +340,20 @@ function PierreEditableFileContents(props: EditableFileContentsProps) {
   );
   const editorOptions = useMemo<PierreEditorOptions<undefined>>(
     () => ({
-      onAttach: attachEditor,
+      onAttach: labelEditor,
       onChange: (nextFile) => {
         const contents = nextFile.contents;
         setDocument((current) => ({ ...current, contents }));
         onContentsChangeRef.current(contents);
       },
     }),
-    [attachEditor],
+    [labelEditor],
   );
 
   return (
     <div
       ref={editorContainerRef}
+      data-file-editor="true"
       className="editor-file-editor__pierre"
       hidden={props.hidden}
       aria-busy={props.saving}
@@ -404,13 +386,34 @@ function PierreEditableFileContents(props: EditableFileContentsProps) {
 // Keep the editing engine stable for the open document: changing it while
 // typing would discard focus, selection and native undo history.
 function EditableFileContents(props: EditableFileContentsProps) {
+  const editorId = useId();
   const [plainText] = useState(
     () =>
       props.contents.length > MAX_SYNTAX_HIGHLIGHT_INPUT_CHARS ||
       props.contents.split("\n").length > 1_000,
   );
   if (plainText) {
-    return <NumberedPlainEditableFileContents {...props} />;
+    return (
+      <div
+        className="flex min-h-0 flex-1 flex-col"
+        hidden={props.hidden}
+        aria-busy={props.saving}
+        aria-invalid={props.invalid ? "true" : undefined}
+      >
+        <CodeEditorPane
+          value={props.contents}
+          valueVersion={props.valueVersion}
+          fileName={props.path}
+          documentKey={`${props.cacheKey}:${editorId}`}
+          language="text"
+          ariaLabel={`Edit ${props.path}`}
+          persistState
+          resolvedTheme={props.theme}
+          onChange={props.onContentsChange}
+          onSave={props.onSave}
+        />
+      </div>
+    );
   }
   return (
     <FilePreviewHighlightErrorBoundary fallback={<NumberedPlainEditableFileContents {...props} />}>
@@ -1221,6 +1224,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
               path={filePath}
               contents={activeEditBuffer.contents}
               cacheKey={activeEditBuffer.key}
+              valueVersion={editor.state.version}
               hidden={showMarkdownPreview}
               themeName={diffThemeName}
               theme={resolvedTheme}

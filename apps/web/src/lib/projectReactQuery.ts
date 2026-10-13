@@ -21,8 +21,13 @@ import { resolveWorkspaceFileReferenceBatched } from "./workspaceFileReferenceBa
 
 export const projectQueryKeys = {
   all: ["projects"] as const,
-  listDirectories: (cwd: string | null, relativePath: string | null, includeFiles: boolean) =>
-    ["projects", "list-directories", cwd, relativePath, includeFiles] as const,
+  listDirectories: (
+    cwd: string | null,
+    relativePath: string | null,
+    includeFiles: boolean,
+    includeChildHints = true,
+  ) =>
+    ["projects", "list-directories", cwd, relativePath, includeFiles, includeChildHints] as const,
   readFile: (cwd: string | null, relativePath: string | null) =>
     ["projects", "read-file", cwd, relativePath] as const,
   localPreviewGrant: (path: string | null) => ["projects", "local-preview-grant", path] as const,
@@ -210,13 +215,20 @@ export function projectListDirectoriesQueryOptions(input: {
   cwd: string | null;
   relativePath?: string | null;
   includeFiles?: boolean;
+  includeChildHints?: boolean;
   enabled?: boolean;
   staleTime?: number;
 }) {
   const relativePath = input.relativePath?.trim() || null;
   const includeFiles = input.includeFiles ?? true;
+  const includeChildHints = input.includeChildHints ?? true;
   return queryOptions<ProjectListDirectoriesResult>({
-    queryKey: projectQueryKeys.listDirectories(input.cwd, relativePath, includeFiles),
+    queryKey: projectQueryKeys.listDirectories(
+      input.cwd,
+      relativePath,
+      includeFiles,
+      includeChildHints,
+    ),
     queryFn: async () => {
       const api = ensureNativeApi();
       if (!input.cwd) {
@@ -225,6 +237,7 @@ export function projectListDirectoriesQueryOptions(input: {
       return api.projects.listDirectories({
         cwd: input.cwd,
         includeFiles,
+        ...(includeChildHints ? {} : { includeChildHints: false }),
         ...(relativePath ? { relativePath } : {}),
       });
     },
