@@ -15,7 +15,7 @@ type ShortcutsInput = Parameters<typeof useChatKeyboardShortcuts>[0];
 
 function Harness({ openThreadFind }: { openThreadFind: ShortcutsInput["setThreadFindOpen"] }) {
   const [value, setValue] = useState("file-only-term\nsecond line\n");
-  const findInputs = {
+  const findInputs: Partial<ShortcutsInput> = {
     surfaceMode: "single",
     isFocusedPane: true,
     activeThreadId: ThreadId.makeUnsafe("find-routing"),
@@ -26,7 +26,7 @@ function Harness({ openThreadFind }: { openThreadFind: ShortcutsInput["setThread
     keybindings: [],
     setThreadFindOpen: openThreadFind,
     setThreadFindFocusNonce: () => undefined,
-  } satisfies Partial<ShortcutsInput>;
+  };
   useChatKeyboardShortcuts(findInputs as ShortcutsInput);
   return (
     <div style={{ display: "flex", flexDirection: "column", height: 500 }}>

@@ -36,20 +36,20 @@ These paired measurements rerun the research report's method against base
 separate home, copied synthetic fixture, browser profile, and unused loopback
 ports. The production desktop app and its data home were not used.
 
-| Case | Before | After |
-| --- | ---: | ---: |
-| 30-row hover pass, full body reads | 30 | 1 |
-| Hover decoded response bytes | 10,348,000 | 325,265 |
-| 256 child folders, child `readdir` calls | 256 | 0 |
-| Directory probe median, six paired trials | 24.85 ms | 0.85 ms |
-| Cached 15,000-line file open | 527 ms | 517 ms |
-| Mounted editor rows | 15,000 | 100 |
-| Typing p95, keydown to next frame, 26 keys | 74.6 ms | 31.1 ms |
-| Typing long tasks / total time | 28 / 1,792 ms | 2 / 104 ms |
-| Cached 1,500-file folder expand | 558 ms | 139 ms |
-| Mounted file rows in the wide folder | 1,500 | 35 |
-| Wide-folder expand long tasks / total time | 3 / 331 ms | 1 / 57 ms |
-| File-focused Cmd+F | Transcript Find | File Find |
+| Case                                       |          Before |      After |
+| ------------------------------------------ | --------------: | ---------: |
+| 30-row hover pass, full body reads         |              30 |          1 |
+| Hover decoded response bytes               |      10,348,000 |    325,265 |
+| 256 child folders, child `readdir` calls   |             256 |          0 |
+| Directory probe median, six paired trials  |        24.85 ms |    0.85 ms |
+| Cached 15,000-line file open               |          527 ms |     517 ms |
+| Mounted editor rows                        |          15,000 |        100 |
+| Typing p95, keydown to next frame, 26 keys |         74.6 ms |    31.1 ms |
+| Typing long tasks / total time             |   28 / 1,792 ms | 2 / 104 ms |
+| Cached 1,500-file folder expand            |          558 ms |     139 ms |
+| Mounted file rows in the wide folder       |           1,500 |         35 |
+| Wide-folder expand long tasks / total time |      3 / 331 ms |  1 / 57 ms |
+| File-focused Cmd+F                         | Transcript Find |  File Find |
 
 The hover pass uses 20 ms per row, then a 300 ms hold on the final row. The one
 after-read comes from that final intentional hold. Brief passes followed by
