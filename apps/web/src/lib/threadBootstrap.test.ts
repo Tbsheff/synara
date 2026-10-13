@@ -261,7 +261,7 @@ describe("threadBootstrap", () => {
       worktreePath: "/repo/.worktrees/new-terminal",
       workingDirectory: null,
       envMode: "worktree",
-      runtimeMode: "approval-required",
+      runtimeMode: "full-access",
       entryPoint: "terminal",
     });
   });
@@ -313,7 +313,7 @@ describe("threadBootstrap", () => {
       worktreePath: null,
       workingDirectory: null,
       envMode: "local",
-      runtimeMode: "approval-required",
+      runtimeMode: "full-access",
       entryPoint: "chat",
       isTemporary: true,
     });
@@ -461,16 +461,16 @@ describe("threadBootstrap", () => {
   });
 });
 
-it("defaults new users to supervised access and preserves saved draft access", () => {
+it("defaults new users to full access and preserves saved draft access", () => {
   expect(
     createFreshDraftThreadSeed({
       createdAt: "2026-10-12T00:00:00.000Z",
       entryPoint: "chat",
       options: undefined,
     }).runtimeMode,
-  ).toBe("approval-required");
+  ).toBe("full-access");
   const storedDraftThread = {
-    ...makeDraftThread({ runtimeMode: "full-access" }),
+    ...makeDraftThread({ runtimeMode: "approval-required" }),
     threadId: THREAD_ID,
   };
   const plan = resolveThreadBootstrapPlan({
@@ -481,5 +481,5 @@ it("defaults new users to supervised access and preserves saved draft access", (
     storedDraftThread,
   });
   expect(plan.kind).toBe("stored");
-  if (plan.kind === "stored") expect(plan.draftThread.runtimeMode).toBe("full-access");
+  if (plan.kind === "stored") expect(plan.draftThread.runtimeMode).toBe("approval-required");
 });

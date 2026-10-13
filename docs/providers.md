@@ -47,7 +47,7 @@ Slow Git work in one workspace leaves other workspaces free to progress. Recover
 completed captures and undo outcomes; an interrupted operation with an uncertain outcome
 is reported for inspection instead of automatically changing the workspace again.
 
-New chats start in **Ask for approval** when no access mode was saved. Synara keeps saved
+New chats start in **Full access** when no access mode was saved. Synara keeps saved
 thread and draft modes. The composer shows the current mode, including at narrow widths.
 
 **Always allow this session** keeps the thread mode. Codex remembers its native approval
