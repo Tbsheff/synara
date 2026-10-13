@@ -86,6 +86,7 @@ import {
 import { WRITE_TOOL_ANNOTATIONS, type ToolContext, type ToolEntry } from "../toolRuntime.ts";
 import { makeAgentGatewayMcpTransport } from "../mcpTransport.ts";
 import { makePluginAgentToolEntries } from "../pluginTools.ts";
+import { startParentNoticeDelivery } from "../parentNoticeDelivery.ts";
 import { deliverGatewayCompletions } from "../completionDelivery.ts";
 import { recoverInterruptedAgentGatewayOperations } from "../startupRecovery.ts";
 import { makeCreateThreadsHandler } from "../creationCoordinator.ts";
@@ -233,6 +234,12 @@ export const makeAgentGateway = Effect.gen(function* () {
     ),
   );
 
+  yield* startParentNoticeDelivery({
+    repository: operationRepository.completions,
+    snapshotQuery,
+    orchestrationEngine,
+  });
+
   const requireThreadShell = (threadId: string) =>
     snapshotQuery.getThreadShellById(ThreadId.makeUnsafe(threadId)).pipe(
       Effect.mapError((error) => new ToolInputError(errorText(error))),
@@ -311,6 +318,8 @@ export const makeAgentGateway = Effect.gen(function* () {
     });
 
   const readTools = makeThreadReadTools({
+    orchestrationEngine,
+    parentNotices: operationRepository.completions.parentNotices,
     snapshotQuery,
     projectionTurns,
     providerDiscovery,
@@ -431,7 +440,7 @@ export const makeAgentGateway = Effect.gen(function* () {
     definition: {
       name: "synara_create_threads",
       description:
-        "Create an exact batch of 1–20 standalone Synara threads. Hub coordinators instead submit durable workItems to the Hub queue: accepted does not mean started, and workerThreadId is available after admission. Worktree threads start on a Synara-managed temporary branch pinned at baseRef (or the selected checkout's HEAD) and copy local checkout changes plus .worktreeinclude files when the ref is that checkout's HEAD; on the first turn Synara may rename the branch after the prompt and publish it. Validation/preflight failures create nothing and may be corrected with the same requestId; durable retries replay the exact operation. Each created thread's result includes a ready-to-use link (`thread://<threadId>`); when you mention a thread in a message to the user, write it as a markdown link like [title](thread://<threadId>).",
+        "Create an exact batch of 1–20 standalone Synara threads. Hub coordinators instead submit durable workItems to the Hub queue: accepted does not mean started, and workerThreadId is available after admission. Worktree threads start on a Synara-managed temporary branch pinned at baseRef (or the selected checkout's HEAD) and copy local checkout changes plus .worktreeinclude files when the ref is that checkout's HEAD; on the first turn Synara may rename the branch after the prompt and publish it. Validation/preflight failures create nothing and may be corrected with the same requestId; durable retries replay the exact operation. notifyParent defaults to true for standalone threads: completion, error, interruption, or requests for input wake this parent once per child turn, steered into active turns where supported or queued otherwise. End your turn instead of polling or spawning watchers; read a child only when you need its result mid-turn. Hub work uses the Hub report path. Each created thread's result includes a ready-to-use link (`thread://<threadId>`); when you mention a thread in a message to the user, write it as a markdown link like [title](thread://<threadId>).",
       inputSchema: {
         type: "object",
         properties: {
@@ -447,6 +456,11 @@ export const makeAgentGateway = Effect.gen(function* () {
             items: {
               type: "object",
               properties: {
+                notifyParent: {
+                  type: "boolean",
+                  description:
+                    "Notify this parent once per child turn, including failures and requests for input. Defaults to true. End your turn instead of polling or spawning watchers. Set false to opt out.",
+                },
                 notifyCreatorOnComplete: {
                   type: "boolean",
                   description:
@@ -500,6 +514,11 @@ export const makeAgentGateway = Effect.gen(function* () {
         type: "object",
         properties: {
           requestId: { type: "string", maxLength: 256 },
+          notifyParent: {
+            type: "boolean",
+            description:
+              "Notify this parent once per child turn. Defaults to true. End your turn instead of polling or spawning watchers. Set false to opt out.",
+          },
           notifyCreatorOnComplete: {
             type: "boolean",
             description:
@@ -566,6 +585,7 @@ export const makeAgentGateway = Effect.gen(function* () {
           "branchName",
           "runtimeMode",
           "notifyCreatorOnComplete",
+          "notifyParent",
         ]) {
           const value = args[key];
           if (value !== undefined) spec[key] = value;
@@ -603,7 +623,7 @@ export const makeAgentGateway = Effect.gen(function* () {
     definition: {
       name: "synara_send_message",
       description:
-        'Send a Synara follow-up message to an existing thread. mode "queue" (default) waits for the current turn. "steer" uses native steering when available; otherwise it queues the follow-up first and interrupts the running turn. With no live turn, it starts normally. Use "queue" for ordinary follow-ups.',
+        'Send a Synara follow-up message to an existing thread. mode "queue" (default) waits for the current turn. "steer" uses native steering when available; otherwise it queues the follow-up first and interrupts the running turn. With no live turn, it starts normally. Use "queue" for ordinary follow-ups. Child follow-ups keep the saved notifyParent setting; with notices enabled, end your turn instead of polling or spawning watchers.',
       inputSchema: {
         type: "object",
         properties: {
@@ -611,6 +631,11 @@ export const makeAgentGateway = Effect.gen(function* () {
           message: { type: "string", description: "Message text." },
           contextMessageIds: contextMessageIdsSchema,
           mode: { type: "string", enum: ["queue", "steer"], description: "Dispatch mode." },
+          notifyParent: {
+            type: "boolean",
+            description:
+              "Notify this parent when the child follow-up settles. Defaults to the saved child link. Set false to opt out; true enables notices. End your turn instead of polling or spawning watchers.",
+          },
         },
         required: ["threadId", "message"],
         additionalProperties: false,
@@ -627,6 +652,11 @@ export const makeAgentGateway = Effect.gen(function* () {
         }
         const caller = yield* requireThreadShell(context.callerThreadId);
         const target = yield* requireThreadShell(threadId);
+        const notifyParent = readBooleanArg(args, "notifyParent");
+        const notices = operationRepository.completions.parentNotices;
+        const linkedChild = yield* notices.isChild(caller.id, target.id);
+        if (notifyParent !== undefined && !linkedChild && target.sourceThreadId !== caller.id)
+          throw new ToolInputError("notifyParent requires a child created by this thread.");
         yield* assertCallerMayDriveThread(caller, target);
         // Pass the requested mode through unchanged: the reactor checks live
         // provider state (authoritative, unlike this projection snapshot) and
@@ -698,6 +728,8 @@ export const makeAgentGateway = Effect.gen(function* () {
           yield* requireThreadShell(context.callerThreadId),
           yield* requireThreadShell(threadId),
         );
+        if (notifyParent !== undefined)
+          yield* notices.setLink(caller.id, target.id, messageId, notifyParent, isoNow());
         const followupCommandId = CommandId.makeUnsafe(`agent:${suffix}:send`);
         const admission =
           sourceMessages.length && hubGateway

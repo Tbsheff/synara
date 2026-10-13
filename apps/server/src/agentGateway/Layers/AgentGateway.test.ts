@@ -32,7 +32,18 @@ import { isTemporaryWorktreeBranch } from "@synara/shared/git";
 import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
 
-import { Cause, Deferred, Effect, Exit, Fiber, Layer, Option, Schema, Stream } from "effect";
+import {
+  Cause,
+  Deferred,
+  Effect,
+  Exit,
+  Fiber,
+  Layer,
+  Option,
+  PubSub,
+  Schema,
+  Stream,
+} from "effect";
 import { TestClock } from "effect/testing";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 
@@ -293,6 +304,13 @@ interface GatewayHarness {
   readonly branchDeletes: Array<{ branch: string }>;
   readonly setThreadDetail: (thread: OrchestrationThread) => void;
   readonly deleteThread: (threadId: string) => void;
+  readonly noticeAcknowledgements: Array<{
+    parent: string;
+    child: string;
+    sequence: number;
+    turn?: string;
+  }>;
+  readonly noticeLinks: Map<string, boolean>;
   readonly setProjectionTurn: (input: {
     readonly threadId: string;
     readonly turnId: string;
@@ -735,47 +753,63 @@ function makeHarnessLayer(
       ),
   } as unknown as (typeof ProviderRuntimeEventRepository)["Service"]);
 
-  const engineLayer = Layer.succeed(OrchestrationEngineService, {
-    dispatch: (command: OrchestrationCommand) =>
-      Effect.sleep(options.dispatchDelayMs ?? 0).pipe(
-        Effect.flatMap(() =>
-          Effect.suspend(() => {
-            dispatched.push(command);
-            const advancedTurnState = options.advanceParentTurnAfterDispatch?.state ?? "running";
-            if (
-              options.advanceParentTurnAfterDispatch?.commandType === command.type &&
-              (threadsById.get("thread-parent")?.latestTurn?.turnId !==
-                options.advanceParentTurnAfterDispatch.turnId ||
-                threadsById.get("thread-parent")?.latestTurn?.state !== advancedTurnState)
-            ) {
-              threadsById.set(
-                "thread-parent",
-                makeThreadShell("thread-parent", {
-                  latestTurn: {
-                    turnId: TurnId.makeUnsafe(options.advanceParentTurnAfterDispatch.turnId),
-                    state: advancedTurnState,
-                    requestedAt: NOW,
-                    startedAt: NOW,
-                    completedAt: advancedTurnState === "running" ? null : NOW,
-                    assistantMessageId: null,
-                  },
-                }),
-              );
-            }
-            const result = options.dispatch
-              ? options.dispatch(command)
-              : options.failDispatch?.(command)
-                ? Effect.fail(new Error("injected dispatch failure"))
-                : Effect.succeed({ sequence: dispatched.length });
-            if (options.pauseAfterDispatch?.commandType !== command.type) return result;
-            return Deferred.succeed(options.pauseAfterDispatch.entered, undefined).pipe(
-              Effect.andThen(Deferred.await(options.pauseAfterDispatch.release)),
-              Effect.andThen(result),
-            );
-          }),
+  const events = PubSub.unbounded<OrchestrationEvent>();
+  let eventBus: PubSub.PubSub<OrchestrationEvent>;
+  const publishThreadChange = (threadId: string, type: string) => {
+    Effect.runSync(PubSub.publish(eventBus, { type, payload: { threadId } } as OrchestrationEvent));
+  };
+  const engineLayer = Layer.effect(
+    OrchestrationEngineService,
+    Effect.gen(function* () {
+      eventBus = yield* events;
+      return {
+        subscribeDomainEvents: PubSub.subscribe(eventBus).pipe(
+          Effect.map((subscription) => Stream.fromEffectRepeat(PubSub.take(subscription))),
         ),
-      ),
-  } as unknown as (typeof OrchestrationEngineService)["Service"]);
+        getEventHighWaterSequence: Effect.succeed(100),
+        dispatch: (command: OrchestrationCommand) =>
+          Effect.sleep(options.dispatchDelayMs ?? 0).pipe(
+            Effect.flatMap(() =>
+              Effect.suspend(() => {
+                dispatched.push(command);
+                const advancedTurnState =
+                  options.advanceParentTurnAfterDispatch?.state ?? "running";
+                if (
+                  options.advanceParentTurnAfterDispatch?.commandType === command.type &&
+                  (threadsById.get("thread-parent")?.latestTurn?.turnId !==
+                    options.advanceParentTurnAfterDispatch.turnId ||
+                    threadsById.get("thread-parent")?.latestTurn?.state !== advancedTurnState)
+                ) {
+                  threadsById.set(
+                    "thread-parent",
+                    makeThreadShell("thread-parent", {
+                      latestTurn: {
+                        turnId: TurnId.makeUnsafe(options.advanceParentTurnAfterDispatch.turnId),
+                        state: advancedTurnState,
+                        requestedAt: NOW,
+                        startedAt: NOW,
+                        completedAt: advancedTurnState === "running" ? null : NOW,
+                        assistantMessageId: null,
+                      },
+                    }),
+                  );
+                }
+                const result = options.dispatch
+                  ? options.dispatch(command)
+                  : options.failDispatch?.(command)
+                    ? Effect.fail(new Error("injected dispatch failure"))
+                    : Effect.succeed({ sequence: dispatched.length });
+                if (options.pauseAfterDispatch?.commandType !== command.type) return result;
+                return Deferred.succeed(options.pauseAfterDispatch.entered, undefined).pipe(
+                  Effect.andThen(Deferred.await(options.pauseAfterDispatch.release)),
+                  Effect.andThen(result),
+                );
+              }),
+            ),
+          ),
+      } as unknown as (typeof OrchestrationEngineService)["Service"];
+    }),
+  );
 
   const automationLayer = Layer.succeed(AutomationService, {
     create: (input: AutomationCreateInput) =>
@@ -1057,8 +1091,34 @@ function makeHarnessLayer(
       operation,
     );
   }
+  const noticeAcknowledgements: GatewayHarness["noticeAcknowledgements"] = [];
+  const noticeLinks = new Map<string, boolean>();
   const operationLayer = Layer.succeed(AgentGatewayOperationRepository, {
     completions: {
+      parentNotices: {
+        setLink: (parent, child, _message, enabled) =>
+          Effect.sync(() => {
+            noticeLinks.set(`${parent}:${child}`, enabled);
+          }),
+        isChild: (parent, child) => Effect.sync(() => noticeLinks.has(`${parent}:${child}`)),
+        candidates: () => Effect.succeed([]),
+        save: () => Effect.void,
+        acknowledge: (parent, child, sequence, turn) =>
+          Effect.sync(() => {
+            noticeAcknowledgements.push({
+              parent,
+              child,
+              sequence,
+              ...(turn === undefined ? {} : { turn }),
+            });
+          }),
+        batchPending: () => Effect.void,
+        batches: () => Effect.succeed([]),
+        settleBatch: () => Effect.void,
+        deliveryText: () => Effect.succeed(null),
+        hasUnacknowledged: () => Effect.succeed(false),
+        withLock: (effect) => effect,
+      },
       pending: () => Effect.succeed([]),
       isOutputSettled: () => Effect.succeed(true),
       hasCompletedRun: () => Effect.succeed(true),
@@ -1414,6 +1474,8 @@ function makeHarnessLayer(
           })),
         );
     return {
+      noticeAcknowledgements,
+      noticeLinks,
       dispatched,
       automationCreates,
       automationUpdates,
@@ -1428,10 +1490,12 @@ function makeHarnessLayer(
       setThreadDetail: (thread) => {
         threadsById.set(thread.id, thread);
         threadDetailsById.set(thread.id, thread);
+        publishThreadChange(thread.id, "thread.turn-diff-completed");
       },
       deleteThread: (threadId) => {
         threadsById.delete(threadId);
         threadDetailsById.delete(threadId);
+        publishThreadChange(threadId, "thread.deleted");
       },
       setProjectionTurn: (input) => {
         projectionTurnsByKey.set(`${input.threadId}:${input.turnId}`, {
@@ -1440,6 +1504,7 @@ function makeHarnessLayer(
           state: input.state,
           assistantMessageId: input.assistantMessageId ?? null,
         });
+        publishThreadChange(input.threadId, "thread.turn-diff-completed");
       },
       setProviderStatuses: (statuses) => {
         providerStatuses = statuses;
@@ -3109,6 +3174,81 @@ describe("AgentGateway", () => {
         }).pipe(Effect.provide(gatewayLayer));
       },
     );
+  }
+
+  it.effect("child follow-ups opt in or out and reject a foreign notice link", () => {
+    const child = makeThreadShell("notify-child", {
+      sourceThreadId: ThreadId.makeUnsafe("thread-parent"),
+    });
+    const foreign = makeThreadShell("notify-foreign");
+    const { gatewayLayer, makeHarness } = makeHarnessLayer([
+      makeThreadShell("thread-parent"),
+      child,
+      foreign,
+    ]);
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      for (const enabled of [true, false]) {
+        const response = yield* harness.callTool({
+          token: "token-parent",
+          name: "synara_send_message",
+          args: { threadId: "notify-child", message: "Follow up", notifyParent: enabled },
+        });
+        assert.isFalse(isToolError(response.result), toolErrorText(response.result));
+        assert.equal(harness.noticeLinks.get("thread-parent:notify-child"), enabled);
+      }
+      const denied = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_send_message",
+        args: { threadId: "notify-foreign", message: "Follow up", notifyParent: true },
+      });
+      assert.isTrue(isToolError(denied.result));
+      assert.equal(harness.noticeLinks.has("thread-parent:notify-foreign"), false);
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+  it.effect("reading a child acknowledges notices only for the authenticated parent", () => {
+    const { gatewayLayer, makeHarness } = makeHarnessLayer([
+      makeThreadShell("thread-parent"),
+      makeThreadShell("read-child"),
+    ]);
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const response = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_read_thread",
+        args: { threadId: "read-child" },
+      });
+      assert.isFalse(isToolError(response.result), toolErrorText(response.result));
+      assert.deepEqual(harness.noticeAcknowledgements, [
+        { parent: "thread-parent", child: "read-child", sequence: 100 },
+      ]);
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  for (const notifyParent of [undefined, true, false]) {
+    it.effect(`persists parent wake setting ${String(notifyParent)} on creation`, () => {
+      const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
+      return Effect.gen(function* () {
+        const harness = yield* makeHarness;
+        const response = yield* harness.callTool({
+          token: "token-parent",
+          name: "synara_create_threads",
+          args: {
+            requestId: "parent-wake",
+            threads: [
+              {
+                prompt: "child",
+                target: { provider: "codex", model: "gpt-5.5" },
+                ...(notifyParent === undefined ? {} : { notifyParent }),
+              },
+            ],
+          },
+        });
+        assert.isFalse(isToolError(response.result), toolErrorText(response.result));
+        const plan = JSON.parse(harness.getOperationPlan());
+        assert.equal(plan[0].notifyParent, notifyParent ?? true);
+      }).pipe(Effect.provide(gatewayLayer));
+    });
   }
 
   it.effect("starts explicit OpenCode plan-agent targets in plan mode", () => {
@@ -4890,7 +5030,49 @@ describe("AgentGateway", () => {
     },
   );
 
-  it.effect("fails a long wait when a pinned thread is deleted between polls", () => {
+  it.effect("wait wakes on a turn event without polling or loading pending transcripts", () => {
+    const running = makeThreadShell("event-child", {
+      latestTurn: {
+        turnId: TurnId.makeUnsafe("event-turn"),
+        state: "running",
+        requestedAt: NOW,
+        startedAt: NOW,
+        completedAt: null,
+        assistantMessageId: null,
+      },
+    });
+    const { gatewayLayer, makeHarness } = makeHarnessLayer([
+      makeThreadShell("thread-parent"),
+      running,
+    ]);
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const fiber = yield* harness
+        .callTool({
+          token: "token-parent",
+          name: "synara_wait_for_threads",
+          args: { threadIds: ["event-child"], timeoutMs: 5000 },
+        })
+        .pipe(Effect.forkChild);
+      yield* Effect.yieldNow;
+      yield* TestClock.adjust("1000 millis");
+      assert.deepEqual(harness.getWaitReadCounts(), { detailReads: 0, batchTurnReads: 1 });
+      harness.setProjectionTurn({
+        threadId: "event-child",
+        turnId: "event-turn",
+        state: "completed",
+      });
+      const response = yield* Fiber.join(fiber);
+      assert.equal(toolResultJson(response.result).allTerminal, true);
+      assert.equal(toolResultJson(response.result).timedOut, false);
+      assert.deepEqual(harness.getWaitReadCounts(), { detailReads: 1, batchTurnReads: 2 });
+      assert.deepEqual(harness.noticeAcknowledgements, [
+        { parent: "thread-parent", child: "event-child", sequence: 100, turn: "event-turn" },
+      ]);
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("fails a long wait when a pinned thread is deleted during the wait", () => {
     const running = makeThreadShell("thread-deleted-during-wait", {
       latestTurn: {
         turnId: TurnId.makeUnsafe("turn-deleted-during-wait"),

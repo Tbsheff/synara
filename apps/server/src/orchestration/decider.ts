@@ -1998,11 +1998,15 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       // Respect settings changed before its serialized dispatch instead of
       // replaying the planner's stale permission or interaction mode.
       const runtimeMode =
-        command.resumePrecondition === undefined && !questionResponse
+        command.resumePrecondition === undefined &&
+        !questionResponse &&
+        command.dispatchOrigin !== "notification"
           ? command.runtimeMode
           : targetThread.runtimeMode;
       const interactionMode =
-        command.resumePrecondition === undefined && !questionResponse
+        command.resumePrecondition === undefined &&
+        !questionResponse &&
+        command.dispatchOrigin !== "notification"
           ? command.interactionMode
           : targetThread.interactionMode;
       yield* validateAutoRuntimeMode(
@@ -2128,7 +2132,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         type: shouldQueue ? "thread.turn-queued" : "thread.turn-start-requested",
         payload: turnRequestPayload,
       };
-      if (shouldQueue && dispatchMode === "steer" && targetThread.claudeCacheReview == null) {
+      if (
+        shouldQueue &&
+        dispatchMode === "steer" &&
+        command.dispatchOrigin !== "notification" &&
+        targetThread.claudeCacheReview == null
+      ) {
         return [
           ...snoozeEvents,
           userMessageEvent,

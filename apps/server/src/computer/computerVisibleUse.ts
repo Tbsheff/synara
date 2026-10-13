@@ -169,6 +169,7 @@ function isLocalHumanMessage(message: OrchestrationMessage): boolean {
     message.role === "user" &&
     message.dispatchOrigin !== "automation" &&
     message.dispatchOrigin !== "agent" &&
+    message.dispatchOrigin !== "notification" &&
     (message.source === "native" || message.source === "async-user-input")
   );
 }
@@ -236,7 +237,12 @@ export function latestUserAuthoredMessage(
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index]!;
     if (message.role !== "user") continue;
-    if (message.dispatchOrigin === "automation" || message.dispatchOrigin === "agent") continue;
+    if (
+      message.dispatchOrigin === "automation" ||
+      message.dispatchOrigin === "agent" ||
+      message.dispatchOrigin === "notification"
+    )
+      continue;
     return message;
   }
   return undefined;

@@ -205,6 +205,7 @@ describe("computerForegroundAuthorizationForMessages", () => {
     { source: "fork-import" as const },
     { dispatchOrigin: "agent" as const },
     { dispatchOrigin: "automation" as const },
+    { dispatchOrigin: "notification" as const },
   ])("does not inherit visibility from imported or nonhuman task history: %j", (origin) => {
     const messages = [
       message({ text: "Show me the browser" }),
