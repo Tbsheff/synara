@@ -718,6 +718,8 @@ function mapCodexRuntimeMode(runtimeMode: RuntimeMode): {
   readonly sandbox: CodexSandboxMode;
 } {
   switch (runtimeMode) {
+    case "accept-edits":
+      throw new Error("Codex does not support Accept edits.");
     case "approval-required":
       return {
         approvalPolicy: "on-request",
@@ -824,6 +826,8 @@ function mapCodexRuntimeModeToTurnOverrides(runtimeMode: RuntimeMode): {
   readonly sandboxPolicy: CodexTurnSandboxPolicy;
 } {
   switch (runtimeMode) {
+    case "accept-edits":
+      throw new Error("Codex does not support Accept edits.");
     case "approval-required":
       return {
         approvalPolicy: "on-request",

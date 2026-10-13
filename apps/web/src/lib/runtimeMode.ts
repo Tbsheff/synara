@@ -7,9 +7,14 @@ import type {
 import {
   normalizeRuntimeModeForProvider,
   providerSupportsAutoRuntimeMode,
+  providerSupportsAcceptEditsRuntimeMode,
 } from "@synara/shared/runtimeMode";
 
-export { normalizeRuntimeModeForProvider, providerSupportsAutoRuntimeMode };
+export {
+  normalizeRuntimeModeForProvider,
+  providerSupportsAutoRuntimeMode,
+  providerSupportsAcceptEditsRuntimeMode,
+};
 
 export function providerModelSupportsAutoRuntimeMode(
   provider: ProviderKind,
@@ -32,6 +37,10 @@ export const RUNTIME_MODE_PRESENTATION: Record<
   "approval-required": {
     label: "Ask for approval",
     description: "Always ask to edit external files and use the internet",
+  },
+  "accept-edits": {
+    label: "Accept edits",
+    description: "Auto-approve file edits and routine file commands; ask for other commands",
   },
   auto: {
     label: "Approve for me",

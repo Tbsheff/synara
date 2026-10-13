@@ -24,6 +24,7 @@ import {
   RUNTIME_MODE_PRESENTATION,
   providerModelSupportsAutoRuntimeMode,
   providerSupportsApprovalRequiredMode,
+  providerSupportsAcceptEditsRuntimeMode,
 } from "../lib/runtimeMode";
 import { useStore } from "../store";
 import {
@@ -206,8 +207,13 @@ export function RuntimeUsageControls({
               onValueChange={(value) => {
                 if (
                   !value ||
-                  (value !== "full-access" && value !== "auto" && value !== "approval-required") ||
+                  (value !== "full-access" &&
+                    value !== "auto" &&
+                    value !== "approval-required" &&
+                    value !== "accept-edits") ||
                   (value === "auto" && !autoModeAvailable) ||
+                  (value === "accept-edits" &&
+                    !providerSupportsAcceptEditsRuntimeMode(provider ?? "codex")) ||
                   (value === "approval-required" &&
                     !providerSupportsApprovalRequiredMode(provider ?? "codex")) ||
                   value === runtimeMode
@@ -221,6 +227,12 @@ export function RuntimeUsageControls({
                 <RuntimeModeMenuItem
                   mode="approval-required"
                   icon={<HiOutlineHandRaised className="size-4 shrink-0" />}
+                />
+              ) : null}
+              {providerSupportsAcceptEditsRuntimeMode(provider ?? "codex") ? (
+                <RuntimeModeMenuItem
+                  mode="accept-edits"
+                  icon={<CentralIcon name="shield-code" className="size-4 shrink-0" />}
                 />
               ) : null}
               {autoModeAvailable ? (

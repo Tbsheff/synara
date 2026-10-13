@@ -15,7 +15,7 @@ import type {
   ThreadSidechatContext,
 } from "@synara/contracts";
 import { buildPromptThreadTitleFallback } from "@synara/shared/chatThreads";
-import { autoRuntimeModeSelectionIssue } from "@synara/shared/runtimeMode";
+import { runtimeModeSelectionIssue } from "@synara/shared/runtimeMode";
 
 import { newCommandId, newMessageId, newThreadId } from "./utils";
 import { buildThreadHandoffImportedMessages } from "./threadHandoff";
@@ -193,7 +193,7 @@ export function resolveSidechatRuntimeMode(
   modelSelection: ModelSelection,
 ): RuntimeMode {
   // Changing provider can lose Auto support; never turn that fallback into Full access.
-  return autoRuntimeModeSelectionIssue({ runtimeMode, modelSelection })
+  return runtimeModeSelectionIssue({ runtimeMode, modelSelection })
     ? "approval-required"
     : runtimeMode;
 }

@@ -37,3 +37,26 @@ it.each(["approval-required", "full-access"] as const)(
     expect(getComputedStyle(span).position).not.toBe("absolute");
   },
 );
+
+it.each(["codex", "claudeAgent", "opencode"] as const)(
+  "offers Accept edits only for capable %s",
+  async (provider) => {
+    const onRuntime = vi.fn();
+    await render(
+      <RuntimeUsageControls
+        provider={provider}
+        runtimeMode="approval-required"
+        onRuntimeModeChange={onRuntime}
+      />,
+    );
+    await page.getByRole("button").click();
+    const choice = page.getByRole("menuitemradio", { name: /^Accept edits/ });
+    if (provider === "claudeAgent") {
+      await expect.element(choice).toBeVisible();
+      await choice.click();
+      expect(onRuntime).toHaveBeenCalledExactlyOnceWith("accept-edits");
+    } else {
+      await expect.element(choice).not.toBeInTheDocument();
+    }
+  },
+);

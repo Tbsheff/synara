@@ -1445,44 +1445,50 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
-  it.effect("keeps an approval-required thread supervised despite a bypass provider option", () => {
-    const harness = makeHarness();
-    return Effect.gen(function* () {
-      const adapter = yield* ClaudeAdapter;
-      const session = yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "approval-required",
-        providerOptions: {
-          claudeAgent: {
-            permissionMode: "bypassPermissions",
+  it.effect.each([
+    ["approval-required", "default"],
+    ["accept-edits", "acceptEdits"],
+  ] as const)(
+    "keeps %s from thread policy despite a bypass provider option",
+    ([runtimeMode, permissionMode]) => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+        const session = yield* adapter.startSession({
+          threadId: THREAD_ID,
+          provider: "claudeAgent",
+          runtimeMode,
+          providerOptions: {
+            claudeAgent: {
+              permissionMode: "bypassPermissions",
+            },
           },
-        },
-      });
+        });
 
-      const createInput = harness.getLastCreateQueryInput();
-      assert.equal(createInput?.options.permissionMode, "default");
-      assert.equal(createInput?.options.allowDangerouslySkipPermissions, undefined);
+        const createInput = harness.getLastCreateQueryInput();
+        assert.equal(createInput?.options.permissionMode, permissionMode);
+        assert.equal(createInput?.options.allowDangerouslySkipPermissions, undefined);
 
-      for (const input of ["First turn", "Second turn"]) {
-        yield* adapter.sendTurn({ threadId: session.threadId, input, attachments: [] });
-        harness.query.emit({
-          type: "result",
-          subtype: "success",
-          is_error: false,
-          errors: [],
-          session_id: "sdk-session-supervised",
-          uuid: `result-${input}`,
-        } as unknown as SDKMessage);
-        yield* Effect.yieldNow;
-      }
-      assert.notInclude(harness.query.setPermissionModeCalls, "bypassPermissions");
-      assert.include(harness.query.setPermissionModeCalls, "default");
-    }).pipe(
-      Effect.provideService(Random.Random, makeDeterministicRandomService()),
-      Effect.provide(harness.layer),
-    );
-  });
+        for (const input of ["First turn", "Second turn"]) {
+          yield* adapter.sendTurn({ threadId: session.threadId, input, attachments: [] });
+          harness.query.emit({
+            type: "result",
+            subtype: "success",
+            is_error: false,
+            errors: [],
+            session_id: "sdk-session-supervised",
+            uuid: `result-${input}`,
+          } as unknown as SDKMessage);
+          yield* Effect.yieldNow;
+        }
+        assert.notInclude(harness.query.setPermissionModeCalls, "bypassPermissions");
+        assert.include(harness.query.setPermissionModeCalls, permissionMode);
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    },
+  );
 
   it.effect("forwards the 1m Claude auto-compact budget and selects extended context", () => {
     const harness = makeHarness();
@@ -8049,154 +8055,157 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     },
   );
 
-  it.effect("keeps Auto reviewer-gated after accepting one request for the session", () => {
-    const harness = makeHarness();
-    return Effect.gen(function* () {
-      const adapter = yield* ClaudeAdapter;
+  it.effect.each(["auto", "accept-edits"] as const)(
+    "keeps %s command prompts supervised after a session grant",
+    (runtimeMode) => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
 
-      const session = yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: "claudeAgent",
-        runtimeMode: "auto",
-      });
+        const session = yield* adapter.startSession({
+          threadId: THREAD_ID,
+          provider: "claudeAgent",
+          runtimeMode,
+        });
 
-      yield* Stream.take(adapter.streamEvents, 3).pipe(Stream.runDrain);
+        yield* Stream.take(adapter.streamEvents, 3).pipe(Stream.runDrain);
 
-      yield* adapter.sendTurn({
-        threadId: session.threadId,
-        input: "approve this",
-        attachments: [],
-      });
-      yield* Stream.take(adapter.streamEvents, 1).pipe(Stream.runDrain);
+        yield* adapter.sendTurn({
+          threadId: session.threadId,
+          input: "approve this",
+          attachments: [],
+        });
+        yield* Stream.take(adapter.streamEvents, 1).pipe(Stream.runDrain);
 
-      harness.query.emit({
-        type: "stream_event",
-        session_id: "sdk-session-approval-1",
-        uuid: "stream-approval-thread",
-        parent_tool_use_id: null,
-        event: {
-          type: "message_start",
-          message: {
-            id: "msg-approval-thread",
-          },
-        },
-      } as unknown as SDKMessage);
-
-      const threadStarted = yield* Stream.runHead(adapter.streamEvents);
-      assert.equal(threadStarted._tag, "Some");
-      if (threadStarted._tag !== "Some" || threadStarted.value.type !== "thread.started") {
-        return;
-      }
-
-      const createInput = harness.getLastCreateQueryInput();
-      const canUseTool = createInput?.options.canUseTool;
-      assert.equal(typeof canUseTool, "function");
-      if (!canUseTool) {
-        return;
-      }
-
-      const permissionPromise = canUseTool(
-        "Bash",
-        { command: "pwd" },
-        {
-          signal: new AbortController().signal,
-          suggestions: [
-            {
-              type: "setMode",
-              mode: "default",
-              destination: "session",
+        harness.query.emit({
+          type: "stream_event",
+          session_id: "sdk-session-approval-1",
+          uuid: "stream-approval-thread",
+          parent_tool_use_id: null,
+          event: {
+            type: "message_start",
+            message: {
+              id: "msg-approval-thread",
             },
-          ],
-          toolUseID: "tool-use-1",
-          requestId: "request-tool-use-1",
-        },
+          },
+        } as unknown as SDKMessage);
+
+        const threadStarted = yield* Stream.runHead(adapter.streamEvents);
+        assert.equal(threadStarted._tag, "Some");
+        if (threadStarted._tag !== "Some" || threadStarted.value.type !== "thread.started") {
+          return;
+        }
+
+        const createInput = harness.getLastCreateQueryInput();
+        const canUseTool = createInput?.options.canUseTool;
+        assert.equal(typeof canUseTool, "function");
+        if (!canUseTool) {
+          return;
+        }
+
+        const permissionPromise = canUseTool(
+          "Bash",
+          { command: "pwd" },
+          {
+            signal: new AbortController().signal,
+            suggestions: [
+              {
+                type: "setMode",
+                mode: "default",
+                destination: "session",
+              },
+            ],
+            toolUseID: "tool-use-1",
+            requestId: "request-tool-use-1",
+          },
+        );
+
+        const requested = yield* Stream.runHead(adapter.streamEvents);
+        assert.equal(requested._tag, "Some");
+        if (requested._tag !== "Some") {
+          return;
+        }
+        assert.equal(requested.value.type, "request.opened");
+        if (requested.value.type !== "request.opened") {
+          return;
+        }
+        assert.deepEqual(requested.value.providerRefs, {
+          providerItemId: ProviderItemId.makeUnsafe("tool-use-1"),
+        });
+        assert.deepEqual(requested.value.payload.args, {
+          toolName: "Bash",
+          input: { command: "pwd" },
+          sessionApprovalAvailable: false,
+          toolUseId: "tool-use-1",
+        });
+        const runtimeRequestId = requested.value.requestId;
+        assert.equal(typeof runtimeRequestId, "string");
+        if (runtimeRequestId === undefined) {
+          return;
+        }
+
+        yield* adapter.respondToRequest(
+          session.threadId,
+          ApprovalRequestId.makeUnsafe(runtimeRequestId),
+          "acceptForSession",
+        );
+
+        const resolved = yield* Stream.runHead(adapter.streamEvents);
+        assert.equal(resolved._tag, "Some");
+        if (resolved._tag !== "Some") {
+          return;
+        }
+        assert.equal(resolved.value.type, "request.resolved");
+        if (resolved.value.type !== "request.resolved") {
+          return;
+        }
+        assert.equal(resolved.value.requestId, requested.value.requestId);
+        assert.equal(resolved.value.payload.decision, "acceptForSession");
+        assert.deepEqual(resolved.value.providerRefs, {
+          providerItemId: ProviderItemId.makeUnsafe("tool-use-1"),
+        });
+
+        const permissionResult = yield* Effect.promise(() => permissionPromise);
+        const allowedPermissionResult = permissionResult as {
+          readonly behavior?: string;
+          readonly updatedPermissions?: unknown;
+        } | null;
+        assert.equal(allowedPermissionResult?.behavior, "allow");
+        assert.isUndefined(allowedPermissionResult?.updatedPermissions);
+
+        const secondPermissionPromise = canUseTool(
+          "Bash",
+          { command: "git status" },
+          {
+            signal: new AbortController().signal,
+            toolUseID: "tool-use-2",
+            requestId: "request-tool-use-2",
+          },
+        );
+        const secondRequested = yield* Stream.runHead(adapter.streamEvents);
+        assert.equal(secondRequested._tag, "Some");
+        if (secondRequested._tag !== "Some" || secondRequested.value.type !== "request.opened") {
+          return;
+        }
+        assert.equal(secondRequested.value.payload.detail, "Bash: git status");
+        const secondRuntimeRequestId = secondRequested.value.requestId;
+        if (secondRuntimeRequestId === undefined) {
+          return;
+        }
+        yield* adapter.respondToRequest(
+          session.threadId,
+          ApprovalRequestId.makeUnsafe(secondRuntimeRequestId),
+          "decline",
+        );
+        yield* Stream.runHead(adapter.streamEvents);
+        const secondPermissionResult = yield* Effect.promise(() => secondPermissionPromise);
+        assert.equal((secondPermissionResult as PermissionResult).behavior, "deny");
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
       );
-
-      const requested = yield* Stream.runHead(adapter.streamEvents);
-      assert.equal(requested._tag, "Some");
-      if (requested._tag !== "Some") {
-        return;
-      }
-      assert.equal(requested.value.type, "request.opened");
-      if (requested.value.type !== "request.opened") {
-        return;
-      }
-      assert.deepEqual(requested.value.providerRefs, {
-        providerItemId: ProviderItemId.makeUnsafe("tool-use-1"),
-      });
-      assert.deepEqual(requested.value.payload.args, {
-        toolName: "Bash",
-        input: { command: "pwd" },
-        sessionApprovalAvailable: false,
-        toolUseId: "tool-use-1",
-      });
-      const runtimeRequestId = requested.value.requestId;
-      assert.equal(typeof runtimeRequestId, "string");
-      if (runtimeRequestId === undefined) {
-        return;
-      }
-
-      yield* adapter.respondToRequest(
-        session.threadId,
-        ApprovalRequestId.makeUnsafe(runtimeRequestId),
-        "acceptForSession",
-      );
-
-      const resolved = yield* Stream.runHead(adapter.streamEvents);
-      assert.equal(resolved._tag, "Some");
-      if (resolved._tag !== "Some") {
-        return;
-      }
-      assert.equal(resolved.value.type, "request.resolved");
-      if (resolved.value.type !== "request.resolved") {
-        return;
-      }
-      assert.equal(resolved.value.requestId, requested.value.requestId);
-      assert.equal(resolved.value.payload.decision, "acceptForSession");
-      assert.deepEqual(resolved.value.providerRefs, {
-        providerItemId: ProviderItemId.makeUnsafe("tool-use-1"),
-      });
-
-      const permissionResult = yield* Effect.promise(() => permissionPromise);
-      const allowedPermissionResult = permissionResult as {
-        readonly behavior?: string;
-        readonly updatedPermissions?: unknown;
-      } | null;
-      assert.equal(allowedPermissionResult?.behavior, "allow");
-      assert.isUndefined(allowedPermissionResult?.updatedPermissions);
-
-      const secondPermissionPromise = canUseTool(
-        "Bash",
-        { command: "git status" },
-        {
-          signal: new AbortController().signal,
-          toolUseID: "tool-use-2",
-          requestId: "request-tool-use-2",
-        },
-      );
-      const secondRequested = yield* Stream.runHead(adapter.streamEvents);
-      assert.equal(secondRequested._tag, "Some");
-      if (secondRequested._tag !== "Some" || secondRequested.value.type !== "request.opened") {
-        return;
-      }
-      assert.equal(secondRequested.value.payload.detail, "Bash: git status");
-      const secondRuntimeRequestId = secondRequested.value.requestId;
-      if (secondRuntimeRequestId === undefined) {
-        return;
-      }
-      yield* adapter.respondToRequest(
-        session.threadId,
-        ApprovalRequestId.makeUnsafe(secondRuntimeRequestId),
-        "decline",
-      );
-      yield* Stream.runHead(adapter.streamEvents);
-      const secondPermissionResult = yield* Effect.promise(() => secondPermissionPromise);
-      assert.equal((secondPermissionResult as PermissionResult).behavior, "deny");
-    }).pipe(
-      Effect.provideService(Random.Random, makeDeterministicRandomService()),
-      Effect.provide(harness.layer),
-    );
-  });
+    },
+  );
 
   it.effect(
     "keeps later command prompts supervised after always allowing a tool for the session",
@@ -11191,7 +11200,10 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     );
   });
 
-  it.effect("resets Claude plan mode to default when settings provided the base mode", () => {
+  it.effect.each([
+    ["approval-required", "default"],
+    ["accept-edits", "acceptEdits"],
+  ] as const)("restores %s thread permission mode after Plan", ([runtimeMode, permissionMode]) => {
     const harness = makeHarness();
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
@@ -11199,7 +11211,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
       const session = yield* adapter.startSession({
         threadId: THREAD_ID,
         provider: "claudeAgent",
-        runtimeMode: "approval-required",
+        runtimeMode,
       });
       yield* adapter.sendTurn({
         threadId: session.threadId,
@@ -11230,7 +11242,7 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
         attachments: [],
       });
 
-      assert.deepEqual(harness.query.setPermissionModeCalls, ["plan", "default"]);
+      assert.deepEqual(harness.query.setPermissionModeCalls, ["plan", permissionMode]);
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),

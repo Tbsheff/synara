@@ -54,7 +54,9 @@ export const ProjectAgentWorkerRouting = Schema.Struct({
   modelSelection: Schema.optional(ModelSelection),
   providerOptions: Schema.optional(ProviderStartOptions),
   environment: Schema.optional(Schema.Literals(["local", "worktree"])),
-  runtimeMode: Schema.optional(Schema.Literals(["approval-required", "full-access"])),
+  runtimeMode: Schema.optional(
+    Schema.Literals(["approval-required", "accept-edits", "full-access"]),
+  ),
 });
 export type ProjectAgentWorkerRouting = typeof ProjectAgentWorkerRouting.Type;
 

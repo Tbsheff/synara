@@ -97,6 +97,7 @@ import { resolveRuntimeModelDescriptor } from "~/components/chat/runtimeModelCap
 import { resolveProviderDiscoveryCwd } from "~/lib/providerDiscovery";
 import {
   normalizeRuntimeModeForProvider,
+  providerSupportsAcceptEditsRuntimeMode,
   providerModelSupportsAutoRuntimeMode,
   providerSupportsAutoRuntimeMode,
 } from "~/lib/runtimeMode";
@@ -1532,6 +1533,9 @@ export function AutomationDialog({
                   onValueChange={(value) => setField("runtimeMode", value as RuntimeMode)}
                 >
                   <MenuRadioItem value="approval-required">Approval required</MenuRadioItem>
+                  {providerSupportsAcceptEditsRuntimeMode(form.modelSelection.provider) ? (
+                    <MenuRadioItem value="accept-edits">Accept edits</MenuRadioItem>
+                  ) : null}
                   {selectedModelSupportsAuto ? (
                     <MenuRadioItem value="auto">
                       <CentralIcon

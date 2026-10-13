@@ -64,6 +64,11 @@ on thread start, resume, fork, and each turn. Workspace work can proceed within 
 actions outside its boundary can ask for approval. This follows the
 [Codex sandbox and approval guide](https://learn.chatgpt.com/docs/agent-approvals-security#defaults-and-recommendations).
 
+Claude also offers **Accept edits**, which maps to native `acceptEdits`. Claude approves
+file edits and routine file commands and still asks for other commands. Only Claude shows
+this choice. The server refuses it for other providers. Thread runtime mode remains the
+source of Claude permission mode; saved provider-option overrides cannot grant more access.
+
 Pi and Antigravity do not offer Synara Plan mode or Ask for approval. Select Full access
 explicitly to use these providers. Changing providers does not grant more access to a saved
 thread or draft. Oh My Pi keeps its existing mode choices.

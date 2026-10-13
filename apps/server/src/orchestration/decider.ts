@@ -27,7 +27,7 @@ import {
 } from "@synara/shared/threadWorkspace";
 import { collectSubagentDescendants } from "@synara/shared/threadHierarchy";
 import { isSidechatThread } from "@synara/shared/sidechatThread";
-import { autoRuntimeModeSelectionIssue } from "@synara/shared/runtimeMode";
+import { runtimeModeSelectionIssue } from "@synara/shared/runtimeMode";
 import { isGroupContainerKind } from "@synara/shared/projectContainers";
 import { findProjectFolderProblem } from "@synara/shared/projectFolders";
 import { providerSupportsNativeTurnSteering } from "@synara/shared/providerMetadata";
@@ -183,7 +183,7 @@ function validateAutoRuntimeMode(
   modelSelection: OrchestrationThread["modelSelection"],
   runtimeMode: OrchestrationThread["runtimeMode"],
 ) {
-  const issue = autoRuntimeModeSelectionIssue({ runtimeMode, modelSelection });
+  const issue = runtimeModeSelectionIssue({ runtimeMode, modelSelection });
   return issue === null
     ? Effect.void
     : Effect.fail(

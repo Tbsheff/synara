@@ -1237,6 +1237,8 @@ function asRuntimeRequestId(value: ApprovalRequestId): RuntimeRequestId {
 
 function permissionModeForRuntimeMode(runtimeMode: RuntimeMode): PermissionMode {
   switch (runtimeMode) {
+    case "accept-edits":
+      return "acceptEdits";
     case "auto":
       return "auto";
     case "full-access":
