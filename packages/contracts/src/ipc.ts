@@ -1430,6 +1430,7 @@ export interface NativeApi {
     ) => Promise<OrchestrationGetThreadDetailSnapshotResult>;
     searchThreads: (
       input: OrchestrationSearchThreadsInput,
+      options?: { readonly signal?: AbortSignal },
     ) => Promise<OrchestrationSearchThreadsResult>;
     dispatchCommand: (command: ClientOrchestrationCommand) => Promise<{ sequence: number }>;
     importThread: (

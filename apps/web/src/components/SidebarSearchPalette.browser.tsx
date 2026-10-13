@@ -2,7 +2,7 @@ import "../index.css";
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { page, userEvent } from "vitest/browser";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { type ComponentProps, useState } from "react";
 import { render } from "vitest-browser-react";
 
@@ -12,6 +12,9 @@ import type { ThreadImportTarget } from "../lib/threadImport";
 
 const searchThreads = vi.hoisted(() => vi.fn());
 const browse = vi.hoisted(() => vi.fn());
+beforeEach(() => {
+  searchThreads.mockReset().mockResolvedValue({ matches: [] });
+});
 vi.mock("~/nativeApi", async (importOriginal) => ({
   ...(await importOriginal<typeof import("~/nativeApi")>()),
   readNativeApi: () => ({ orchestration: { searchThreads }, filesystem: { browse } }),
@@ -159,7 +162,10 @@ it("finds a thread through server message hits when its messages are not loaded"
   const result = page.getByRole("option", { name: /Fix login flow/ });
   await expect.element(result).toHaveTextContent("refund webhook retries three times");
   await expect.element(result).toHaveTextContent("2 chat hits");
-  expect(searchThreads).toHaveBeenCalledWith({ query: "webhook retries", limit: 50 });
+  expect(searchThreads).toHaveBeenCalledWith(
+    { query: "webhook retries", limit: 50 },
+    { signal: expect.any(AbortSignal) },
+  );
   await result.click();
   expect(onOpenThread).toHaveBeenCalledExactlyOnceWith(thread.id, "webhook retries");
   expect(onOpenChange).toHaveBeenCalledExactlyOnceWith(false);
@@ -345,4 +351,137 @@ it("shows a folder browse error without a create offer", async () => {
   await page.getByPlaceholder("Search chats or run a command").fill("/restricted/missing");
   await expect.element(page.getByRole("status")).toHaveTextContent("Could not read this folder");
   expect(page.getByRole("button", { name: /Create & Add/ }).length).toBe(0);
+});
+
+const pagedThreads = Array.from(
+  { length: 307 },
+  (_, index): SidebarSearchThread => ({
+    ...thread,
+    id: `paged-${index}`,
+    title: `Paged ${String(index).padStart(3, "0")}`,
+    messages: [],
+  }),
+);
+
+function searchPage(start: number, end: number, nextCursor?: string) {
+  return {
+    matches: pagedThreads.slice(start, end).map((entry, index) => ({
+      threadId: entry.id,
+      excerpt: index % 2 ? "cursor needle" : "Context before cursor needle after",
+      matchCount: 1,
+    })),
+    ...(nextCursor ? { nextCursor } : {}),
+  };
+}
+
+it("reaches every cursor page in server order without duplicate threads", async () => {
+  searchThreads.mockReset().mockImplementation(async ({ cursor }: { cursor?: string }) => {
+    const start = Number(cursor ?? 0);
+    const end = Math.min(start + 50, pagedThreads.length);
+    return searchPage(start, end, end < pagedThreads.length ? String(end) : undefined);
+  });
+  await renderPalette(thread, { threads: pagedThreads });
+  await page.getByPlaceholder("Search chats or run a command").fill("cursor needle");
+  const titles = () =>
+    Array.from(document.querySelectorAll('[role="option"]'))
+      .map((option) => option.textContent?.match(/Paged \d{3}/)?.[0])
+      .filter(Boolean);
+  await vi.waitFor(() => expect(titles()).toHaveLength(20));
+  for (let count = 20; count < pagedThreads.length; count += 20) {
+    await page.getByRole("option", { name: "Show more chats", exact: true }).click();
+    await vi.waitFor(() =>
+      expect(titles()).toEqual(
+        pagedThreads
+          .slice(0, Math.min(count + 20, pagedThreads.length))
+          .map((entry) => entry.title),
+      ),
+    );
+  }
+  expect(searchThreads).toHaveBeenCalledTimes(7);
+  expect(page.getByRole("option", { name: "Show more chats", exact: true }).length).toBe(0);
+});
+
+it("keeps loaded results on a page error and retries the same cursor, deduplicating overlap", async () => {
+  searchThreads
+    .mockReset()
+    .mockResolvedValueOnce(searchPage(0, 50, "50"))
+    .mockRejectedValueOnce(new Error("Page unavailable"))
+    .mockResolvedValueOnce(searchPage(49, 70));
+  await renderPalette(thread, { threads: pagedThreads });
+  await page.getByPlaceholder("Search chats or run a command").fill("cursor needle");
+  await expect.element(page.getByText("Paged 019", { exact: true })).toBeVisible();
+  await page.getByRole("option", { name: "Show more chats", exact: true }).click();
+  await page.getByRole("option", { name: "Show more chats", exact: true }).click();
+  await expect.element(page.getByRole("status")).toHaveTextContent("Could not load more chats");
+  await expect.element(page.getByText("Paged 039", { exact: true })).toBeVisible();
+  await page.getByRole("option", { name: "Show more chats", exact: true }).click();
+  await expect.element(page.getByText("Paged 059", { exact: true })).toBeVisible();
+  await page.getByRole("option", { name: "Show more chats", exact: true }).click();
+  await expect.element(page.getByText("Paged 069", { exact: true })).toBeVisible();
+  expect(page.getByRole("option").length).toBe(70);
+  expect(searchThreads.mock.calls.slice(1).map(([input]) => input.cursor)).toEqual(["50", "50"]);
+});
+
+it("cancels a stale page as soon as the query changes and ignores its late response", async () => {
+  let finishPage: ((result: ReturnType<typeof searchPage>) => void) | undefined;
+  let pageSignal: AbortSignal | undefined;
+  searchThreads.mockReset().mockImplementation(({ query, cursor }, options) => {
+    if (query === "replacement query") return Promise.resolve({ matches: [] });
+    if (!cursor) return Promise.resolve(searchPage(0, 50, "50"));
+    pageSignal = options?.signal;
+    return new Promise((resolve) => {
+      finishPage = resolve;
+    });
+  });
+  await renderPalette(thread, { threads: pagedThreads });
+  const input = page.getByPlaceholder("Search chats or run a command");
+  await input.fill("cursor needle");
+  await expect.element(page.getByText("Paged 019", { exact: true })).toBeVisible();
+  await page.getByRole("option", { name: "Show more chats", exact: true }).click();
+  await page.getByRole("option", { name: "Show more chats", exact: true }).click();
+  await vi.waitFor(() => expect(finishPage).toBeTypeOf("function"));
+  await expect.element(page.getByRole("status")).toHaveTextContent("Loading more chats");
+  await input.fill("replacement query");
+  await vi.waitFor(() => expect(pageSignal?.aborted).toBe(true));
+  finishPage!(searchPage(50, 100));
+  await expect.element(page.getByRole("status")).toHaveTextContent("No results");
+  expect(page.getByRole("option").length).toBe(0);
+});
+
+it("ends paging on an empty final page and keeps archive and thread scope boundaries", async () => {
+  searchThreads
+    .mockReset()
+    .mockResolvedValueOnce({
+      ...searchPage(0, 50, "50"),
+      matches: [
+        ...searchPage(0, 50).matches,
+        { threadId: "outside-scope", excerpt: "cursor needle", matchCount: 1 },
+      ],
+    })
+    .mockResolvedValueOnce({ matches: [] });
+  await renderPalette(thread, {
+    threads: [
+      ...pagedThreads,
+      { ...thread, id: "archive", title: "cursor needle archived", archivedAt: "2026-10-01" },
+    ],
+  });
+  const input = page.getByPlaceholder("Search chats or run a command");
+  await input.fill("cursor needle");
+  await expect
+    .element(page.getByRole("option", { name: /cursor needle archived/ }))
+    .toHaveTextContent("Archived");
+  for (let index = 0; index < 2; index += 1) {
+    await page.getByRole("option", { name: "Show more chats", exact: true }).click();
+  }
+  await expect.element(page.getByText("Paged 049", { exact: true })).toBeVisible();
+  expect(page.getByRole("option").length).toBe(51);
+  expect(page.getByRole("option", { name: "Show more chats", exact: true }).length).toBe(0);
+  expect(searchThreads).toHaveBeenCalledTimes(2);
+  expect(searchThreads.mock.calls.every(([request]) => request.includeArchived !== true)).toBe(
+    true,
+  );
+  await input.fill("new query");
+  await expect
+    .element(page.getByRole("option", { name: /cursor needle archived/ }))
+    .not.toBeInTheDocument();
 });

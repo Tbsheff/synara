@@ -602,6 +602,18 @@ describe("wsNativeApi", () => {
     });
   });
 
+  it("forwards thread search cursors and cancellation to the transport", async () => {
+    requestMock.mockResolvedValue({ matches: [], nextCursor: "next-page" });
+    const { createWsNativeApi } = await import("./wsNativeApi");
+    const controller = new AbortController();
+    const api = createWsNativeApi();
+    const input = { query: "needle", limit: 50, cursor: "page-2", includeArchived: true };
+    await api.orchestration.searchThreads(input, { signal: controller.signal });
+    expect(requestMock).toHaveBeenCalledWith(ORCHESTRATION_WS_METHODS.searchThreads, input, {
+      signal: controller.signal,
+    });
+  });
+
   it("forwards an abort signal on projects.readFile to the transport", async () => {
     requestMock.mockResolvedValue({
       relativePath: "src/app.ts",

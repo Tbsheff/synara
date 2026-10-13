@@ -34,7 +34,7 @@ import { isGenericChatThreadTitle } from "@synara/shared/chatThreads";
 import { Autocomplete as AutocompletePrimitive } from "@base-ui/react/autocomplete";
 import { LuArrowLeft, LuCornerLeftUp } from "react-icons/lu";
 import { type ComponentType, useEffect, useMemo, useState, type KeyboardEvent } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useDebouncedValue } from "@tanstack/react-pacer";
 import { ProjectSidebarIcon } from "./ProjectSidebarIcon";
 import { ProviderIcon as SharedProviderIcon } from "./ProviderIcon";
@@ -67,6 +67,7 @@ import {
   matchSidebarSearchProjects,
   matchSidebarSearchThemes,
   matchSidebarSearchThreads,
+  orderSidebarSearchThreadMatches,
 } from "./SidebarSearchPalette.logic";
 import { useTheme } from "../hooks/useTheme";
 import { getAvailableCodeThemes, getCodeThemeSeed } from "../theme/theme.logic";
@@ -518,31 +519,57 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
   const [debouncedThreadQuery] = useDebouncedValue(trimmedQuery, {
     wait: THREAD_SEARCH_DEBOUNCE_MS,
   });
-  const { data: serverThreadSearch } = useQuery({
-    queryKey: ["sidebar-palette-thread-search", debouncedThreadQuery],
-    queryFn: async () => {
+  const threadSearchEnabled =
+    props.open &&
+    props.mode === "search" &&
+    !isBrowsing &&
+    trimmedQuery === debouncedThreadQuery &&
+    trimmedQuery.length >= ORCHESTRATION_SEARCH_THREADS_MIN_QUERY_LENGTH;
+  const queryClient = useQueryClient();
+  const threadSearchKey = useMemo(
+    () => ["sidebar-palette-thread-search", trimmedQuery, props.mode],
+    [trimmedQuery, props.mode],
+  );
+  const threadSearch = useInfiniteQuery({
+    queryKey: threadSearchKey,
+    initialPageParam: "",
+    queryFn: async ({ pageParam, signal }) => {
       const api = readNativeApi();
-      if (!api) return null;
-      const result = await api.orchestration.searchThreads({
-        query: debouncedThreadQuery,
-        limit: ORCHESTRATION_SEARCH_THREADS_MAX_LIMIT,
-      });
-      return { query: debouncedThreadQuery, matches: result.matches };
+      if (!api) throw new Error("Connection unavailable");
+      return await api.orchestration.searchThreads(
+        {
+          query: trimmedQuery,
+          limit: ORCHESTRATION_SEARCH_THREADS_MAX_LIMIT,
+          ...(pageParam ? { cursor: pageParam } : {}),
+        },
+        { signal },
+      );
     },
-    enabled:
-      props.open &&
-      props.mode === "search" &&
-      !isBrowsing &&
-      debouncedThreadQuery.length >= ORCHESTRATION_SEARCH_THREADS_MIN_QUERY_LENGTH,
+    getNextPageParam: (lastPage) => lastPage.nextCursor || undefined,
+    enabled: threadSearchEnabled,
     staleTime: THREAD_SEARCH_STALE_TIME_MS,
-    placeholderData: (previous) => previous,
+    gcTime: 0,
+    retry: false,
+    refetchOnWindowFocus: false,
   });
+  useEffect(
+    () => () => {
+      void queryClient.cancelQueries({ queryKey: threadSearchKey, exact: true });
+    },
+    [queryClient, threadSearchKey, props.open],
+  );
   const serverThreadMatches = useMemo(
     () =>
-      trimmedQuery.length >= ORCHESTRATION_SEARCH_THREADS_MIN_QUERY_LENGTH
-        ? buildSidebarSearchServerThreadMatches(serverThreadSearch, trimmedQuery)
-        : undefined,
-    [serverThreadSearch, trimmedQuery],
+      buildSidebarSearchServerThreadMatches(
+        threadSearch.data
+          ? {
+              query: trimmedQuery,
+              matches: threadSearch.data.pages.flatMap((page) => page.matches),
+            }
+          : null,
+        trimmedQuery,
+      ),
+    [threadSearch.data, trimmedQuery],
   );
   const matchedSettings = isBrowsing ? [] : rankSettingsSearchEntries(query, 12);
   // Scoring normalizes and scans every message of every thread; keep it keyed
@@ -583,7 +610,10 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
         combined.set(id, match);
       }
     }
-    return matchSidebarSearchThreads(props.threads, query, undefined, combined, "");
+    const matches = matchSidebarSearchThreads(props.threads, query, undefined, combined, "");
+    return threadSearch.data
+      ? orderSidebarSearchThreadMatches(matches, serverThreadMatches, threadSearch.hasNextPage)
+      : matches;
   }, [
     isBrowsing,
     props.mode,
@@ -592,9 +622,21 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
     trimmedQuery,
     serverThreadMatches,
     localThreadSearch,
+    threadSearch.data,
+    threadSearch.hasNextPage,
   ]);
   const [threadPage, setThreadPage] = useState({ query: "", limit: 20 });
   const threadResultLimit = threadPage.query === query ? threadPage.limit : 20;
+  const showMoreThreads = async () => {
+    if (threadSearch.isFetching || (!threadSearchEnabled && threadSearch.hasNextPage)) return;
+    const limit = threadResultLimit + 20;
+    if (limit > matchedThreads.length && threadSearch.hasNextPage) {
+      const pageCount = threadSearch.data?.pages.length ?? 0;
+      const next = await threadSearch.fetchNextPage({ cancelRefetch: false });
+      if (next.isError || (next.data?.pages.length ?? 0) <= pageCount) return;
+    }
+    setThreadPage({ query, limit });
+  };
   const hasSearchResults =
     matchedActions.length > 0 ||
     themeCommandItems.length > 0 ||
@@ -1150,10 +1192,12 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                   </CommandGroup>
                 ) : null}
 
-                {!isBrowsing && matchedThreads.length > threadResultLimit ? (
+                {!isBrowsing &&
+                (matchedThreads.length > threadResultLimit || threadSearch.hasNextPage) ? (
                   <CommandItem
                     value="more-thread-results"
-                    onClick={() => setThreadPage({ query, limit: threadResultLimit + 20 })}
+                    disabled={threadSearch.isFetching}
+                    onClick={() => void showMoreThreads()}
                   >
                     Show more chats
                   </CommandItem>
@@ -1387,9 +1431,28 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                       </div>
                     </>
                   )
-                ) : !hasSearchResults ? (
-                  <div className={PALETTE_STATUS_CLASS}>No results.</div>
-                ) : null}
+                ) : (
+                  <>
+                    {threadSearch.isFetchingNextPage ? (
+                      <div className={PALETTE_STATUS_CLASS}>Loading more chats...</div>
+                    ) : threadSearchEnabled && threadSearch.isFetching ? (
+                      <div className={PALETTE_STATUS_CLASS}>Searching chats...</div>
+                    ) : threadSearch.error ? (
+                      <div className={PALETTE_STATUS_CLASS}>
+                        {threadSearch.isFetchNextPageError
+                          ? "Could not load more chats. Use Show more chats to retry."
+                          : "Could not search chats."}
+                        {!threadSearch.isFetchNextPageError ? (
+                          <button type="button" onClick={() => void threadSearch.refetch()}>
+                            Retry
+                          </button>
+                        ) : null}
+                      </div>
+                    ) : !hasSearchResults ? (
+                      <div className={PALETTE_STATUS_CLASS}>No results.</div>
+                    ) : null}
+                  </>
+                )}
               </CommandStatus>
             </Command>
           </>
