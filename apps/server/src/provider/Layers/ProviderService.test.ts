@@ -2542,6 +2542,52 @@ routing.layer("ProviderServiceLive routing", (it) => {
   });
 
   staleSettlementRouting.layer("ProviderServiceLive stale-generation settlement", (it) => {
+    it.effect("publishes stopped state when idle cleanup rotates the runtime generation", () =>
+      Effect.gen(function* () {
+        const provider = yield* ProviderService;
+        const directory = yield* ProviderSessionDirectory;
+        const threadId = asThreadId("thread-idle-stop-projection");
+        yield* staleSettlementRouting.codex.waitForRuntimeSubscribers();
+        yield* provider.startSession(threadId, {
+          provider: "codex",
+          threadId,
+          cwd: "/tmp/project",
+          runtimeMode: "full-access",
+        });
+        const oldGeneration = Option.getOrUndefined(
+          yield* directory.getBinding(threadId),
+        )?.lifecycleGeneration;
+        yield* provider.stopRuntimeSession!({ threadId });
+        staleSettlementRouting.codex.emit({
+          type: "session.exited",
+          eventId: asEventId("idle-stop-late-close"),
+          provider: "codex",
+          threadId,
+          createdAt: new Date().toISOString(),
+          lifecycleGeneration: oldGeneration!,
+          payload: { exitKind: "graceful" },
+        });
+        yield* waitUntil(
+          () =>
+            [...staleSettlementPersistedEvents.values()].some(
+              (event) =>
+                event.threadId === threadId &&
+                event.type === "session.state.changed" &&
+                event.payload.state === "stopped",
+            ),
+          500,
+          10,
+          "durable idle stopped status",
+        );
+        const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+        assert.equal(binding?.status, "stopped");
+        assert.equal(
+          asRuntimePayloadRecord(binding?.runtimePayload).lastRuntimeEvent,
+          "provider.stopRuntimeSession",
+        );
+      }),
+    );
+
     it.effect("processes stale terminal events when no lifecycle generation is current", () =>
       Effect.gen(function* () {
         const provider = yield* ProviderService;

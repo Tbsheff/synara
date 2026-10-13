@@ -4627,6 +4627,25 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             if (!isExpectedIdleStopCurrent()) {
               return;
             }
+            yield* processRuntimeEvent({
+              type: "session.state.changed",
+              eventId: EventId.makeUnsafe(`runtime-stop:${lease.generation}`),
+              provider: binding.provider,
+              threadId: input.threadId,
+              createdAt: new Date().toISOString(),
+              lifecycleGeneration: lease.generation,
+              payload: { state: "stopped" },
+            }).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new ProviderAdapterProcessError({
+                    provider: binding.provider,
+                    threadId: input.threadId,
+                    detail: "Failed to publish the stopped provider runtime status.",
+                    cause,
+                  }),
+              ),
+            );
             clearLiveRuntimeTasks(input.threadId);
             yield* withBindingWriteLock(
               input.threadId,
