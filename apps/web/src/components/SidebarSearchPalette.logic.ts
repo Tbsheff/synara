@@ -397,7 +397,10 @@ export function buildSidebarSearchServerThreadMatches(
   const queryTokens = tokenizeQuery(query);
   for (const { threadId, excerpt, matchCount, localScore } of result.matches) {
     const normalizedExcerpt = normalizeText(excerpt);
-    if (isCurrent || queryTokens.every((token) => normalizedExcerpt.includes(token))) {
+    if (
+      !serverMatches.has(threadId) &&
+      (isCurrent || queryTokens.every((token) => normalizedExcerpt.includes(token)))
+    ) {
       serverMatches.set(threadId, {
         excerpt,
         matchCount,
@@ -406,6 +409,32 @@ export function buildSidebarSearchServerThreadMatches(
     }
   }
   return serverMatches;
+}
+
+export function orderSidebarSearchThreadMatches(
+  matches: readonly SidebarSearchThreadMatch[],
+  serverMatches: ReadonlyMap<string, SidebarSearchServerThreadMatch>,
+  hasNextPage: boolean,
+): SidebarSearchThreadMatch[] {
+  const result = matches.filter((match) => match.matchKind !== "message");
+  const seen = new Set(result.map((match) => match.thread.id));
+  const byId = new Map(matches.map((match) => [match.thread.id, match]));
+  for (const id of serverMatches.keys()) {
+    const match = byId.get(id);
+    if (match && !seen.has(id)) {
+      result.push(match);
+      seen.add(id);
+    }
+  }
+  if (!hasNextPage) {
+    for (const match of matches) {
+      if (!seen.has(match.thread.id)) {
+        result.push(match);
+        seen.add(match.thread.id);
+      }
+    }
+  }
+  return result;
 }
 
 // A server hit matched every query token somewhere in the message; its excerpt

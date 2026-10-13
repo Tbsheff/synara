@@ -36,15 +36,17 @@ is cancelled, the task and its prompt remain available for retry.
   across saved chats, including chats not recently opened. Archived chats appear in title
   and loaded-message results with an Archived label; persisted message search excludes them
   by default. Deleted and subagent chats stay out of results. The palette shows 20 chats
-  per page, with Show more for further matches in the current result set. A message result
-  opens Find in thread with the search query and jumps to the first loaded match.
+  at first. Show more reveals further matches and loads the next server page when needed.
+  Body results keep the server's order without duplicate chats. Changing the query cancels
+  pending pages and starts a new search. A message result opens Find in thread with the
+  search query and jumps to the first loaded match.
   Every search word must match the message body; the server returns at most 50 hits per page
   with short excerpts. Message matching ignores ASCII letter case.
   The search API accepts the previous page's `nextCursor` as `cursor` and can include archived
   chats with `includeArchived: true`. Each message hit includes its `messageId` and archive state.
-  The palette must opt into these API options to load more server pages, include archived
-  persisted-message results, or jump to the exact saved message. The server scans saved bodies
-  in chunks so writes can run between reads.
+  The palette uses the cursor to load more server pages. Including archived persisted-message
+  results or jumping to the exact saved message requires the other API options. The server
+  scans saved bodies in chunks so writes can run between reads.
   Archiving the open thread or marking it **Done** opens the most recently used unfinished chat
   across projects, ordered by its last human message (or creation time). If none remains, New
   thread reopens an unsent draft. Actions on other threads keep the current chat open.
