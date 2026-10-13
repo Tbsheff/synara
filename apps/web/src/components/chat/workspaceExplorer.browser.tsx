@@ -14,12 +14,18 @@ afterEach(async () => {
   restoreApi?.();
 });
 
-function Harness({ onSelectFile = () => undefined }: { onSelectFile?: (path: string) => void }) {
+function Harness({
+  onSelectFile = () => undefined,
+  selectedFilePath = null,
+}: {
+  onSelectFile?: (path: string) => void;
+  selectedFilePath?: string | null;
+}) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   return (
     <WorkspaceFilesSidebar
       workspaceRoot="/fixture"
-      selectedFilePath={null}
+      selectedFilePath={selectedFilePath}
       expandedDirectories={expanded}
       containerClassName="flex h-full w-64 flex-col"
       onSelectFile={onSelectFile}
@@ -38,6 +44,7 @@ function Harness({ onSelectFile = () => undefined }: { onSelectFile?: (path: str
 async function mount(
   entries: ProjectFileSystemEntry[],
   childEntries: ProjectFileSystemEntry[] = [],
+  selectedFilePath: string | null = null,
 ) {
   const readFile = vi.fn().mockResolvedValue({ contents: "synthetic", relativePath: "file.txt" });
   const listDirectories = vi
@@ -59,7 +66,7 @@ async function mount(
   await render(
     <QueryClientProvider client={client}>
       <div style={{ height: 400 }}>
-        <Harness onSelectFile={selected} />
+        <Harness onSelectFile={selected} selectedFilePath={selectedFilePath} />
       </div>
     </QueryClientProvider>,
   );
@@ -126,4 +133,25 @@ it("bounds wide folder rows and reaches offscreen files with keyboard, scroll, a
   await userEvent.keyboard("{Home}{Enter}");
   await expect.element(page.getByRole("button", { name: "wide", exact: true })).toHaveFocus();
   await expect.poll(() => document.querySelectorAll("[data-explorer-row]").length).toBe(1);
+});
+
+it("scrolls a selected offscreen file into view and measures rows at the chosen UI size", async () => {
+  const entries: ProjectFileSystemEntry[] = Array.from({ length: 5000 }, (_, index) => ({
+    path: `entry-${String(index).padStart(4, "0")}.txt`,
+    name: `entry-${String(index).padStart(4, "0")}.txt`,
+    kind: "file",
+  }));
+  const previous = document.documentElement.style.getPropertyValue("--app-font-size-ui-sm");
+  document.documentElement.style.setProperty("--app-font-size-ui-sm", "22px");
+  try {
+    await mount(entries, [], "entry-4999.txt");
+    const last = page.getByRole("button", { name: "entry-4999.txt", exact: true });
+    await expect.element(last).toBeVisible();
+    await expect.poll(() => last.element().getBoundingClientRect().bottom).toBeLessThanOrEqual(400);
+    expect(document.querySelectorAll("[data-explorer-row]").length).toBeLessThan(100);
+    expect(getComputedStyle(last.element()).fontSize).toBe("22px");
+  } finally {
+    if (previous) document.documentElement.style.setProperty("--app-font-size-ui-sm", previous);
+    else document.documentElement.style.removeProperty("--app-font-size-ui-sm");
+  }
 });

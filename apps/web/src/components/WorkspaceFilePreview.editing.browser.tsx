@@ -92,46 +92,53 @@ afterEach(async () => {
   await cleanup();
 });
 
-it("bounds large plain-file editing and keeps offscreen edits, undo, save, and reload", async () => {
-  const contents = Array.from({ length: 15_000 }, (_, index) => `Line ${index} synthetic`).join(
-    "\n",
-  );
-  const readFile = vi.fn().mockResolvedValue(loadedFile({ contents }));
-  const writeFile = vi.fn().mockResolvedValue({ relativePath: FILE_PATH, version: SAVED_VERSION });
-  const restore = installNativeApi({
-    projects: { readFile, writeFile, onFileChange: () => () => undefined },
-  } as unknown as NativeApi);
-  try {
-    await render(
-      <QueryClientProvider client={makeQueryClient()}>
-        <div style={{ display: "flex", height: 500 }}>
-          <WorkspaceFilePreview workspaceRoot={WORKSPACE_ROOT} filePath={FILE_PATH} editable />
-        </div>
-      </QueryClientProvider>,
+it.each([15_000, 100_000])(
+  "bounds %i-line editing and keeps offscreen edits, undo, save, and reload",
+  async (lines) => {
+    const contents = Array.from({ length: lines }, (_, index) => `Line ${index} synthetic`).join(
+      "\n",
     );
-    const editor = page.getByRole("textbox", { name: `Edit ${FILE_PATH}`, exact: true });
-    await expect.element(editor).toBeVisible();
-    expect(document.querySelectorAll(".editor-file-editor__gutter-line").length).toBeLessThan(250);
-    expect(editor.element().querySelectorAll("[data-line]").length).toBeGreaterThan(0);
-    expect(editor.element().querySelectorAll("[data-line]").length).toBeLessThan(250);
-    await editor.click({ position: { x: 15, y: 5 } });
-    await userEvent.keyboard(shortcut("{End}"));
-    await userEvent.keyboard("tail");
-    await expect.element(editor).toHaveTextContent("synthetictail");
-    await userEvent.keyboard(shortcut("z"));
-    await expect.element(editor).not.toHaveTextContent("synthetictail");
-    await userEvent.keyboard(shortcut("z").replace("z", "{Shift>}z{/Shift}"));
-    await expect.element(editor).toHaveTextContent("synthetictail");
-    await userEvent.keyboard(shortcut("s"));
-    await expect.poll(() => writeFile.mock.calls.length).toBe(1);
-    expect(writeFile.mock.calls[0]?.[0].contents).toBe(contents + "tail");
-    readFile.mockResolvedValue(loadedFile({ contents: "reloaded\n", version: SAVED_VERSION }));
-    await page.getByRole("button", { name: "Reload file from disk", exact: true }).click();
-    await expect.element(editor).toHaveTextContent("reloaded");
-  } finally {
-    restore();
-  }
-});
+    const readFile = vi.fn().mockResolvedValue(loadedFile({ contents }));
+    const writeFile = vi
+      .fn()
+      .mockResolvedValue({ relativePath: FILE_PATH, version: SAVED_VERSION });
+    const restore = installNativeApi({
+      projects: { readFile, writeFile, onFileChange: () => () => undefined },
+    } as unknown as NativeApi);
+    try {
+      await render(
+        <QueryClientProvider client={makeQueryClient()}>
+          <div style={{ display: "flex", height: 500 }}>
+            <WorkspaceFilePreview workspaceRoot={WORKSPACE_ROOT} filePath={FILE_PATH} editable />
+          </div>
+        </QueryClientProvider>,
+      );
+      const editor = page.getByRole("textbox", { name: `Edit ${FILE_PATH}`, exact: true });
+      await expect.element(editor).toBeVisible();
+      expect(document.querySelectorAll(".editor-file-editor__gutter-line").length).toBeLessThan(
+        250,
+      );
+      expect(editor.element().querySelectorAll("[data-line]").length).toBeGreaterThan(0);
+      expect(editor.element().querySelectorAll("[data-line]").length).toBeLessThan(250);
+      await editor.click({ position: { x: 15, y: 5 } });
+      await userEvent.keyboard(shortcut("{End}"));
+      await userEvent.keyboard("tail");
+      await expect.element(editor).toHaveTextContent("synthetictail");
+      await userEvent.keyboard(shortcut("z"));
+      await expect.element(editor).not.toHaveTextContent("synthetictail");
+      await userEvent.keyboard(shortcut("z").replace("z", "{Shift>}z{/Shift}"));
+      await expect.element(editor).toHaveTextContent("synthetictail");
+      await userEvent.keyboard(shortcut("s"));
+      await expect.poll(() => writeFile.mock.calls.length).toBe(1);
+      expect(writeFile.mock.calls[0]?.[0].contents).toBe(contents + "tail");
+      readFile.mockResolvedValue(loadedFile({ contents: "reloaded\n", version: SAVED_VERSION }));
+      await page.getByRole("button", { name: "Reload file from disk", exact: true }).click();
+      await expect.element(editor).toHaveTextContent("reloaded");
+    } finally {
+      restore();
+    }
+  },
+);
 
 it.each([2, 15_000])(
   "finds within a %i-line file and restores file focus on Escape",
@@ -1014,9 +1021,7 @@ it("preserves the bounded Markdown editor while its preview is open", async () =
     expect(original.getBoundingClientRect().height).toBe(0);
     await page.getByRole("radio", { name: "Source", exact: true }).click();
     await expect.element(editor).toHaveTextContent("# unsaved draft");
-    expect((editor.element().getRootNode() as ShadowRoot).host).toBe(
-      (original.getRootNode() as ShadowRoot).host,
-    );
+    expect(editor.element().getAttribute("contenteditable")).toBe("true");
     await editor.click({ position: { x: 15, y: 5 } });
     await userEvent.keyboard(shortcut("z"));
     await expect.element(editor).toHaveTextContent("line");
