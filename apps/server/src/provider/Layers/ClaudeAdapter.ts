@@ -183,6 +183,7 @@ import {
   claudeToolProgressItemType,
 } from "../claudeToolClassification.ts";
 import {
+  buildClaudeProposedFileChanges,
   buildClaudeServerToolResultDetails,
   buildClaudeToolResultDetails,
   buildClaudeToolStartDetails,
@@ -7245,6 +7246,12 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               };
 
               const requestedStamp = yield* makeEventStamp();
+              const fileChanges = yield* buildClaudeProposedFileChanges(
+                fileSystem,
+                toolName,
+                toolInput,
+                context.session.cwd ?? serverConfig.cwd,
+              );
               yield* offerRuntimeEvent(context, {
                 type: "request.opened",
                 eventId: requestedStamp.eventId,
@@ -7261,6 +7268,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
                   args: {
                     toolName,
                     input: toolInput,
+                    ...(fileChanges ? { fileChanges } : {}),
                     sessionApprovalAvailable: sessionPermissionUpdates.length > 0,
                     ...(callbackOptions.toolUseID ? { toolUseId: callbackOptions.toolUseID } : {}),
                     ...claudePermissionPromptFields(callbackOptions),
@@ -7296,6 +7304,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               callbackOptions.signal.addEventListener("abort", onAbort, {
                 once: true,
               });
+              if (callbackOptions.signal.aborted) onAbort();
 
               const decision = yield* Deferred.await(decisionDeferred).pipe(
                 Effect.ensuring(

@@ -69,6 +69,10 @@ file edits and routine file commands and still asks for other commands. Only Cla
 this choice. The server refuses it for other providers. Thread runtime mode remains the
 source of Claude permission mode; saved provider-option overrides cannot grant more access.
 
+Claude edit approvals show the proposed file diff before the user decides. The preview
+does not write the file. Large or unreadable files show a preview limit; notebook edits
+show a partial cell diff. The existing approval card renders these previews.
+
 Pi and Antigravity do not offer Synara Plan mode or Ask for approval. Select Full access
 explicitly to use these providers. Changing providers does not grant more access to a saved
 thread or draft. Oh My Pi keeps its existing mode choices.

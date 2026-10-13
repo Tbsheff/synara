@@ -8456,6 +8456,73 @@ await agent("Draft the spec", { label: "delta-agent", phase: "Two" });
     },
   );
 
+  it.effect.each([
+    { toolName: "Edit", input: { old_string: "old", new_string: "new" }, original: "old\n" },
+    {
+      toolName: "MultiEdit",
+      input: { edits: [{ old_string: "old", new_string: "new" }] },
+      original: "old\n",
+    },
+    { toolName: "Write", input: { content: "new\n" }, original: "old\n" },
+    { toolName: "Write", input: { content: "new\n" }, original: undefined },
+  ])("sends a proposed $toolName diff before approval", ({ toolName, input, original }) => {
+    const directory = mkdtempSync(path.join(os.tmpdir(), "synara-claude-approval-diff-"));
+    const filePath = path.join(directory, "preview.txt");
+    if (original !== undefined) writeFileSync(filePath, original);
+    const harness = makeHarness({ cwd: directory });
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "approval-required",
+        cwd: directory,
+      });
+      yield* Stream.take(adapter.streamEvents, 3).pipe(Stream.runDrain);
+      const canUseTool = harness.getLastCreateQueryInput()!.options.canUseTool!;
+      const permission = canUseTool(
+        toolName,
+        { file_path: "preview.txt", ...input },
+        {
+          signal: new AbortController().signal,
+          toolUseID: "preview-edit",
+          requestId: "preview-request",
+        },
+      );
+      const requested = yield* Stream.runHead(adapter.streamEvents);
+      if (requested._tag !== "Some" || requested.value.type !== "request.opened") {
+        return assert.fail("Expected an edit approval request.");
+      }
+      assert.deepEqual((requested.value.payload.args as Record<string, unknown>).fileChanges, {
+        changes: [
+          {
+            path: "preview.txt",
+            kind: original === undefined ? "add" : "update",
+            additions: 1,
+            deletions: original === undefined ? 0 : 1,
+            unifiedDiff:
+              original === undefined
+                ? "--- /dev/null\n+++ preview.txt\n@@ -0,0 +1,1 @@\n+new"
+                : "--- preview.txt\n+++ preview.txt\n@@ -1,1 +1,1 @@\n-old\n+new",
+          },
+        ],
+        totalFiles: 1,
+      });
+      yield* adapter.respondToRequest(
+        session.threadId,
+        ApprovalRequestId.makeUnsafe(String(requested.value.requestId)),
+        "decline",
+      );
+      yield* Stream.runHead(adapter.streamEvents);
+      assert.equal((yield* Effect.promise(() => permission))?.behavior, "deny");
+      if (original !== undefined) assert.equal(readFileSync(filePath, "utf8"), original);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+      Effect.ensuring(Effect.sync(() => rmSync(directory, { recursive: true, force: true }))),
+    );
+  });
+
   it.effect("keeps credential values out of the tool approval detail", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
