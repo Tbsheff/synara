@@ -7,7 +7,8 @@
 
 import type { ProjectEntry, ProjectFileSystemEntry } from "@synara/contracts";
 import { useDebouncedValue } from "@tanstack/react-pacer";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
+import { defaultRangeExtractor, useVirtualizer } from "@tanstack/react-virtual";
 import {
   type ComponentPropsWithoutRef,
   type DragEvent as ReactDragEvent,
@@ -15,6 +16,10 @@ import {
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
   forwardRef,
+  useEffect,
+  useRef,
+  useState,
+  useLayoutEffect,
 } from "react";
 
 import {
@@ -36,7 +41,11 @@ import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collaps
 import { DisclosureChevron } from "../ui/DisclosureChevron";
 import { SearchInput } from "../ui/search-input";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import { EXPLORER_ROW_PROPS, useExplorerListNavigation } from "./explorerListNavigation";
+import {
+  EXPLORER_ROW_PROPS,
+  nextExplorerRowIndex,
+  useExplorerListNavigation,
+} from "./explorerListNavigation";
 import { FileEntryIcon } from "./FileEntryIcon";
 import { fileRowClassName, fileRowIndentStyle } from "./fileRowStyles";
 import { PanelStateMessage } from "./PanelStateMessage";
@@ -94,24 +103,45 @@ function shouldShowExplorerEntry(entry: ProjectFileSystemEntry): boolean {
  */
 export function useExplorerEntryPrefetch(cwd: string | null) {
   const queryClient = useQueryClient();
-  return (entry: Pick<ProjectFileSystemEntry, "path" | "kind">) => {
-    if (!cwd) {
-      return;
-    }
-    if (entry.kind === "directory") {
+  const pending = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cancel = () => {
+    if (pending.current !== null) clearTimeout(pending.current);
+    pending.current = null;
+  };
+  useEffect(() => cancel, [cwd]);
+  return (
+    entry: Pick<ProjectFileSystemEntry, "path" | "kind">,
+    intent: "hover" | "cancel" | "focus" = "focus",
+  ) => {
+    cancel();
+    if (intent === "cancel") return;
+    const prefetch = () => {
+      pending.current = null;
+      if (!cwd) {
+        return;
+      }
+      if (entry.kind === "directory") {
+        void queryClient.prefetchQuery(
+          projectListDirectoriesQueryOptions({
+            cwd,
+            relativePath: entry.path,
+            includeFiles: true,
+            includeChildHints: false,
+          }),
+        );
+        return;
+      }
       void queryClient.prefetchQuery(
-        projectListDirectoriesQueryOptions({
-          cwd,
-          relativePath: entry.path,
-          includeFiles: true,
-        }),
+        projectReadFileQueryOptions({ cwd, relativePath: entry.path }),
       );
-      return;
-    }
-    void queryClient.prefetchQuery(projectReadFileQueryOptions({ cwd, relativePath: entry.path }));
-    void getSyntaxHighlighterPromise(getSyntaxLanguageForPath(entry.path)).catch(() => undefined);
+      void getSyntaxHighlighterPromise(getSyntaxLanguageForPath(entry.path)).catch(() => undefined);
+    };
+    if (intent === "hover") pending.current = setTimeout(prefetch, 180);
+    else prefetch();
   };
 }
+
+type ExplorerEntryPrefetch = ReturnType<typeof useExplorerEntryPrefetch>;
 
 // Forwards its ref and spreads incoming props so directory rows can act as the
 // Collapsible trigger (Base UI injects onClick/aria/data + ref onto this element).
@@ -123,7 +153,7 @@ const ExplorerRow = forwardRef<
     selected: boolean;
     expanded: boolean;
     onSelectFile: (path: string) => void;
-    onPrefetchEntry: (entry: ProjectFileSystemEntry) => void;
+    onPrefetchEntry: ExplorerEntryPrefetch;
     onEntryContextMenu: (entry: ProjectFileSystemEntry, position: { x: number; y: number }) => void;
   } & ComponentPropsWithoutRef<"button">
 >(function ExplorerRow(
@@ -166,6 +196,7 @@ const ExplorerRow = forwardRef<
     <button
       {...rest}
       {...EXPLORER_ROW_PROPS}
+      data-explorer-path={entry.path}
       ref={ref}
       type="button"
       className={fileRowClassName(selected, cn("h-7 pr-2", className))}
@@ -174,7 +205,9 @@ const ExplorerRow = forwardRef<
       draggable
       onDragStart={handleDragStart}
       onClick={handleClick}
-      onPointerEnter={handlePrefetch}
+      onPointerEnter={() => onPrefetchEntry(entry, "hover")}
+      onPointerLeave={() => onPrefetchEntry(entry, "cancel")}
+      onBlur={() => onPrefetchEntry(entry, "cancel")}
       onFocus={handlePrefetch}
       onContextMenu={handleContextMenu}
     >
@@ -220,7 +253,7 @@ function WorkspaceDirectory(props: {
   expandedDirectories: ReadonlySet<string>;
   onSelectFile: (path: string) => void;
   onToggleDirectory: (path: string) => void;
-  onPrefetchEntry: (entry: ProjectFileSystemEntry) => void;
+  onPrefetchEntry: ExplorerEntryPrefetch;
   onEntryContextMenu: (entry: ProjectFileSystemEntry, position: { x: number; y: number }) => void;
 }) {
   const query = useQuery(
@@ -228,6 +261,7 @@ function WorkspaceDirectory(props: {
       cwd: props.cwd,
       relativePath: props.relativePath,
       includeFiles: true,
+      includeChildHints: false,
     }),
   );
 
@@ -323,18 +357,170 @@ function useResultEntryContextMenu(
 
 // Scrollable file-tree body, shared by the standalone files sidebar and the
 // combined explorer sidebar (which shows it whenever the search box is empty).
-function WorkspaceFilesTreeBody(props: {
+type WorkspaceFilesTreeProps = {
   workspaceRoot: string | null;
   selectedFilePath: string | null;
   expandedDirectories: ReadonlySet<string>;
   onSelectFile: (path: string) => void;
   onToggleDirectory: (path: string) => void;
-  onPrefetchEntry: (entry: ProjectFileSystemEntry) => void;
+  onPrefetchEntry: ExplorerEntryPrefetch;
   onEntryContextMenu: (entry: ProjectFileSystemEntry, position: { x: number; y: number }) => void;
-}) {
+};
+
+function WorkspaceFilesTree(props: WorkspaceFilesTreeProps & { workspaceRoot: string }) {
+  const paths = [
+    null,
+    ...Array.from(props.expandedDirectories).filter((path) => {
+      const parts = path.split("/");
+      if (
+        parts.some(
+          (name) => name.startsWith(".synara") || EXPLORER_HIDDEN_DIRECTORY_NAMES.has(name),
+        )
+      )
+        return false;
+      return parts
+        .slice(0, -1)
+        .every((_, index) => props.expandedDirectories.has(parts.slice(0, index + 1).join("/")));
+    }),
+  ];
+  const queries = useQueries({
+    queries: paths.map((relativePath) =>
+      projectListDirectoriesQueryOptions({
+        cwd: props.workspaceRoot,
+        relativePath,
+        includeFiles: true,
+        includeChildHints: false,
+      }),
+    ),
+  });
+  const byPath = new Map(paths.map((path, index) => [path, queries[index]!]));
+  type Row = { key: string; depth: number } & (
+    | { entry: ProjectFileSystemEntry; message?: never }
+    | { entry?: never; message: string }
+  );
+  const rows: Row[] = [];
+  const appendDirectory = (path: string | null, depth: number) => {
+    const query = byPath.get(path);
+    if (!query || query.isLoading || query.isPlaceholderData) {
+      rows.push({ key: `loading:${path}`, depth, message: "Loading directory..." });
+      return;
+    }
+    if (query.error) {
+      rows.push({ key: `error:${path}`, depth, message: query.error.message });
+      return;
+    }
+    for (const entry of (query.data?.entries ?? []).filter(shouldShowExplorerEntry)) {
+      rows.push({ key: entry.path, depth, entry });
+      if (entry.kind === "directory" && props.expandedDirectories.has(entry.path))
+        appendDirectory(entry.path, depth + 1);
+    }
+  };
+  appendDirectory(null, 0);
+  const virtual = rows.length > 200;
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [focusedPath, setFocusedPath] = useState<string | null>(null);
+  const pendingFocus = useRef<string | null>(null);
+  const wasVirtual = useRef(virtual);
+  if (wasVirtual.current !== virtual) {
+    pendingFocus.current = focusedPath;
+    wasVirtual.current = virtual;
+  }
+  const focusedIndex = rows.findIndex((row) => row.key === focusedPath);
+  const virtualizer = useVirtualizer({
+    count: rows.length,
+    getScrollElement: () => scrollRef.current,
+    getItemKey: (index) => rows[index]!.key,
+    estimateSize: () => 28,
+    overscan: 8,
+    enabled: virtual,
+    rangeExtractor: (range) => {
+      const indexes = defaultRangeExtractor(range);
+      if (focusedIndex >= 0 && !indexes.includes(focusedIndex)) indexes.push(focusedIndex);
+      return indexes.sort((a, b) => a - b);
+    },
+  });
+  const virtualRows = virtualizer.getVirtualItems();
+  const selectedIndex = rows.findIndex((row) => row.key === props.selectedFilePath);
+  useLayoutEffect(() => {
+    const path = pendingFocus.current;
+    if (!path) return;
+    const row = Array.from(
+      scrollRef.current?.querySelectorAll<HTMLButtonElement>("[data-explorer-path]") ?? [],
+    ).find((row) => row.dataset.explorerPath === path);
+    if (row) {
+      pendingFocus.current = null;
+      row.focus({ preventScroll: true });
+    }
+  });
+  useEffect(() => {
+    if (virtual && selectedIndex >= 0) virtualizer.scrollToIndex(selectedIndex, { align: "auto" });
+  }, [selectedIndex, virtual, virtualizer]);
+
   return (
-    <div className="min-h-0 flex-1 overflow-auto px-1 py-1">
-      {props.workspaceRoot ? (
+    <div
+      ref={scrollRef}
+      className="min-h-0 flex-1 overflow-auto px-1 py-1"
+      onFocusCapture={(event) => {
+        const path = (event.target as HTMLElement).dataset.explorerPath;
+        if (path) setFocusedPath(path);
+      }}
+      onKeyDown={(event) => {
+        if (!virtual || event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey)
+          return;
+        const key = event.key;
+        if (key !== "ArrowDown" && key !== "ArrowUp" && key !== "Home" && key !== "End") return;
+        const entryIndexes = rows.flatMap((row, index) => (row.entry ? [index] : []));
+        const current = entryIndexes.indexOf(focusedIndex);
+        const next = entryIndexes[nextExplorerRowIndex(key, current, entryIndexes.length)];
+        if (next === undefined) return;
+        event.preventDefault();
+        pendingFocus.current = rows[next]!.key;
+        setFocusedPath(rows[next]!.key);
+        virtualizer.scrollToIndex(next, { align: "auto" });
+      }}
+    >
+      {virtual ? (
+        <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
+          {virtualRows.map((item) => {
+            const row = rows[item.index]!;
+            return (
+              <div
+                key={row.key}
+                data-index={item.index}
+                ref={virtualizer.measureElement}
+                className="absolute left-0 top-0 w-full"
+                style={{ transform: `translateY(${item.start}px)` }}
+              >
+                {row.entry ? (
+                  <ExplorerRow
+                    entry={row.entry}
+                    depth={row.depth}
+                    selected={row.entry.path === props.selectedFilePath}
+                    expanded={props.expandedDirectories.has(row.entry.path)}
+                    aria-expanded={
+                      row.entry.kind === "directory"
+                        ? props.expandedDirectories.has(row.entry.path)
+                        : undefined
+                    }
+                    onClick={
+                      row.entry.kind === "directory"
+                        ? () => props.onToggleDirectory(row.entry.path)
+                        : undefined
+                    }
+                    onSelectFile={props.onSelectFile}
+                    onPrefetchEntry={props.onPrefetchEntry}
+                    onEntryContextMenu={props.onEntryContextMenu}
+                  />
+                ) : (
+                  <p className="h-7 truncate px-3 text-ui-sm text-muted-foreground" role="status">
+                    {row.message}
+                  </p>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      ) : (
         <WorkspaceDirectory
           cwd={props.workspaceRoot}
           relativePath={null}
@@ -346,12 +532,26 @@ function WorkspaceFilesTreeBody(props: {
           onPrefetchEntry={props.onPrefetchEntry}
           onEntryContextMenu={props.onEntryContextMenu}
         />
+      )}
+    </div>
+  );
+}
+
+function WorkspaceFilesTreeBody(props: WorkspaceFilesTreeProps) {
+  return (
+    <>
+      {props.workspaceRoot ? (
+        <WorkspaceFilesTree
+          key={props.workspaceRoot}
+          {...props}
+          workspaceRoot={props.workspaceRoot}
+        />
       ) : (
         <PanelStateMessage density="compact" fill="flex">
           <p>No workspace.</p>
         </PanelStateMessage>
       )}
-    </div>
+    </>
   );
 }
 
@@ -389,7 +589,7 @@ function WorkspaceSearchResultRow(props: {
   entry: ProjectEntry;
   selected: boolean;
   onSelectFile: (path: string) => void;
-  onPrefetchEntry: (entry: Pick<ProjectFileSystemEntry, "path" | "kind">) => void;
+  onPrefetchEntry: ExplorerEntryPrefetch;
   onEntryContextMenu: (path: string, position: { x: number; y: number }) => void;
 }) {
   const { entry, onEntryContextMenu, onPrefetchEntry, onSelectFile } = props;
@@ -409,7 +609,9 @@ function WorkspaceSearchResultRow(props: {
         setFileReferenceDragData(event.dataTransfer, entry.path);
       }}
       onClick={() => onSelectFile(entry.path)}
-      onPointerEnter={handlePrefetch}
+      onPointerEnter={() => onPrefetchEntry(entry, "hover")}
+      onPointerLeave={() => onPrefetchEntry(entry, "cancel")}
+      onBlur={() => onPrefetchEntry(entry, "cancel")}
       onFocus={handlePrefetch}
       onContextMenu={(event) => {
         event.preventDefault();
@@ -528,7 +730,7 @@ function WorkspaceSearchResultsBody(props: {
   search: WorkspaceFileSearchState;
   selectedFilePath: string | null;
   onSelectFile: (path: string) => void;
-  onPrefetchEntry: (entry: Pick<ProjectFileSystemEntry, "path" | "kind">) => void;
+  onPrefetchEntry: ExplorerEntryPrefetch;
   onEntryContextMenu: (path: string, position: { x: number; y: number }) => void;
 }) {
   const { fileMatches } = props.search;
