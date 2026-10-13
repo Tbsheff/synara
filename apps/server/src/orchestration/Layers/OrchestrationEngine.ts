@@ -6,7 +6,8 @@ import type {
   SpaceId,
   ThreadId,
 } from "@synara/contracts";
-import { OrchestrationCommand, ORCHESTRATION_WS_METHODS } from "@synara/contracts";
+import { EventId, OrchestrationCommand, ORCHESTRATION_WS_METHODS } from "@synara/contracts";
+import { archivedOwnerOfFinishedThread } from "../threadArchive";
 import { makeKeyedDrainableWorker } from "@synara/shared/KeyedDrainableWorker";
 import { SIDECHAT_INACTIVITY_EXPIRY_MS, sidechatExpiryMs } from "@synara/shared/sidechatExpiry";
 import {
@@ -1227,6 +1228,44 @@ const makeOrchestrationEngine = Effect.gen(function* () {
                   yield* projectionPipeline.projectHotEventInCurrentTransaction(savedEvent),
                 );
               }
+              committedEvents.push(savedEvent);
+            }
+
+            const settledIds = new Set(
+              committedEvents.flatMap((event) =>
+                event.type === "thread.session-set" || event.type === "thread.turn-diff-completed"
+                  ? [event.payload.threadId]
+                  : [],
+              ),
+            );
+            for (const threadId of settledIds) {
+              const parentId = archivedOwnerOfFinishedThread(
+                nextCommandReadModel.threads,
+                threadId,
+              );
+              if (!parentId) continue;
+              const occurredAt = committedEvents.at(-1)!.occurredAt;
+              const savedEvent = yield* eventStore.append({
+                aggregateKind: "thread",
+                aggregateId: threadId,
+                eventId: EventId.makeUnsafe(crypto.randomUUID()),
+                commandId: command.commandId,
+                occurredAt,
+                causationEventId: null,
+                correlationId: null,
+                metadata: {},
+                type: "thread.archived",
+                payload: {
+                  threadId,
+                  archivedAt: occurredAt,
+                  updatedAt: occurredAt,
+                  archivedByThreadId: parentId,
+                },
+              });
+              nextCommandReadModel = yield* projectEvent(nextCommandReadModel, savedEvent);
+              committedAttachmentCleanups.push(
+                yield* projectionPipeline.projectHotEventInCurrentTransaction(savedEvent),
+              );
               committedEvents.push(savedEvent);
             }
 

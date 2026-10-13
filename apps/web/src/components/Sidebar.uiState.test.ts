@@ -63,6 +63,7 @@ describe("Sidebar.uiState", () => {
 
   it("defaults collapsed sidebar UI state with no thread list paging", () => {
     expect(readSidebarUiState()).toEqual({
+      expandedParentThreadIds: [],
       chatSectionExpanded: false,
       chatThreadListExtraPages: 0,
       projectThreadListExtraPagesByCwd: {},
@@ -75,6 +76,7 @@ describe("Sidebar.uiState", () => {
 
   it("persists project thread list paging by normalized cwd", () => {
     persistSidebarUiState({
+      expandedParentThreadIds: [],
       chatSectionExpanded: true,
       chatThreadListExtraPages: 2,
       projectThreadListExtraPagesByCwd: {
@@ -94,6 +96,7 @@ describe("Sidebar.uiState", () => {
     });
 
     expect(readSidebarUiState()).toEqual({
+      expandedParentThreadIds: [],
       chatSectionExpanded: true,
       chatThreadListExtraPages: 2,
       projectThreadListExtraPagesByCwd: {
@@ -117,6 +120,7 @@ describe("Sidebar.uiState", () => {
     window.localStorage.setItem(
       "synara:sidebar-ui:v1",
       JSON.stringify({
+        expandedParentThreadIds: [],
         chatSectionExpanded: true,
         chatThreadListExtraPages: -4,
         projectThreadListExtraPagesByCwd: {
@@ -140,6 +144,7 @@ describe("Sidebar.uiState", () => {
     );
 
     expect(readSidebarUiState()).toEqual({
+      expandedParentThreadIds: [],
       chatSectionExpanded: true,
       chatThreadListExtraPages: 0,
       projectThreadListExtraPagesByCwd: {
@@ -160,6 +165,7 @@ describe("Sidebar.uiState", () => {
     window.localStorage.setItem(
       "synara:sidebar-ui:v1",
       JSON.stringify({
+        expandedParentThreadIds: [],
         chatSectionExpanded: false,
         chatThreadListExpanded: true,
         expandedProjectThreadListCwds: ["/Users/tester/Code/demo", "/Users/tester/Code/other"],
@@ -187,6 +193,7 @@ describe("Sidebar.uiState", () => {
     );
 
     expect(readSidebarUiState()).toEqual({
+      expandedParentThreadIds: [],
       chatSectionExpanded: false,
       chatThreadListExtraPages: 0,
       projectThreadListExtraPagesByCwd: {},

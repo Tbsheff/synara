@@ -42,6 +42,16 @@ interface HotPathModule {
 const HOT_PATH_MODULES: readonly HotPathModule[] = [
   { relativePath: "ChatView.tsx", requiredFunction: "ChatView", allowedBailoutReasons: [] },
   {
+    relativePath: "SidebarThreadTree.tsx",
+    requiredFunction: "SidebarThreadTree",
+    allowedBailoutReasons: [],
+  },
+  {
+    relativePath: "SidebarThreadRowContent.tsx",
+    requiredFunction: "SidebarThreadRowContent",
+    allowedBailoutReasons: [],
+  },
+  {
     relativePath: "chat/useChatTranscriptScroll.ts",
     requiredFunction: "useChatTranscriptScroll",
     allowedBailoutReasons: [],

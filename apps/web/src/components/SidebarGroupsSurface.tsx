@@ -45,6 +45,7 @@ import {
   SidebarMenuSubButton,
   SidebarMenuSubItem,
 } from "./ui/sidebar";
+import { SidebarThreadTree } from "./SidebarThreadTree";
 import { DisclosureRegion } from "./ui/DisclosureRegion";
 import { RenameDialog } from "./RenameDialog";
 import { toastManager } from "./ui/toast";
@@ -60,6 +61,7 @@ import type { SidebarThreadSortOrder } from "../appSettings";
 // while the server has not yet echoed the new title. `inFlight` only dedupes the
 // outstanding call — an id moves into the done set once the dispatch resolves, so a
 // transient failure retries on the next snapshot instead of being swallowed.
+const EMPTY_EXPANDED_THREAD_IDS: ReadonlySet<string> = new Set();
 const studioAdoptionDispatchedIds = new Set<string>();
 const studioAdoptionInFlightIds = new Set<string>();
 
@@ -78,6 +80,7 @@ export function SidebarGroupsSurface({
   threadSortOrder,
   onThreadSortOrderChange,
   renderThreadRow,
+  expandedParentThreadIds,
   renderListSectionHeader,
   renderPinnedThreadsSection,
   onOpenThread,
@@ -90,12 +93,14 @@ export function SidebarGroupsSurface({
   readonly visualActiveThreadId: ThreadId | null;
   readonly threadSortOrder: SidebarThreadSortOrder;
   readonly onThreadSortOrderChange: (sortOrder: SidebarThreadSortOrder) => void;
+  readonly expandedParentThreadIds?: ReadonlySet<string>;
   readonly renderThreadRow: (
     thread: SidebarThreadSummary,
     orderedProjectThreadIds: readonly ThreadId[],
     depth?: number,
     topLevel?: boolean,
     projectContextLabel?: string,
+    childStateSummary?: string,
   ) => ReactNode;
   readonly renderListSectionHeader: (label: string, toolbar: ReactNode) => ReactNode;
   readonly renderPinnedThreadsSection: () => ReactNode;
@@ -107,6 +112,7 @@ export function SidebarGroupsSurface({
   ) => void;
   readonly onProjectContextMenu: (projectId: ProjectId, position: { x: number; y: number }) => void;
 }) {
+  const expandedThreadIds = expandedParentThreadIds ?? EMPTY_EXPANDED_THREAD_IDS;
   const homeDir = useWorkspacePathsStore((store) => store.homeDir);
   const chatWorkspaceRoot = useWorkspacePathsStore((store) => store.chatWorkspaceRoot);
   const studioWorkspaceRoot = useWorkspacePathsStore((store) => store.studioWorkspaceRoot);
@@ -415,17 +421,23 @@ export function SidebarGroupsSurface({
                         SIDEBAR_NESTED_LIST_GAP_CLASS_NAME,
                       )}
                     >
-                      {groupThreadEntries.map((entry) =>
-                        renderThreadRow(
-                          entry.thread,
-                          projectSidebarData?.orderedProjectThreadIds ?? [],
-                          entry.depth,
-                          false,
-                          entry.thread.projectId !== project.id
-                            ? (projectLabelById.get(entry.thread.projectId) ?? undefined)
-                            : undefined,
-                        ),
-                      )}
+                      <SidebarThreadTree
+                        entries={groupThreadEntries}
+                        expandedParentThreadIds={expandedThreadIds}
+                        activeThreadId={visualActiveThreadId}
+                        renderRow={(entry) =>
+                          renderThreadRow(
+                            entry.thread,
+                            projectSidebarData?.orderedProjectThreadIds ?? [],
+                            entry.depth,
+                            false,
+                            entry.thread.projectId !== project.id
+                              ? projectLabelById.get(entry.thread.projectId)
+                              : undefined,
+                            entry.childStateSummary,
+                          )
+                        }
+                      />
                     </SidebarMenuSub>
                   </DisclosureRegion>
                 </div>

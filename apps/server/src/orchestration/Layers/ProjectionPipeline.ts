@@ -773,6 +773,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             createdAt: event.payload.createdAt,
             updatedAt: event.payload.updatedAt,
             archivedAt: null,
+            archivedByThreadId: null,
             settledAt: null,
             snoozedUntil: null,
             snoozeReminderAt: null,
@@ -1105,6 +1106,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           return yield* updateThreadProjection(event.payload.threadId, (thread) => ({
             ...thread,
             archivedAt,
+            archivedByThreadId: event.payload.archivedByThreadId ?? null,
             snoozedUntil: null,
             snoozeReminderAt: null,
             updatedAt: event.payload.updatedAt ?? archivedAt,
@@ -1115,6 +1117,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           return yield* updateThreadProjection(event.payload.threadId, (thread) => ({
             ...thread,
             archivedAt: null,
+            archivedByThreadId: null,
             updatedAt: event.payload.updatedAt ?? event.payload.unarchivedAt ?? event.occurredAt,
           }));
 

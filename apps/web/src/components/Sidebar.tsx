@@ -1,3 +1,5 @@
+import { SidebarCollapsibleSection } from "./SidebarListSection";
+import { SidebarThreadTree } from "./SidebarThreadTree";
 import { useProjectImportDialogStore } from "~/projectImport/projectImportDialogStore";
 // FILE: Sidebar.tsx
 // Purpose: Renders the project/thread sidebar, including row status, sorting, and thread actions.
@@ -395,6 +397,8 @@ import { useThreadSelectionStore } from "../threadSelectionStore";
 import {
   excludeHiddenProjectAgentCoordinatorThreads,
   buildProjectThreadTree,
+  groupSidebarAutomationRuns,
+  sidebarThreadNeedsReveal,
   derivePinnedProjectIdsForSidebar,
   deriveSidebarProjectData,
   createSidebarThreadHoverAnchorId,
@@ -1648,6 +1652,17 @@ export default function Sidebar() {
   const [threadListExtraPagesByProjectCwd, setThreadListExtraPagesByProjectCwd] = useState<
     ReadonlyMap<string, number>
   >(() => new Map(Object.entries(readSidebarUiState().projectThreadListExtraPagesByCwd)));
+  const [expandedParentThreadIds, setExpandedParentThreadIds] = useState<ReadonlySet<string>>(
+    () => new Set(readSidebarUiState().expandedParentThreadIds ?? []),
+  );
+  const toggleThreadChildren = useCallback((threadId: ThreadId) => {
+    setExpandedParentThreadIds((current) => {
+      const next = new Set(current);
+      if (next.has(threadId)) next.delete(threadId);
+      else next.add(threadId);
+      return next;
+    });
+  }, []);
   const [chatSectionExpanded, setChatSectionExpanded] = useState(
     () => readSidebarUiState().chatSectionExpanded,
   );
@@ -1689,6 +1704,7 @@ export default function Sidebar() {
   useEffect(
     () =>
       subscribeSidebarUiState((state) => {
+        setExpandedParentThreadIds(new Set(state.expandedParentThreadIds ?? []));
         setChatSectionExpanded(state.chatSectionExpanded);
         setChatThreadListExtraPages(state.chatThreadListExtraPages);
         setThreadListExtraPagesByProjectCwd(
@@ -1741,6 +1757,29 @@ export default function Sidebar() {
     [hideAutomationRunThreads],
   );
   const sidebarTreeThreads = useStore(selectSidebarTreeThreads);
+  const automationRunThreadIds = useMemo(
+    () =>
+      sidebarTreeThreads
+        .filter((thread) => thread.creationSource === "automation_run")
+        .map((thread) => thread.id),
+    [sidebarTreeThreads],
+  );
+  const automationThreadLinksQuery = useQuery({
+    queryKey: ["sidebar-automation-links", automationRunThreadIds],
+    queryFn: () =>
+      ensureNativeApi().automation.list({
+        threadIds: automationRunThreadIds,
+        includeArchived: true,
+      }),
+    enabled: automationRunThreadIds.length > 0,
+  });
+  useEffect(
+    () =>
+      ensureNativeApi().automation.onEvent(() => {
+        void queryClient.invalidateQueries({ queryKey: ["sidebar-automation-links"] });
+      }),
+    [queryClient],
+  );
   const selectProjectLastActivityAt = useMemo(() => createProjectLastActivityAtSelector(), []);
   const projectLastActivityAt = useStore(selectProjectLastActivityAt);
   const { summaryFor, summariesByProjectId, coordinatorThreadIds } = useProjectAgentSummaries();
@@ -1755,8 +1794,16 @@ export default function Sidebar() {
     activityNonGroupThreads: activityNonGroupSidebarThreads,
   } = useActivityThreads({ hideAutomationRunThreads });
   const displaySidebarTreeThreads = useMemo(
-    () => excludeHiddenProjectAgentCoordinatorThreads(sidebarTreeThreads, coordinatorThreadIds),
-    [coordinatorThreadIds, sidebarTreeThreads],
+    () =>
+      excludeHiddenProjectAgentCoordinatorThreads(
+        groupSidebarAutomationRuns({
+          threads: sidebarTreeThreads,
+          definitions: automationThreadLinksQuery.data?.definitions ?? [],
+          runs: automationThreadLinksQuery.data?.runs ?? [],
+        }),
+        coordinatorThreadIds,
+      ),
+    [coordinatorThreadIds, sidebarTreeThreads, automationThreadLinksQuery.data],
   );
   const { nonGroupThreads: nonGroupSidebarTreeThreads, groupThreads: groupSidebarTreeThreads } =
     useMemo(
@@ -3832,6 +3879,7 @@ export default function Sidebar() {
     (nextLastThreadRoute: LastThreadRoute) => {
       setLastThreadRoute(nextLastThreadRoute);
       persistSidebarUiState({
+        expandedParentThreadIds: [...expandedParentThreadIds],
         chatSectionExpanded,
         chatThreadListExtraPages,
         projectThreadListExtraPagesByCwd: Object.fromEntries(threadListExtraPagesByProjectCwd),
@@ -3844,6 +3892,7 @@ export default function Sidebar() {
     [
       activityScope,
       activityViewEnabled,
+      expandedParentThreadIds,
       chatSectionExpanded,
       chatThreadListExtraPages,
       dismissedThreadStatusKeyByThreadId,
@@ -4479,16 +4528,21 @@ export default function Sidebar() {
         appSettings.sidebarThreadSortOrder,
       ),
       forceVisibleThreadId: activeSidebarThreadId ?? undefined,
+      expandedParentThreadIds,
     });
   }, [
     activeSidebarThreadId,
     appSettings.sidebarThreadSortOrder,
     chatSectionExpanded,
+    expandedParentThreadIds,
     chatProjects,
     sortedSidebarThreadsByProjectId,
   ]);
   const visibleChatThreadIds = useMemo(
-    () => visibleChatThreadRows.map((row) => row.thread.id),
+    () =>
+      visibleChatThreadRows
+        .filter((row) => !row.thread.automationGroupId)
+        .map((row) => row.thread.id),
     [visibleChatThreadRows],
   );
   const visibleChatPreviewEntries = useMemo(
@@ -4520,6 +4574,11 @@ export default function Sidebar() {
       entries: visibleChatPreviewEntries,
       activeEntryId: activeChatPreviewEntry?.rowId,
       previewLimit: paging.previewLimit,
+      forceVisibleEntryIds: visibleChatPreviewEntries
+        .filter(
+          (entry) => !entry.row.thread.parentThreadId && sidebarThreadNeedsReveal(entry.row.thread),
+        )
+        .map((entry) => entry.rowId),
     });
     return {
       // Mirror deriveSidebarProjectData: the active-chat reveal can force rows past the page
@@ -4611,6 +4670,7 @@ export default function Sidebar() {
         activeSidebarThreadId: activeSidebarThreadId ?? undefined,
         previewLimit: THREAD_PREVIEW_LIMIT,
         previewPageSize: THREAD_PREVIEW_PAGE_SIZE,
+        expandedParentThreadIds,
         resolveThreadStatus: resolveThreadStatusForSidebar,
       }),
     [
@@ -4618,6 +4678,7 @@ export default function Sidebar() {
       threadListExtraPagesByProjectCwd,
       pinnedThreadIds,
       sortedSidebarThreadsByProjectId,
+      expandedParentThreadIds,
       standardProjects,
       resolveThreadStatusForSidebar,
     ],
@@ -4683,6 +4744,7 @@ export default function Sidebar() {
       activeSidebarThreadId: activeSidebarThreadId ?? undefined,
       previewLimit: THREAD_PREVIEW_LIMIT,
       previewPageSize: THREAD_PREVIEW_PAGE_SIZE,
+      expandedParentThreadIds,
       resolveThreadStatus: resolveThreadStatusForSidebar,
     });
   }, [
@@ -4691,6 +4753,7 @@ export default function Sidebar() {
     threadListExtraPagesByProjectCwd,
     pinnedThreadIds,
     groupScopedSortedSidebarThreadsByProjectId,
+    expandedParentThreadIds,
     groupProjects,
     resolveThreadStatusForSidebar,
   ]);
@@ -4742,6 +4805,7 @@ export default function Sidebar() {
         activeSidebarThreadId: activeSidebarThreadId ?? undefined,
         previewLimit: THREAD_PREVIEW_LIMIT,
         previewPageSize: THREAD_PREVIEW_PAGE_SIZE,
+        expandedParentThreadIds,
         resolveThreadStatus: resolveThreadStatusForSidebar,
       }).get(railSpacesProject.id) ?? null
     );
@@ -4749,6 +4813,7 @@ export default function Sidebar() {
     activeSidebarThreadId,
     pinnedThreadIds,
     railSpacesProject,
+    expandedParentThreadIds,
     resolveThreadStatusForSidebar,
     sortedSidebarThreadsByProjectId,
     threadListExtraPagesByProjectCwd,
@@ -4805,6 +4870,7 @@ export default function Sidebar() {
 
   useEffect(() => {
     persistSidebarUiState({
+      expandedParentThreadIds: [...expandedParentThreadIds],
       chatSectionExpanded,
       chatThreadListExtraPages,
       projectThreadListExtraPagesByCwd: Object.fromEntries(threadListExtraPagesByProjectCwd),
@@ -4816,6 +4882,7 @@ export default function Sidebar() {
   }, [
     activityScope,
     activityViewEnabled,
+    expandedParentThreadIds,
     chatSectionExpanded,
     chatThreadListExtraPages,
     dismissedThreadStatusKeyByThreadId,
@@ -4893,7 +4960,7 @@ export default function Sidebar() {
       }
 
       for (const entry of projectSidebarData.visibleEntries) {
-        addVisibleThreadId(entry.rowId);
+        if (!entry.thread.automationGroupId) addVisibleThreadId(entry.rowId);
       }
     }
 
@@ -5392,7 +5459,20 @@ export default function Sidebar() {
     // A group member thread dispatched into a linked repo shows where it runs —
     // same small-label treatment as pinned rows' project name.
     projectContextLabel?: string,
+    childStateSummary?: string,
   ) {
+    if (thread.automationGroupId) {
+      return (
+        <SidebarCollapsibleSection
+          key={thread.id}
+          label={`${thread.title} · ${childStateSummary ?? ""}`}
+          open={expandedParentThreadIds.has(thread.id)}
+          onToggle={() => toggleThreadChildren(thread.id)}
+        >
+          {null}
+        </SidebarCollapsibleSection>
+      );
+    }
     const threadTerminalState = selectThreadTerminalState(terminalStateByThreadId, thread.id);
     const threadEntryPoint = threadTerminalState.entryPoint;
     const isActive = visualActiveSidebarThreadId === thread.id;
@@ -5457,7 +5537,8 @@ export default function Sidebar() {
                     isSelected,
                     isSnoozeReminder: threadStatus?.label === "Reminder",
                   }),
-                  topLevel && !isSubagentThread ? "pl-2" : null,
+                  topLevel && depth === 0 ? "pl-2" : null,
+                  childStateSummary ? "h-auto py-0.5" : null,
                   "pr-2",
                 )}
                 draggable
@@ -5508,6 +5589,10 @@ export default function Sidebar() {
               isActive={isActive}
               variant="standard"
               subagentIndentPx={subagentIndentPx}
+              nested={depth > 0}
+              childStateSummary={childStateSummary}
+              childrenExpanded={expandedParentThreadIds.has(thread.id)}
+              onToggleChildren={() => toggleThreadChildren(thread.id)}
               pendingStatusColorClass={
                 threadStatus?.label === "Pending Approval" ? threadStatus.colorClass : null
               }
@@ -5623,12 +5708,26 @@ export default function Sidebar() {
   ) {
     const { visibleEntries, threadListExtraPages, canShowMoreThreads, canShowLessThreads } =
       projectSidebarData;
-    const renderedProjectThreadIds = visibleEntries.map((entry) => entry.thread.id);
+    const renderedProjectThreadIds = visibleEntries
+      .filter((entry) => !entry.thread.automationGroupId)
+      .map((entry) => entry.thread.id);
     return (
       <>
-        {visibleEntries.map((entry) =>
-          renderThreadRow(entry.thread, renderedProjectThreadIds, entry.depth),
-        )}
+        <SidebarThreadTree
+          entries={visibleEntries}
+          expandedParentThreadIds={expandedParentThreadIds}
+          activeThreadId={visualActiveSidebarThreadId}
+          renderRow={(entry) =>
+            renderThreadRow(
+              entry.thread,
+              renderedProjectThreadIds,
+              entry.depth,
+              false,
+              undefined,
+              entry.childStateSummary,
+            )
+          }
+        />
 
         {(canShowMoreThreads || canShowLessThreads) && (
           <SidebarMenuSubItem className="w-full">
@@ -7234,6 +7333,7 @@ export default function Sidebar() {
                         <SidebarGroupsSurface
                           groupProjects={groupProjects}
                           projectSidebarDataById={groupProjectSidebarDataById}
+                          expandedParentThreadIds={expandedParentThreadIds}
                           threadsHydrated={threadsHydrated}
                           visualActiveThreadId={visualActiveSidebarThreadId}
                           threadSortOrder={appSettings.sidebarThreadSortOrder}
@@ -7507,14 +7607,26 @@ export default function Sidebar() {
                                   )}
                                 >
                                   {visibleChatThreadRows.length > 0 ? (
-                                    renderedChatEntries.map((entry) =>
-                                      renderThreadRow(
-                                        entry.row.thread,
-                                        renderedChatThreadIds,
-                                        entry.row.depth,
-                                        true,
-                                      ),
-                                    )
+                                    <SidebarThreadTree
+                                      entries={renderedChatEntries.map((entry) => ({
+                                        kind: "thread",
+                                        rowId: entry.rowId,
+                                        rootRowId: entry.rootRowId,
+                                        ...entry.row,
+                                      }))}
+                                      expandedParentThreadIds={expandedParentThreadIds}
+                                      activeThreadId={visualActiveSidebarThreadId}
+                                      renderRow={(entry) =>
+                                        renderThreadRow(
+                                          entry.thread,
+                                          renderedChatThreadIds,
+                                          entry.depth,
+                                          true,
+                                          undefined,
+                                          entry.childStateSummary,
+                                        )
+                                      }
+                                    />
                                   ) : (
                                     <div className="px-2 py-2 text-ui text-muted-foreground/48">
                                       No chats yet

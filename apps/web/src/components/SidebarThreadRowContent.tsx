@@ -19,6 +19,9 @@ import { cn } from "../lib/utils";
 import { ProviderIcon } from "./ProviderIcon";
 import { SidebarGlyph } from "./sidebarGlyphs";
 import { SidebarDraftGlyph } from "./SidebarStatusTrailingGlyph";
+import { SidebarIconButton } from "./SidebarIconButton";
+import { DisclosureChevron } from "./ui/DisclosureChevron";
+import { ChevronRightIcon } from "../lib/icons";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 
 export interface SidebarThreadTerminalStatus {
@@ -175,6 +178,10 @@ export function SidebarThreadRowContent({
   subagentIndentPx: subagentIndentPxProp,
   pendingStatusColorClass,
   suffix,
+  nested: nestedProp,
+  childStateSummary,
+  childrenExpanded: childrenExpandedProp,
+  onToggleChildren,
 }: {
   thread: SidebarThreadSummary;
   terminalEntryPoint: boolean;
@@ -185,8 +192,14 @@ export function SidebarThreadRowContent({
   subagentIndentPx?: number;
   pendingStatusColorClass?: string | null | undefined;
   suffix?: ReactNode;
+  nested?: boolean;
+  childStateSummary?: string | undefined;
+  childrenExpanded?: boolean;
+  onToggleChildren?: () => void;
 }) {
   const subagentIndentPx = subagentIndentPxProp ?? 0;
+  const nested = nestedProp ?? false;
+  const childrenExpanded = childrenExpandedProp ?? false;
   const isSubagentThread = Boolean(thread.parentThreadId);
   const subagentPresentation =
     variant === "standard" && isSubagentThread
@@ -206,7 +219,7 @@ export function SidebarThreadRowContent({
 
   return (
     <>
-      {variant === "standard" && isSubagentThread ? (
+      {variant === "standard" && (isSubagentThread || nested) ? (
         <span
           aria-hidden="true"
           className="relative inline-flex h-3.5 w-[18px] shrink-0 items-center"
@@ -232,6 +245,7 @@ export function SidebarThreadRowContent({
         className={cn(
           "flex min-w-0 flex-1 items-center text-left",
           variant === "standard" && isSubagentThread ? "gap-[5px]" : "gap-1.5",
+          childStateSummary && onToggleChildren && "flex-wrap gap-y-0",
         )}
       >
         <span
@@ -263,6 +277,26 @@ export function SidebarThreadRowContent({
           >
             Pending
           </span>
+        ) : null}
+        {childStateSummary && onToggleChildren ? (
+          <SidebarIconButton
+            icon={ChevronRightIcon}
+            label={`${childrenExpanded ? "Collapse" : "Expand"} children of ${thread.title}`}
+            aria-expanded={childrenExpanded}
+            title={childStateSummary}
+            className="h-auto w-full justify-start gap-0.5 p-0 text-ui-xs text-muted-foreground/65"
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              onToggleChildren();
+            }}
+            onKeyDown={(event) => event.stopPropagation()}
+            onDoubleClick={(event) => event.stopPropagation()}
+          >
+            <span className="min-w-0 truncate">{childStateSummary.replaceAll("needs ", "")}</span>
+            <DisclosureChevron open={childrenExpanded} />
+          </SidebarIconButton>
         ) : null}
         {variant === "pinned" ? suffix : null}
       </div>

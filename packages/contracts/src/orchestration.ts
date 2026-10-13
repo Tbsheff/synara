@@ -1154,6 +1154,7 @@ export const OrchestrationThread = Schema.Struct({
   hasActionableProposedPlan: Schema.optional(Schema.Boolean),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
+  archivedByThreadId: Schema.optional(Schema.NullOr(ThreadId)),
   archivedAt: Schema.optional(Schema.NullOr(IsoDateTime)).pipe(
     Schema.withDecodingDefault(() => null),
   ),
@@ -1256,6 +1257,7 @@ export const OrchestrationThreadShell = Schema.Struct({
   hasActionableProposedPlan: Schema.optional(Schema.Boolean),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
+  archivedByThreadId: Schema.optional(Schema.NullOr(ThreadId)),
   archivedAt: Schema.optional(Schema.NullOr(IsoDateTime)).pipe(
     Schema.withDecodingDefault(() => null),
   ),
@@ -2312,6 +2314,7 @@ export const ThreadSidechatExpiredPayload = Schema.Struct({
 
 export const ThreadArchivedPayload = Schema.Struct({
   threadId: ThreadId,
+  archivedByThreadId: Schema.optional(Schema.NullOr(ThreadId)),
   // Required for new events, optional for legacy events
   archivedAt: Schema.optional(IsoDateTime),
   updatedAt: Schema.optional(IsoDateTime),

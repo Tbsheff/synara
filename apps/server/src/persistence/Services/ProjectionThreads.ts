@@ -101,6 +101,7 @@ export const ProjectionThread = Schema.Struct({
   hasActionableProposedPlan: NonNegativeInt,
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
+  archivedByThreadId: Schema.optional(Schema.NullOr(ThreadId)),
   archivedAt: Schema.optional(Schema.NullOr(IsoDateTime)).pipe(
     Schema.withDecodingDefault(() => null),
   ),

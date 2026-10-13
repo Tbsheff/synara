@@ -688,6 +688,7 @@ export function projectEvent(
             ...nextBase,
             threads: updateThread(nextBase.threads, payload.threadId, {
               archivedAt,
+              archivedByThreadId: payload.archivedByThreadId ?? null,
               snoozedUntil: null,
               snoozeReminderAt: null,
               updatedAt: payload.updatedAt ?? archivedAt,
@@ -704,6 +705,7 @@ export function projectEvent(
             ...nextBase,
             threads: updateThread(nextBase.threads, payload.threadId, {
               archivedAt: null,
+              archivedByThreadId: null,
               updatedAt,
             }),
           };

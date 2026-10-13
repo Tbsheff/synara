@@ -24,6 +24,22 @@ The task appears in the sidebar before Git preparation finishes, with a **Prepar
 indicator. Its provider session starts only after the worktree is ready. If preparation fails or
 is cancelled, the task and its prompt remain available for retry.
 
+## Child threads in the sidebar
+
+Threads created by an agent appear under the thread that created them. Hub work appears under
+its source or coordinator thread when both threads belong to the same project. Automation runs
+appear under their target or source thread. Standalone runs without an owner share a row named
+for the automation; this groups its run history without creating a provider session.
+
+These child lists start closed. The parent shows child counts by state and saves your open/close
+choice. Approval, input, error, and currently open children stay visible with their parent path.
+Search can find a closed child and opens that path. Missing, deleted, archived, or other-project
+parents leave these children at the top level. Provider-native subagent visibility stays the same.
+
+Archiving a parent also archives its finished children. Running children stay visible at the top
+level until they finish, then archive. Restoring the parent restores the children it archived;
+children you archived on their own stay archived.
+
 ## The main surfaces
 
 - **Sidebar** — projects, spaces, tasks, and activity requiring attention. The rail

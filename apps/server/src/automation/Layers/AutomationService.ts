@@ -1465,7 +1465,12 @@ export const AutomationServiceLive = Layer.effect(
             // dedicated thread is a persistent conversation and stays unmarked.
             ...(automationOwnsItsThread(definition.mode)
               ? {}
-              : { creationSource: "automation_run" as const }),
+              : {
+                  creationSource: "automation_run" as const,
+                  ...(definition.sourceThreadId
+                    ? { sourceThreadId: definition.sourceThreadId }
+                    : {}),
+                }),
             modelSelection: definition.modelSelection,
             runtimeMode: definition.runtimeMode,
             interactionMode: definition.interactionMode,

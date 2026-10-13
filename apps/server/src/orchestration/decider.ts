@@ -25,7 +25,10 @@ import {
   deriveAssociatedWorktreeMetadataPatch,
   workspaceRootsEqual,
 } from "@synara/shared/threadWorkspace";
-import { collectSubagentDescendants } from "@synara/shared/threadHierarchy";
+import {
+  collectOwnedThreadDescendants,
+  collectSubagentDescendants,
+} from "@synara/shared/threadHierarchy";
 import { isSidechatThread } from "@synara/shared/sidechatThread";
 import { runtimeModeSelectionIssue } from "@synara/shared/runtimeMode";
 import { isGroupContainerKind } from "@synara/shared/projectContainers";
@@ -1587,13 +1590,15 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         threadId: command.threadId,
       });
       const occurredAt = nowIso();
-      // Subagent threads are only reachable through their parent, so archiving a
-      // thread archives its still-active subagent subtree with it. The commanded
-      // thread goes last: the command receipt records the final event's aggregate.
-      const subagentThreadIds = collectSubagentDescendants(readModel.threads, command.threadId)
-        .filter((thread) => thread.deletedAt === null && (thread.archivedAt ?? null) === null)
+      const childThreadIds = collectOwnedThreadDescendants(readModel.threads, command.threadId)
+        .filter(
+          (thread) =>
+            thread.deletedAt === null &&
+            (thread.archivedAt ?? null) === null &&
+            (thread.parentThreadId != null || !threadHasInFlightTurn(thread)),
+        )
         .map((thread) => thread.id);
-      return [...subagentThreadIds, command.threadId].flatMap(
+      return [...childThreadIds, command.threadId].flatMap(
         (threadId): Array<Omit<OrchestrationEvent, "sequence">> => {
           const review = readModel.threads.find(
             (entry) => entry.id === threadId,
@@ -1622,6 +1627,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             payload: {
               threadId,
               archivedAt: occurredAt,
+              archivedByThreadId: threadId === command.threadId ? null : command.threadId,
               updatedAt: occurredAt,
             },
           });
@@ -1637,13 +1643,19 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         threadId: command.threadId,
       });
       const occurredAt = nowIso();
-      // Restoring a parent brings back the subagent subtree that was archived with
-      // it. The commanded thread goes last: the command receipt records the final
-      // event's aggregate.
-      const subagentThreadIds = collectSubagentDescendants(readModel.threads, command.threadId)
-        .filter((thread) => thread.deletedAt === null && (thread.archivedAt ?? null) !== null)
+      const nativeDescendantIds = new Set(
+        collectSubagentDescendants(readModel.threads, command.threadId).map((thread) => thread.id),
+      );
+      const childThreadIds = readModel.threads
+        .filter(
+          (thread) =>
+            thread.deletedAt === null &&
+            (thread.archivedAt ?? null) !== null &&
+            (thread.archivedByThreadId === command.threadId ||
+              (nativeDescendantIds.has(thread.id) && thread.archivedByThreadId == null)),
+        )
         .map((thread) => thread.id);
-      return [...subagentThreadIds, command.threadId].map(
+      return [...childThreadIds, command.threadId].map(
         (threadId): Omit<OrchestrationEvent, "sequence"> => ({
           ...withEventBase({
             aggregateKind: "thread",
