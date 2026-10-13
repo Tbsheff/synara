@@ -354,6 +354,8 @@ export interface SidebarThreadSummary {
   lastVisitedAt?: string | undefined;
   parentThreadId?: ThreadId | null;
   creationSource?: ThreadCreationSource | null;
+  sourceThreadId?: ThreadId | null;
+  automationGroupId?: string;
   subagentAgentId?: string | null;
   subagentNickname?: string | null;
   subagentRole?: string | null;

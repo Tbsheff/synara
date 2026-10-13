@@ -791,6 +791,34 @@ describe("store projection", () => {
     expect(thread?.sourceThreadId).toBe(sourceThreadId);
   });
 
+  it("refreshes sidebar ownership when only the source thread changes", () => {
+    const threadId = ThreadId.makeUnsafe("ownership-child");
+    const before = syncServerReadModel(
+      makeState(makeThread({ id: threadId })),
+      makeReadModel(
+        makeReadModelThread({
+          id: threadId,
+          creationSource: "synara_mcp",
+          sourceThreadId: ThreadId.makeUnsafe("parent-a"),
+        }),
+      ),
+    );
+    const after = syncServerReadModel(
+      before,
+      makeReadModel(
+        makeReadModelThread({
+          id: threadId,
+          creationSource: "synara_mcp",
+          sourceThreadId: ThreadId.makeUnsafe("parent-b"),
+        }),
+      ),
+    );
+    expect(after.sidebarThreadSummaryById[threadId]?.sourceThreadId).toBe("parent-b");
+    expect(after.sidebarThreadSummaryById[threadId]).not.toBe(
+      before.sidebarThreadSummaryById[threadId],
+    );
+  });
+
   it("carries creationSource onto the sidebar summary and rebuilds it when only that field changes", () => {
     const threadId = ThreadId.makeUnsafe("thread-1");
     const initial = syncServerReadModel(

@@ -4,10 +4,13 @@
 
 import {
   MAX_PINNED_PROJECTS,
+  ThreadId,
+  type AutomationDefinition,
+  type AutomationRun,
   type ProjectId,
   type SpaceId,
-  type ThreadId,
 } from "@synara/contracts";
+import { ownedThreadParentId } from "@synara/shared/threadHierarchy";
 import { pluralize } from "@synara/shared/text";
 import { resolveThreadEnvironmentMode } from "@synara/shared/threadEnvironment";
 import { isWorkspaceRootWithin, workspaceRootsEqual } from "@synara/shared/threadWorkspace";
@@ -338,6 +341,7 @@ export type SidebarProjectEntry = {
   rootRowId: ThreadId;
   thread: SidebarThreadSummary;
   depth: number;
+  childStateSummary?: string;
 };
 
 export type SidebarThreadHoverAnchorScope = "pinned" | "chat" | "project" | "activity";
@@ -913,93 +917,191 @@ export function resolveSidebarThreadListPaging(input: {
   };
 }
 
-export interface SidebarThreadTreeRow<
-  T extends Pick<SidebarThreadSummary, "id" | "parentThreadId">,
-> {
+type SidebarTreeThread = Pick<SidebarThreadSummary, "id" | "parentThreadId"> &
+  Partial<
+    Pick<
+      SidebarThreadSummary,
+      | "projectId"
+      | "sourceThreadId"
+      | "creationSource"
+      | "archivedAt"
+      | "hasPendingApprovals"
+      | "session"
+      | "latestTurn"
+      | "hasPendingUserInput"
+    >
+  >;
+
+export interface SidebarThreadTreeRow<T extends SidebarTreeThread> {
   thread: T;
   depth: number;
   rootThreadId: T["id"];
+  childStateSummary?: string;
 }
 
-function collectActiveThreadAncestorIds<
-  T extends Pick<SidebarThreadSummary, "id" | "parentThreadId">,
->(threadById: Map<T["id"], T>, forceVisibleThreadId: T["id"] | undefined): Set<T["id"]> {
-  const ancestorIds = new Set<T["id"]>();
-  let currentThreadId = forceVisibleThreadId;
+export function sidebarThreadNeedsReveal(thread: SidebarTreeThread): boolean {
+  return (
+    thread.hasPendingApprovals === true ||
+    thread.hasPendingUserInput === true ||
+    thread.session?.status === "error" ||
+    thread.latestTurn?.state === "error"
+  );
+}
 
-  while (currentThreadId) {
-    const parentThreadId = threadById.get(currentThreadId)?.parentThreadId ?? undefined;
-    if (
-      !parentThreadId ||
-      parentThreadId === forceVisibleThreadId ||
-      ancestorIds.has(parentThreadId)
-    ) {
-      break;
-    }
-    ancestorIds.add(parentThreadId);
-    currentThreadId = parentThreadId;
+function childStateSummary(threads: readonly SidebarTreeThread[]): string {
+  const counts = new Map<string, number>();
+  for (const thread of threads) {
+    const state = thread.hasPendingApprovals
+      ? "needs approval"
+      : thread.hasPendingUserInput
+        ? "needs input"
+        : thread.session?.status === "error" || thread.latestTurn?.state === "error"
+          ? "error"
+          : thread.latestTurn?.state === "running" ||
+              thread.session?.status === "running" ||
+              thread.session?.status === "connecting"
+            ? "running"
+            : "idle";
+    counts.set(state, (counts.get(state) ?? 0) + 1);
   }
-
-  return ancestorIds;
+  return ["running", "needs approval", "needs input", "error", "idle"]
+    .flatMap((state) => (counts.has(state) ? [`${counts.get(state)} ${state}`] : []))
+    .join(", ");
 }
 
-// Build the project-local parent/child thread tree while preserving sort order from the input list.
-export function buildProjectThreadTree<
-  T extends Pick<SidebarThreadSummary, "id" | "parentThreadId">,
->(input: {
+export function buildProjectThreadTree<T extends SidebarTreeThread>(input: {
   threads: readonly T[];
   forceVisibleThreadId?: T["id"] | undefined;
+  expandedParentThreadIds?: ReadonlySet<string> | undefined;
 }): SidebarThreadTreeRow<T>[] {
-  const { forceVisibleThreadId, threads } = input;
-  const threadById = new Map(threads.map((thread) => [thread.id, thread] as const));
-  const childrenByParentId = new Map<T["id"], T[]>();
-  const roots: T[] = [];
-
-  for (const thread of threads) {
-    const parentThreadId = thread.parentThreadId ?? null;
-    if (!parentThreadId) {
-      roots.push(thread);
-      continue;
-    }
-    // Subagent threads are only reachable through their parent. When the parent
-    // is not in the list (archived or deleted), its subtree stays hidden instead
-    // of being promoted to top-level rows.
-    if (!threadById.has(parentThreadId)) {
-      continue;
-    }
-    const siblings = childrenByParentId.get(parentThreadId) ?? [];
-    siblings.push(thread);
-    childrenByParentId.set(parentThreadId, siblings);
+  if (!input.threads.some((thread) => ownedThreadParentId(thread))) {
+    return input.threads.map((thread) => ({ thread, depth: 0, rootThreadId: thread.id }));
   }
-
-  const activeThreadAncestorIds = collectActiveThreadAncestorIds(threadById, forceVisibleThreadId);
-  const orderedRows: SidebarThreadTreeRow<T>[] = [];
-
+  const byId = new Map(input.threads.map((thread) => [thread.id, thread]));
+  const parentById = new Map<T["id"], T["id"]>();
+  const hiddenNativeIds = new Set<T["id"]>();
+  for (const thread of input.threads) {
+    const parentId = ownedThreadParentId(thread) as T["id"] | null;
+    const parent = parentId === null ? undefined : byId.get(parentId);
+    if (!parent || parent.archivedAt || parent.projectId !== thread.projectId) {
+      if (thread.parentThreadId) hiddenNativeIds.add(thread.id);
+    } else if (parentId !== null) parentById.set(thread.id, parentId);
+  }
+  const checked = new Set<T["id"]>();
+  for (const thread of input.threads) {
+    if (checked.has(thread.id)) continue;
+    const path: T["id"][] = [];
+    const indices = new Map<T["id"], number>();
+    let id: T["id"] | undefined = thread.id;
+    while (id !== undefined && !checked.has(id) && !indices.has(id)) {
+      indices.set(id, path.length);
+      path.push(id);
+      id = parentById.get(id);
+    }
+    if (id !== undefined && indices.has(id)) {
+      for (const cycleId of path.slice(indices.get(id))) {
+        if (!byId.get(cycleId)?.parentThreadId) parentById.delete(cycleId);
+      }
+    }
+    for (const pathId of path) checked.add(pathId);
+  }
+  const children = new Map<T["id"], T[]>();
+  const roots: T[] = [];
+  for (const thread of input.threads) {
+    const parentId = parentById.get(thread.id);
+    if (parentId !== undefined) {
+      const siblings = children.get(parentId);
+      if (siblings) siblings.push(thread);
+      else children.set(parentId, [thread]);
+    } else if (!hiddenNativeIds.has(thread.id)) roots.push(thread);
+  }
+  const forced = new Set<T["id"]>();
+  const nativeActiveAncestors = new Set<T["id"]>();
+  for (const thread of input.threads) {
+    const active = thread.id === input.forceVisibleThreadId;
+    if (!active && (thread.parentThreadId || !sidebarThreadNeedsReveal(thread))) continue;
+    let id: T["id"] | undefined = thread.id;
+    while (id !== undefined && !forced.has(id)) {
+      forced.add(id);
+      id = parentById.get(id);
+    }
+    if (active) {
+      id = parentById.get(thread.id);
+      while (id !== undefined && !nativeActiveAncestors.has(id)) {
+        nativeActiveAncestors.add(id);
+        id = parentById.get(id);
+      }
+    }
+  }
+  const rows: SidebarThreadTreeRow<T>[] = [];
+  const visited = new Set<T["id"]>();
   const visit = (thread: T, depth: number, rootThreadId: T["id"]) => {
-    const childThreads = childrenByParentId.get(thread.id) ?? [];
-    const revealsActiveDescendant =
-      childThreads.length > 0 && activeThreadAncestorIds.has(thread.id);
-
-    orderedRows.push({
+    if (visited.has(thread.id)) return;
+    visited.add(thread.id);
+    const childThreads = children.get(thread.id) ?? [];
+    const ownedChildren = childThreads.filter((child) => !child.parentThreadId);
+    rows.push({
       thread,
       depth,
       rootThreadId,
+      ...(ownedChildren.length ? { childStateSummary: childStateSummary(ownedChildren) } : {}),
     });
-
-    if (!revealsActiveDescendant) {
-      return;
-    }
-
     for (const child of childThreads) {
-      visit(child, depth + 1, rootThreadId);
+      if (
+        child.parentThreadId
+          ? nativeActiveAncestors.has(thread.id)
+          : input.expandedParentThreadIds?.has(thread.id) || forced.has(child.id)
+      ) {
+        visit(child, depth + 1, rootThreadId);
+      }
     }
   };
+  for (const root of roots) visit(root, 0, root.id);
+  return rows;
+}
 
-  for (const root of roots) {
-    visit(root, 0, root.id);
-  }
-
-  return orderedRows;
+export function groupSidebarAutomationRuns(input: {
+  threads: readonly SidebarThreadSummary[];
+  definitions: readonly Pick<
+    AutomationDefinition,
+    "id" | "name" | "projectId" | "sourceThreadId" | "targetThreadId"
+  >[];
+  runs: readonly Pick<AutomationRun, "automationId" | "threadId">[];
+}): readonly SidebarThreadSummary[] {
+  if (input.runs.length === 0) return input.threads;
+  const definitions = new Map(input.definitions.map((definition) => [definition.id, definition]));
+  const definitionByThreadId = new Map(
+    input.runs.flatMap((run) => {
+      const definition = definitions.get(run.automationId);
+      return definition && run.threadId ? [[run.threadId, definition] as const] : [];
+    }),
+  );
+  const groups = new Map<string, SidebarThreadSummary>();
+  const threads = input.threads.map((thread) => {
+    if (thread.creationSource !== "automation_run") return thread;
+    const definition = definitionByThreadId.get(thread.id);
+    if (!definition) return thread;
+    const ownerId = definition.targetThreadId ?? definition.sourceThreadId;
+    if (ownerId) return ownerId === thread.id ? thread : { ...thread, sourceThreadId: ownerId };
+    const id = ThreadId.makeUnsafe(`automation-group:${definition.id}`);
+    if (!groups.has(id))
+      groups.set(id, {
+        ...thread,
+        id,
+        title: definition.name,
+        sourceThreadId: null,
+        parentThreadId: null,
+        creationSource: null,
+        automationGroupId: definition.id,
+        latestTurn: null,
+        session: null,
+        hasPendingApprovals: false,
+        hasPendingUserInput: false,
+        hasLiveTailWork: false,
+      });
+    return { ...thread, sourceThreadId: id };
+  });
+  return [...groups.values(), ...threads];
 }
 
 export function getVisibleSidebarEntriesForPreview<
@@ -1011,6 +1113,7 @@ export function getVisibleSidebarEntriesForPreview<
   entries: readonly T[];
   activeEntryId: Thread["id"] | undefined;
   previewLimit: number;
+  forceVisibleEntryIds?: readonly ThreadId[];
 }): {
   hasHiddenEntries: boolean;
   visibleEntries: T[];
@@ -1028,10 +1131,18 @@ export function getVisibleSidebarEntriesForPreview<
   const previewEntries = entries.slice(0, previewLimit);
   const visibleEntryIds = new Set(previewEntries.map((entry) => entry.rowId));
 
+  for (const id of input.forceVisibleEntryIds ?? []) {
+    const index = entries.findIndex((entry) => entry.rowId === id);
+    if (index < 0) continue;
+    const rootIndex = entries.findIndex((entry) => entry.rowId === entries[index]!.rootRowId);
+    for (const entry of entries.slice(rootIndex < 0 ? index : rootIndex, index + 1))
+      visibleEntryIds.add(entry.rowId);
+  }
+  const attentionEntries = entries.filter((entry) => visibleEntryIds.has(entry.rowId));
   if (!activeEntryId || visibleEntryIds.has(activeEntryId)) {
     return {
       hasHiddenEntries: true,
-      visibleEntries: previewEntries,
+      visibleEntries: attentionEntries,
     };
   }
 
@@ -1039,7 +1150,7 @@ export function getVisibleSidebarEntriesForPreview<
   if (activeEntryIndex === -1) {
     return {
       hasHiddenEntries: true,
-      visibleEntries: previewEntries,
+      visibleEntries: attentionEntries,
     };
   }
 
@@ -1047,7 +1158,7 @@ export function getVisibleSidebarEntriesForPreview<
   if (!activeEntry) {
     return {
       hasHiddenEntries: true,
-      visibleEntries: previewEntries,
+      visibleEntries: attentionEntries,
     };
   }
 
@@ -1138,7 +1249,8 @@ export function orderPinnedProjectsForSidebar<T extends Pick<Project, "id">>(
 // children with a missing parent — hiding such a parent would make its
 // descendants unreachable anywhere in the sidebar.
 export function getUnpinnedThreadsForSidebar<
-  T extends Pick<Thread, "id"> & Partial<Pick<SidebarThreadSummary, "parentThreadId">>,
+  T extends Pick<Thread, "id"> &
+    Partial<Pick<SidebarThreadSummary, "parentThreadId" | "sourceThreadId" | "creationSource">>,
 >(threads: readonly T[], pinnedThreadIds: readonly T["id"][]): T[] {
   if (pinnedThreadIds.length === 0) {
     return [...threads];
@@ -1146,7 +1258,7 @@ export function getUnpinnedThreadsForSidebar<
 
   const parentThreadIds = new Set<T["id"]>();
   for (const thread of threads) {
-    const parentThreadId = thread.parentThreadId ?? null;
+    const parentThreadId = ownedThreadParentId(thread);
     if (parentThreadId !== null) {
       parentThreadIds.add(parentThreadId as T["id"]);
     }
@@ -1470,17 +1582,26 @@ export function isHiddenProjectAgentCoordinatorThread(
   return coordinatorThreadIds.has(threadId);
 }
 
-export function excludeHiddenProjectAgentCoordinatorThreads<T extends { readonly id: string }>(
-  threads: readonly T[],
-  coordinatorThreadIds: ReadonlySet<string>,
-): readonly T[] {
+export function excludeHiddenProjectAgentCoordinatorThreads<
+  T extends {
+    readonly id: string;
+    readonly parentThreadId?: string | null;
+    readonly sourceThreadId?: string | null;
+    readonly creationSource?: string | null;
+  },
+>(threads: readonly T[], coordinatorThreadIds: ReadonlySet<string>): readonly T[] {
   if (coordinatorThreadIds.size === 0) {
     // The input array is already the answer — copying it gave every caller a new
     // reference each render, churning downstream memo deps in dev.
     return threads;
   }
+  const parents = new Set(
+    threads.filter((thread) => !thread.parentThreadId).map(ownedThreadParentId),
+  );
   return threads.filter(
-    (thread) => !isHiddenProjectAgentCoordinatorThread(thread.id, coordinatorThreadIds),
+    (thread) =>
+      parents.has(thread.id) ||
+      !isHiddenProjectAgentCoordinatorThread(thread.id, coordinatorThreadIds),
   );
 }
 
@@ -1586,6 +1707,7 @@ export function deriveSidebarProjectData(input: {
   activeSidebarThreadId: ThreadId | undefined;
   previewLimit: number;
   previewPageSize: number;
+  expandedParentThreadIds?: ReadonlySet<string> | undefined;
   resolveThreadStatus?: (
     thread: SidebarThreadSummary,
   ) => ReturnType<typeof resolveThreadStatusPill>;
@@ -1608,7 +1730,9 @@ export function deriveSidebarProjectData(input: {
     );
     const requestedExtraPages =
       input.threadListExtraPagesByProjectCwd.get(input.normalizeProjectCwd(project.cwd)) ?? 0;
-    const orderedProjectThreadIds = projectThreads.map((thread) => thread.id);
+    const orderedProjectThreadIds = projectThreads
+      .filter((thread) => !thread.automationGroupId)
+      .map((thread) => thread.id);
 
     // Collapsed folders should not build or render their full tree; large projects can
     // contain hundreds of rows and folder toggles are on the sidebar hot path.
@@ -1648,14 +1772,16 @@ export function deriveSidebarProjectData(input: {
     const projectThreadTree = buildProjectThreadTree({
       threads: projectThreads,
       forceVisibleThreadId: input.activeSidebarThreadId,
+      expandedParentThreadIds: input.expandedParentThreadIds,
     });
     const orderedEntries: SidebarProjectEntry[] = projectThreadTree.map(
-      ({ thread, depth, rootThreadId }) => ({
+      ({ thread, depth, rootThreadId, childStateSummary }) => ({
         kind: "thread",
         rowId: thread.id,
         rootRowId: rootThreadId,
         thread,
         depth,
+        ...(childStateSummary ? { childStateSummary } : {}),
       }),
     );
 
@@ -1673,6 +1799,9 @@ export function deriveSidebarProjectData(input: {
       entries: orderedEntries,
       activeEntryId: activeEntry?.rowId,
       previewLimit: paging.previewLimit,
+      forceVisibleEntryIds: orderedEntries
+        .filter((entry) => !entry.thread.parentThreadId && sidebarThreadNeedsReveal(entry.thread))
+        .map((entry) => entry.rowId),
     });
 
     byProjectId.set(project.id, {

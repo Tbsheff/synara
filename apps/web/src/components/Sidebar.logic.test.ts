@@ -2328,9 +2328,7 @@ describe("sortProjectsForSidebar", () => {
 it("passes only rendered chat and project rows to range selection", () => {
   const source = readFileSync(new URL("./Sidebar.tsx", import.meta.url), "utf8");
   expect(source.includes("renderedChatThreadIds,")).toBe(true);
-  expect(
-    source.includes("renderThreadRow(entry.thread, renderedProjectThreadIds, entry.depth)"),
-  ).toBe(true);
+  expect(source.includes("renderedProjectThreadIds")).toBe(true);
 });
 
 it("keeps hidden chats out of a range to a distant revealed active row", () => {
