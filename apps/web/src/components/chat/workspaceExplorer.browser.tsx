@@ -155,3 +155,24 @@ it("scrolls a selected offscreen file into view and measures rows at the chosen 
     else document.documentElement.style.removeProperty("--app-font-size-ui");
   }
 });
+
+it("keeps the expanded folder in view when an earlier file is selected", async () => {
+  const children: ProjectFileSystemEntry[] = Array.from({ length: 1500 }, (_, index) => ({
+    path: `wide/entry-${String(index).padStart(4, "0")}.txt`,
+    name: `entry-${String(index).padStart(4, "0")}.txt`,
+    kind: "file",
+  }));
+  await mount(
+    [
+      { path: "active.txt", name: "active.txt", kind: "file" },
+      { path: "wide", name: "wide", kind: "directory" },
+    ],
+    children,
+    "active.txt",
+  );
+  await page.getByRole("button", { name: "wide", exact: true }).click();
+  const first = page.getByRole("button", { name: "entry-0000.txt", exact: true });
+  await expect.element(first).toBeVisible();
+  expect(first.element().getBoundingClientRect().bottom).toBeLessThanOrEqual(400);
+  expect(document.querySelectorAll("[data-explorer-row]").length).toBeLessThan(100);
+});
