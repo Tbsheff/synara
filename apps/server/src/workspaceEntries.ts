@@ -9,7 +9,6 @@ import {
   FilesystemBrowseResult,
   ProjectDiscoverScriptsInput,
   ProjectDiscoverScriptsResult,
-  ProjectDirectoryEntry,
   ProjectDiscoveredScriptTarget,
   ProjectFileSystemEntry,
   ProjectListDirectoriesInput,
@@ -1313,8 +1312,10 @@ export async function listWorkspaceDirectories(
           name: dirent.name,
           kind: "directory",
           ...(relativePath ? { parentPath: relativePath } : {}),
-          hasChildren: await directoryHasChildDirectories(childAbsolutePath),
-        } satisfies ProjectDirectoryEntry & ProjectFileSystemEntry;
+          ...(input.includeChildHints === false
+            ? {}
+            : { hasChildren: await directoryHasChildDirectories(childAbsolutePath) }),
+        } satisfies ProjectFileSystemEntry;
       }
       return {
         path: childRelativePath,

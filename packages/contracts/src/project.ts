@@ -65,6 +65,7 @@ export const ProjectListDirectoriesInput = Schema.Struct({
     PositiveInt.check(Schema.isLessThanOrEqualTo(PROJECT_DIRECTORY_LIST_MAX_DEPTH)),
   ),
   includeFiles: Schema.optional(Schema.Boolean),
+  includeChildHints: Schema.optional(Schema.Boolean),
 });
 export type ProjectListDirectoriesInput = typeof ProjectListDirectoriesInput.Type;
 

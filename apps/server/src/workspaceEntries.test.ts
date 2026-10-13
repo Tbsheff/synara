@@ -474,6 +474,34 @@ describe("searchLocalEntries", () => {
 });
 
 describe("listWorkspaceDirectories", () => {
+  it("omits child hints without reading children and retains the picker default", async () => {
+    const cwd = makeTempDir("synara-workspace-list-hints-");
+    writeFile(cwd, "docs/api/guide.md", "guide");
+    writeFile(cwd, ".cache/nested/file.txt", "cache");
+    writeFile(cwd, "README.md", "root");
+    const readdir = vi.spyOn(fsPromises, "readdir");
+    const result = await listWorkspaceDirectories({
+      cwd,
+      includeFiles: true,
+      includeChildHints: false,
+    });
+    expect(readdir).toHaveBeenCalledTimes(1);
+    expect(result.entries.every((entry) => entry.hasChildren === undefined)).toBe(true);
+    expect(result.entries.map((entry) => entry.name)).toEqual([".cache", "docs", "README.md"]);
+    readdir.mockClear();
+    const picker = await listWorkspaceDirectories({ cwd });
+    expect(readdir).toHaveBeenCalledTimes(3);
+    expect(picker.entries.find((entry) => entry.path === "docs")?.hasChildren).toBe(true);
+    await expect(
+      listWorkspaceDirectories({ cwd, relativePath: "..", includeChildHints: false }),
+    ).rejects.toThrow("outside the workspace root");
+    const outside = makeTempDir("synara-workspace-list-hints-outside-");
+    fs.symlinkSync(outside, path.join(cwd, "outside"));
+    await expect(
+      listWorkspaceDirectories({ cwd, relativePath: "outside", includeChildHints: false }),
+    ).rejects.toThrow("outside the workspace root");
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
     for (const dir of tempDirs.splice(0, tempDirs.length)) {
