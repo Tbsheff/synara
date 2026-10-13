@@ -20,6 +20,7 @@ interface WorkerMonitorNoticePillProps {
   entry: WorkLogEntry;
   notice: WorkLogSynaraWorkerNotice;
   onOpenThread?: (threadId: ThreadId) => void;
+  quotedExcerpt?: string;
 }
 
 /**
@@ -32,6 +33,7 @@ export function WorkerMonitorNoticePill({
   entry,
   notice,
   onOpenThread,
+  quotedExcerpt,
 }: WorkerMonitorNoticePillProps) {
   const [pendingAction, setPendingAction] = useState<"retry" | "stop" | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -62,7 +64,8 @@ export function WorkerMonitorNoticePill({
       className={cn(
         // Reads as part of the coordinator's reply: left-aligned body text,
         // no pill, no status glyphs.
-        "flex max-w-full flex-wrap items-center gap-x-1 gap-y-1 text-chat text-foreground",
+        "flex max-w-full flex-wrap items-center gap-x-1 gap-y-1 text-foreground",
+        quotedExcerpt === undefined ? "text-chat" : "text-ui",
       )}
       data-worker-monitor-kind={notice.kind}
     >
@@ -169,6 +172,14 @@ export function WorkerMonitorNoticePill({
             </Button>
           ) : null}
         </span>
+      ) : null}
+      {quotedExcerpt !== undefined ? (
+        <blockquote
+          className="w-full whitespace-pre-wrap break-words border-l-2 border-border pl-3 text-ui-sm text-muted-foreground"
+          data-child-notice-excerpt="true"
+        >
+          {quotedExcerpt}
+        </blockquote>
       ) : null}
       {error ? <span className="text-destructive">{error}</span> : null}
     </div>

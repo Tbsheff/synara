@@ -1,5 +1,5 @@
 import type { LegendListRef } from "@legendapp/list/react";
-import { ThreadId } from "@synara/contracts";
+import { MessageId, ThreadId } from "@synara/contracts";
 import { describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 import { useChatTranscriptScroll } from "./useChatTranscriptScroll";
@@ -302,6 +302,85 @@ it("keeps a detached reader detached after the content shrinks to the viewport",
     controls!.onIsAtEndChange(true);
     await waitForFrames();
     expect(controls!.isUserScrollDetached).toBe(true);
+  } finally {
+    await screen.unmount();
+  }
+});
+
+it("does not rearm a detached reader when a child notice arrives", async () => {
+  const node = document.createElement("div");
+  Object.defineProperties(node, {
+    scrollHeight: { value: 1000 },
+    clientHeight: { value: 200 },
+    scrollTop: { value: 300, writable: true },
+  });
+  const scrollToEnd = vi.fn(async () => {});
+  const listRef = {
+    current: { getScrollableNode: () => node, scrollToEnd } as unknown as LegendListRef,
+  };
+  let controls: ReturnType<typeof useChatTranscriptScroll> | undefined;
+  function Harness({ entries }: { entries: TimelineEntry[] }) {
+    controls = useChatTranscriptScroll({
+      activeThreadId: ThreadId.makeUnsafe("parent-notice"),
+      legendListRef: listRef,
+      timelineEntries: entries,
+      hasStreamingAssistantText: false,
+      composerTranscriptInsetPx: 0,
+      isInactiveSplitPane: false,
+    });
+    return null;
+  }
+  const screen = await render(<Harness entries={[]} />);
+  try {
+    await waitForFrames();
+    scrollToEnd.mockClear();
+    await screen.rerender(
+      <Harness
+        entries={[
+          {
+            id: "notice-arrival",
+            kind: "message",
+            createdAt: "2026-10-12T12:00:00.000Z",
+            message: {
+              id: MessageId.makeUnsafe("notice-arrival"),
+              role: "user",
+              dispatchOrigin: "notification",
+              text: "Child result",
+              createdAt: "2026-10-12T12:00:00.000Z",
+              streaming: false,
+            },
+          },
+        ]}
+      />,
+    );
+    await waitForFrames();
+    expect(scrollToEnd).not.toHaveBeenCalled();
+    controls!.onTranscriptNavigate();
+    await waitForFrames();
+    scrollToEnd.mockClear();
+    await screen.rerender(
+      <Harness
+        entries={[
+          {
+            id: "child-notice",
+            kind: "message",
+            createdAt: "2026-10-12T12:00:00.000Z",
+            message: {
+              id: MessageId.makeUnsafe("child-notice"),
+              role: "user",
+              dispatchOrigin: "notification",
+              text: "Child result",
+              createdAt: "2026-10-12T12:00:00.000Z",
+              streaming: false,
+            },
+          },
+        ]}
+      />,
+    );
+    await waitForFrames();
+    expect(controls!.isUserScrollDetached).toBe(true);
+    expect(scrollToEnd).not.toHaveBeenCalled();
+    expect(node.scrollTop).toBe(300);
   } finally {
     await screen.unmount();
   }

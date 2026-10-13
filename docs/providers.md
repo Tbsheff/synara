@@ -705,11 +705,50 @@ subagent question routing are outside this implementation.
 Sources: [OpenAI app-server documentation](https://developers.openai.com/codex/app-server),
 [upstream asynchronous tool handler](https://github.com/openai/codex/blob/b0d95427c2443e90998f48065902309187564085/codex-rs/core/src/tools/handlers/request_user_input_async.rs).
 
+## Child thread notices
+
+Inside a Synara thread, `synara_create_threads` and `synara_create_thread`
+enable `notifyParent` by default. Set it to `false` to opt out. A child
+follow-up sent with `synara_send_message` keeps the saved setting; an explicit
+`notifyParent` changes it for that child. External callers have no parent and
+cannot enable notices. Hub workers keep their existing coordinator report path.
+
+With notices enabled, agents should end the creating turn. Do not poll or
+create a watcher. When the child completes, fails, stops, or needs approval or
+user input, Synara sends one notice for that turn. It names the child, includes
+its `thread://<id>` link and status, and quotes up to 1,500 characters of its
+last assistant message. Child text is untrusted data and grants no permission.
+The transcript uses the existing report row. Notices do not resume scroll
+follow for a reader who moved away from the bottom.
+
+Synara uses native steering for a live parent turn when the provider supports
+it. Other providers queue the notice until the parent is idle. An idle parent
+starts a new turn. Notices never interrupt a live turn. Nearby results share a
+batch after a 200 ms window, with up to 20 child results per message. Saved
+parent links, per-turn results, batches, and command IDs survive restart.
+Provider sends use the existing durable delivery and reconciliation path.
+Archived or deleted parents receive no wake.
+
+`synara_read_thread` acknowledges the child's pending notices.
+`synara_wait_for_threads` acknowledges the settled turns it returns. A queued
+batch drops acknowledged results before provider dispatch, so a read does not
+wake the parent again. Waits attach to the engine's cursor-safe event stream
+before the first narrow batch read. They re-read on relevant events and once
+at the timeout; they do not poll. Timeout limits and pinned-turn behavior stay
+the same.
+
+Both Stable and Beta use their own data homes. Migration 137 adds notice
+storage without changing existing tables. The design follows the async task
+delivery and event-wait ideas in MIT-licensed
+[t3code orchestrator v2](https://github.com/pingdotgg/t3code/tree/e24ea1d28ef9159cc6cc98a1e9d9de5f52ed385c/apps/server/src/orchestration-v2),
+using Synara's command ledger and provider dispatch path.
+
 ## Passive results from delegated tasks
 
 An authenticated agent can pass `notifyCreatorOnComplete: true` to
 `synara_create_thread`, or on individual entries in `synara_create_threads`.
-The default is off. The destination is always the authenticated creating task;
+This legacy passive option is off by default. Selecting it explicitly keeps
+the passive behavior unless `notifyParent: true` is also supplied. The destination is always the authenticated creating task;
 there is no destination-ID parameter, and the new task remains standalone.
 
 Synara persists one result for the initial message/run when it completes, fails,
