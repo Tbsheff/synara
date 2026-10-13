@@ -145,10 +145,6 @@ export interface RuntimeUsageControlsProps {
   activeContextWindowLabel?: string | null | undefined;
   pendingContextWindowLabel?: string | null | undefined;
   className?: string | undefined;
-  // Force icon-only rendering regardless of container width. Used when the
-  // control is relocated outside the composer footer (which provides the
-  // @container the responsive sr-only fallback depends on).
-  hideLabel?: boolean | undefined;
 }
 
 export function RuntimeUsageControls({
@@ -158,13 +154,11 @@ export function RuntimeUsageControls({
   runtimeMode,
   onRuntimeModeChange,
   className,
-  hideLabel: hideLabelProp,
 }: RuntimeUsageControlsProps) {
   const autoModeAvailable =
     provider !== undefined &&
     providerModelSupportsAutoRuntimeMode(provider, runtimeModel, providerStatus);
   const runtimePresentation = RUNTIME_MODE_PRESENTATION[runtimeMode ?? "approval-required"];
-  const hideLabel = hideLabelProp ?? false;
   return (
     <div
       className={cn(
@@ -197,15 +191,8 @@ export function RuntimeUsageControls({
               ) : (
                 <HiOutlineHandRaised className="size-3.5 shrink-0" />
               )}
-              <span className={cn("truncate", hideLabel ? "sr-only" : "@max-[480px]:sr-only")}>
-                {runtimePresentation.label}
-              </span>
-              <ChevronDownIcon
-                className={cn(
-                  "size-3 shrink-0 opacity-70",
-                  hideLabel ? "hidden" : "@max-[480px]:hidden",
-                )}
-              />
+              <span className="truncate">{runtimePresentation.label}</span>
+              <ChevronDownIcon className="size-3 shrink-0 opacity-70" />
             </span>
           </MenuTrigger>
           <ComposerPickerMenuPopup

@@ -47,6 +47,9 @@ Slow Git work in one workspace leaves other workspaces free to progress. Recover
 completed captures and undo outcomes; an interrupted operation with an uncertain outcome
 is reported for inspection instead of automatically changing the workspace again.
 
+New chats start in **Ask for approval** when no access mode was saved. Synara keeps saved
+thread and draft modes. The composer shows the current mode, including at narrow widths.
+
 Pi and Antigravity do not offer Synara Plan mode or Ask for approval. Select Full access
 explicitly to use these providers. Changing providers does not grant more access to a saved
 thread or draft. Oh My Pi keeps its existing mode choices.
