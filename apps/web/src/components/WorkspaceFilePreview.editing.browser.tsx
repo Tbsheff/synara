@@ -115,7 +115,7 @@ it("bounds large plain-file editing and keeps offscreen edits, undo, save, and r
     expect(editor.element().querySelectorAll("[data-line]").length).toBeGreaterThan(0);
     expect(editor.element().querySelectorAll("[data-line]").length).toBeLessThan(250);
     await editor.click({ position: { x: 15, y: 5 } });
-    await userEvent.keyboard(shortcut("End"));
+    await userEvent.keyboard(shortcut("{End}"));
     await userEvent.keyboard("tail");
     await expect.element(editor).toHaveTextContent("synthetictail");
     await userEvent.keyboard(shortcut("z"));
@@ -1014,7 +1014,12 @@ it("preserves the bounded Markdown editor while its preview is open", async () =
     expect(original.getBoundingClientRect().height).toBe(0);
     await page.getByRole("radio", { name: "Source", exact: true }).click();
     await expect.element(editor).toHaveTextContent("# unsaved draft");
-    expect(editor.element()).toBe(original);
+    expect((editor.element().getRootNode() as ShadowRoot).host).toBe(
+      (original.getRootNode() as ShadowRoot).host,
+    );
+    await editor.click({ position: { x: 15, y: 5 } });
+    await userEvent.keyboard(shortcut("z"));
+    await expect.element(editor).toHaveTextContent("line");
   } finally {
     restoreNativeApi();
   }
