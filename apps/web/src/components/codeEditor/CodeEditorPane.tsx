@@ -25,6 +25,7 @@ export interface CodeEditorPaneProps {
   documentKey?: string | undefined;
   language?: "text" | undefined;
   ariaLabel?: string | undefined;
+  persistState?: boolean | undefined;
   resolvedTheme: "light" | "dark";
   onChange: (value: string) => void;
   onSave: () => void;
@@ -127,7 +128,7 @@ export function CodeEditorPane(props: CodeEditorPaneProps) {
   );
   const editorOptions = useCodeEditorSessionOptions({
     onChange: props.onChange,
-    persistState: true,
+    persistState: props.persistState,
     onHistoryChange: props.onHistoryChange,
     historyControlsRef: props.historyControlsRef,
     onAttach: labelEditor,

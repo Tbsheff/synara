@@ -407,6 +407,7 @@ function EditableFileContents(props: EditableFileContentsProps) {
           documentKey={`${props.cacheKey}:${editorId}`}
           language="text"
           ariaLabel={`Edit ${props.path}`}
+          persistState
           resolvedTheme={props.theme}
           onChange={props.onContentsChange}
           onSave={props.onSave}
