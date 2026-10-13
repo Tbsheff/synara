@@ -128,6 +128,7 @@ export interface PreparedCodexAuthTracking {
   readonly sourceConfigPath: string;
   readonly authoritativeAuthFilePath: string;
   readonly sourceConfigSnapshot: string;
+  readonly storeMode: CodexAuthCredentialsStoreMode;
   readonly authSource: CodexPreparedAuthSource;
 }
 
@@ -312,9 +313,9 @@ export function readEffectiveCodexAuthCredentialsStoreMode(
 function assertManagedCodexHomeUsesObservableAuth(input: {
   readonly sourceConfig: string;
   readonly accountId?: string;
-}): void {
+}): CodexAuthCredentialsStoreMode {
   const mode = readEffectiveCodexAuthCredentialsStoreMode(input.sourceConfig);
-  if (mode !== "keyring" && mode !== "auto") return;
+  if (mode !== "keyring" && mode !== "auto") return mode;
   const accountLabel = input.accountId?.trim() || "default";
   throw new Error(
     `Codex account '${accountLabel}' uses cli_auth_credentials_store = "${mode}". Synara-managed Codex homes require file-backed Codex auth so account changes can invalidate long-lived app-server sessions; set the root cli_auth_credentials_store = "file" before starting this account.`,
@@ -762,7 +763,7 @@ function* readCodexPreparedAuthTrackingFingerprintIo(
   tracking: PreparedCodexAuthTracking,
 ): CodexAuthIo<string> {
   return JSON.stringify({
-    storeMode: readEffectiveCodexAuthCredentialsStoreMode(tracking.sourceConfigSnapshot),
+    storeMode: tracking.storeMode,
     auth: readCodexPreparedAuthIdentity(
       yield* readCodexPreparedHomeFileSnapshotIo(tracking.authSource, "auth.json"),
     ),
@@ -840,7 +841,7 @@ function* prepareCodexAuthTrackingIo(
       "utf8",
     ) ?? "";
   const sourceConfigPath = path.join(sourceHomePath, "config.toml");
-  assertManagedCodexHomeUsesObservableAuth({
+  const storeMode = assertManagedCodexHomeUsesObservableAuth({
     sourceConfig: sourceConfigSnapshot,
     ...(input.accountId ? { accountId: input.accountId } : {}),
   });
@@ -850,6 +851,7 @@ function* prepareCodexAuthTrackingIo(
     sourceConfigPath,
     authoritativeAuthFilePath,
     sourceConfigSnapshot,
+    storeMode,
     authSource,
   };
 }

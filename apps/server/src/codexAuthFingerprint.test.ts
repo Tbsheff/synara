@@ -2,7 +2,17 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { readCodexAuthFingerprintAsync } from "./codexProcessEnv";
+import { parse as parseToml } from "smol-toml";
+import {
+  prepareCodexAuthTracking,
+  readCodexPreparedAuthTrackingFingerprint,
+  readCodexAuthFingerprintAsync,
+} from "./codexProcessEnv";
+
+vi.mock("smol-toml", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("smol-toml")>();
+  return { ...actual, parse: vi.fn(actual.parse) };
+});
 
 const roots: string[] = [];
 afterEach(() => {
@@ -19,6 +29,32 @@ function fixture() {
 }
 
 describe("asynchronous Codex auth freshness", () => {
+  it.each(["sync", "async"] as const)(
+    "parses config once per %s status check and reads fresh auth and config on the next check",
+    async (mode) => {
+      const input = fixture();
+      const authPath = path.join(input.homePath, "auth.json");
+      const configPath = path.join(input.homePath, "config.toml");
+      const check = () =>
+        mode === "async"
+          ? readCodexAuthFingerprintAsync(input)
+          : Promise.resolve(
+              readCodexPreparedAuthTrackingFingerprint(prepareCodexAuthTracking(input)),
+            );
+      vi.mocked(parseToml).mockClear();
+      const first = await check();
+      expect(parseToml).toHaveBeenCalledExactlyOnceWith('cli_auth_credentials_store = "file"\n');
+      fs.writeFileSync(authPath, JSON.stringify({ tokens: { account_id: "new-login" } }));
+      vi.mocked(parseToml).mockClear();
+      const next = await check();
+      expect(next).not.toBe(first);
+      expect(parseToml).toHaveBeenCalledOnce();
+      fs.unlinkSync(authPath);
+      expect(await check()).toBe(first);
+      fs.writeFileSync(configPath, 'cli_auth_credentials_store = "keyring"\n');
+      await expect(Promise.resolve().then(check)).rejects.toThrow("require file-backed Codex auth");
+    },
+  );
   it.each(["identity", "content"] as const)(
     "rejects descriptor %s races and closes the descriptor",
     async (race) => {

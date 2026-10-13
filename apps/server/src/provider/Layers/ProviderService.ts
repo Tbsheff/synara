@@ -68,6 +68,7 @@ import {
 } from "effect";
 import { nonEmptyTrimmed } from "@synara/shared/text";
 import { computerApprovalGate } from "../../computer/ComputerApprovalGate.ts";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import {
   type ProviderAdapterError,
@@ -97,7 +98,14 @@ import {
   isStartedTurnApplicable,
 } from "../terminalTurnApplicability.ts";
 import { makeProviderLifecycleCoordinator } from "../providerLifecycleCoordinator.ts";
-import { selectWarmSessionEvictions } from "../warmSessionPolicy.ts";
+import {
+  canStopIdleSessionWithDurableWork,
+  resolveWarmSessionIdleTimeoutMs,
+  resolveWarmSessionLimit,
+  selectWarmSessionEvictions,
+  WARM_SESSION_MEMORY_CHECK_MS,
+} from "../warmSessionPolicy.ts";
+import os from "node:os";
 import { makeKeyedLock } from "../keyedLock.ts";
 import { carryProviderAttachmentPaths } from "../providerAttachmentPaths.ts";
 import {
@@ -138,6 +146,9 @@ export interface ProviderServiceLiveOptions {
   readonly canonicalEventLogPath?: string;
   readonly canonicalEventLogger?: EventNdjsonLogger;
   readonly runtimeIdleStopMs?: number;
+  readonly canStopIdleSession?: (
+    threadId: ThreadId,
+  ) => Effect.Effect<boolean, ProviderValidationError>;
   /** Test/embedding override for the lossless runtime-event fan-out budget. */
   readonly runtimeEventBufferCapacity?: number;
   /** Production journal hook. The event must be durable before this effect returns. */
@@ -891,6 +902,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
     const registry = yield* ProviderAdapterRegistry;
     const directory = yield* ProviderSessionDirectory;
     const serverSettings = yield* ServerSettingsService;
+    const canStopIdleSession = options?.canStopIdleSession ?? (() => Effect.succeed(true));
     const secretStore = yield* ServerSecretStore;
     const credentialsFingerprintKey = yield* secretStore.getOrCreateRandom(
       PROVIDER_OPTIONS_FINGERPRINT_HMAC_SECRET,
@@ -1062,25 +1074,36 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       if ((liveRuntimeTaskIds.get(threadId)?.size ?? 0) > 0) {
         return;
       }
-      if (runtimeIdleStopMs <= 0 && !warmSessionTouches.has(threadId)) {
-        retireRuntimeIdleGeneration(threadId);
-        return;
-      }
-
       const generation = invalidateRuntimeIdleGeneration(threadId);
-      if (runtimeIdleStopMs <= 0) return;
-      const timer = setTimeout(
-        () => {
-          runtimeIdleTimers.delete(threadId);
-          stopIdleRuntimeSession?.(threadId, generation);
-        },
+      const idleSince = Date.now();
+      const normalTimeoutMs =
         options?.runtimeIdleStopMs ??
-          (configuredProviderRuntimeIdleStopMs !== undefined
-            ? runtimeIdleStopMs
-            : idleStopMinutes * 60_000),
-      );
-      timer.unref();
-      runtimeIdleTimers.set(threadId, timer);
+        (configuredProviderRuntimeIdleStopMs !== undefined
+          ? runtimeIdleStopMs
+          : idleStopMinutes * 60_000);
+      const currentTimeoutMs = () =>
+        resolveWarmSessionIdleTimeoutMs(normalTimeoutMs, os.freemem(), os.totalmem());
+      const armTimer = () => {
+        const timeoutMs = currentTimeoutMs();
+        const remainingMs =
+          timeoutMs > 0 ? Math.max(1, timeoutMs - (Date.now() - idleSince)) : Infinity;
+        const timer = setTimeout(
+          () => {
+            if (!isRuntimeIdleGenerationCurrent(threadId, generation)) return;
+            runtimeIdleTimers.delete(threadId);
+            const timeoutMs = currentTimeoutMs();
+            if (timeoutMs > 0 && Date.now() - idleSince >= timeoutMs) {
+              stopIdleRuntimeSession?.(threadId, generation);
+            } else {
+              armTimer();
+            }
+          },
+          Math.min(WARM_SESSION_MEMORY_CHECK_MS, remainingMs),
+        );
+        timer.unref();
+        runtimeIdleTimers.set(threadId, timer);
+      };
+      armTimer();
     };
 
     const markRuntimeTaskLive = (threadId: ThreadId, taskId: string): void => {
@@ -1332,7 +1355,14 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
     const reconcileRuntimeIdleTimer = (event: ProviderRuntimeEvent) => {
       switch (event.type) {
         case "turn.started":
+        case "request.opened":
+        case "user-input.requested":
           clearRuntimeIdleTimer(event.threadId);
+          retireRuntimeIdleGeneration(event.threadId);
+          return;
+        case "request.resolved":
+        case "user-input.resolved":
+          scheduleRuntimeIdleStop(event.threadId);
           return;
         case "task.started":
         case "task.progress":
@@ -4554,6 +4584,30 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             if (!isExpectedIdleStopCurrent()) {
               return;
             }
+            if (
+              expectedIdleGeneration !== undefined &&
+              runtimeIdleCleanupGenerations.get(input.threadId) !== expectedIdleGeneration
+            ) {
+              const payload = runtimePayloadRecord(binding.runtimePayload);
+              const sessions = yield* adapter.listSessions();
+              const session = sessions.find((entry) => entry.threadId === input.threadId);
+              if (
+                payload.activeTurnId != null ||
+                session?.activeTurnId !== undefined ||
+                (session?.status === "running" && binding.status !== "stopped") ||
+                (liveRuntimeTaskIds.get(input.threadId)?.size ?? 0) > 0 ||
+                (dispatchStateByThread.get(input.threadId)?.inFlightGenerations.size ?? 0) > 0 ||
+                (dispatchStateByThread.get(input.threadId)?.outstandingTurnIds.size ?? 0) > 0 ||
+                !(yield* canStopIdleSession(input.threadId))
+              ) {
+                scheduleRuntimeIdleStop(input.threadId);
+                return;
+              }
+              if (!isExpectedIdleStopCurrent()) return;
+            }
+            if (expectedIdleGeneration !== undefined) {
+              runtimeIdleCleanupGenerations.set(input.threadId, expectedIdleGeneration);
+            }
             yield* adapter.stopSession(input.threadId);
             if (!isExpectedIdleStopCurrent()) {
               return;
@@ -4633,7 +4687,9 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         if (
           (bindingRuntimePayload.activeTurnId !== null &&
             bindingRuntimePayload.activeTurnId !== undefined) ||
-          (liveRuntimeTaskIds.get(threadId)?.size ?? 0) > 0
+          (liveRuntimeTaskIds.get(threadId)?.size ?? 0) > 0 ||
+          (dispatchStateByThread.get(threadId)?.inFlightGenerations.size ?? 0) > 0 ||
+          (dispatchStateByThread.get(threadId)?.outstandingTurnIds.size ?? 0) > 0
         ) {
           retireRuntimeIdleGeneration(threadId, generation);
           return;
@@ -4676,9 +4732,11 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         if (!isRuntimeIdleGenerationCurrent(threadId, generation)) {
           return;
         }
+        if (!(yield* canStopIdleSession(threadId))) {
+          scheduleRuntimeIdleStop(threadId);
+          return;
+        }
 
-        cleanupStarted = true;
-        runtimeIdleCleanupGenerations.set(threadId, generation);
         yield* stopRuntimeSessionInternal({ threadId }, generation);
       }).pipe(
         Effect.catchCause((cause) => {
@@ -4689,7 +4747,11 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             const timer = setTimeout(
               () => {
                 runtimeIdleTimers.delete(threadId);
-                stopIdleRuntimeSession?.(threadId, generation, cleanupStarted);
+                stopIdleRuntimeSession?.(
+                  threadId,
+                  generation,
+                  cleanupStarted || runtimeIdleCleanupGenerations.get(threadId) === generation,
+                );
               },
               Math.max(1_000, Math.min(runtimeIdleStopMs, 30_000)),
             );
@@ -4928,14 +4990,17 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         const remaining = (yield* idleWarmSessions()).filter(
           (session) => !reserving || session.threadId !== threadId,
         );
-        return remaining.length + (reserving ? 1 : 0) <= settings.warmSessionLimit;
+        return (
+          remaining.length + (reserving ? 1 : 0) <=
+          resolveWarmSessionLimit(settings.warmSessionLimit)
+        );
       });
 
     enforceWarmSessionLimit = (threadId) =>
       Effect.gen(function* () {
         const settings = yield* serverSettings.getSettings;
         const candidates = new Set([...runtimeIdleTimers.keys(), ...warmSessionTouches.keys()]);
-        if (candidates.size <= settings.warmSessionLimit) return;
+        if (candidates.size <= resolveWarmSessionLimit(settings.warmSessionLimit)) return;
         yield* warmSessionLock.withPermits(1)(
           evictWarmSessions(threadId, false).pipe(Effect.asVoid),
         );
@@ -5246,8 +5311,23 @@ export function makeDurableProviderServiceLive(options?: ProviderServiceLiveOpti
     ProviderService,
     Effect.gen(function* () {
       const runtimeEvents = yield* ProviderRuntimeEventRepository;
+      const canStopIdleSession = yield* Effect.map(
+        Effect.service(SqlClient.SqlClient),
+        (sql) => (threadId: ThreadId) =>
+          canStopIdleSessionWithDurableWork(threadId).pipe(
+            Effect.provideService(SqlClient.SqlClient, sql),
+            Effect.mapError((cause) =>
+              toValidationError(
+                "ProviderService.idleStop",
+                "Could not check pending work before idle teardown.",
+                cause,
+              ),
+            ),
+          ),
+      );
       return yield* makeProviderService({
         ...options,
+        canStopIdleSession: options?.canStopIdleSession ?? canStopIdleSession,
         persistRuntimeEvent: (event) => runtimeEvents.append(event),
         quarantineRuntimeEvent: (event, cause) =>
           runtimeEvents

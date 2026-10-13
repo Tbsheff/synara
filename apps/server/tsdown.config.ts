@@ -29,6 +29,8 @@ export default defineConfig({
   // the import behind a `process.versions.bun` check.
   external: [/^bun:/u],
   sourcemap: buildSourcemap,
+  minify: true,
+  outputOptions: { keepNames: true },
   define: {
     __SYNARA_MIGRATION_RUNTIME_SOURCE_DIGEST__: JSON.stringify(migrationRuntimeSourceDigest),
   },
