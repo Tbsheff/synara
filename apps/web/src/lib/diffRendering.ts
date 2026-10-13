@@ -149,6 +149,14 @@ export function buildDiffPanelUnsafeCSS(theme: "light" | "dark"): string {
   color: var(--foreground) !important;
 }
 
+/* File Find is UI chrome inside the editor's shadow root. */
+[data-search-panel],
+[data-search-panel] input,
+[data-search-panel] button {
+  font-family: var(--font-ui-family) !important;
+  font-size: var(--app-font-size-ui) !important;
+}
+
 /* Sticky header chrome. Layout for the custom slot only — do not zero-out
    Pierre's default header padding (that clips path/+N text). */
 [data-diffs-header] {

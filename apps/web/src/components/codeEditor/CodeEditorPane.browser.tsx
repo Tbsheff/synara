@@ -11,6 +11,24 @@ import type { CodeEditHistoryControls, CodeEditHistoryState } from "./pierreEdit
 
 afterEach(() => document.documentElement.classList.remove("dark"));
 
+it("uses file Find in the full editor and returns focus after closing", async () => {
+  const view = await mount(false, "full-editor-needle\nother\nfull-editor-needle\n");
+  const editor = page.getByRole("textbox", { name: "Edit sample.ts" });
+  await editor.click({ position: { x: 15, y: 5 } });
+  const modifier = /Mac/.test(navigator.platform) ? "Meta" : "Control";
+  await userEvent.keyboard(`{${modifier}>}f{/${modifier}}`);
+  const find = page.getByRole("textbox", { name: "Find in file" });
+  await find.fill("full-editor-needle");
+  await expect
+    .poll(() => (find.element().getRootNode() as ShadowRoot).activeElement === find.element())
+    .toBe(true);
+  await userEvent.keyboard("{Enter}{Escape}");
+  await expect
+    .poll(() => (editor.element().getRootNode() as ShadowRoot).activeElement === editor.element())
+    .toBe(true);
+  await view.unmount();
+});
+
 function Harness({
   diff = false,
   initialValue = "const value = 1;\n",

@@ -9,6 +9,7 @@ import { buildDiffPanelUnsafeCSS, resolveDiffThemeName } from "~/lib/diffRenderi
 import { isEditorFileSaveShortcut } from "~/keybindings";
 import { serverConfigQueryOptions } from "~/lib/serverReactQuery";
 import { CodeEditBoundary } from "./CodeEditBoundary";
+import { useFileEditorFind } from "./useFileEditorFind";
 import {
   createCodeEditHistoryControls,
   readCodeEditHistoryState,
@@ -21,10 +22,14 @@ export interface CodeEditorPaneProps {
   value: string;
   valueVersion: number;
   fileName: string;
+  documentKey?: string | undefined;
+  language?: "text" | undefined;
+  ariaLabel?: string | undefined;
   resolvedTheme: "light" | "dark";
   onChange: (value: string) => void;
   onSave: () => void;
   historyControlsRef?: RefObject<CodeEditHistoryControls | null> | undefined;
+  editorRef?: RefObject<PierreEditor | null> | undefined;
   onHistoryChange?: ((history: CodeEditHistoryState) => void) | undefined;
 }
 
@@ -32,12 +37,15 @@ export function useCodeEditorSessionOptions(input: {
   onChange: (value: string) => void;
   onHistoryChange?: ((history: CodeEditHistoryState) => void) | undefined;
   historyControlsRef?: RefObject<CodeEditHistoryControls | null> | undefined;
+  onAttach?: ((editor: PierreEditor) => void) | undefined;
 }): EditorOptions<undefined> {
   const onChangeRef = useRef(input.onChange);
   onChangeRef.current = input.onChange;
   const onHistoryChangeRef = useRef(input.onHistoryChange);
   onHistoryChangeRef.current = input.onHistoryChange;
   const historyControlsRef = input.historyControlsRef;
+  const onAttachRef = useRef(input.onAttach);
+  onAttachRef.current = input.onAttach;
   const editorRef = useRef<PierreEditor | null>(null);
 
   return useMemo(() => {
@@ -57,6 +65,7 @@ export function useCodeEditorSessionOptions(input: {
     return {
       onAttach: (editor: PierreEditor) => {
         editorRef.current = editor;
+        onAttachRef.current?.(editor);
         if (historyControlsRef) {
           historyControlsRef.current = createCodeEditHistoryControls(editor);
         }
@@ -102,20 +111,36 @@ export function useCodeEditorSaveKeyDownHandler(onSave: () => void) {
 }
 
 export function CodeEditorPane(props: CodeEditorPaneProps) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const localEditorRef = useRef<PierreEditor | null>(null);
+  const editorRef = props.editorRef ?? localEditorRef;
+  const labelEditor = useFileEditorFind(
+    containerRef,
+    editorRef,
+    props.ariaLabel ?? `Edit ${props.fileName}`,
+  );
   const valueRef = useRef(props.value);
   valueRef.current = props.value;
   const file = useMemo(
     () => ({
       name: props.fileName,
       contents: valueRef.current,
-      cacheKey: `edit:${props.fileName}:${props.valueVersion}`,
+      cacheKey: `edit:${props.documentKey ?? props.fileName}:${props.valueVersion}`,
+      ...(props.language ? { lang: props.language } : {}),
     }),
-    [props.fileName, props.valueVersion],
+    [props.fileName, props.documentKey, props.valueVersion, props.language],
   );
   const editorOptions = useCodeEditorSessionOptions({
-    onChange: props.onChange,
+    onChange: (value) => {
+      file.contents = value;
+      props.onChange(value);
+    },
     onHistoryChange: props.onHistoryChange,
     historyControlsRef: props.historyControlsRef,
+    onAttach: (editor) => {
+      editorRef.current = editor;
+      labelEditor();
+    },
   });
   const options = useMemo(
     () => ({
@@ -137,6 +162,8 @@ export function CodeEditorPane(props: CodeEditorPaneProps) {
 
   return (
     <div
+      ref={containerRef}
+      data-file-editor="true"
       className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
       onKeyDownCapture={saveKeyDownHandler}
     >
