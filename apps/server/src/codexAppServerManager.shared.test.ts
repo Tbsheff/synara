@@ -166,6 +166,31 @@ async function fixture(
 }
 
 describe("shared Codex manager", () => {
+  it("keeps active shared turns running when a joining session cannot revalidate auth", async () => {
+    const h = await fixture();
+    const sessions = await Promise.all([h.start("a"), h.start("b")]);
+    const turns = await Promise.all(
+      sessions.map(({ threadId }) => h.manager.sendTurn({ threadId, input: "hello" })),
+    );
+    const realpath = fs.realpathSync.bind(fs);
+    h.manager.on("event", (event) => {
+      if (event.threadId === "c" && event.method === "session/connecting") {
+        vi.spyOn(fs, "realpathSync").mockImplementation((file) => {
+          if (file === h.home) throw new Error("Temporary auth read failure");
+          return realpath(file);
+        });
+      }
+    });
+    await expect(h.start("c")).rejects.toThrow("revalidation is pending");
+    vi.restoreAllMocks();
+    expect(h.manager.listSessions().map((session) => session.activeTurnId)).toEqual(
+      turns.map((turn) => turn.turnId),
+    );
+    expect(h.teardownProcessTree).not.toHaveBeenCalled();
+    expect(h.events.filter((event) => event.method === "session/exited")).toEqual([]);
+    expect(h.children).toHaveLength(1);
+  });
+
   it.each(["shared", "per-session"] as const)(
     "keeps three active turns running after an auth read timeout in %s mode",
     async (mode) => {

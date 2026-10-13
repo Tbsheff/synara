@@ -1539,11 +1539,11 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     if (context.sharedProcess) {
       try {
         await context.sharedProcess.initialize(buildCodexInitializeParams(), this.synaraSkillsDir);
-        this.assertContextAuthCurrent(context);
       } catch (error) {
         context.sharedProcess.fail(error);
         throw error;
       }
+      this.assertContextAuthCurrent(context);
     } else {
       await this.sendRequest(context, "initialize", buildCodexInitializeParams());
       this.assertContextAuthCurrent(context);
