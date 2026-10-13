@@ -36,7 +36,7 @@ export const RUNTIME_MODE_PRESENTATION: Record<
 > = {
   "approval-required": {
     label: "Ask for approval",
-    description: "Always ask to edit external files and use the internet",
+    description: "Ask for actions that need permission under the provider rules",
   },
   "accept-edits": {
     label: "Accept edits",
@@ -51,6 +51,24 @@ export const RUNTIME_MODE_PRESENTATION: Record<
     description: "Unrestricted access to the internet and any file on your computer",
   },
 };
+
+export function runtimeModePresentation(mode: RuntimeMode, provider?: ProviderKind) {
+  const presentation = RUNTIME_MODE_PRESENTATION[mode];
+  if (mode !== "approval-required") return presentation;
+  if (provider === "codex")
+    return {
+      ...presentation,
+      description:
+        "Allow workspace edits and commands; ask when an action needs access outside the sandbox",
+    };
+  if (provider === "claudeAgent")
+    return {
+      ...presentation,
+      description:
+        "Ask before file edits and commands that need permission; saved Claude rules still apply",
+    };
+  return presentation;
+}
 
 export function providerSupportsPlanMode(provider: ProviderKind): boolean {
   return provider !== "pi" && provider !== "antigravity";

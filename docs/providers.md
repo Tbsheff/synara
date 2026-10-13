@@ -64,6 +64,10 @@ on thread start, resume, fork, and each turn. Workspace work can proceed within 
 actions outside its boundary can ask for approval. This follows the
 [Codex sandbox and approval guide](https://learn.chatgpt.com/docs/agent-approvals-security#defaults-and-recommendations).
 
+The mode description follows the provider. For Claude, **Ask for approval** asks before
+file edits and commands that need permission; saved Claude rules still apply. For Codex,
+the description states that workspace work can proceed within the sandbox.
+
 Claude also offers **Accept edits**, which maps to native `acceptEdits`. Claude approves
 file edits and routine file commands and still asks for other commands. Only Claude shows
 this choice. The server refuses it for other providers. Thread runtime mode remains the

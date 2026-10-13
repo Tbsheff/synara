@@ -60,3 +60,32 @@ it.each(["codex", "claudeAgent", "opencode"] as const)(
     }
   },
 );
+
+it.each([
+  [
+    "codex",
+    "Allow workspace edits and commands; ask when an action needs access outside the sandbox",
+  ],
+  [
+    "claudeAgent",
+    "Ask before file edits and commands that need permission; saved Claude rules still apply",
+  ],
+] as const)("shows the %s access rules in the composer and menu", async (provider, description) => {
+  await render(
+    <RuntimeUsageControls
+      provider={provider}
+      runtimeMode="approval-required"
+      onRuntimeModeChange={vi.fn()}
+    />,
+  );
+  const button = page.getByRole("button", { name: /Ask for approval/ });
+  await expect
+    .element(button)
+    .toHaveAttribute("title", `Ask for approval: ${description}. Click to change permissions.`);
+  await button.click();
+  await expect
+    .element(
+      page.getByRole("menuitemradio", { name: `Ask for approval ${description}`, exact: true }),
+    )
+    .toBeVisible();
+});

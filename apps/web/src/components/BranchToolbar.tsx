@@ -21,7 +21,7 @@ import { useComposerDraftStore } from "../composerDraftStore";
 import { useProviderUsageSummary } from "../hooks/useProviderUsageSummary";
 import { resolveThreadEnvironmentPresentation } from "../lib/threadEnvironment";
 import {
-  RUNTIME_MODE_PRESENTATION,
+  runtimeModePresentation,
   providerModelSupportsAutoRuntimeMode,
   providerSupportsApprovalRequiredMode,
   providerSupportsAcceptEditsRuntimeMode,
@@ -76,14 +76,16 @@ function WorktreeGlyph({ className }: { className?: string }) {
 
 function RuntimeModeMenuItem({
   mode,
+  provider,
   icon,
   accent = false,
 }: {
   mode: RuntimeMode;
+  provider?: ProviderKind | undefined;
   icon: ReactNode;
   accent?: boolean;
 }) {
-  const presentation = RUNTIME_MODE_PRESENTATION[mode];
+  const presentation = runtimeModePresentation(mode, provider);
   return (
     <MenuRadioItem
       value={mode}
@@ -159,7 +161,10 @@ export function RuntimeUsageControls({
   const autoModeAvailable =
     provider !== undefined &&
     providerModelSupportsAutoRuntimeMode(provider, runtimeModel, providerStatus);
-  const runtimePresentation = RUNTIME_MODE_PRESENTATION[runtimeMode ?? "approval-required"];
+  const runtimePresentation = runtimeModePresentation(
+    runtimeMode ?? "approval-required",
+    provider ?? "codex",
+  );
   return (
     <div
       className={cn(
@@ -226,6 +231,7 @@ export function RuntimeUsageControls({
               {providerSupportsApprovalRequiredMode(provider ?? "codex") ? (
                 <RuntimeModeMenuItem
                   mode="approval-required"
+                  provider={provider ?? "codex"}
                   icon={<HiOutlineHandRaised className="size-4 shrink-0" />}
                 />
               ) : null}
