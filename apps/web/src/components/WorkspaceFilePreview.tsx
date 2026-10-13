@@ -77,7 +77,7 @@ import { readNativeApi } from "~/nativeApi";
 import { PluginFileOpener, resolvePluginFileSource } from "~/plugins/PluginFileOpener";
 import { PluginSourceCodeRenderer } from "~/plugins/PluginSourceCodeRenderer";
 import ChatMarkdown from "./ChatMarkdown";
-import { loadPierreEdit, type PierreEditor } from "./codeEditor/pierreEdit";
+import { loadPierreEdit } from "./codeEditor/pierreEdit";
 import { CodeEditorPane } from "./codeEditor/CodeEditorPane";
 import { useFileEditorFind } from "./codeEditor/useFileEditorFind";
 import { DiffTruncationWarning } from "./DiffTruncationWarning";
