@@ -174,14 +174,21 @@ it.each([2, 15_000])(
       await expect.poll(() => root.querySelector("[data-matches]")?.textContent).toBe("1 of 2");
       await userEvent.keyboard("{Enter}");
       await expect.poll(() => root.querySelector("[data-matches]")?.textContent).toBe("2 of 2");
+      await expect
+        .poll(() => editor.element().querySelector(`[data-line="${lines}"]`)?.textContent)
+        .toBe("file-only-needle");
       await userEvent.keyboard("{Shift>}{Enter}{/Shift}");
       await expect.poll(() => root.querySelector("[data-matches]")?.textContent).toBe("1 of 2");
+      await expect
+        .poll(() => editor.element().querySelector('[data-line="1"]')?.textContent)
+        .toBe("file-only-needle");
       await userEvent.keyboard("{Escape}");
       await expect
         .poll(
           () => (editor.element().getRootNode() as ShadowRoot).activeElement === editor.element(),
         )
         .toBe(true);
+      await expect.poll(() => document.getSelection()?.toString()).toBe("file-only-needle");
       await userEvent.keyboard("replacement");
       await userEvent.keyboard(shortcut("f"));
       await find.fill("file-only-needle");
